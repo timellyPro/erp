@@ -157,9 +157,9 @@ const validateForm = (
       form.discountPercent?.trim() &&
       (Number.isNaN(Number(form.discountPercent)) ||
         Number(form.discountPercent) < 0 ||
-        Number(form.discountPercent) > 100)
+        Number(form.discountPercent) > feeNum)
     ) {
-      newErrors.discountPercent = "Discount must be between 0 and 100";
+      newErrors.discountPercent = "Fees must be between 0 and the total fee";
     }
   }
 
@@ -456,6 +456,14 @@ export default function useStudentPage({ classes = [], reload }: Props) {
 
     const aadhaarDigits = form.aadhaarNo.replace(/\D/g, "");
     const phoneDigits = form.phoneNo.replace(/\D/g, "");
+    const totalFeeAmount = Number(form.totalFee);
+    const feesAmount = form.discountPercent.trim()
+      ? Number(form.discountPercent)
+      : totalFeeAmount;
+    const derivedDiscountPercent =
+      totalFeeAmount > 0
+        ? Number((((totalFeeAmount - feesAmount) / totalFeeAmount) * 100).toFixed(2))
+        : 0;
 
     try {
       setSaving(true);
@@ -473,10 +481,8 @@ export default function useStudentPage({ classes = [], reload }: Props) {
         dob: form.dob,
         classId: classIdPayload,
         address: form.address?.trim() || undefined,
-        totalFee: Number(form.totalFee),
-        discountPercent: form.discountPercent
-          ? Number(form.discountPercent)
-          : 0,
+        totalFee: totalFeeAmount,
+        discountPercent: derivedDiscountPercent,
         applicationFee: form.applicationFee.trim()
           ? Number(form.applicationFee)
           : null,

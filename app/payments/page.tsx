@@ -39,12 +39,12 @@ export default function Page() {
   const verifiedRef = useRef(false);
   const [fee, setFee] = useState<StudentFee | null>(null);
   const [loading, setLoading] = useState(true);
-  const [plan, setPlan] = useState<1 | 3>(1);
+  const [plan, setPlan] = useState(1);
   const [adminFees, setAdminFees] = useState<FeeWithStudent[]>([]);
   const [stats, setStats] = useState<FeeStats | null>(null);
   const [selectedFee, setSelectedFee] = useState<FeeWithStudent | null>(null);
   const [totalFeeInput, setTotalFeeInput] = useState<number | "">("");
-  const [discountInput, setDiscountInput] = useState<number | "">("");
+  const [feesInput, setFeesInput] = useState<number | "">("");
   const [installmentsInput, setInstallmentsInput] = useState<number | "">("");
   const [saving, setSaving] = useState(false);
 
@@ -81,7 +81,7 @@ export default function Page() {
         const first = data.fees[0];
         setSelectedFee(first);
         setTotalFeeInput(first.totalFee);
-        setDiscountInput(first.discountPercent);
+        setFeesInput(first.finalFee);
         setInstallmentsInput(first.installments);
       } else {
         setSelectedFee(null);
@@ -152,6 +152,13 @@ export default function Page() {
     }
   }, [status, session?.user?.role]);
 
+  useEffect(() => {
+    if (!fee) return;
+    if (plan !== 1 && plan !== fee.installments) {
+      setPlan(1);
+    }
+  }, [fee, plan]);
+
   if (status === "loading" || loading) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
@@ -203,6 +210,7 @@ export default function Page() {
 
   if (role === "STUDENT" && fee) {
     const remainingAmount = fee.remainingFee;
+    const planOptions = fee.installments > 1 ? [1, fee.installments] : [1];
     const payable = plan === 1 ? remainingAmount : remainingAmount / plan;
     const progress =
       fee.finalFee > 0 ? Math.min((fee.amountPaid / fee.finalFee) * 100, 100) : 0;
@@ -228,7 +236,7 @@ export default function Page() {
                 Total Fee: <span className="font-semibold text-white">₹{fee.totalFee}</span>
               </p>
               <p className="text-[#808080] text-sm">
-                Discount: {fee.discountPercent}% &nbsp; | &nbsp; Payable after discount:{" "}
+                Fees:{" "}
                 <span className="font-semibold text-white">₹{fee.finalFee}</span>
               </p>
               <p className="text-[#808080] text-sm">
@@ -239,12 +247,12 @@ export default function Page() {
 
             {/* Plan Selector */}
             <div className="space-y-3">
-              {[1, 3].map((p) => (
+              {planOptions.map((p) => (
                 <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.97 }}
                   key={p}
-                  onClick={() => setPlan(p as 1 | 3)}
+                  onClick={() => setPlan(p)}
                   className={`w-full p-4 rounded-xl border flex justify-between items-center transition-all duration-300 ${
                     plan === p
                       ? "bg-gradient-to-r from-green-500/20 to-green-600/20 border-green-500/50 text-white shadow-lg"
@@ -374,7 +382,7 @@ export default function Page() {
                   onClick={() => {
                     setSelectedFee(feeItem);
                     setTotalFeeInput(feeItem.totalFee);
-                    setDiscountInput(feeItem.discountPercent);
+                    setFeesInput(feeItem.finalFee);
                     setInstallmentsInput(feeItem.installments);
                   }}
                   className={`w-full text-left p-3 rounded-xl border transition-all duration-300 ${
@@ -438,18 +446,18 @@ export default function Page() {
                         whileHover={{ scale: 1.05 }}
                         className="p-5 rounded-xl bg-blue-500/20 border border-blue-500/30"
                       >
-                        <p className="text-sm text-[#808080] mb-2">Discount</p>
+                        <p className="text-sm text-[#808080] mb-2">Fees</p>
                         <p className="text-3xl font-bold text-blue-400">
-                          {selectedFee.discountPercent}%
+                          Rs. {selectedFee.finalFee}
                         </p>
                       </motion.div>
                       <motion.div
                         whileHover={{ scale: 1.05 }}
                         className="p-5 rounded-xl bg-yellow-500/20 border border-yellow-500/30"
                       >
-                        <p className="text-sm text-[#808080] mb-2">Payable</p>
+                        <p className="text-sm text-[#808080] mb-2">Remaining</p>
                         <p className="text-3xl font-bold text-yellow-400">
-                          ₹{selectedFee.finalFee}
+                          Rs. {selectedFee.remainingFee}
                         </p>
                       </motion.div>
                       <motion.div
@@ -498,12 +506,13 @@ export default function Page() {
                           />
                         </div>
                         <div className="space-y-2">
-                          <label className="text-[#808080] block">Discount %</label>
+                          <label className="text-[#808080] block">Fees</label>
                           <input
                             type="number"
-                            value={discountInput}
+                            min="0"
+                            value={feesInput}
                             onChange={(e) =>
-                              setDiscountInput(e.target.value === "" ? "" : Number(e.target.value))
+                              setFeesInput(e.target.value === "" ? "" : Number(e.target.value))
                             }
                             className="w-full bg-[#1a1a1a] border border-[#404040] text-white rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#808080] focus:border-transparent hover:border-[#808080] transition placeholder-[#6b6b6b]"
                           />
@@ -526,16 +535,34 @@ export default function Page() {
                         whileTap={{ scale: saving ? 1 : 0.98 }}
                         onClick={async () => {
                           if (!selectedFee) return;
+                          const nextTotalFee =
+                            totalFeeInput === "" ? selectedFee.totalFee : Number(totalFeeInput);
+                          const nextFees =
+                            feesInput === "" ? selectedFee.finalFee : Number(feesInput);
+
+                          if (nextTotalFee <= 0) {
+                            alert("Total Fee must be a positive number.");
+                            return;
+                          }
+
+                          if (nextFees < 0 || nextFees > nextTotalFee) {
+                            alert("Fees must be between 0 and the Total Fee.");
+                            return;
+                          }
+
+                          const derivedDiscountPercent =
+                            nextTotalFee > 0
+                              ? Number((((nextTotalFee - nextFees) / nextTotalFee) * 100).toFixed(2))
+                              : 0;
+
                           setSaving(true);
                           try {
                             const res = await fetch(`/api/fees/student/${selectedFee.student.id}`, {
                               method: "PATCH",
                               headers: { "Content-Type": "application/json" },
                               body: JSON.stringify({
-                                totalFee:
-                                  totalFeeInput === "" ? undefined : Number(totalFeeInput),
-                                discountPercent:
-                                  discountInput === "" ? undefined : Number(discountInput),
+                                totalFee: nextTotalFee,
+                                discountPercent: derivedDiscountPercent,
                                 installments:
                                   installmentsInput === "" ? undefined : Number(installmentsInput),
                               }),
@@ -588,3 +615,4 @@ export default function Page() {
     
   );
 }
+

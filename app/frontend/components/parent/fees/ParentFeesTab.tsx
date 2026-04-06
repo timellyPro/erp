@@ -81,7 +81,7 @@ export default function ParentFeesTab() {
   const [fee, setFee] = useState<FeeData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [plan, setPlan] = useState<1 | 3>(1);
+  const [plan, setPlan] = useState(1);
   const [selectedComponents, setSelectedComponents] = useState<Set<number>>(new Set());
   const [selectedExtraIds, setSelectedExtraIds] = useState<Set<string>>(new Set());
   const [customAmount, setCustomAmount] = useState<string>("");
@@ -182,6 +182,13 @@ export default function ParentFeesTab() {
     fetchFee();
   }, [fetchFee]);
 
+  useEffect(() => {
+    if (!fee) return;
+    if (plan !== 1 && plan !== fee.installments) {
+      setPlan(1);
+    }
+  }, [fee, plan]);
+
   const dueByKey = useMemo(() => {
     const m = new Map<string, number>();
     (fee?.dueHeads ?? []).forEach((h) => m.set(h.key, Number(h.dueBefore) || 0));
@@ -251,6 +258,7 @@ export default function ParentFeesTab() {
   }
 
   const remainingAmount = fee.remainingFee;
+  const planOptions = fee.installments > 1 ? [1, fee.installments] : [1];
 
   // Selected fees "due" amount (when user picks specific items)
   const selectedAmount = (() => {
@@ -322,19 +330,19 @@ export default function ParentFeesTab() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
             <div className="bg-white/5 rounded-xl p-4 border border-white/10">
               <p className="text-xs text-gray-400 uppercase tracking-wider">Total Fee</p>
-              <p className="text-xl font-bold text-white mt-1">₹{fee.totalFee.toLocaleString()}</p>
+              <p className="text-xl font-bold text-white mt-1">Rs. {fee.totalFee.toLocaleString()}</p>
             </div>
             <div className="bg-white/5 rounded-xl p-4 border border-white/10">
-              <p className="text-xs text-gray-400 uppercase tracking-wider">Discount</p>
-              <p className="text-xl font-bold text-lime-400 mt-1">{fee.discountPercent}%</p>
+              <p className="text-xs text-gray-400 uppercase tracking-wider">Fees</p>
+              <p className="text-xl font-bold text-lime-400 mt-1">Rs. {fee.finalFee.toLocaleString()}</p>
             </div>
             <div className="bg-white/5 rounded-xl p-4 border border-white/10">
-              <p className="text-xs text-gray-400 uppercase tracking-wider">Payable</p>
-              <p className="text-xl font-bold text-white mt-1">₹{fee.finalFee.toLocaleString()}</p>
+              <p className="text-xs text-gray-400 uppercase tracking-wider">Remaining</p>
+              <p className="text-xl font-bold text-white mt-1">Rs. {fee.remainingFee.toLocaleString()}</p>
             </div>
             <div className="bg-white/5 rounded-xl p-4 border border-white/10">
               <p className="text-xs text-gray-400 uppercase tracking-wider">Paid</p>
-              <p className="text-xl font-bold text-emerald-400 mt-1">₹{fee.amountPaid.toLocaleString()}</p>
+              <p className="text-xl font-bold text-emerald-400 mt-1">Rs. {fee.amountPaid.toLocaleString()}</p>
             </div>
           </div>
 
@@ -432,7 +440,7 @@ export default function ParentFeesTab() {
           ) : (
             <div className="space-y-4">
               <div className="flex flex-wrap gap-2">
-                {([1, 3] as const).map((p) => (
+                {planOptions.map((p) => (
                   <button
                     key={p}
                     onClick={() => setPlan(p)}
@@ -620,3 +628,6 @@ export default function ParentFeesTab() {
     </div>
   );
 }
+
+
+

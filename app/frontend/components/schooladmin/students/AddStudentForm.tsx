@@ -170,10 +170,10 @@ export default function AddStudentForm({
         </div>
         <div>
           <InputField
-            label="Discount (%)"
+            label="Fees"
             value={form.discountPercent}
             onChange={(value) => onFieldChange("discountPercent", value)}
-            placeholder="e.g. 10"
+            placeholder="e.g. 10800"
             type="number"
             bgColor="white"
           />
