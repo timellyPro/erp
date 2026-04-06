@@ -10,6 +10,7 @@ export interface IStudent {
   address?: string;
   admissionNumber?: string;
   gender?: string;
+  residencyType?: string;
   previousSchool?: string;
   status?: string;
   photoUrl?: string | null;

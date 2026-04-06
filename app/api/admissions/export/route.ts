@@ -4,7 +4,6 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { assertCanManageAdmissions, getSessionSchoolId } from "../_utils";
 import * as XLSX from "xlsx";
-import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
 
 function formatDate(value: Date | null | undefined) {
   if (!value) return "";
@@ -22,6 +21,17 @@ function formatBoardingType(value: string) {
     .join(" ");
 }
 
+function normalizeResidencyType(value: string | null | undefined) {
+  const raw = (value ?? "").trim();
+  if (!raw) return "Day Scholar";
+  const normalized = raw.toLowerCase().replace(/\s+/g, "");
+  if (normalized === "dayscholar" || normalized === "dayscholer") return "Day Scholar";
+  if (normalized === "hostler" || normalized === "hosteler" || normalized === "hosteller" || normalized === "hoster") {
+    return "Hosteller";
+  }
+  return raw;
+}
+
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -31,13 +41,6 @@ export async function GET(req: Request) {
 
     const schoolId = await getSessionSchoolId(session);
     if (!schoolId) return NextResponse.json({ message: "School not found in session" }, { status: 400 });
-
-    const [school, settings] = await Promise.all([
-      prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } }),
-      prisma.schoolSettings.findUnique({ where: { schoolId }, select: { emailDomain: true } }),
-    ]);
-    const emailDomain =
-      normalizeEmailDomain(settings?.emailDomain) ?? schoolDomainFromName(school?.name ?? "school");
 
     const { searchParams } = new URL(req.url);
     const search = (searchParams.get("search") ?? "").trim();
@@ -82,6 +85,7 @@ export async function GET(req: Request) {
         admissionNo: true,
         gradeSought: true,
         boardingType: true,
+        residencyType: true,
         rollNo: true,
         firstName: true,
         middleName: true,
@@ -131,6 +135,7 @@ export async function GET(req: Request) {
       "Admission No": r.admissionNo ?? "",
       "Grade Sought": formatGrade(r.gradeSought),
       "Boarding Type": formatBoardingType(r.boardingType),
+      "Residency Type": normalizeResidencyType(r.residencyType),
       Class: r.class?.name ?? r.className ?? "",
       Section: r.class?.section ?? r.section ?? "",
       "First Name": r.firstName,
@@ -167,26 +172,6 @@ export async function GET(req: Request) {
       "Father No": r.emergencyFatherNo,
       "Mother No": r.emergencyMotherNo,
       "Guardian No": r.emergencyGuardianNo,
-      // Keep compatibility columns so this export can still be used in student bulk upload
-      name: `${r.firstName} ${r.middleName ? `${r.middleName} ` : ""}${r.lastName}`.trim(),
-      fatherName: r.parentName,
-      rollNo: r.rollNo ?? "",
-      aadhaarNo: r.aadharNo,
-      gender: r.gender === "MALE" ? "Male" : "Female",
-      dob: formatDate(r.dateOfBirth),
-      previousSchool: r.previousSchoolName,
-      class: r.class?.name ?? r.className ?? "",
-      section: r.class?.section ?? r.section ?? "",
-      totalFee: r.totalFee ?? "",
-      discountPercent: r.discountPercent ?? 0,
-      applicationFee: r.applicationFee ?? "",
-      admissionFee: r.admissionFee ?? "",
-      phoneNo: r.parentPhone,
-      email: `${emailLocalPartFromFullName(
-        `${r.firstName} ${r.middleName ? `${r.middleName} ` : ""}${r.lastName}`.trim()
-      )}@${emailDomain}`,
-      password: formatDate(r.dateOfBirth).replace(/-/g, ""),
-      address: `${r.houseNo}, ${r.street}, ${r.town ? `${r.town}, ` : ""}${r.city}, ${r.state} - ${r.pinCode}`,
     }));
 
     const ws = XLSX.utils.json_to_sheet(data);

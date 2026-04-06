@@ -15,6 +15,7 @@ export type StudentFormState = {
   name: string;
   rollNo: string;
   gender: string;
+  residencyType: string;
   dob: string;
   classId: string;
   section: string;

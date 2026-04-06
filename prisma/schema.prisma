@@ -444,6 +444,7 @@ model Student {
   address         String?
   gender          String?
   previousSchool  String?  @db.Text
+  residencyType   String?  @default("Day Scholar")
 
   applicationFee Float? // record-only fee amounts (no payment integration here)
   admissionFee   Float?
@@ -1140,6 +1141,7 @@ model StudentApplication {
 
   gradeSought  Grade
   boardingType BoardingType
+  residencyType String @default("Day Scholar")
 
   // Fees (for bulk upload compatibility)
   totalFee         Float?
@@ -1199,6 +1201,7 @@ model StudentApplication {
   @@index([studentId])
   @@index([gradeSought])
   @@index([boardingType])
+  @@index([residencyType])
   @@index([createdAt])
 }
 

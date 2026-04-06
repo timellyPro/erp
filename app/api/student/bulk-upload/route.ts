@@ -28,6 +28,17 @@ function normalizeGender(value: unknown) {
   return raw;
 }
 
+function normalizeResidencyType(value: unknown) {
+  const raw = toStr(value);
+  if (!raw) return "Day Scholar";
+  const normalized = raw.toLowerCase().replace(/\s+/g, "");
+  if (normalized === "dayscholar" || normalized === "dayscholer") return "Day Scholar";
+  if (normalized === "hostler" || normalized === "hosteler" || normalized === "hosteller" || normalized === "hoster") {
+    return "Hosteller";
+  }
+  return raw;
+}
+
 function parseOptionalNumber(value: unknown) {
   if (value === "" || value === null || value === undefined) return null;
   const parsed = Number(value);
@@ -183,6 +194,9 @@ export async function POST(req: Request) {
           row.applicationFee ?? row["Application Fee"]
         );
         const admissionFee = parseOptionalNumber(row.admissionFee ?? row["Admission Fee"]);
+        const residencyType = normalizeResidencyType(
+          row.residencyType ?? row["Residency Type"] ?? row.residency ?? "Day Scholar"
+        );
         const rawDob = row.dob ?? row.dateOfBirth ?? row["Date of Birth"];
 
         console.log("[student bulk upload] Parsed row", {
@@ -310,6 +324,7 @@ export async function POST(req: Request) {
                   phoneNo,
                   classId,
                   gender,
+                  residencyType,
                   previousSchool,
                   ...(applicationFee !== null && Number.isFinite(applicationFee)
                     ? { applicationFee }
@@ -441,6 +456,7 @@ export async function POST(req: Request) {
                 phoneNo,
                 classId,
                 gender,
+                residencyType,
                 previousSchool,
                 applicationFee:
                   applicationFee != null && Number.isFinite(applicationFee)

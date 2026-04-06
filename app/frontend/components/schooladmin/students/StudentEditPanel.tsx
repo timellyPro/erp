@@ -63,6 +63,18 @@ export default function StudentEditPanel({
       </div>
 
       <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <SelectInput
+          label="Residency Type"
+          value={form.residencyType}
+          onChange={(value) => onFieldChange("residencyType", value)}
+          options={[
+            { label: "Day Scholar", value: "Day Scholar" },
+            { label: "Hosteller", value: "Hosteller" },
+          ]}
+        />
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
         <InputField
           label="Application Fee (record only)"
           value={form.applicationFee}

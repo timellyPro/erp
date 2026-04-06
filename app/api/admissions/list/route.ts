@@ -77,6 +77,7 @@ export async function GET(req: Request) {
           class: { select: { id: true, name: true, section: true } },
           gradeSought: true,
           boardingType: true,
+          residencyType: true,
           totalFee: true,
           discountPercent: true,
           applicationFee: true,

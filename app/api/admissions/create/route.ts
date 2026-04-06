@@ -21,6 +21,18 @@ function optionalString(value: unknown) {
   return v ? v : null;
 }
 
+function normalizeResidencyType(value: unknown) {
+  if (typeof value !== "string") return "Day Scholar";
+  const raw = value.trim();
+  if (!raw) return "Day Scholar";
+  const normalized = raw.toLowerCase().replace(/\s+/g, "");
+  if (normalized === "dayscholar" || normalized === "dayscholer") return "Day Scholar";
+  if (normalized === "hostler" || normalized === "hosteler" || normalized === "hosteller" || normalized === "hoster") {
+    return "Hosteller";
+  }
+  return raw;
+}
+
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -31,7 +43,55 @@ export async function POST(req: Request) {
     const schoolId = await getSessionSchoolId(session);
     if (!schoolId) return NextResponse.json({ message: "School not found in session" }, { status: 400 });
 
-    const body = await req.json();
+    const rawBody = await req.json();
+    const input =
+      rawBody && typeof rawBody === "object" ? (rawBody as Record<string, unknown>) : ({} as Record<string, unknown>);
+    const allowedFields = new Set([
+      "applicationNo",
+      "fedenaNo",
+      "admissionNo",
+      "classId",
+      "gradeSought",
+      "boardingType",
+      "residencyType",
+      "totalFee",
+      "discountPercent",
+      "applicationFee",
+      "admissionFee",
+      "firstName",
+      "middleName",
+      "lastName",
+      "gender",
+      "dateOfBirth",
+      "aadharNo",
+      "firstLanguage",
+      "nationality",
+      "languagesAtHome",
+      "caste",
+      "religion",
+      "houseNo",
+      "street",
+      "city",
+      "town",
+      "state",
+      "pinCode",
+      "parentName",
+      "parentOccupation",
+      "officeAddress",
+      "parentPhone",
+      "parentEmail",
+      "parentAadharNo",
+      "parentWhatsapp",
+      "bankAccountNo",
+      "previousSchoolName",
+      "previousSchoolAddress",
+      "emergencyFatherNo",
+      "emergencyMotherNo",
+      "emergencyGuardianNo",
+    ]);
+    const body: any = Object.fromEntries(
+      Object.entries(input).filter(([key]) => allowedFields.has(key))
+    );
 
     const classId =
       typeof body.classId === "string" && body.classId.trim() ? body.classId.trim() : null;
@@ -73,6 +133,7 @@ export async function POST(req: Request) {
         admissionNo: optionalString(body.admissionNo),
         gradeSought: body.gradeSought,
         boardingType: body.boardingType,
+        residencyType: normalizeResidencyType(body.residencyType),
         totalFee:
           typeof body.totalFee === "number"
             ? body.totalFee

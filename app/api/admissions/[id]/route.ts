@@ -20,6 +20,18 @@ function requiredString(value: unknown, field: string) {
   return value.trim();
 }
 
+function normalizeResidencyType(value: unknown) {
+  if (typeof value !== "string") return "Day Scholar";
+  const raw = value.trim();
+  if (!raw) return "Day Scholar";
+  const normalized = raw.toLowerCase().replace(/\s+/g, "");
+  if (normalized === "dayscholar" || normalized === "dayscholer") return "Day Scholar";
+  if (normalized === "hostler" || normalized === "hosteler" || normalized === "hosteller" || normalized === "hoster") {
+    return "Hosteller";
+  }
+  return raw;
+}
+
 export async function GET(_: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const session = await getServerSession(authOptions);
@@ -101,6 +113,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
         admissionNo: optionalString(body.admissionNo),
         gradeSought: body.gradeSought,
         boardingType: body.boardingType,
+        residencyType: normalizeResidencyType(body.residencyType),
         totalFee:
           typeof body.totalFee === "number"
             ? body.totalFee
