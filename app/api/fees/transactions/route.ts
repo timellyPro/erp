@@ -25,7 +25,8 @@ export async function GET(req: Request) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
   const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
-  if (!isAdmin) {
+  const hasFeature = session.user.role === "TEACHER" && (session.user.allowedFeatures?.includes("FEES") || session.user.allowedFeatures?.includes("PAYMENTS"));
+  if (!isAdmin && !hasFeature) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
 

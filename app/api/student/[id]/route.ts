@@ -18,9 +18,10 @@ export async function GET(_req: Request, context: RouteParams) {
   }
 
   const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
+  const hasFeature = session.user.role === "TEACHER" && (session.user.allowedFeatures?.includes("STUDENTS") || session.user.allowedFeatures?.includes("STUDENT_DETAILS"));
   const isOwnStudent = session.user.studentId === id;
 
-  if (!isAdmin && !isOwnStudent) {
+  if (!isAdmin && !isOwnStudent && !hasFeature) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
 
@@ -287,7 +288,9 @@ export async function PUT(req: Request, context: RouteParams) {
   if (!session?.user) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
-  if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "SUPERADMIN") {
+  const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
+  const hasFeature = session.user.role === "TEACHER" && (session.user.allowedFeatures?.includes("STUDENTS") || session.user.allowedFeatures?.includes("STUDENT_DETAILS"));
+  if (!isAdmin && !hasFeature) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
 
@@ -388,7 +391,9 @@ export async function DELETE(_req: Request, context: RouteParams) {
   if (!session?.user) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
-  if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "SUPERADMIN") {
+  const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
+  const hasFeature = session.user.role === "TEACHER" && (session.user.allowedFeatures?.includes("STUDENTS") || session.user.allowedFeatures?.includes("STUDENT_DETAILS"));
+  if (!isAdmin && !hasFeature) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
 

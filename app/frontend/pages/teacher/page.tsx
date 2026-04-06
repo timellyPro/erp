@@ -21,8 +21,13 @@ import TeacherProfileTab from "../../components/teacher/profile/Profile";
 import TeacherSettingsTab from "../../components/teacher/settings/Settings";
 import TeacherAdmissionTab from "../../components/teacher/admission/Admission";
 import NewsFeed from "../../components/schooladmin/Newsfeed";
-
-
+import SchoolAdminStudentsTab from "../../components/schooladmin/Students";
+import StudentDetails from "../../components/schooladmin/StudentDetails";
+import SchoolAdminTeacherTab from "../../components/schooladmin/TeachersTab";
+import SchoolTeacherLeavesTab from "../../components/schooladmin/TeacherLeaves";
+import TeacherAuditTab from "../../components/schooladmin/TeacherAudit";
+import Certificates from "../../components/schooladmin/Certificates";
+import SchoolAdminFeesTab from "../../components/schooladmin/Fees";
 const TEACHER_TAB_TITLES = {
   dashboard: "Dashboard",
   admission: "Admission",
@@ -38,6 +43,13 @@ const TEACHER_TAB_TITLES = {
   workshops: "Workshops",
   profile: "Profile",
   settings: "Settings",
+  students: "Students",
+  "student-details": "Student Details",
+  teachers: "Teachers",
+  "teacher-leaves": "Teacher Leaves",
+  "teacher-audit": "Teacher Audit",
+  certificates: "Certificates",
+  fees: "Fees & Payments",
 };
 function TeacherDashboardInner() {
   const { data: session } = useSession();
@@ -81,6 +93,20 @@ function TeacherDashboardInner() {
         return <TeacherProfileTab />;
       case "settings":
         return <TeacherSettingsTab />;
+      case "students":
+        return <SchoolAdminStudentsTab />;
+      case "student-details":
+        return <StudentDetails />;
+      case "teachers":
+        return <SchoolAdminTeacherTab />;
+      case "teacher-leaves":
+        return <SchoolTeacherLeavesTab />;
+      case "teacher-audit":
+        return <TeacherAuditTab />;
+      case "certificates":
+        return <Certificates />;
+      case "fees":
+        return <SchoolAdminFeesTab />;
       default:
         return <div>Unknown Tab</div>;
     }
