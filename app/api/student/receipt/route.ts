@@ -56,13 +56,41 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ error: "Student not found" }, { status: 404 });
         }
 
-        // Get payment details
-        const payment = await prisma.payment.findFirst({
-            where: {
-                id: paymentId,
+        let payment: any = null;
+
+        if (paymentId === "admission-fee") {
+            payment = {
+                id: "admission-fee",
                 studentId: studentId,
-            },
-        });
+                amount: student.admissionFee || 0,
+                status: "completed",
+                gateway: "One-time",
+                method: "One-time",
+                transactionId: "N/A",
+                createdAt: student.createdAt || new Date(),
+                feeTypeName: "Admission Fee"
+            };
+        } else if (paymentId === "application-fee") {
+            payment = {
+                id: "application-fee",
+                studentId: studentId,
+                amount: student.applicationFee || 0,
+                status: "completed",
+                gateway: "One-time",
+                method: "One-time",
+                transactionId: "N/A",
+                createdAt: student.createdAt || new Date(),
+                feeTypeName: "Application Fee"
+            };
+        } else {
+            const dbPayment = await prisma.payment.findFirst({
+                where: {
+                    id: paymentId,
+                    studentId: studentId,
+                },
+            });
+            if (dbPayment) payment = dbPayment;
+        }
 
         if (!payment) {
             return NextResponse.json({ error: "Payment not found" }, { status: 404 });

@@ -49,9 +49,11 @@ export async function PATCH(req: Request, context: RouteParams) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
 
-  if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "SUPERADMIN") {
+  const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
+  const hasFeature = session.user.role === "TEACHER" && (session.user.allowedFeatures?.includes("FEES") || session.user.allowedFeatures?.includes("PAYMENTS"));
+  if (!isAdmin && !hasFeature) {
     return NextResponse.json(
-      { message: "Only admins can update student fees" },
+      { message: "Forbidden" },
       { status: 403 }
     );
   }

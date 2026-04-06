@@ -16,7 +16,7 @@ interface RequireFeatureProps {
  * Maps tab names (from URL params) to feature IDs used in the permission system.
  * This ensures that when a teacher accesses a tab, we check the correct feature permission.
  */
-const TAB_TO_FEATURE_MAP: Record<string, FeatureId> = {
+const TAB_TO_FEATURE_MAP: Record<string, string> = {
   dashboard: "dashboard",
   admission: "admission",
   attendance: "attendance-view",
@@ -44,9 +44,13 @@ const TAB_TO_FEATURE_MAP: Record<string, FeatureId> = {
   tc: "tc",
   school: "school",
   profile: "profile",
+  "student-details": "STUDENT_DETAILS",
+  "teacher-leaves": "TEACHER_LEAVES",
+  "teacher-audit": "TEACHER_AUDIT",
+  fees: "FEES",
 } as const;
 
-const ROLES_WITH_ALL_ACCESS = ["SUPERADMIN", "SCHOOLADMIN"] as const;
+const ROLES_WITH_ALL_ACCESS = ["SUPERADMIN", "SCHOOLADMIN",] as const;
 
 /**
  * Component that protects routes/features by checking if the current user
@@ -99,12 +103,12 @@ export default function RequireFeature({ requiredFeature, children }: RequireFea
         setIsAuthorized(true);
         return;
       }
-      const featureId: FeatureId | undefined = TAB_TO_FEATURE_MAP[normalizedTab] || (normalizedTab as FeatureId);
+      const featureId = TAB_TO_FEATURE_MAP[normalizedTab] || normalizedTab;
 
       // Check if the feature is in the allowed list
       // Also check the raw tab name as fallback for exact matches
       const hasAccess = 
-        allowedFeatures.includes(featureId) || 
+        allowedFeatures.includes(featureId as FeatureId) || 
         allowedFeatures.includes(normalizedTab as FeatureId) ||
         allowedFeatures.some(f => f.toLowerCase() === normalizedTab);
 

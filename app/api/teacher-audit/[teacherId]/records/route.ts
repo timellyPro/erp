@@ -16,7 +16,9 @@ export async function GET(
     const session = await getServerSession(authOptions);
     if (!session)
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "SCHOOLADMIN") {
+    const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
+    const hasFeature = session.user.role === "TEACHER" && session.user.allowedFeatures?.includes("TEACHER_AUDIT");
+    if (!isAdmin && !hasFeature) {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
@@ -89,7 +91,9 @@ export async function POST(
     const session = await getServerSession(authOptions);
     if (!session)
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "SCHOOLADMIN") {
+    const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
+    const hasFeature = session.user.role === "TEACHER" && session.user.allowedFeatures?.includes("TEACHER_AUDIT");
+    if (!isAdmin && !hasFeature) {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 

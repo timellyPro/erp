@@ -170,7 +170,9 @@ export async function POST(req: Request) {
     if (!session) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
-    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "SUPERADMIN") {
+    const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
+    const hasFeature = session.user.role === "TEACHER" && (session.user.allowedFeatures?.includes("TEACHER_LEAVES") || session.user.allowedFeatures?.includes("TEACHERS"));
+    if (!isAdmin && !hasFeature) {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 

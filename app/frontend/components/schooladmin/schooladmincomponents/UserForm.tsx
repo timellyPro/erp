@@ -50,6 +50,13 @@ const AVAILABLE_FEATURES_FOR_TEACHERS = [
   { key: Permission.LEAVES, label: "Leave" },
   { key: Permission.PROFILE, label: "Profile" },
   { key: Permission.SETTINGS, label: "Settings" },
+  { key: Permission.STUDENTS, label: "Students" },
+  { key: Permission.FEES, label: "Fees" },
+  { key: Permission.CERTIFICATES, label: "Certificates" },
+  { key: Permission.STUDENT_DETAILS, label: "Student Details" },
+  { key: Permission.TEACHERS, label: "Teachers" },
+  { key: Permission.TEACHER_LEAVES, label: "Teacher Leaves" },
+  { key: Permission.TEACHER_AUDIT, label: "Teacher Audit" },
 ];
 
 export default function UserForm({ mode = "create", initialData }: UserFormProps) {

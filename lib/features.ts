@@ -24,8 +24,9 @@ export const FEATURES = [
   { id: "school", label: "School Details", description: "School information" },
   { id: "payments", label: "Payments & Fees", description: "Fees and payments" },
   { id: "tc", label: "Transfer Certificate", description: "TC requests and approval" },
-  { id: "profile", label: "Profile", description: "View and edit the profile" },
-  
+  { id: "student-details", label: "Student Details", description: "View student details" },
+  { id: "teacher-leaves", label: "Teacher Leaves", description: "Manage teacher leaves" },
+  { id: "teacher-audit", label: "Teacher Audit", description: "Audit teacher performance" },
 ] as const;
 
 export type FeatureId = (typeof FEATURES)[number]["id"];

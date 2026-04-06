@@ -108,11 +108,13 @@ export async function generateReceiptPDFServer(data: any): Promise<ArrayBuffer> 
     const paymentDate = new Date(data.payment?.createdAt || new Date()).toLocaleDateString("en-IN");
     const transactionId = data.payment?.transactionId || "N/A";
     const paymentMethod = data.payment?.method || "Online";
+    const feeTypeName = data.payment?.feeTypeName || "Fee payment";
 
     const paymentInfo = [
         [`Payment Date:`, paymentDate],
         [`Transaction ID:`, transactionId],
         [`Payment Method:`, paymentMethod],
+        [`Fee Type:`, feeTypeName],
     ];
 
     paymentInfo.forEach(([label, value]) => {
