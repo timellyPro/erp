@@ -89,6 +89,7 @@ export default function SchoolAdminSettingsView({
         uploading={uploading}
       />
       <SchoolEmailDomainCard />
+      <SchoolInstallmentsSettingsCard />
       <SchoolHyperPGCredentialsCard />
       <SchoolAdminPasswordCard passwords={passwords} setPasswords={setPasswords} />
       <SchoolAdminNotificationsCard
@@ -98,6 +99,112 @@ export default function SchoolAdminSettingsView({
         onMarkRead={markOneRead}
         formatTime={formatTime}
       />
+    </div>
+  );
+}
+
+function SchoolInstallmentsSettingsCard() {
+  const [defaultInstallments, setDefaultInstallments] = useState("3");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/school/settings", { credentials: "include" });
+        const data = await res.json();
+        if (!cancelled && res.ok && data.settings) {
+          const v = Number(data.settings.defaultInstallments ?? 3);
+          setDefaultInstallments(String(Number.isInteger(v) && v > 0 ? v : 3));
+        }
+      } catch (_) {
+        if (!cancelled) setMessage({ type: "error", text: "Failed to load installments settings" });
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const parsed = Number(defaultInstallments);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        setMessage({ type: "error", text: "Installments must be a positive integer" });
+        setSaving(false);
+        return;
+      }
+      const res = await fetch("/api/school/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ defaultInstallments: parsed }),
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setMessage({ type: "success", text: "Default installments saved for all students." });
+      } else {
+        setMessage({ type: "error", text: data?.message ?? "Failed to save" });
+      }
+    } catch (_) {
+      setMessage({ type: "error", text: "Failed to save" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className={CARD_CLASS}>
+      <div className={CARD_HEADER_CLASS}>
+        <CardTitle
+          icon={<CreditCard className="text-lime-300" size={22} />}
+          title="Fee Installments Settings"
+          subtitle="Set default installments for the whole school"
+        />
+      </div>
+      <div className={CARD_BODY_CLASS}>
+        {loading ? (
+          <div className="flex items-center gap-2 text-white/60">
+            <div className="w-4 h-4 border-2 border-white/20 border-t-lime-400 rounded-full animate-spin" />
+            Loading…
+          </div>
+        ) : (
+          <>
+            <Field label="Default Installments">
+              <SearchInput
+                value={defaultInstallments}
+                onChange={(v) => setDefaultInstallments(v.replace(/\D/g, "").slice(0, 2))}
+                icon={CreditCard}
+                variant="glass"
+                className="mt-2"
+                placeholder="e.g. 3"
+              />
+              <p className="mt-2 text-xs text-white/50">
+                This updates existing students and will be used for all future student fee records.
+              </p>
+            </Field>
+            {message && (
+              <p className={`mt-3 text-sm ${message.type === "success" ? "text-lime-400" : "text-red-400"}`}>
+                {message.text}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving}
+              className="mt-4 px-5 py-2.5 rounded-xl bg-lime-400/20 text-lime-400 border border-lime-400/30 font-medium hover:bg-lime-400/30 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {saving ? "Saving…" : "Save installments settings"}
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }

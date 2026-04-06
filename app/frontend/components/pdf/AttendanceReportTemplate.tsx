@@ -2,6 +2,7 @@ import React, { forwardRef } from "react";
 import { format } from "date-fns";
 
 export interface AttendanceReportData {
+  schoolName?: string;
   studentName: string;
   studentClass: string;
   dateGenerated: string | Date;
@@ -44,16 +45,9 @@ const AttendanceReportTemplate = forwardRef<HTMLDivElement, AttendanceReportTemp
           {/* Header */}
           <div className="flex justify-between items-end border-b-2 pb-8 mb-10 mt-6" style={{ borderColor: "#f1f5f9" }}>
             <div>
-              <div className="flex items-center gap-4 mb-4">
-                <div className="w-14 h-14 rounded-xl flex items-center justify-center font-bold text-3xl shadow-sm" style={{ backgroundColor: "#10b981", color: "#ffffff" }}>
-                  T
-                </div>
-                <div>
-                  <h1 className="text-3xl font-extrabold tracking-tight" style={{ color: "#1e293b" }}>
-                    Timelly School
-                  </h1>
-                </div>
-              </div>
+              <h1 className="text-3xl font-extrabold tracking-tight mb-4" style={{ color: "#1e293b" }}>
+                {data.schoolName || "School"}
+              </h1>
             </div>
             <div className="text-right">
               <h2 className="text-3xl font-black uppercase tracking-widest mb-2" style={{ color: "#cbd5e1" }}>
@@ -164,6 +158,17 @@ const AttendanceReportTemplate = forwardRef<HTMLDivElement, AttendanceReportTemp
             <p className="text-xs mt-2" style={{ color: "#94a3b8" }}>
               This is an official computer-generated document.
             </p>
+            <div className="mt-4 flex items-center justify-center gap-2">
+              <span
+                className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold"
+                style={{ backgroundColor: "#84cc16", color: "#ffffff" }}
+              >
+                T
+              </span>
+              <p className="text-xs font-semibold tracking-wide" style={{ color: "#64748b" }}>
+                Powered by Timelly
+              </p>
+            </div>
           </div>
         </div>
       </div>

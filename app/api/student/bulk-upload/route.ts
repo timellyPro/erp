@@ -159,10 +159,14 @@ export async function POST(req: Request) {
 
     const [school, settings] = await Promise.all([
       prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } }),
-      prisma.schoolSettings.findUnique({ where: { schoolId }, select: { emailDomain: true } }),
+      prisma.schoolSettings.findUnique({ where: { schoolId }, select: { emailDomain: true, defaultInstallments: true } as any }),
     ]);
     const schoolDomain =
       normalizeEmailDomain(settings?.emailDomain) ?? schoolDomainFromName(school?.name ?? "school");
+    const schoolDefaultInstallments =
+      Number.isInteger((settings as any)?.defaultInstallments) && (settings as any).defaultInstallments > 0
+        ? (settings as any).defaultInstallments
+        : 3;
 
     const year = new Date().getFullYear();
 
@@ -355,7 +359,7 @@ export async function POST(req: Request) {
                     finalFee,
                     amountPaid: 0,
                     remainingFee: finalFee,
-                    installments: 3,
+                    installments: schoolDefaultInstallments,
                   },
                 });
               }
@@ -373,7 +377,8 @@ export async function POST(req: Request) {
                   admissionPrefix: "ADM",
                   rollNoPrefix: "",
                   admissionCounter: 0,
-                },
+                  defaultInstallments: schoolDefaultInstallments,
+                } as any,
               });
             }
 
@@ -384,10 +389,15 @@ export async function POST(req: Request) {
                 admissionPrefix: true,
                 rollNoPrefix: true,
                 admissionCounter: true,
-              },
+                defaultInstallments: true,
+              } as any,
             });
 
             const nextNum = updatedSettings.admissionCounter;
+            const defaultInstallments =
+              Number.isInteger((updatedSettings as any).defaultInstallments) && (updatedSettings as any).defaultInstallments > 0
+                ? (updatedSettings as any).defaultInstallments
+                : schoolDefaultInstallments;
             const admissionNumber = `${
               updatedSettings.admissionPrefix
             }/${year}/${String(nextNum).padStart(3, "0")}`;
@@ -480,7 +490,7 @@ export async function POST(req: Request) {
                   finalFee,
                   amountPaid: 0,
                   remainingFee: finalFee,
-                  installments: 3,
+                  installments: defaultInstallments,
                 },
               });
             }

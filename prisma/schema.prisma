@@ -263,6 +263,7 @@ model SchoolSettings {
   admissionPrefix  String @default("ADM") // e.g. ADM -> ADM/2026/001
   rollNoPrefix     String @default("") // optional prefix for roll numbers
   admissionCounter Int    @default(0) // last used number for admission
+  defaultInstallments Int @default(3) // default installments for newly created student fees
 
   // Email domain override for auto-generated emails (e.g. "myschool.in")
   emailDomain String?

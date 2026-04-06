@@ -319,7 +319,7 @@ export async function POST(req: Request) {
       async (tx) => {
         const [school, emailSettings] = await Promise.all([
           tx.school.findUnique({ where: { id: schoolId }, select: { name: true } }),
-          tx.schoolSettings.findUnique({ where: { schoolId }, select: { emailDomain: true } }),
+          tx.schoolSettings.findUnique({ where: { schoolId }, select: { emailDomain: true, defaultInstallments: true } as any }),
         ]);
         const schoolDomain =
           normalizeEmailDomain(emailSettings?.emailDomain) ?? schoolDomainFromName(school?.name ?? "school");
@@ -328,10 +328,14 @@ export async function POST(req: Request) {
         let settings = await tx.schoolSettings.findUnique({ where: { schoolId } });
         if (!settings) {
           settings = await tx.schoolSettings.create({
-            data: { schoolId, admissionPrefix: "ADM", rollNoPrefix: "", admissionCounter: 0 },
+            data: { schoolId, admissionPrefix: "ADM", rollNoPrefix: "", admissionCounter: 0, defaultInstallments: 3 } as any,
           });
         }
         const nextNum = settings.admissionCounter + 1;
+        const defaultInstallments =
+          Number.isInteger((settings as any)?.defaultInstallments) && (settings as any).defaultInstallments > 0
+            ? (settings as any).defaultInstallments
+            : 3;
         const admissionNumber =
           `${settings.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
         
@@ -464,7 +468,7 @@ export async function POST(req: Request) {
             finalFee,
             amountPaid: 0,
             remainingFee: finalFee,
-            installments: 3,
+            installments: defaultInstallments,
           },
         });
 

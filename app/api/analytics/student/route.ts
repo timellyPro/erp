@@ -26,6 +26,7 @@ export async function GET() {
       include: {
         user: { select: { id: true, name: true, email: true, photoUrl: true } },
         class: { select: { id: true, name: true, section: true } },
+        school: { select: { name: true } },
         fee: true,
       },
     });
@@ -236,6 +237,7 @@ export async function GET() {
       student: {
         name: student.user?.name || "Student",
         rollNo: student.rollNo || "",
+        schoolName: student.school?.name || "",
         class: student.class
           ? `${student.class.name}${student.class.section ? ` • ${student.class.section}` : ""}`
           : student.classId
