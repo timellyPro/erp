@@ -22,6 +22,11 @@ export const metadata: Metadata = {
   title: "Timelly - School ERP & Management Software",
   description:
     "Timelly is a powerful School ERP and management software for handling student data, attendance tracking,staff management, and real-time notifications. Perfect solution for modern schools and institutions.",
+  icons: {
+    icon: [{ url: "/icon.png?v=3", type: "image/png", sizes: "32x32" }],
+    shortcut: [{ url: "/icon.png?v=3", type: "image/png" }],
+    apple: [{ url: "/icon.png?v=3", type: "image/png", sizes: "180x180" }],
+  },
 };
 
 export default function RootLayout({
