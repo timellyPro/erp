@@ -7,6 +7,20 @@ type RouteParams =
   | { params: { id: string } }
   | { params: Promise<{ id: string }> };
 
+function normalizeResidencyType(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") return null;
+  const raw = value.trim();
+  if (!raw) return "Day Scholar";
+  const normalized = raw.toLowerCase().replace(/\s+/g, "");
+  if (normalized === "dayscholar" || normalized === "dayscholer") return "Day Scholar";
+  if (normalized === "hostler" || normalized === "hosteler" || normalized === "hosteller" || normalized === "hoster") {
+    return "Hosteller";
+  }
+  return raw;
+}
+
 export async function GET(_req: Request, context: RouteParams) {
   const resolved = "then" in context.params ? await context.params : context.params;
   const id = resolved.id;
@@ -215,6 +229,7 @@ export async function GET(_req: Request, context: RouteParams) {
         motherOccupation: student.occupation ?? "",
         fatherPhone: student.phoneNo ?? "",
         previousSchool: student.previousSchool ?? "",
+        residencyType: student.residencyType ?? "Day Scholar",
         applicationFee: student.applicationFee ?? null,
         admissionFee: student.admissionFee ?? null,
         createdAt: student.createdAt?.toISOString() ?? "",
@@ -319,6 +334,7 @@ export async function PUT(req: Request, context: RouteParams) {
     const email = typeof body.email === "string" ? body.email.trim() : undefined;
     const address = typeof body.address === "string" ? body.address.trim() || null : undefined;
     const gender = typeof body.gender === "string" ? body.gender.trim() || null : undefined;
+    const residencyType = normalizeResidencyType(body.residencyType);
     const previousSchool = typeof body.previousSchool === "string" ? body.previousSchool.trim() || null : undefined;
     const parseOptFee = (v: unknown): number | null | undefined => {
       if (v === undefined) return undefined;
@@ -355,6 +371,7 @@ export async function PUT(req: Request, context: RouteParams) {
     if (phoneNo !== undefined) studentUpdate.phoneNo = phoneNo;
     if (address !== undefined) studentUpdate.address = address;
     if (gender !== undefined) studentUpdate.gender = gender;
+    if (residencyType !== undefined) studentUpdate.residencyType = residencyType;
     if (previousSchool !== undefined) studentUpdate.previousSchool = previousSchool;
     if (applicationFee !== undefined) studentUpdate.applicationFee = applicationFee;
     if (admissionFee !== undefined) studentUpdate.admissionFee = admissionFee;

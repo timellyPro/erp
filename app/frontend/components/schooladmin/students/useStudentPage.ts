@@ -55,6 +55,7 @@ const DEFAULT_FORM: StudentFormState = {
   name: "",
   rollNo: "",
   gender: "",
+  residencyType: "Day Scholar",
   dob: "",
   classId: "",
   section: "",
@@ -489,6 +490,7 @@ export default function useStudentPage({ classes = [], reload }: Props) {
         admissionFee: form.admissionFee.trim() ? Number(form.admissionFee) : null,
         rollNo: form.rollNo?.trim() || undefined,
         gender: form.gender?.trim() || undefined,
+        residencyType: form.residencyType?.trim() || "Day Scholar",
       });
 
       const data = await res.json();
@@ -617,6 +619,7 @@ export default function useStudentPage({ classes = [], reload }: Props) {
         phoneNo: editForm.phoneNo.trim() || undefined,
         address: editForm.address.trim() || undefined,
         gender: editForm.gender.trim() || undefined,
+        residencyType: editForm.residencyType?.trim() || "Day Scholar",
         applicationFee: editForm.applicationFee.trim()
           ? Number(editForm.applicationFee)
           : null,

@@ -106,6 +106,18 @@ export default function AddStudentForm({
           />
         </div>
         <div>
+          <SelectInput
+            label="Residency Type"
+            value={form.residencyType}
+            onChange={(value) => onFieldChange("residencyType", value)}
+            options={[
+              { label: "Day Scholar", value: "Day Scholar" },
+              { label: "Hosteller", value: "Hosteller" },
+            ]}
+            bgColor="white"
+          />
+        </div>
+        <div>
           <label className="block text-xs font-medium text-white/70 mb-1.5">
             Age
           </label>

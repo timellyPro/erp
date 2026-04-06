@@ -9,6 +9,7 @@ import PageTabs from "../../schooladmin/schooladmincomponents/PageHeaderTabs";
 import InputField from "../../schooladmin/schooladmincomponents/InputField";
 import DataTable from "../../common/TableLayout";
 import SearchInput from "../../common/SearchInput";
+import { generateFeeReceipt } from "../../../utils/receiptGenerator";
 
 type Gender = "MALE" | "FEMALE";
 type BoardingType = "SEMI_RESIDENTIAL" | "REGULAR_BOARDER";
@@ -35,6 +36,7 @@ type AdmissionRow = {
   class?: { id: string; name: string; section: string | null } | null;
   gradeSought: Grade;
   boardingType: BoardingType;
+  residencyType?: string | null;
   totalFee?: number | null;
   discountPercent?: number | null;
   applicationFee?: number | null;
@@ -61,6 +63,7 @@ type FormState = {
   classId: string;
   gradeSought: Grade;
   boardingType: BoardingType;
+  residencyType: string;
   totalFee: string;
   discountPercent: string;
   applicationFee: string;
@@ -129,6 +132,7 @@ const defaultForm = (): FormState => ({
   classId: "",
   gradeSought: "GRADE_1",
   boardingType: "SEMI_RESIDENTIAL",
+  residencyType: "Day Scholar",
   totalFee: "",
   discountPercent: "0",
   applicationFee: "",
@@ -203,61 +207,44 @@ function formatInrCell(n: number | null | undefined) {
   return `₹ ${Number(n).toLocaleString("en-IN")}`;
 }
 
-function escapeHtml(s: string) {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+function normalizeResidencyType(value: string | null | undefined): string {
+  const v = (value ?? "").trim().toLowerCase().replace(/\s+/g, "");
+  if (!v) return "Day Scholar";
+  if (v === "dayscholar" || v === "dayscholer") return "Day Scholar";
+  if (v === "hostler" || v === "hosteler" || v === "hosteller" || v === "hoster") return "Hosteller";
+  return value?.trim() || "Day Scholar";
 }
 
-function downloadFeeReceipt(opts: {
+async function downloadFeeReceipt(opts: {
   schoolName: string;
   applicationNo: string;
   studentName: string;
+  className: string;
   createdAt: string;
+  residencyType?: string | null;
   applicationFee: number | null | undefined;
   admissionFee: number | null | undefined;
 }) {
-  const app = opts.applicationFee;
-  const adm = opts.admissionFee;
-  const sum =
-    app != null || adm != null ? Number(app ?? 0) + Number(adm ?? 0) : null;
-  const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"/><title>Fee receipt</title>
-<style>
-body{font-family:system-ui,sans-serif;max-width:520px;margin:40px auto;padding:24px;border:1px solid #ddd;border-radius:12px;}
-h1{font-size:1.25rem;margin:0 0 8px;}
-p{margin:6px 0;color:#444;font-size:14px;}
-table{width:100%;border-collapse:collapse;margin-top:16px;}
-td{padding:8px;border-bottom:1px solid #eee;}
-.note{font-size:12px;color:#666;margin-top:20px;}
-</style></head><body>
-<h1>Fee receipt (record)</h1>
-<p><strong>School:</strong> ${escapeHtml(opts.schoolName || "—")}</p>
-<p><strong>Application No:</strong> ${escapeHtml(opts.applicationNo)}</p>
-<p><strong>Student:</strong> ${escapeHtml(opts.studentName)}</p>
-<p><strong>Date:</strong> ${escapeHtml(opts.createdAt)}</p>
-<table>
-<tr><td>Application fee</td><td align="right">${formatInrCell(app)}</td></tr>
-<tr><td>Admission fee</td><td align="right">${formatInrCell(adm)}</td></tr>
-${
-  sum != null && Number.isFinite(sum)
-    ? `<tr><td><strong>Total</strong></td><td align="right"><strong>${formatInrCell(sum)}</strong></td></tr>`
-    : ""
-}
-</table>
-<p class="note">Amounts are recorded in the system only. No online payment is processed from this screen.</p>
-</body></html>`;
-  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `fee-receipt-${opts.applicationNo.replace(/[^\w-]+/g, "_")}.html`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  const app = Number(opts.applicationFee ?? 0);
+  const adm = Number(opts.admissionFee ?? 0);
+  const sum = app + adm;
+  generateFeeReceipt({
+    schoolName: opts.schoolName || "Timelly School",
+    studentName: opts.studentName || "Student",
+    admissionNumber: opts.applicationNo || "-",
+    className: opts.className || "-",
+    totalFees: sum,
+    amountPaid: sum,
+    remainingFees: 0,
+    paymentDate: opts.createdAt,
+    paymentMethod: "Offline",
+    transactionId: opts.applicationNo || "N/A",
+    feeBreakdown: [
+      { feeType: "Application Fee", amount: app },
+      { feeType: "Admission Fee", amount: adm },
+      { feeType: `Residency (${normalizeResidencyType(opts.residencyType)})`, amount: 0 },
+    ],
+  });
 }
 
 export default function TeacherAdmissionTab() {
@@ -348,6 +335,7 @@ export default function TeacherAdmissionTab() {
       { header: "Student", render: (r: AdmissionRow) => <span className="text-sm text-white/80">{`${r.firstName} ${r.lastName}`}</span> },
       { header: "Grade", render: (r: AdmissionRow) => <span className="text-sm text-white/70">{r.gradeSought}</span> },
       { header: "Boarding", render: (r: AdmissionRow) => <span className="text-sm text-white/70">{r.boardingType}</span> },
+      { header: "Residency", render: (r: AdmissionRow) => <span className="text-sm text-white/70">{normalizeResidencyType(r.residencyType)}</span> },
       { header: "Parent Phone", render: (r: AdmissionRow) => <span className="text-sm text-white/70">{r.parentPhone}</span> },
       {
         header: "Application Fee",
@@ -373,13 +361,15 @@ export default function TeacherAdmissionTab() {
                   schoolName,
                   applicationNo: r.applicationNo,
                   studentName: `${r.firstName} ${r.lastName}`,
+                  className: r.class ? `${r.class.name}${r.class.section ? `-${r.class.section}` : ""}` : r.gradeSought,
                   createdAt: new Date(r.createdAt).toLocaleString(),
+                  residencyType: r.residencyType,
                   applicationFee: r.applicationFee,
                   admissionFee: r.admissionFee,
                 })
               }
               className="p-2 rounded-lg bg-lime-400/10 border border-lime-400/25 text-lime-300 hover:bg-lime-400/20"
-              title="Download fee receipt (HTML)"
+              title="Download fee receipt (PDF)"
             >
               <FileText size={14} />
             </button>
@@ -456,6 +446,7 @@ export default function TeacherAdmissionTab() {
           classId: a.classId ?? "",
           gradeSought: a.gradeSought,
           boardingType: a.boardingType,
+          residencyType: normalizeResidencyType(a.residencyType),
           totalFee: a.totalFee === null || a.totalFee === undefined ? "" : String(a.totalFee),
           discountPercent:
             a.discountPercent === null || a.discountPercent === undefined ? "0" : String(a.discountPercent),
@@ -555,6 +546,7 @@ export default function TeacherAdmissionTab() {
         parentAadharNo: form.parentAadharNo?.trim() || derivedParentAadhar,
         previousSchoolName: form.previousSchoolName?.trim() || "-",
         previousSchoolAddress: form.previousSchoolAddress?.trim() || "-",
+        residencyType: normalizeResidencyType(form.residencyType),
       };
       const endpoint = editId ? `/api/admissions/${editId}` : "/api/admissions/create";
       const method = editId ? "PUT" : "POST";
@@ -680,6 +672,15 @@ export default function TeacherAdmissionTab() {
                   value={form.boardingType}
                   onChange={(v) => setForm((p) => ({ ...p, boardingType: v as BoardingType }))}
                   options={BOARDING}
+                />
+                <Select
+                  label="Residency Type"
+                  value={form.residencyType}
+                  onChange={(v) => setForm((p) => ({ ...p, residencyType: v }))}
+                  options={[
+                    { label: "Day Scholar", value: "Day Scholar" },
+                    { label: "Hosteller", value: "Hosteller" },
+                  ]}
                 />
                 <Select
                   label="Gender"
@@ -962,7 +963,9 @@ export default function TeacherAdmissionTab() {
                             schoolName,
                             applicationNo: r.applicationNo,
                             studentName: `${r.firstName} ${r.lastName}`,
+                            className: r.class ? `${r.class.name}${r.class.section ? `-${r.class.section}` : ""}` : r.gradeSought,
                             createdAt: new Date(r.createdAt).toLocaleString(),
+                            residencyType: r.residencyType,
                             applicationFee: r.applicationFee,
                             admissionFee: r.admissionFee,
                           })

@@ -7,6 +7,18 @@ import { Role } from "@prisma/client";
 import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
 import { randomUUID } from "crypto";
 
+function normalizeResidencyType(value: unknown) {
+  if (typeof value !== "string") return "Day Scholar";
+  const raw = value.trim();
+  if (!raw) return "Day Scholar";
+  const normalized = raw.toLowerCase().replace(/\s+/g, "");
+  if (normalized === "dayscholar" || normalized === "dayscholer") return "Day Scholar";
+  if (normalized === "hostler" || normalized === "hosteler" || normalized === "hosteller" || normalized === "hoster") {
+    return "Hosteller";
+  }
+  return raw;
+}
+
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -98,6 +110,7 @@ export async function POST(req: Request) {
       emergencyGuardianNo,
       applicationFee: applicationFeeInput,
       admissionFee: admissionFeeInput,
+      residencyType: residencyTypeInput,
     } = body;
 
     const parseOptFee = (v: unknown): number | null => {
@@ -121,6 +134,7 @@ export async function POST(req: Request) {
     let effectiveDiscountPercentInput = discountPercentInput;
     let effectiveRollNo = rollNo;
     let effectiveGenderInput = genderInput;
+    let effectiveResidencyType = normalizeResidencyType(residencyTypeInput);
     let effectivePreviousSchoolInput = previousSchoolInput;
 
     let effectiveApplicationFee = parseOptFee(applicationFeeInput);
@@ -157,6 +171,7 @@ export async function POST(req: Request) {
         effectiveAdmissionFee = app.admissionFee;
       }
       effectiveGenderInput = app.gender === "MALE" ? "Male" : "Female";
+      effectiveResidencyType = normalizeResidencyType(app.residencyType);
       effectivePreviousSchoolInput = app.previousSchoolName;
       applicationToLink = { id: app.id };
     }
@@ -419,6 +434,7 @@ export async function POST(req: Request) {
                 : null,
             aadhaarNo: aadhaarCleaned,
             phoneNo: String(effectivePhoneNo).trim(),
+            residencyType: effectiveResidencyType,
             rollNo:
               typeof effectiveRollNo === "string" && effectiveRollNo.trim()
                 ? effectiveRollNo.trim()
@@ -474,6 +490,7 @@ export async function POST(req: Request) {
               admissionNo: null,
               gradeSought: "GRADE_1",
               boardingType: "SEMI_RESIDENTIAL",
+              residencyType: effectiveResidencyType,
               totalFee,
               discountPercent: safeDiscount,
               applicationFee: effectiveApplicationFee,
