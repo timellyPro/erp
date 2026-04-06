@@ -56,6 +56,8 @@ type StatCardConfig = {
 export default function ParentAttendanceTab() {
   const { data: session } = useSession();
   const studentId = session?.user?.studentId ?? null;
+  const sessionSchoolName =
+    typeof (session?.user as any)?.schoolName === "string" ? (session?.user as any).schoolName : "";
 
   const [monthCursor, setMonthCursor] = useState(firstDayOfMonth(new Date()));
   const [selectedDateKey, setSelectedDateKey] = useState("");
@@ -63,6 +65,7 @@ export default function ParentAttendanceTab() {
   const [dailyStatus, setDailyStatus] = useState<Record<string, "PRESENT" | "ABSENT" | "LATE" | "HOLIDAY">>({});
   const [studentName, setStudentName] = useState("your child");
   const [studentClassLabel, setStudentClassLabel] = useState("");
+  const [schoolName, setSchoolName] = useState(sessionSchoolName || "");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [generatingPdf, setGeneratingPdf] = useState(false);
@@ -132,6 +135,8 @@ export default function ParentAttendanceTab() {
         const studentData = (await res.json()) as StudentDetailResponse;
         const name = studentData?.student?.name?.trim();
         if (name) setStudentName(name);
+        const school = studentData?.student?.schoolName?.trim();
+        if (school) setSchoolName(school);
 
         const cls =
           studentData?.student?.class?.displayName?.trim() ||
@@ -307,6 +312,7 @@ export default function ParentAttendanceTab() {
   };
 
   const reportData: AttendanceReportData = useMemo(() => ({
+    schoolName,
     studentName,
     studentClass: studentClassLabel,
     dateGenerated: new Date(),
@@ -317,7 +323,7 @@ export default function ParentAttendanceTab() {
       total: academicYearSummary.total,
       presentRate: academicYearSummary.presentRate,
     }
-  }), [studentName, studentClassLabel, academicYearSummary]);
+  }), [schoolName, studentName, studentClassLabel, academicYearSummary]);
 
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);

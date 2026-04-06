@@ -29,7 +29,7 @@ export async function GET() {
 
     if (!settings) {
       const created = await prisma.schoolSettings.create({
-        data: { schoolId, admissionPrefix: "ADM", rollNoPrefix: "", admissionCounter: 0 },
+        data: { schoolId, admissionPrefix: "ADM", rollNoPrefix: "", admissionCounter: 0, defaultInstallments: 3 },
       });
       return NextResponse.json({ settings: created }, { status: 200 });
     }
@@ -56,6 +56,7 @@ export async function PUT(req: Request) {
       admissionPrefix,
       rollNoPrefix,
       emailDomain,
+      defaultInstallments,
 
       hyperpgMerchantId,
       hyperpgApiKey,
@@ -69,10 +70,18 @@ export async function PUT(req: Request) {
       juspayApiKey?: string | null;
       hyperpgMerchantId?: string | null;
       hyperpgApiKey?: string | null;
+      defaultInstallments?: number;
     } = {};
     if (typeof admissionPrefix === "string") data.admissionPrefix = admissionPrefix;
     if (typeof rollNoPrefix === "string") data.rollNoPrefix = rollNoPrefix;
     if (emailDomain !== undefined) data.emailDomain = emailDomain === "" ? null : String(emailDomain);
+    if (defaultInstallments !== undefined) {
+      const n = Number(defaultInstallments);
+      if (!Number.isInteger(n) || n <= 0) {
+        return NextResponse.json({ message: "defaultInstallments must be a positive integer" }, { status: 400 });
+      }
+      data.defaultInstallments = n;
+    }
 
     if (hyperpgMerchantId !== undefined) data.hyperpgMerchantId = hyperpgMerchantId === "" ? null : String(hyperpgMerchantId);
     if (hyperpgApiKey !== undefined) data.hyperpgApiKey = hyperpgApiKey === "" ? null : String(hyperpgApiKey);
@@ -82,6 +91,7 @@ export async function PUT(req: Request) {
       admissionPrefix: "ADM",
       rollNoPrefix: "",
       admissionCounter: 0,
+      defaultInstallments: 3,
       ...data,
     };
     const settings = await prisma.schoolSettings.upsert({
@@ -89,6 +99,13 @@ export async function PUT(req: Request) {
       create: createData,
       update: data,
     });
+
+    if (typeof data.defaultInstallments === "number") {
+      await prisma.studentFee.updateMany({
+        where: { student: { schoolId } },
+        data: { installments: data.defaultInstallments },
+      });
+    }
     return NextResponse.json({ settings }, { status: 200 });
   } catch (e: unknown) {
     console.error("School settings PUT:", e);

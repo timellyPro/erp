@@ -5,6 +5,11 @@ export interface ReceiptData {
     studentName: string;
     admissionNumber: string;
     className: string;
+    gradeSought?: string;
+    boardingType?: string;
+    residencyType?: string;
+    parentName?: string;
+    parentPhone?: string;
     totalFees: number;
     amountPaid: number;
     remainingFees: number;
@@ -258,8 +263,13 @@ export const generateFeeReceipt = (data: ReceiptData) => {
 
     const studentInfo = [
         [`Student Name:`, data.studentName],
-        [`Admission Number:`, data.admissionNumber],
+        [`Application No:`, data.admissionNumber],
         [`Class:`, data.className],
+        [`Grade:`, data.gradeSought || "-"],
+        [`Boarding:`, data.boardingType || "-"],
+        [`Residency:`, data.residencyType || "-"],
+        [`Parent Name:`, data.parentName || "-"],
+        [`Parent Phone:`, data.parentPhone || "-"],
     ];
 
     studentInfo.forEach(([label, value]) => {
@@ -283,7 +293,7 @@ export const generateFeeReceipt = (data: ReceiptData) => {
     doc.setFont("helvetica", "normal");
 
     const paymentInfo = [
-        [`Payment Date:`, new Date(data.paymentDate).toLocaleDateString("en-IN")],
+        [`Receipt Date:`, new Date(data.paymentDate).toLocaleString("en-IN")],
         [`Transaction ID:`, data.transactionId],
         [`Payment Method:`, data.paymentMethod],
     ];

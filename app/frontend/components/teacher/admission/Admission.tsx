@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { Download, FileText, Pencil, PlusCircle, Save, Search, Trash2 } from "lucide-react";
@@ -9,7 +9,8 @@ import PageTabs from "../../schooladmin/schooladmincomponents/PageHeaderTabs";
 import InputField from "../../schooladmin/schooladmincomponents/InputField";
 import DataTable from "../../common/TableLayout";
 import SearchInput from "../../common/SearchInput";
-import { generateFeeReceipt } from "../../../utils/receiptGenerator";
+import { generatePDF } from "@/lib/pdfUtils";
+import AdmissionReceiptTemplate, { type AdmissionReceiptData } from "../../pdf/AdmissionReceiptTemplate";
 
 type Gender = "MALE" | "FEMALE";
 type BoardingType = "SEMI_RESIDENTIAL" | "REGULAR_BOARDER";
@@ -215,38 +216,6 @@ function normalizeResidencyType(value: string | null | undefined): string {
   return value?.trim() || "Day Scholar";
 }
 
-async function downloadFeeReceipt(opts: {
-  schoolName: string;
-  applicationNo: string;
-  studentName: string;
-  className: string;
-  createdAt: string;
-  residencyType?: string | null;
-  applicationFee: number | null | undefined;
-  admissionFee: number | null | undefined;
-}) {
-  const app = Number(opts.applicationFee ?? 0);
-  const adm = Number(opts.admissionFee ?? 0);
-  const sum = app + adm;
-  generateFeeReceipt({
-    schoolName: opts.schoolName || "Timelly School",
-    studentName: opts.studentName || "Student",
-    admissionNumber: opts.applicationNo || "-",
-    className: opts.className || "-",
-    totalFees: sum,
-    amountPaid: sum,
-    remainingFees: 0,
-    paymentDate: opts.createdAt,
-    paymentMethod: "Offline",
-    transactionId: opts.applicationNo || "N/A",
-    feeBreakdown: [
-      { feeType: "Application Fee", amount: app },
-      { feeType: "Admission Fee", amount: adm },
-      { feeType: `Residency (${normalizeResidencyType(opts.residencyType)})`, amount: 0 },
-    ],
-  });
-}
-
 export default function TeacherAdmissionTab() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -278,13 +247,49 @@ export default function TeacherAdmissionTab() {
   const [selectedClassName, setSelectedClassName] = useState("");
   const [selectedSection, setSelectedSection] = useState("");
   const [schoolName, setSchoolName] = useState("");
+  const [schoolAddress, setSchoolAddress] = useState("");
+  const [receiptData, setReceiptData] = useState<AdmissionReceiptData | null>(null);
+  const receiptRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch("/api/school/mine", { credentials: "include", cache: "no-store" })
       .then((res) => res.json())
-      .then((d) => setSchoolName(typeof d?.school?.name === "string" ? d.school.name : ""))
-      .catch(() => setSchoolName(""));
+      .then((d) => {
+        setSchoolName(typeof d?.school?.name === "string" ? d.school.name : "");
+        const address = [d?.school?.address, d?.school?.location].filter((v: any) => typeof v === "string" && v.trim()).join(", ");
+        setSchoolAddress(address);
+      })
+      .catch(() => {
+        setSchoolName("");
+        setSchoolAddress("");
+      });
   }, []);
+
+  const downloadFeeReceipt = async (r: AdmissionRow) => {
+    const app = Number(r.applicationFee ?? 0);
+    const adm = Number(r.admissionFee ?? 0);
+    const data: AdmissionReceiptData = {
+      schoolName: schoolName || "School",
+      schoolAddress: schoolAddress || "-",
+      applicationNo: r.applicationNo || "-",
+      studentName: `${r.firstName} ${r.lastName}`.trim() || "Student",
+      className: r.class ? `${r.class.name}${r.class.section ? `-${r.class.section}` : ""}` : r.gradeSought,
+      gradeSought: r.gradeSought,
+      boardingType: r.boardingType,
+      residencyType: normalizeResidencyType(r.residencyType),
+      parentName: r.parentName || "-",
+      parentPhone: r.parentPhone || "-",
+      createdAt: new Date(r.createdAt).toLocaleString(),
+      applicationFee: app,
+      admissionFee: adm,
+      total: app + adm,
+    };
+
+    setReceiptData(data);
+    setTimeout(async () => {
+      await generatePDF(receiptRef, `fee-receipt-${(r.applicationNo || "APP").replace(/[^\w-]+/g, "_")}.pdf`);
+    }, 200);
+  };
 
   useEffect(() => {
     fetch("/api/class/list")
@@ -357,16 +362,7 @@ export default function TeacherAdmissionTab() {
             <button
               type="button"
               onClick={() =>
-                downloadFeeReceipt({
-                  schoolName,
-                  applicationNo: r.applicationNo,
-                  studentName: `${r.firstName} ${r.lastName}`,
-                  className: r.class ? `${r.class.name}${r.class.section ? `-${r.class.section}` : ""}` : r.gradeSought,
-                  createdAt: new Date(r.createdAt).toLocaleString(),
-                  residencyType: r.residencyType,
-                  applicationFee: r.applicationFee,
-                  admissionFee: r.admissionFee,
-                })
+                downloadFeeReceipt(r)
               }
               className="p-2 rounded-lg bg-lime-400/10 border border-lime-400/25 text-lime-300 hover:bg-lime-400/20"
               title="Download fee receipt (PDF)"
@@ -959,16 +955,7 @@ export default function TeacherAdmissionTab() {
                       <button
                         type="button"
                         onClick={() =>
-                          downloadFeeReceipt({
-                            schoolName,
-                            applicationNo: r.applicationNo,
-                            studentName: `${r.firstName} ${r.lastName}`,
-                            className: r.class ? `${r.class.name}${r.class.section ? `-${r.class.section}` : ""}` : r.gradeSought,
-                            createdAt: new Date(r.createdAt).toLocaleString(),
-                            residencyType: r.residencyType,
-                            applicationFee: r.applicationFee,
-                            admissionFee: r.admissionFee,
-                          })
+                          downloadFeeReceipt(r)
                         }
                         className="px-3 py-2 rounded-xl bg-lime-400/15 border border-lime-400/30 text-lime-300 text-xs"
                       >
@@ -1043,6 +1030,9 @@ export default function TeacherAdmissionTab() {
           </div>
         </div>
       )}
+      <div className="pointer-events-none opacity-0 fixed -top-[10000px] -left-[10000px]">
+        <AdmissionReceiptTemplate ref={receiptRef} data={receiptData} />
+      </div>
     </>
   );
 }

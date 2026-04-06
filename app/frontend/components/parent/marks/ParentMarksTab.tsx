@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useMemo } from "react";
+import { useSession } from "next-auth/react";
 import {
   TrendingUp,
   Trophy,
@@ -54,8 +55,12 @@ function getGradeLabel(percentage: number): string {
 }
 
 export default function ParentMarksTab() {
+  const { data: session } = useSession();
+  const sessionSchoolName =
+    typeof (session?.user as any)?.schoolName === "string" ? (session?.user as any).schoolName : "";
   const [marks, setMarks] = useState<Mark[]>([]);
   const [studentInfo, setStudentInfo] = useState<StudentInfo | null>(null);
+  const [schoolName, setSchoolName] = useState(sessionSchoolName || "");
   const [rank, setRank] = useState<number | null>(null);
   const [totalStudents, setTotalStudents] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -66,15 +71,24 @@ export default function ParentMarksTab() {
   useEffect(() => {
     (async () => {
       try {
-        const [marksRes, analyticsRes, userRes] = await Promise.all([
+        const [marksRes, analyticsRes, userRes, schoolRes] = await Promise.all([
           fetch("/api/marks/view", { credentials: "include" }),
           fetch("/api/analytics/student", { credentials: "include" }),
           fetch("/api/user/me", { credentials: "include" }),
+          fetch("/api/school/mine", { credentials: "include" }),
         ]);
 
         if (marksRes.ok) {
           const marksData = await marksRes.json();
           setMarks(marksData.marks || []);
+        }
+
+        if (schoolRes.ok) {
+          const schoolData = await schoolRes.json();
+          const n = schoolData?.school?.name;
+          if (typeof n === "string" && n.trim()) {
+            setSchoolName(n.trim());
+          }
         }
 
         // Get student ID from user session
@@ -104,6 +118,9 @@ export default function ParentMarksTab() {
               rollNo: student.rollNo || undefined,
             };
             setStudentInfo(studentInfoData);
+            if (typeof student.schoolName === "string" && student.schoolName.trim()) {
+              setSchoolName(student.schoolName.trim());
+            }
           } else if (studentId) {
             // Fallback: fetch student details directly if analytics doesn't have it
             try {
@@ -119,6 +136,9 @@ export default function ParentMarksTab() {
                     photoUrl: student.user?.photoUrl || null,
                     rollNo: student.rollNo || undefined,
                   });
+                  if (typeof student.schoolName === "string" && student.schoolName.trim()) {
+                    setSchoolName(student.schoolName.trim());
+                  }
                   
                   // Try to get class students count for rank context
                   if (student.classId) {
@@ -226,6 +246,7 @@ export default function ParentMarksTab() {
   };
 
   const reportData: MarksReportData = useMemo(() => ({
+    schoolName,
     studentName,
     studentClass: studentInfo?.class || "N/A",
     dateGenerated: new Date(),
@@ -241,7 +262,7 @@ export default function ParentMarksTab() {
       grade: m.grade,
       examType: m.examType,
     }))
-  }), [studentName, studentInfo, stats, rank, filteredMarks]);
+  }), [schoolName, studentName, studentInfo, stats, rank, filteredMarks]);
 
   if (loading) {
     return (

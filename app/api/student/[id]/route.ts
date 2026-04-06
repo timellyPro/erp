@@ -213,7 +213,7 @@ export async function GET(_req: Request, context: RouteParams) {
       student: {
         id: student.id,
         name: student.user?.name ?? "",
-        schoolName: student.school?.name ?? "Timelly School",
+        schoolName: student.school?.name ?? "",
         admissionNumber: student.admissionNumber,
         email: student.user?.email ?? "",
         photoUrl: student.user?.photoUrl ?? null,
