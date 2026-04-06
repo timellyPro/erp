@@ -20,13 +20,47 @@ type Props = {
   studentName?: string;
   studentId?: string;
   admissionNumber?: string;
+  applicationFee?: number | null;
+  admissionFee?: number | null;
+  studentCreatedAt?: string;
 };
 
-export const FeeTransactions = ({ fee, payments, studentName = "Student", studentId = "", admissionNumber = "" }: Props) => {
+export const FeeTransactions = ({ fee, payments, studentName = "Student", studentId = "", admissionNumber = "", applicationFee, admissionFee, studentCreatedAt }: Props) => {
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   const hasFee = fee && (fee.totalFee > 0 || fee.amountPaid > 0 || fee.remainingFee > 0);
-  const activePayments = payments && payments.length > 0 ? payments : [];
+  
+  const basePayments = payments && payments.length > 0 ? [...payments] : [];
+  
+  if (admissionFee && admissionFee > 0) {
+    basePayments.push({
+      id: "admission-fee",
+      amount: admissionFee,
+      status: "Paid",
+      method: "One-time",
+      createdAt: studentCreatedAt || new Date().toISOString(),
+      transactionId: "N/A",
+      feeTypeName: "Admission Fee",
+      feeTypeAmount: admissionFee
+    });
+  }
+  
+  if (applicationFee && applicationFee > 0) {
+    basePayments.push({
+      id: "application-fee",
+      amount: applicationFee,
+      status: "Paid",
+      method: "One-time",
+      createdAt: studentCreatedAt || new Date().toISOString(),
+      transactionId: "N/A",
+      feeTypeName: "Application Fee",
+      feeTypeAmount: applicationFee
+    });
+  }
+
+  // Sort by date descending
+  const activePayments = basePayments.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
   const totalPaid = hasFee ? fee!.amountPaid : 0;
   const total = hasFee ? fee!.amountPaid + fee!.remainingFee : 0;
   const hasAny = hasFee || activePayments.length > 0;

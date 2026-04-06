@@ -33,6 +33,9 @@ type StudentDetail = {
     motherOccupation?: string;
     fatherPhone?: string;
     class: { id: string; name: string; section: string | null; displayName: string } | null;
+    applicationFee: number | null;
+    admissionFee: number | null;
+    createdAt?: string;
   };
   fee: {
     baseTotalFee: number;
@@ -323,6 +326,9 @@ function StudentDetailsPageContent() {
             <FeeTransactions
               fee={detail.fee}
               payments={detail.payments}
+              applicationFee={detail.student.applicationFee}
+              admissionFee={detail.student.admissionFee}
+              studentCreatedAt={detail.student.createdAt}
               studentName={detail.student.name}
               studentId={detail.student.id}
               admissionNumber={detail.student.admissionNumber}

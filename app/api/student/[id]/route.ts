@@ -216,6 +216,7 @@ export async function GET(_req: Request, context: RouteParams) {
         previousSchool: student.previousSchool ?? "",
         applicationFee: student.applicationFee ?? null,
         admissionFee: student.admissionFee ?? null,
+        createdAt: student.createdAt?.toISOString() ?? "",
         // status isn’t stored on the model yet; show Active by default
         status: "Active",
         class: student.class
