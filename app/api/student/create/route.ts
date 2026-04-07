@@ -337,31 +337,47 @@ export async function POST(req: Request) {
             : 3;
         let nextNum = 0;
         let admissionNumber = "";
-        let admissionNumberReady = false;
-        // Generate admission number with atomic counter increments + retry.
-        // This heals stale counters and avoids race-condition conflicts.
-        // Keep retrying for a larger window so stale counters don't block creation
-        // when many existing admissions already occupy early numbers.
-        for (let attempt = 0; attempt < 1000; attempt++) {
-          const updatedSettings = await tx.schoolSettings.update({
-            where: { schoolId },
-            data: { admissionCounter: { increment: 1 } },
-            select: { admissionCounter: true, admissionPrefix: true },
-          });
-          nextNum = updatedSettings.admissionCounter;
-          admissionNumber = `${updatedSettings.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
+        const timellyId =
+          typeof effectiveRollNo === "string" && effectiveRollNo.trim()
+            ? effectiveRollNo.trim()
+            : null;
 
+        if (timellyId) {
+          admissionNumber = `${settings.admissionPrefix}/${year}/${timellyId}`;
           const existingAdmission = await tx.student.findUnique({
             where: { admissionNumber },
             select: { id: true },
           });
-          if (!existingAdmission) {
-            admissionNumberReady = true;
-            break;
+          if (existingAdmission) {
+            throw new Error("This Timelly ID is already used. Please enter a different Timelly ID.");
           }
-        }
-        if (!admissionNumberReady) {
-          throw new Error("Unable to generate admission number. Please try again.");
+        } else {
+          let admissionNumberReady = false;
+          // Generate admission number with atomic counter increments + retry.
+          // This heals stale counters and avoids race-condition conflicts.
+          // Keep retrying for a larger window so stale counters don't block creation
+          // when many existing admissions already occupy early numbers.
+          for (let attempt = 0; attempt < 1000; attempt++) {
+            const updatedSettings = await tx.schoolSettings.update({
+              where: { schoolId },
+              data: { admissionCounter: { increment: 1 } },
+              select: { admissionCounter: true, admissionPrefix: true },
+            });
+            nextNum = updatedSettings.admissionCounter;
+            admissionNumber = `${updatedSettings.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
+
+            const existingAdmission = await tx.student.findUnique({
+              where: { admissionNumber },
+              select: { id: true },
+            });
+            if (!existingAdmission) {
+              admissionNumberReady = true;
+              break;
+            }
+          }
+          if (!admissionNumberReady) {
+            throw new Error("Unable to generate admission number. Please try again.");
+          }
         }
 
         const rollNoPrefix = settings.rollNoPrefix || "";
@@ -491,7 +507,9 @@ export async function POST(req: Request) {
             : null;
 
           const year2 = new Date().getFullYear();
-          const appNo = `APP/${year2}/${randomUUID().slice(0, 8).toUpperCase()}`;
+          // Keep mixed case from UUID slice (no forced uppercase).
+          const appNo = `APP/${year2}/${randomUUID().slice(0, 8)}`;
+          const generatedParentAadharNo = `${aadhaarCleaned}${String(Date.now()).slice(-4)}`;
 
           await tx.studentApplication.create({
             data: {
@@ -535,8 +553,11 @@ export async function POST(req: Request) {
               parentPhone: String(effectivePhoneNo).trim(),
               parentEmail:
                 parentContactEmail ??
-                `parent.${nameLocal}.${nextNum}@${schoolDomain}`,
-              parentAadharNo: typeof parentAadharNo === "string" && parentAadharNo.trim() ? parentAadharNo.trim() : `${aadhaarCleaned.slice(0, 8)}0000`,
+                `parent.${nameLocal}.${timellyId ?? nextNum}@${schoolDomain}`,
+              parentAadharNo:
+                typeof parentAadharNo === "string" && parentAadharNo.trim()
+                  ? parentAadharNo.trim()
+                  : generatedParentAadharNo,
               parentWhatsapp: typeof parentWhatsapp === "string" && parentWhatsapp.trim() ? parentWhatsapp.trim() : String(effectivePhoneNo).trim(),
               bankAccountNo: typeof bankAccountNo === "string" && bankAccountNo.trim() ? bankAccountNo.trim() : "-",
               previousSchoolName: typeof effectivePreviousSchoolInput === "string" && effectivePreviousSchoolInput.trim() ? effectivePreviousSchoolInput.trim() : "-",
@@ -600,6 +621,12 @@ export async function POST(req: Request) {
       if (field === "aadhaarNo") {
         return NextResponse.json(
           { message: "Aadhaar number already exists. Please check the Aadhaar number." },
+          { status: 400 }
+        );
+      }
+      if (field === "parentAadharNo") {
+        return NextResponse.json(
+          { message: "Parent Aadhaar conflict. Please enter a different parent Aadhaar number." },
           { status: 400 }
         );
       }

@@ -198,7 +198,7 @@ function StudentDetailsPageContent() {
         rightSlot={
           <div className="w-full sm:w-auto flex justify-center sm:justify-end">
             <div className="bg-[#0F172A]/40 border border-white/10 px-3 py-2 sm:px-4 rounded-xl text-xs sm:text-sm text-gray-200 whitespace-nowrap">
-              {new Date().getFullYear() - 1}-{new Date().getFullYear()}
+              {new Date().getFullYear() - 1}-{new Date().getFullYear() + 1}
             </div>
           </div>
         }

@@ -219,17 +219,58 @@ export async function POST(req: Request) {
             });
           }
 
-          const updated = await tx.schoolSettings.update({
-            where: { schoolId },
-            data: { admissionCounter: { increment: 1 } },
-            select: { admissionPrefix: true, rollNoPrefix: true, admissionCounter: true, defaultInstallments: true } as any,
-          });
-          const nextNum = updated.admissionCounter;
+          let nextNum = 0;
+          let updated: any = null;
+          let admissionNumber = "";
+          const timellyId = rollNo || null;
+          if (timellyId) {
+            const current = await tx.schoolSettings.findUnique({
+              where: { schoolId },
+              select: { admissionPrefix: true, rollNoPrefix: true, admissionCounter: true, defaultInstallments: true } as any,
+            });
+            if (!current) {
+              throw new Error("School settings not found while generating admission number.");
+            }
+            updated = current;
+            admissionNumber = `${updated.admissionPrefix}/${year}/${timellyId}`;
+            const existingAdmission = await tx.student.findUnique({
+              where: { admissionNumber },
+              select: { id: true },
+            });
+            if (existingAdmission) {
+              throw new Error("This Timelly ID is already used. Please use a different Timelly ID.");
+            }
+          } else {
+            let admissionNumberReady = false;
+            // Keep retrying for a larger window so stale counters don't block conversion
+            // when many existing admissions already occupy early numbers.
+            for (let attempt = 0; attempt < 1000; attempt++) {
+              const candidate = await tx.schoolSettings.update({
+                where: { schoolId },
+                data: { admissionCounter: { increment: 1 } },
+                select: { admissionPrefix: true, rollNoPrefix: true, admissionCounter: true, defaultInstallments: true } as any,
+              });
+              nextNum = candidate.admissionCounter;
+              admissionNumber = `${candidate.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
+
+              const existingAdmission = await tx.student.findUnique({
+                where: { admissionNumber },
+                select: { id: true },
+              });
+              if (!existingAdmission) {
+                updated = candidate;
+                admissionNumberReady = true;
+                break;
+              }
+            }
+            if (!admissionNumberReady || !updated) {
+              throw new Error("Unable to generate admission number. Please try again.");
+            }
+          }
           const defaultInstallments =
             Number.isInteger((updated as any).defaultInstallments) && (updated as any).defaultInstallments > 0
               ? (updated as any).defaultInstallments
               : schoolDefaultInstallments;
-          const admissionNumber = `${updated.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
 
           const password = dobDate.toISOString().split("T")[0].replace(/-/g, "");
           const hashedPassword = await bcrypt.hash(password, 10);
