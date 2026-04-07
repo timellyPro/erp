@@ -101,6 +101,21 @@ function buildAddress(row: Record<string, unknown>) {
   return [locality, region].filter(Boolean).join(", ").trim();
 }
 
+function extractTimellyId(row: Record<string, unknown>) {
+  return toStr(
+    row.rollNo ??
+      row.studentId ??
+      row.timellyNumber ??
+      row.timelyNumber ??
+      row["Timelly Number"] ??
+      row["Timelly No"] ??
+      row["Timely Number"] ??
+      row["Timely No"] ??
+      row["Student ID"] ??
+      row["Roll No"]
+  );
+}
+
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -312,13 +327,11 @@ export async function POST(req: Request) {
                 },
               });
 
+              const timellyId = extractTimellyId(row);
               const student = await tx.student.update({
                 where: { id: existingStudent.id },
                 data: {
-                  rollNo:
-                    toStr(
-                      row.rollNo ?? row.studentId ?? row["Admission No"] ?? row["Application No"]
-                    ) || undefined,
+                  rollNo: timellyId || undefined,
                   dob: dobDate,
                   address,
                   fatherName,
@@ -379,45 +392,61 @@ export async function POST(req: Request) {
               });
             }
 
-            const updatedSettings = await tx.schoolSettings.update({
-              where: { schoolId },
-              data: { admissionCounter: { increment: 1 } },
-              select: {
-                admissionPrefix: true,
-                rollNoPrefix: true,
-                admissionCounter: true,
-                defaultInstallments: true,
-              } as any,
-            });
+            const timellyId = extractTimellyId(row);
+            let nextNum = 0;
+            let updatedSettings: any = null;
+            let admissionNumber = "";
 
-            const nextNum = updatedSettings.admissionCounter;
+            if (timellyId) {
+              updatedSettings = settings;
+              admissionNumber = `${settings.admissionPrefix}/${year}/${timellyId}`;
+              const existingAdmission = await tx.student.findUnique({
+                where: { admissionNumber },
+                select: { id: true },
+              });
+              if (existingAdmission) {
+                throw new Error("This Timelly number is already used.");
+              }
+            } else {
+              let admissionNumberReady = false;
+              for (let attempt = 0; attempt < 1000; attempt++) {
+                const candidate = await tx.schoolSettings.update({
+                  where: { schoolId },
+                  data: { admissionCounter: { increment: 1 } },
+                  select: {
+                    admissionPrefix: true,
+                    rollNoPrefix: true,
+                    admissionCounter: true,
+                    defaultInstallments: true,
+                  } as any,
+                });
+                nextNum = candidate.admissionCounter;
+                admissionNumber = `${candidate.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
+                const existingAdmission = await tx.student.findUnique({
+                  where: { admissionNumber },
+                  select: { id: true },
+                });
+                if (!existingAdmission) {
+                  updatedSettings = candidate;
+                  admissionNumberReady = true;
+                  break;
+                }
+              }
+              if (!admissionNumberReady) {
+                throw new Error("Unable to generate admission number. Please try again.");
+              }
+            }
+
             const defaultInstallments =
               Number.isInteger((updatedSettings as any).defaultInstallments) && (updatedSettings as any).defaultInstallments > 0
                 ? (updatedSettings as any).defaultInstallments
                 : schoolDefaultInstallments;
-            const admissionNumber = `${
-              updatedSettings.admissionPrefix
-            }/${year}/${String(nextNum).padStart(3, "0")}`;
-
-            const existingAdmission = await tx.student.findUnique({
-              where: { admissionNumber },
-              select: { id: true },
-            });
-            if (existingAdmission) {
-              throw new Error(
-                "Admission number conflict. Please try the upload again."
-              );
-            }
-
             const rollNoPrefix = updatedSettings.rollNoPrefix || "";
-            const rawRollNo =
-              row.rollNo ?? row.studentId ?? row["Admission No"] ?? row["Application No"] ?? "";
-            const finalRollNo =
-              typeof rawRollNo === "string" && rawRollNo.trim()
-                ? rawRollNo.trim()
-                : rollNoPrefix
-                ? `${rollNoPrefix}${nextNum}`
-                : String(nextNum);
+            const finalRollNo = timellyId
+              ? timellyId
+              : rollNoPrefix
+              ? `${rollNoPrefix}${nextNum}`
+              : String(nextNum);
 
             let existingUser = await tx.user.findUnique({
               where: { email: userEmail },
