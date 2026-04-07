@@ -340,7 +340,9 @@ export async function POST(req: Request) {
         let admissionNumberReady = false;
         // Generate admission number with atomic counter increments + retry.
         // This heals stale counters and avoids race-condition conflicts.
-        for (let attempt = 0; attempt < 20; attempt++) {
+        // Keep retrying for a larger window so stale counters don't block creation
+        // when many existing admissions already occupy early numbers.
+        for (let attempt = 0; attempt < 1000; attempt++) {
           const updatedSettings = await tx.schoolSettings.update({
             where: { schoolId },
             data: { admissionCounter: { increment: 1 } },
