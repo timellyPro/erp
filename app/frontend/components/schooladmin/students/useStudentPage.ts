@@ -322,7 +322,7 @@ export default function useStudentPage({ classes, reload }: Props) {
     if (!options?.silent) setAllLoading(true);
     try {
       // Avoid pulling huge datasets; fetch only most recent students.
-      const res = await fetch("/api/student/list?take=300", { cache: "no-store", credentials: "include" });
+      const res = await fetch("/api/student/list?take=1000", { cache: "no-store", credentials: "include" });
       const data: StudentsListResponse = await res.json();
       if (!res.ok) return;
       setAllStudents(data.students || []);
