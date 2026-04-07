@@ -43,6 +43,9 @@ type StudentDetail = {
     totalFee: number;
     amountPaid: number;
     remainingFee: number;
+    installments: number;
+    installmentReminderDates?: string[];
+    tuitionPaid?: number;
     moneyForStudent: number | null;
   } | null;
   payments: Array<{
@@ -204,7 +207,7 @@ function StudentDetailsPageContent() {
         }
       />
       <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-xl sm:rounded-2xl p-3 sm:p-6 overflow-visible relative z-20 min-w-0">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4 md:gap-6 overflow-visible">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 sm:gap-4 md:gap-6 overflow-visible">
           <div>
             <StudentSearchAutocomplete
               students={students}
@@ -231,6 +234,21 @@ function StudentDetailsPageContent() {
               value={filterSection}
               onChange={setFilterSection}
               options={sectionOptions}
+              bgColor="black"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 mb-2 block">Students List</label>
+            <SelectInput
+              value={selectedId ?? ""}
+              onChange={(value) => setSelectedId(value || null)}
+              options={[
+                { label: "Select student", value: "" },
+                ...filtered.map((s) => ({
+                  label: `${s.name} (${s.admissionNumber || "-"})`,
+                  value: s.id,
+                })),
+              ]}
               bgColor="black"
             />
           </div>
@@ -332,6 +350,10 @@ function StudentDetailsPageContent() {
               studentName={detail.student.name}
               studentId={detail.student.id}
               admissionNumber={detail.student.admissionNumber}
+              tuitionFeeAmount={detail.fee?.totalFee}
+              installmentCount={detail.fee?.installments}
+              installmentDates={detail.fee?.installmentReminderDates || []}
+              tuitionPaidAmount={detail.fee?.tuitionPaid}
             />
 
             {detail.fee && (

@@ -16,8 +16,20 @@ async function getSchoolId(session: { user: { id: string; schoolId?: string | nu
 }
 
 type HeadDueResponse =
-  | { key: string; headType: "BASE_COMPONENT"; label: string; dueBefore: number }
-  | { key: string; headType: "EXTRA_FEE"; label: string; dueBefore: number };
+  | {
+      key: string;
+      headType: "BASE_COMPONENT";
+      label: string;
+      snapshotAmount: number;
+      dueBefore: number;
+    }
+  | {
+      key: string;
+      headType: "EXTRA_FEE";
+      label: string;
+      snapshotAmount: number;
+      dueBefore: number;
+    };
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -42,7 +54,6 @@ export async function GET(req: Request) {
     if (!student.fee) return NextResponse.json({ message: "Fee record not found for this student" }, { status: 404 });
 
     const fee = student.fee;
-    const discountRatio = fee.totalFee > 0 ? fee.finalFee / fee.totalFee : 0;
 
     const classFeeStructure = student.class?.id
       ? await prisma.classFeeStructure.findUnique({
@@ -76,31 +87,25 @@ export async function GET(req: Request) {
     });
 
     const allHeads = [
+      {
+        key: `BASE:-1`,
+        headType: "BASE_COMPONENT" as const,
+        label: "Tuition Fee",
+        snapshotDue: Math.max(fee.finalFee, 0),
+      },
       ...baseComps.map((c, idx) => ({
         key: `BASE:${idx}`,
         headType: "BASE_COMPONENT" as const,
         label: c.name,
-        snapshotDue: c.amount * discountRatio,
+        snapshotDue: c.amount,
       })),
       ...extraFees.map((ef) => ({
         key: `EXTRA:${ef.id}`,
         headType: "EXTRA_FEE" as const,
         label: ef.name,
-        snapshotDue: Number(ef.amount) * discountRatio,
+        snapshotDue: Number(ef.amount) || 0,
       })),
     ];
-
-    const sumHeadsDue = allHeads.reduce((s, h) => s + h.snapshotDue, 0);
-    const manualDue = Math.max(fee.finalFee - sumHeadsDue, 0);
-
-    if (manualDue > 0.00001) {
-      allHeads.push({
-        key: `BASE:-1`,
-        headType: "BASE_COMPONENT" as const,
-        label: "General Tuition Fee",
-        snapshotDue: manualDue,
-      });
-    }
 
     // Net already-paid by head via allocations (new payments only).
     const [paymentAllocations, refundAllocations] = await Promise.all([
@@ -126,7 +131,7 @@ export async function GET(req: Request) {
 
     const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);
     const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);
-    const totalSnapshotDue = Math.max(fee.finalFee, 0);
+    const totalSnapshotDue = Math.max(allHeads.reduce((s, h) => s + h.snapshotDue, 0), 0);
 
     const headsDue: HeadDueResponse[] = allHeads.map((h) => {
       const paidAlloc = netPaidByHead.get(h.key) ?? 0;
@@ -135,15 +140,30 @@ export async function GET(req: Request) {
       const dueBefore = Math.max(h.snapshotDue - paidBefore, 0);
 
       if (h.headType === "BASE_COMPONENT") {
-        return { key: h.key, headType: "BASE_COMPONENT", label: h.label, dueBefore };
+        return {
+          key: h.key,
+          headType: "BASE_COMPONENT",
+          label: h.label,
+          snapshotAmount: h.snapshotDue,
+          dueBefore,
+        };
       }
-      return { key: h.key, headType: "EXTRA_FEE", label: h.label, dueBefore };
+      return {
+        key: h.key,
+        headType: "EXTRA_FEE",
+        label: h.label,
+        snapshotAmount: h.snapshotDue,
+        dueBefore,
+      };
     });
 
+    const totalDueBefore = headsDue.reduce((s, h) => s + h.dueBefore, 0);
+    const totalAmount = headsDue.reduce((s, h) => s + h.snapshotAmount, 0);
     return NextResponse.json(
       {
         studentId: student.id,
-        remainingFee: fee.remainingFee,
+        remainingFee: totalDueBefore,
+        totalAmount,
         amountPaid: fee.amountPaid,
         finalFee: fee.finalFee,
         dueHeads: headsDue,

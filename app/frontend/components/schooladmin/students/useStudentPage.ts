@@ -162,7 +162,7 @@ const validateForm = (
         Number(form.discountPercent) < 0 ||
         Number(form.discountPercent) > feeNum)
     ) {
-      newErrors.discountPercent = "Fees must be between 0 and the total fee";
+        newErrors.discountPercent = "Discount amount must be between 0 and tuition fee";
     }
   }
 
@@ -461,12 +461,12 @@ export default function useStudentPage({ classes, reload }: Props) {
     const aadhaarDigits = form.aadhaarNo.replace(/\D/g, "");
     const phoneDigits = form.phoneNo.replace(/\D/g, "");
     const totalFeeAmount = Number(form.totalFee);
-    const feesAmount = form.discountPercent.trim()
+    const discountAmount = form.discountPercent.trim()
       ? Number(form.discountPercent)
-      : totalFeeAmount;
+      : 0;
     const derivedDiscountPercent =
       totalFeeAmount > 0
-        ? Number((((totalFeeAmount - feesAmount) / totalFeeAmount) * 100).toFixed(2))
+        ? Number(((discountAmount / totalFeeAmount) * 100).toFixed(2))
         : 0;
 
     try {

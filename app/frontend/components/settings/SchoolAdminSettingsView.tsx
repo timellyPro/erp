@@ -105,6 +105,7 @@ export default function SchoolAdminSettingsView({
 
 function SchoolInstallmentsSettingsCard() {
   const [defaultInstallments, setDefaultInstallments] = useState("3");
+  const [installmentReminderDates, setInstallmentReminderDates] = useState<string[]>(["", "", ""]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -117,7 +118,21 @@ function SchoolInstallmentsSettingsCard() {
         const data = await res.json();
         if (!cancelled && res.ok && data.settings) {
           const v = Number(data.settings.defaultInstallments ?? 3);
-          setDefaultInstallments(String(Number.isInteger(v) && v > 0 ? v : 3));
+          const count = Number.isInteger(v) && v > 0 ? v : 3;
+          setDefaultInstallments(String(count));
+          const rawReminder = data.settings.installmentReminderDates;
+          let parsed: string[] = [];
+          if (typeof rawReminder === "string" && rawReminder.trim()) {
+            try {
+              const arr = JSON.parse(rawReminder);
+              if (Array.isArray(arr)) {
+                parsed = arr.map((x) => (typeof x === "string" ? x : "")).slice(0, count);
+              }
+            } catch {
+              parsed = [];
+            }
+          }
+          setInstallmentReminderDates(Array.from({ length: count }, (_, idx) => parsed[idx] || ""));
         }
       } catch (_) {
         if (!cancelled) setMessage({ type: "error", text: "Failed to load installments settings" });
@@ -140,15 +155,28 @@ function SchoolInstallmentsSettingsCard() {
         setSaving(false);
         return;
       }
+      const validDate = /^\d{4}-\d{2}-\d{2}$/;
+      const normalizedDates = installmentReminderDates
+        .slice(0, parsed)
+        .map((d) => d.trim());
+      for (let i = 0; i < normalizedDates.length; i++) {
+        const d = normalizedDates[i];
+        if (!d) continue;
+        if (!validDate.test(d) || Number.isNaN(new Date(`${d}T00:00:00Z`).getTime())) {
+          setMessage({ type: "error", text: `Installment ${i + 1} reminder date is invalid` });
+          setSaving(false);
+          return;
+        }
+      }
       const res = await fetch("/api/school/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ defaultInstallments: parsed }),
+        body: JSON.stringify({ defaultInstallments: parsed, installmentReminderDates: normalizedDates }),
         credentials: "include",
       });
       const data = await res.json();
       if (res.ok) {
-        setMessage({ type: "success", text: "Default installments saved for all students." });
+        setMessage({ type: "success", text: "Installments and reminder dates saved." });
       } else {
         setMessage({ type: "error", text: data?.message ?? "Failed to save" });
       }
@@ -179,7 +207,16 @@ function SchoolInstallmentsSettingsCard() {
             <Field label="Default Installments">
               <SearchInput
                 value={defaultInstallments}
-                onChange={(v) => setDefaultInstallments(v.replace(/\D/g, "").slice(0, 2))}
+                onChange={(v) => {
+                  const next = v.replace(/\D/g, "").slice(0, 2);
+                  setDefaultInstallments(next);
+                  const nextCount = Number(next);
+                  if (Number.isInteger(nextCount) && nextCount > 0) {
+                    setInstallmentReminderDates((prev) =>
+                      Array.from({ length: nextCount }, (_, idx) => prev[idx] || "")
+                    );
+                  }
+                }}
                 icon={CreditCard}
                 variant="glass"
                 className="mt-2"
@@ -189,6 +226,29 @@ function SchoolInstallmentsSettingsCard() {
                 This updates existing students and will be used for all future student fee records.
               </p>
             </Field>
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+              {installmentReminderDates.map((value, index) => (
+                <Field key={index} label={`Installment ${index + 1} reminder date`}>
+                  <SearchInput
+                    value={value}
+                    onChange={(v) =>
+                      setInstallmentReminderDates((prev) => {
+                        const next = [...prev];
+                        next[index] = v;
+                        return next;
+                      })
+                    }
+                    type="date"
+                    icon={CreditCard}
+                    variant="glass"
+                    className="mt-2"
+                  />
+                </Field>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-white/50">
+              These dates are reminder-only for each installment.
+            </p>
             {message && (
               <p className={`mt-3 text-sm ${message.type === "success" ? "text-lime-400" : "text-red-400"}`}>
                 {message.text}

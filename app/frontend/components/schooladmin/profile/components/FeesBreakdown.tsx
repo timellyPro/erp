@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Download, Zap, Settings, PlusCircle } from "lucide-react";
 import { generatePDF } from "@/lib/pdfUtils";
 import { ModifyFeeModal } from "./ModifyFeeModal";
@@ -47,6 +47,12 @@ export const FeesBreakdown = ({
   const [isGeneratingReceipt, setIsGeneratingReceipt] = useState(false);
   const [showModifyFee, setShowModifyFee] = useState(false);
   const [showAddExtraFee, setShowAddExtraFee] = useState(false);
+  const [headsLoading, setHeadsLoading] = useState(false);
+  const [headCards, setHeadCards] = useState<
+    Array<{ key: string; label: string; amount: number; paid: number; due: number }>
+  >([]);
+  const [headsTotalAmount, setHeadsTotalAmount] = useState<number | null>(null);
+  const [headsRemainingAmount, setHeadsRemainingAmount] = useState<number | null>(null);
 
   // Calculate breakdown by fee type from payments
   const feeBreakdown = new Map<string, { amount: number; paidAmount: number }>();
@@ -66,6 +72,55 @@ export const FeesBreakdown = ({
 
   // Calculate payment percentage
   const paidPercentage = totalFee > 0 ? (amountPaid / totalFee) * 100 : 0;
+  const discountAmount = Math.max(baseTotalFee - totalFee, 0);
+  const displayTotalAmount = headsTotalAmount ?? totalFee;
+  const displayRemainingAmount = headsRemainingAmount ?? remainingFee;
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadHeads = async () => {
+      try {
+        setHeadsLoading(true);
+        const res = await fetch(`/api/fees/admin/breakdown?studentId=${encodeURIComponent(studentId)}`, {
+          credentials: "include",
+          cache: "no-store",
+        });
+        const data = await res.json();
+        if (!res.ok) return;
+        if (cancelled) return;
+
+        const dueHeads = Array.isArray(data?.dueHeads) ? data.dueHeads : [];
+        const normalized = dueHeads.map((h: any) => ({
+          key: String(h.key),
+          label: String(h.label || "Fee Head"),
+          amount: Number(h.snapshotAmount) || 0,
+          paid: Math.max((Number(h.snapshotAmount) || 0) - (Number(h.dueBefore) || 0), 0),
+          due: Number(h.dueBefore) || 0,
+        }));
+        setHeadCards(normalized);
+        setHeadsTotalAmount(
+          Number(data?.totalAmount) ||
+            normalized.reduce((s: number, h: { amount: number }) => s + h.amount, 0)
+        );
+        setHeadsRemainingAmount(
+          Number(data?.remainingFee) ||
+            normalized.reduce((s: number, h: { due: number }) => s + h.due, 0)
+        );
+      } catch {
+        if (!cancelled) {
+          setHeadCards([]);
+          setHeadsTotalAmount(null);
+          setHeadsRemainingAmount(null);
+        }
+      } finally {
+        if (!cancelled) setHeadsLoading(false);
+      }
+    };
+    loadHeads();
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId, amountPaid, remainingFee, totalFee]);
 
   const handleDownloadReceipt = async () => {
     try {
@@ -125,8 +180,14 @@ export const FeesBreakdown = ({
       {/* Main Fee Summary */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
         <div className="bg-amber-400/10 border border-amber-400/20 rounded-xl p-4">
-          <p className="text-xs text-amber-300/70 uppercase tracking-widest font-bold">Total Fees</p>
-          <p className="text-2xl font-bold text-white mt-2">₹{totalFee.toLocaleString("en-IN")}</p>
+          <p className="text-xs text-amber-300/70 uppercase tracking-widest font-bold">Total Fees (All Heads)</p>
+          <p className="text-2xl font-bold text-white mt-2">₹{displayTotalAmount.toLocaleString("en-IN")}</p>
+          <p className="text-xs text-amber-300 mt-1 font-semibold">
+            Tuition: ₹{baseTotalFee.toLocaleString("en-IN")}
+          </p>
+          <p className="text-xs text-amber-300 mt-1 font-semibold">
+            Discount: ₹{discountAmount.toLocaleString("en-IN")}
+          </p>
         </div>
 
         <div className="bg-lime-400/10 border border-lime-400/20 rounded-xl p-4">
@@ -137,9 +198,38 @@ export const FeesBreakdown = ({
 
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4">
           <p className="text-xs text-red-300/70 uppercase tracking-widest font-bold">Remaining / Due</p>
-          <p className="text-2xl font-bold text-white mt-2">₹{remainingFee.toLocaleString("en-IN")}</p>
-          <p className="text-xs text-red-400 mt-1 font-semibold">{Math.round(100 - paidPercentage)}% Pending</p>
+          <p className="text-2xl font-bold text-white mt-2">₹{displayRemainingAmount.toLocaleString("en-IN")}</p>
+          <p className="text-xs text-red-400 mt-1 font-semibold">
+            {Math.round(100 - paidPercentage)}% Pending
+          </p>
         </div>
+      </div>
+
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-sm font-semibold text-gray-300">Global Fee Breakdown Configuration</p>
+          {headsLoading ? <p className="text-xs text-gray-500">Loading heads...</p> : null}
+        </div>
+        {headCards.length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {headCards.map((h) => (
+              <div key={h.key} className="rounded-xl border border-white/10 bg-white/5 p-4">
+                <p className="text-xs text-gray-400 uppercase tracking-wide">{h.label}</p>
+                <p className="text-lg font-bold text-white mt-2">₹{h.amount.toLocaleString("en-IN")}</p>
+                <p className="text-xs text-lime-400 mt-1">
+                  Paid: ₹{h.paid.toLocaleString("en-IN")}
+                </p>
+                <p className="text-xs text-red-400 mt-1">
+                  Remaining: ₹{h.due.toLocaleString("en-IN")}
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-gray-500">
+            No fee head cards available.
+          </div>
+        )}
       </div>
 
       {/* Payment Progress Bar */}

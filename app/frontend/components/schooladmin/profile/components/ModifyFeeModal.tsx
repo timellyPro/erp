@@ -73,7 +73,7 @@ export const ModifyFeeModal = ({
         <div className="p-6">
           <h2 className="text-2xl font-bold text-white mb-2">Modify Fee Setup</h2>
           <p className="text-gray-400 text-sm mb-6">
-            Update the base total fee and discount for this student. The remaining balance will adjust automatically.
+            Update this student's tuition fee amount and discount amount. Class/global fee heads stay separate.
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -85,7 +85,7 @@ export const ModifyFeeModal = ({
             )}
 
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1.5">Base Total Fee (₹)</label>
+              <label className="block text-sm font-medium text-gray-300 mb-1.5">Tuition Fee Amount (₹)</label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                   <DollarSign className="w-5 h-5 text-gray-500" />
@@ -123,7 +123,7 @@ export const ModifyFeeModal = ({
             </div>
 
             <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4 text-center">
-              <p className="text-xs text-blue-300/70 uppercase tracking-widest font-bold">New Final Total Fee</p>
+              <p className="text-xs text-blue-300/70 uppercase tracking-widest font-bold">Net Fee After Discount</p>
               <p className="text-2xl font-bold text-white mt-1">₹{isNaN(currentFinalFee) ? "-" : currentFinalFee.toFixed(2)}</p>
             </div>
 
