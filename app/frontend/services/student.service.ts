@@ -1,4 +1,4 @@
-;
+
 import axios from "axios";
 import { api } from "./api.service";
 import { IStudent } from "../interfaces/student";
@@ -21,7 +21,7 @@ export const uploadStudentsCSV = (file: File, classId: string) => {
   formData.append("file", file);
   formData.append("classId", classId);
 
-  return fetch("/api/students/upload", {
+  return fetch("/api/student/bulk-upload", {
     method: "POST",
     body: formData,
   }).then(res => res.json());
@@ -80,7 +80,6 @@ export const studentApi = {
       { admissionNo, updates }
     ),
 };
-
 
 
 
