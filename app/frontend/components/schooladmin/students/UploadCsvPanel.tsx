@@ -9,7 +9,11 @@ type Props = {
   onFileChange: (file: File | null) => void;
   uploading: boolean;
   onCancel: () => void;
-  onUpload: () => Promise<{ createdCount?: number; failedCount?: number } | void>;
+  onUpload: () => Promise<{
+    createdCount?: number;
+    failedCount?: number;
+    failed?: Array<{ row?: number; error?: string }>;
+  } | void>;
 };
 
 export default function UploadCsvPanel({
@@ -22,6 +26,7 @@ export default function UploadCsvPanel({
   const [result, setResult] = useState<{
     createdCount?: number;
     failedCount?: number;
+    failed?: Array<{ row?: number; error?: string }>;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -120,6 +125,20 @@ export default function UploadCsvPanel({
                   </p>
                 </div>
               </div>
+              {Array.isArray(result.failed) && result.failed.length > 0 && (
+                <div className="mt-3 rounded-lg border border-yellow-500/20 bg-yellow-500/10 p-3">
+                  <p className="text-xs font-semibold text-yellow-300 mb-2">
+                    Top failed rows
+                  </p>
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {result.failed.map((item, idx) => (
+                      <p key={`${item.row}-${idx}`} className="text-[11px] text-yellow-200/90">
+                        Row {item.row ?? "?"}: {item.error || "Unknown error"}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
             </motion.div>
           )}
 

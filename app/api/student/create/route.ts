@@ -19,6 +19,13 @@ function normalizeResidencyType(value: unknown) {
   return raw;
 }
 
+function formatDobPassword(dob: Date) {
+  const yyyy = dob.getFullYear();
+  const mm = String(dob.getMonth() + 1).padStart(2, "0");
+  const dd = String(dob.getDate()).padStart(2, "0");
+  return `${yyyy}${mm}${dd}`;
+}
+
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -289,7 +296,7 @@ export async function POST(req: Request) {
       }
     }
 
-    const password = dobDate.toISOString().split("T")[0].replace(/-/g, "");
+    const password = formatDobPassword(dobDate);
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Check for duplicate aadhaar number before transaction

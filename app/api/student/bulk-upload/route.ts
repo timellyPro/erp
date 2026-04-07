@@ -6,6 +6,7 @@ import bcrypt from "bcryptjs";
 import { Role } from "@prisma/client";
 import * as XLSX from "xlsx";
 import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
+import { randomUUID } from "crypto";
 
 function toStr(value: unknown) {
   if (value === null || value === undefined) return "";
@@ -18,6 +19,18 @@ function normalizePhone(value: unknown) {
 
 function normalizeAadhaar(value: unknown) {
   return toStr(value).replace(/[\s-]/g, "");
+}
+
+function generateSyntheticAadhaar(rowNumber: number) {
+  const digits = `${Date.now()}${rowNumber}${Math.floor(Math.random() * 1_000_000)}`.replace(
+    /\D/g,
+    ""
+  );
+  return digits.slice(-12).padStart(12, "0");
+}
+
+function normalizeTimellyNo(value: unknown) {
+  return toStr(value).replace(/\s+/g, "").toUpperCase();
 }
 
 function normalizeGender(value: unknown) {
@@ -67,6 +80,21 @@ function parseDob(rawDob: unknown): Date {
   }
 
   const normalizedDob = toStr(rawDob);
+  const ddmmyyyy = normalizedDob.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
+  if (ddmmyyyy) {
+    const day = Number(ddmmyyyy[1]);
+    const month = Number(ddmmyyyy[2]);
+    const year = Number(ddmmyyyy[3]);
+    const dt = new Date(year, month - 1, day);
+    if (
+      !Number.isNaN(dt.getTime()) &&
+      dt.getDate() === day &&
+      dt.getMonth() === month - 1 &&
+      dt.getFullYear() === year
+    ) {
+      return dt;
+    }
+  }
   const dt = new Date(normalizedDob);
   if (Number.isNaN(dt.getTime())) {
     throw new Error("Invalid date of birth");
@@ -74,8 +102,15 @@ function parseDob(rawDob: unknown): Date {
   return dt;
 }
 
+function formatDobPassword(dob: Date) {
+  const yyyy = dob.getFullYear();
+  const mm = String(dob.getMonth() + 1).padStart(2, "0");
+  const dd = String(dob.getDate()).padStart(2, "0");
+  return `${yyyy}${mm}${dd}`;
+}
+
 function buildName(row: Record<string, unknown>) {
-  const compactName = toStr(row.name);
+  const compactName = toStr(row.name ?? row["Student Name"]);
   if (compactName) return compactName;
 
   const firstName = toStr(row["First Name"]);
@@ -159,7 +194,15 @@ export async function POST(req: Request) {
 
     const [school, settings] = await Promise.all([
       prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } }),
-      prisma.schoolSettings.findUnique({ where: { schoolId }, select: { emailDomain: true, defaultInstallments: true } as any }),
+      prisma.schoolSettings.findUnique({
+        where: { schoolId },
+        select: {
+          emailDomain: true,
+          defaultInstallments: true,
+          admissionPrefix: true,
+          rollNoPrefix: true,
+        } as any,
+      }),
     ]);
     const schoolDomain =
       normalizeEmailDomain(settings?.emailDomain) ?? schoolDomainFromName(school?.name ?? "school");
@@ -167,6 +210,26 @@ export async function POST(req: Request) {
       Number.isInteger((settings as any)?.defaultInstallments) && (settings as any).defaultInstallments > 0
         ? (settings as any).defaultInstallments
         : 3;
+    const admissionPrefix = (settings as any)?.admissionPrefix || "ADM";
+    const rollNoPrefix = (settings as any)?.rollNoPrefix || "";
+    const verboseLog = process.env.STUDENT_BULK_UPLOAD_VERBOSE === "true";
+    const bcryptRoundsRaw = Number(process.env.STUDENT_BULK_UPLOAD_BCRYPT_ROUNDS ?? 4);
+    const bcryptRounds = Number.isFinite(bcryptRoundsRaw)
+      ? Math.min(10, Math.max(4, Math.trunc(bcryptRoundsRaw)))
+      : 6;
+    const hashCache = new Map<string, string>();
+
+    const classLookup = new Map<string, string>();
+    for (const c of classes) {
+      const key = `${(c.name || "").trim().toLowerCase()}::${(c.section || "")
+        .trim()
+        .toLowerCase()}`;
+      classLookup.set(key, c.id);
+      if (!(c.section || "").trim()) {
+        const classOnlyKey = `${(c.name || "").trim().toLowerCase()}::`;
+        if (!classLookup.has(classOnlyKey)) classLookup.set(classOnlyKey, c.id);
+      }
+    }
 
     const year = new Date().getFullYear();
 
@@ -177,14 +240,24 @@ export async function POST(req: Request) {
       try {
         const name = buildName(row);
         const fatherName = toStr(
-          row.fatherName ?? row.parentName ?? row["Parent Name"]
+          row.fatherName ??
+            row.parentName ??
+            row["Parent Name"] ??
+            row["Parent/Guardian Name"]
         );
         const phoneNo = normalizePhone(
-          row.phoneNo ?? row.contactNumber ?? row.parentPhone ?? row["Parent Phone"]
+          row.phoneNo ??
+            row.contactNumber ??
+            row.parentPhone ??
+            row["Parent Phone"] ??
+            row["Primary Phone"]
         );
-        const aadhaarNo = normalizeAadhaar(
+        let aadhaarNo = normalizeAadhaar(
           row.aadhaarNo ?? row.aadharNo ?? row.aadhaarNoRaw ?? row["Aadhar No"]
         );
+        if (!aadhaarNo) {
+          aadhaarNo = generateSyntheticAadhaar(rowNumber);
+        }
         const address = buildAddress(row) || null;
         const gender = normalizeGender(row.gender ?? row.Gender);
         const previousSchool =
@@ -199,26 +272,36 @@ export async function POST(req: Request) {
         );
         const admissionFee = parseOptionalNumber(row.admissionFee ?? row["Admission Fee"]);
         const residencyType = normalizeResidencyType(
-          row.residencyType ?? row["Residency Type"] ?? row.residency ?? "Day Scholar"
+          row.residencyType ??
+            row["Residency Type"] ??
+            row["Student Category"] ??
+            row.residency ??
+            "Day Scholar"
         );
         const rawDob = row.dob ?? row.dateOfBirth ?? row["Date of Birth"];
+        const timellyNo = normalizeTimellyNo(
+          row.timellyNo ?? row["Timelly No"] ?? row["Timely No"]
+        );
 
-        console.log("[student bulk upload] Parsed row", {
-          row: rowNumber,
-          name,
-          fatherName,
-          phoneNo,
-          aadhaarNo,
-          gender,
-          previousSchool,
-          totalFee,
-          discountPercent,
-          rawDob,
-          className: toStr(row.class ?? row.className ?? row.Class),
-          section: toStr(row.section ?? row.Section),
-          email: toStr(row.email ?? row.parentEmail ?? row["Parent Email"]) || null,
-          address,
-        });
+        if (verboseLog) {
+          console.log("[student bulk upload] Parsed row", {
+            row: rowNumber,
+            name,
+            fatherName,
+            phoneNo,
+            aadhaarNo,
+            gender,
+            previousSchool,
+            totalFee,
+            discountPercent,
+            rawDob,
+            className: toStr(row.class ?? row.className ?? row.Class),
+            section: toStr(row.section ?? row.Section),
+            email: toStr(row.email ?? row.parentEmail ?? row["Parent Email"]) || null,
+            address,
+            timellyNo: timellyNo || null,
+          });
+        }
 
         if (!name || name.length < 2) {
           throw new Error("Name is required (min 2 characters)");
@@ -230,7 +313,7 @@ export async function POST(req: Request) {
           throw new Error("Contact number is required");
         }
         if (!aadhaarNo || aadhaarNo.length < 2) {
-          throw new Error("Aadhaar number is required");
+          throw new Error("Aadhaar number is invalid");
         }
         if (totalFee != null && (!Number.isFinite(totalFee) || totalFee <= 0)) {
           throw new Error("totalFee must be a positive number");
@@ -256,15 +339,11 @@ export async function POST(req: Request) {
         const section = toStr(row.section ?? row.Section);
         let classId: string | null = null;
         if (className) {
-          const match = classes.find((c) => {
-            const sameName =
-              (c.name || "").trim().toLowerCase() === className.toLowerCase();
-            const sameSection =
-              !section ||
-              (c.section || "").trim().toLowerCase() === section.toLowerCase();
-            return sameName && sameSection;
-          });
-          if (match) classId = match.id;
+          const keyWithSection = `${className.trim().toLowerCase()}::${section
+            .trim()
+            .toLowerCase()}`;
+          const keyClassOnly = `${className.trim().toLowerCase()}::`;
+          classId = classLookup.get(keyWithSection) || classLookup.get(keyClassOnly) || null;
           // If no match, leave classId null (unassigned) instead of throwing
         }
 
@@ -275,11 +354,12 @@ export async function POST(req: Request) {
             // Student login email is always name@schoolDomain — CSV/row "email" is parent contact only, not User.email.
             let userEmail = `${nameLocalPart}@${schoolDomain}`;
 
-            const password = dobDate
-              .toISOString()
-              .split("T")[0]
-              .replace(/-/g, "");
-            const hashedPassword = await bcrypt.hash(password, 10);
+            const password = formatDobPassword(dobDate);
+            let hashedPassword = hashCache.get(password);
+            if (!hashedPassword) {
+              hashedPassword = await bcrypt.hash(password, bcryptRounds);
+              hashCache.set(password, hashedPassword);
+            }
 
             if (existingStudent) {
               let existingUser = await tx.user.findUnique({
@@ -308,17 +388,20 @@ export async function POST(req: Request) {
                 data: {
                   name,
                   email: userEmail,
-                  password: hashedPassword,
                 },
               });
 
               const student = await tx.student.update({
                 where: { id: existingStudent.id },
                 data: {
-                  rollNo:
-                    toStr(
-                      row.rollNo ?? row.studentId ?? row["Admission No"] ?? row["Application No"]
-                    ) || undefined,
+                  rollNo: timellyNo
+                    ? timellyNo
+                    : toStr(
+                        row.rollNo ??
+                          row.studentId ??
+                          row["Admission No"] ??
+                          row["Application No"]
+                      ) || undefined,
                   dob: dobDate,
                   address,
                   fatherName,
@@ -364,60 +447,41 @@ export async function POST(req: Request) {
               return;
             }
 
-            let settings = await tx.schoolSettings.findUnique({
-              where: { schoolId },
-            });
-            if (!settings) {
-              settings = await tx.schoolSettings.create({
-                data: {
-                  schoolId,
-                  admissionPrefix: "ADM",
-                  rollNoPrefix: "",
-                  admissionCounter: 0,
-                  defaultInstallments: schoolDefaultInstallments,
-                } as any,
+            let admissionNumber = "";
+            if (timellyNo) {
+              const preferredAdmission = `${admissionPrefix}/${year}/${timellyNo}`;
+              const existingPreferred = await tx.student.findUnique({
+                where: { admissionNumber: preferredAdmission },
+                select: { id: true },
               });
+              if (!existingPreferred) {
+                admissionNumber = preferredAdmission;
+              } else {
+                const fallbackWithSuffix = `${preferredAdmission}-${randomUUID()
+                  .replace(/-/g, "")
+                  .slice(0, 4)
+                  .toUpperCase()}`;
+                admissionNumber = fallbackWithSuffix;
+              }
+            } else {
+              admissionNumber = `${admissionPrefix}/${year}/R${randomUUID()
+                .replace(/-/g, "")
+                .slice(0, 10)
+                .toUpperCase()}`;
             }
 
-            const updatedSettings = await tx.schoolSettings.update({
-              where: { schoolId },
-              data: { admissionCounter: { increment: 1 } },
-              select: {
-                admissionPrefix: true,
-                rollNoPrefix: true,
-                admissionCounter: true,
-                defaultInstallments: true,
-              } as any,
-            });
+            const defaultInstallments = schoolDefaultInstallments;
 
-            const nextNum = updatedSettings.admissionCounter;
-            const defaultInstallments =
-              Number.isInteger((updatedSettings as any).defaultInstallments) && (updatedSettings as any).defaultInstallments > 0
-                ? (updatedSettings as any).defaultInstallments
-                : schoolDefaultInstallments;
-            const admissionNumber = `${
-              updatedSettings.admissionPrefix
-            }/${year}/${String(nextNum).padStart(3, "0")}`;
-
-            const existingAdmission = await tx.student.findUnique({
-              where: { admissionNumber },
-              select: { id: true },
-            });
-            if (existingAdmission) {
-              throw new Error(
-                "Admission number conflict. Please try the upload again."
-              );
-            }
-
-            const rollNoPrefix = updatedSettings.rollNoPrefix || "";
             const rawRollNo =
               row.rollNo ?? row.studentId ?? row["Admission No"] ?? row["Application No"] ?? "";
             const finalRollNo =
-              typeof rawRollNo === "string" && rawRollNo.trim()
+              timellyNo
+                ? timellyNo
+                : typeof rawRollNo === "string" && rawRollNo.trim()
                 ? rawRollNo.trim()
                 : rollNoPrefix
-                ? `${rollNoPrefix}${nextNum}`
-                : String(nextNum);
+                ? `${rollNoPrefix}${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`
+                : `R${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
 
             let existingUser = await tx.user.findUnique({
               where: { email: userEmail },
@@ -498,18 +562,22 @@ export async function POST(req: Request) {
           }
         );
 
-        console.log("[student bulk upload] Created student successfully", {
-          row: rowNumber,
-          name,
-        });
+        if (verboseLog) {
+          console.log("[student bulk upload] Created student successfully", {
+            row: rowNumber,
+            name,
+          });
+        }
 
         created.push({ row: rowNumber, name });
       } catch (err: any) {
-        console.error("[student bulk upload] Failed row", {
-          row: rowNumber,
-          error: err?.message || "Unknown error while creating student",
-          rawRow: row,
-        });
+        if (verboseLog) {
+          console.error("[student bulk upload] Failed row", {
+            row: rowNumber,
+            error: err?.message || "Unknown error while creating student",
+            rawRow: row,
+          });
+        }
 
         failed.push({
           row: rowNumber,
@@ -524,6 +592,7 @@ export async function POST(req: Request) {
       failedCount: failed.length,
       created,
       failed,
+      failedPreview: failed.slice(0, 10),
     });
 
   } catch (err: any) {

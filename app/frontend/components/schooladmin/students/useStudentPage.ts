@@ -574,6 +574,7 @@ export default function useStudentPage({ classes, reload }: Props) {
       return {
         createdCount: uploadData.createdCount || 0,
         failedCount: uploadData.failedCount || 0,
+        failed: Array.isArray(uploadData.failed) ? uploadData.failed.slice(0, 10) : [],
       };
     } catch (e) {
       if (e instanceof Error) {
