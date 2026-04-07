@@ -130,67 +130,79 @@ export async function POST(req: Request) {
         const applicationNo = `APP/${year}/${randomUUID().slice(0, 8).toUpperCase()}`;
         const gender = genderRaw.toLowerCase().startsWith("f") ? "FEMALE" : "MALE";
 
-        const app = await prisma.studentApplication.upsert({
-          where: { aadharNo: aadhaarNo },
-          create: {
-            schoolId,
-            classId,
-            className: className || null,
-            section: section || null,
-            applicationNo,
-            gradeSought: "GRADE_1",
-            boardingType: "SEMI_RESIDENTIAL",
-            totalFee,
-            discountPercent,
-            applicationFee:
-              applicationFee != null && Number.isFinite(applicationFee) ? applicationFee : null,
-            admissionFee: admissionFee != null && Number.isFinite(admissionFee) ? admissionFee : null,
-            rollNo: rollNo || null,
-            firstName,
-            middleName,
-            lastName,
-            gender,
-            dateOfBirth: dobDate,
-            aadharNo: aadhaarNo,
-            firstLanguage: "English",
-            nationality: "Indian",
-            languagesAtHome: "English",
-            houseNo: address || "-",
-            street: "-",
-            city: "-",
-            state: "-",
-            pinCode: "-",
-            parentName: fatherName,
-            parentOccupation: "-",
-            officeAddress: "-",
-            parentPhone: phoneNo,
-            parentEmail: email || `${emailLocalPartFromFullName(name)}@${schoolDomain}`,
-            parentAadharNo: `${aadhaarNo.slice(0, 8)}0000`,
-            parentWhatsapp: phoneNo,
-            bankAccountNo: "-",
-            previousSchoolName: previousSchool || "-",
-            previousSchoolAddress: "-",
-            emergencyFatherNo: phoneNo,
-            emergencyMotherNo: phoneNo,
-            emergencyGuardianNo: phoneNo,
-          },
-          update: {
-            classId,
-            className: className || null,
-            section: section || null,
-            totalFee,
-            discountPercent,
-            applicationFee:
-              applicationFee != null && Number.isFinite(applicationFee) ? applicationFee : null,
-            admissionFee: admissionFee != null && Number.isFinite(admissionFee) ? admissionFee : null,
-            rollNo: rollNo || null,
-            parentName: fatherName,
-            parentPhone: phoneNo,
-            parentEmail: email || undefined,
-            previousSchoolName: previousSchool || undefined,
-          },
+        const existingApp = await prisma.studentApplication.findFirst({
+          where: { schoolId, aadharNo: aadhaarNo },
           select: { id: true, studentId: true },
         });
+
+        const commonUpdate = {
+          classId,
+          className: className || null,
+          section: section || null,
+          totalFee,
+          discountPercent,
+          applicationFee:
+            applicationFee != null && Number.isFinite(applicationFee) ? applicationFee : null,
+          admissionFee: admissionFee != null && Number.isFinite(admissionFee) ? admissionFee : null,
+          rollNo: rollNo || null,
+          parentName: fatherName,
+          parentPhone: phoneNo,
+          parentEmail: email || undefined,
+          previousSchoolName: previousSchool || undefined,
+        };
+
+        const app = existingApp
+          ? await prisma.studentApplication.update({
+              where: { id: existingApp.id },
+              data: commonUpdate,
+              select: { id: true, studentId: true },
+            })
+          : await prisma.studentApplication.create({
+              data: {
+                schoolId,
+                classId,
+                className: className || null,
+                section: section || null,
+                applicationNo,
+                gradeSought: "GRADE_1",
+                boardingType: "SEMI_RESIDENTIAL",
+                totalFee,
+                discountPercent,
+                applicationFee:
+                  applicationFee != null && Number.isFinite(applicationFee) ? applicationFee : null,
+                admissionFee:
+                  admissionFee != null && Number.isFinite(admissionFee) ? admissionFee : null,
+                rollNo: rollNo || null,
+                firstName,
+                middleName,
+                lastName,
+                gender,
+                dateOfBirth: dobDate,
+                aadharNo: aadhaarNo,
+                firstLanguage: "English",
+                nationality: "Indian",
+                languagesAtHome: "English",
+                houseNo: address || "-",
+                street: "-",
+                city: "-",
+                state: "-",
+                pinCode: "-",
+                parentName: fatherName,
+                parentOccupation: "-",
+                officeAddress: "-",
+                parentPhone: phoneNo,
+                parentEmail: email || `${emailLocalPartFromFullName(name)}@${schoolDomain}`,
+                parentAadharNo: `${aadhaarNo.slice(0, 8)}0000`,
+                parentWhatsapp: phoneNo,
+                bankAccountNo: "-",
+                previousSchoolName: previousSchool || "-",
+                previousSchoolAddress: "-",
+                emergencyFatherNo: phoneNo,
+                emergencyMotherNo: phoneNo,
+                emergencyGuardianNo: phoneNo,
+              },
+              select: { id: true, studentId: true },
+            });
 
         createdApplications.push({ row: i + 2, applicationId: app.id, aadhaarNo });
 
