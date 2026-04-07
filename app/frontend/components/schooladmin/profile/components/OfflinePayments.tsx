@@ -36,10 +36,12 @@ export const OfflinePayments = ({ studentId, studentName, remainingFee, onPaymen
     const [selectedHeads, setSelectedHeads] = useState<SelectedHead[]>([]);
     const [breakdownLoading, setBreakdownLoading] = useState(false);
     const [breakdownError, setBreakdownError] = useState<string | null>(null);
+    const [currentRemainingFee, setCurrentRemainingFee] = useState<number>(remainingFee);
 
     useEffect(() => {
       if (!showModal) return;
       let cancelled = false;
+      setSelectedHeads([]);
 
       const loadBreakdown = async () => {
         setBreakdownLoading(true);
@@ -55,6 +57,7 @@ export const OfflinePayments = ({ studentId, studentName, remainingFee, onPaymen
             return;
           }
           if (!cancelled && Array.isArray(data.dueHeads)) {
+            setCurrentRemainingFee(Number(data.remainingFee) || 0);
             const opts: Array<{ key: string; label: string; dueBefore: number; head: SelectedHead }> =
               data.dueHeads.map((h: any) => {
                 const key: string = h.key;
@@ -77,10 +80,9 @@ export const OfflinePayments = ({ studentId, studentName, remainingFee, onPaymen
                   };
                   return { key, label, dueBefore, head };
                 }
-                const fallbackHead: SelectedHead = { headType: "BASE_COMPONENT", componentIndex: 0, componentName: label };
-                return { key, label, dueBefore, head: fallbackHead };
+                return null;
               });
-            setHeadOptions(opts);
+            setHeadOptions(opts.filter((x): x is { key: string; label: string; dueBefore: number; head: SelectedHead } => Boolean(x)));
           }
         } catch (e: any) {
           if (!cancelled) setBreakdownError(e?.message || "Failed to load fee heads");
@@ -119,8 +121,8 @@ export const OfflinePayments = ({ studentId, studentName, remainingFee, onPaymen
                 throw new Error("Please enter a valid amount");
             }
 
-            if (amount > remainingFee) {
-                throw new Error(`Amount exceeds remaining fee of ₹${remainingFee.toLocaleString("en-IN")}`);
+            if (amount > currentRemainingFee) {
+                throw new Error(`Amount exceeds remaining fee of ₹${currentRemainingFee.toLocaleString("en-IN")}`);
             }
 
             if (formData.method === "CHEQUE" && !formData.referenceNumber) {
@@ -194,7 +196,7 @@ export const OfflinePayments = ({ studentId, studentName, remainingFee, onPaymen
             <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4 text-sm">
                 <p className="text-blue-300">
                     <span className="font-semibold">Remaining Fee:</span>{" "}
-                    <span className="text-lg font-bold">₹{remainingFee.toLocaleString("en-IN")}</span>
+                    <span className="text-lg font-bold">₹{currentRemainingFee.toLocaleString("en-IN")}</span>
                 </p>
                 <p className="text-blue-200/70 text-xs mt-2">
                     Record cash, cheque, bank transfer, or demand draft payments manually.

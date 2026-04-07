@@ -264,6 +264,8 @@ model SchoolSettings {
   rollNoPrefix     String @default("") // optional prefix for roll numbers
   admissionCounter Int    @default(0) // last used number for admission
   defaultInstallments Int @default(3) // default installments for newly created student fees
+  // JSON string array of YYYY-MM-DD dates (index = installment number - 1), for reminders only
+  installmentReminderDates String?
 
   // Email domain override for auto-generated emails (e.g. "myschool.in")
   emailDomain String?

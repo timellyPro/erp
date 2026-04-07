@@ -104,27 +104,6 @@ export default function OfflinePaymentForm({
     return students.find((s) => s.id === studentId) ?? null;
   }, [students, studentId]);
 
-  const availableBaseComponents = useMemo(() => {
-    if (!selectedStudent?.class?.id) return [];
-    const structure = structures.find((st) => st.classId === selectedStudent.class?.id);
-    return structure?.components ?? [];
-  }, [selectedStudent, structures]);
-
-  const availableExtraFeesForStudent = useMemo(() => {
-    if (!selectedStudent) return [];
-    const classId = selectedStudent.class?.id ?? null;
-    const classSection = selectedStudent.class?.section ?? null;
-    const sid = selectedStudent.id;
-
-    return extraFees.filter((ef) => {
-      if (ef.targetType === "SCHOOL") return true;
-      if (ef.targetType === "CLASS") return ef.targetClassId === classId;
-      if (ef.targetType === "SECTION") return ef.targetClassId === classId && ef.targetSection === classSection;
-      if (ef.targetType === "STUDENT") return ef.targetStudentId === sid;
-      return false;
-    });
-  }, [extraFees, selectedStudent]);
-
   const getHeadKey = (head: SelectedHead) => {
     if (head.headType === "BASE_COMPONENT") return `BASE:${head.componentIndex}`;
     return `EXTRA:${head.extraFeeId}`;
@@ -132,25 +111,36 @@ export default function OfflinePaymentForm({
 
   const headOptions = useMemo(() => {
     const heads: Array<{ key: string; label: string; head: SelectedHead }> = [];
-
-    availableBaseComponents.forEach((c, idx) => {
-      heads.push({
-        key: `BASE:${idx}`,
-        label: c.name,
-        head: { headType: "BASE_COMPONENT", componentIndex: idx, componentName: c.name },
-      });
+    dueHeads.forEach((h) => {
+      if (h.headType === "BASE_COMPONENT") {
+        const raw = h.key.replace("BASE:", "");
+        const componentIndex = Number(raw);
+        if (!Number.isNaN(componentIndex)) {
+          heads.push({
+            key: h.key,
+            label: h.label,
+            head: {
+              headType: "BASE_COMPONENT",
+              componentIndex,
+              componentName: h.label,
+            },
+          });
+        }
+        return;
+      }
+      if (h.headType === "EXTRA_FEE" && h.key.startsWith("EXTRA:")) {
+        heads.push({
+          key: h.key,
+          label: h.label,
+          head: {
+            headType: "EXTRA_FEE",
+            extraFeeId: h.key.slice("EXTRA:".length),
+          },
+        });
+      }
     });
-
-    availableExtraFeesForStudent.forEach((ef) => {
-      heads.push({
-        key: `EXTRA:${ef.id}`,
-        label: ef.name,
-        head: { headType: "EXTRA_FEE", extraFeeId: ef.id },
-      });
-    });
-
     return heads;
-  }, [availableBaseComponents, availableExtraFeesForStudent]);
+  }, [dueHeads]);
 
   const toggleHead = (head: SelectedHead) => {
     const key = getHeadKey(head);

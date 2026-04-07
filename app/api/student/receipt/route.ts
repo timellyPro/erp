@@ -48,7 +48,8 @@ export async function GET(request: NextRequest) {
             include: {
                 user: true,
                 class: true,
-                school: { select: { name: true } },
+                school: { select: { name: true, address: true, location: true } },
+                fee: true,
             },
         });
 
@@ -98,16 +99,88 @@ export async function GET(request: NextRequest) {
 
         const school = await prisma.school.findUnique({
             where: { id: schoolId },
-            select: { name: true },
+            select: { name: true, address: true, location: true },
         });
 
         const schoolName = school?.name ?? student.school?.name ?? "Timelly School";
+        const schoolAddress = school?.address ?? student.school?.address ?? "";
+        const schoolLocation = school?.location ?? student.school?.location ?? "";
+        const linkedApplication = await prisma.studentApplication.findFirst({
+            where: { studentId: student.id },
+            select: { rollNo: true },
+        });
+
+        const paymentAllocations =
+            paymentId === "admission-fee" || paymentId === "application-fee"
+                ? []
+                : await prisma.paymentFeeAllocation.findMany({
+                      where: { paymentId, allocationType: "PAYMENT" },
+                      select: {
+                          headType: true,
+                          componentIndex: true,
+                          componentName: true,
+                          extraFeeId: true,
+                          allocatedAmount: true,
+                      },
+                  });
+
+        const extraFeeIds = Array.from(
+            new Set(
+                paymentAllocations
+                    .filter((a) => a.headType === "EXTRA_FEE" && !!a.extraFeeId)
+                    .map((a) => a.extraFeeId as string)
+            )
+        );
+        const extraFees =
+            extraFeeIds.length > 0
+                ? await prisma.extraFee.findMany({
+                      where: { id: { in: extraFeeIds } },
+                      select: { id: true, name: true },
+                  })
+                : [];
+        const extraNameById = new Map(extraFees.map((e) => [e.id, e.name]));
+
+        const feeBreakdown =
+            paymentAllocations.length > 0
+                ? paymentAllocations.map((a) => ({
+                      feeType:
+                          a.headType === "BASE_COMPONENT"
+                              ? a.componentName || (a.componentIndex === -1 ? "Tuition Fee" : "Fee Component")
+                              : extraNameById.get(a.extraFeeId || "") || "Extra Fee",
+                      amount: a.allocatedAmount,
+                  }))
+                : [
+                      {
+                          feeType: payment.feeTypeName || "Fee Payment",
+                          amount: Number(payment.amount) || 0,
+                      },
+                  ];
+
+        const admissionParts = (student.admissionNumber || "").split("/");
+        const admissionPrefix = admissionParts[0] || "ADM";
+        const admissionYear = admissionParts.length >= 2 ? admissionParts[1] : String(new Date().getFullYear());
+        const timellyId =
+            (student.rollNo && String(student.rollNo).trim()) ||
+            (linkedApplication?.rollNo && String(linkedApplication.rollNo).trim()) ||
+            (admissionParts[admissionParts.length - 1] || "").trim();
+        const displayAdmissionNumber = `${admissionPrefix}/${admissionYear}/${timellyId || "N/A"}`;
 
         const pdfBytes = await generateReceiptPDFServer({
             payment,
             student,
             copyType,
             schoolName,
+            schoolAddress,
+            schoolLocation,
+            className: student.class?.name ?? "",
+            sectionName: student.class?.section ?? "",
+            generatedAt: new Date().toISOString(),
+            feeBreakdown,
+            totalFees: (student.fee?.amountPaid || 0) + (student.fee?.remainingFee || 0),
+            remainingFees: student.fee?.remainingFee || 0,
+            timellyId,
+            admissionYear,
+            displayAdmissionNumber,
         });
 
         return new NextResponse(pdfBytes, {

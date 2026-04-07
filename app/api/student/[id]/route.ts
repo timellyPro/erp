@@ -66,6 +66,26 @@ export async function GET(_req: Request, context: RouteParams) {
       return NextResponse.json({ message: "Student not found" }, { status: 404 });
     }
 
+    const schoolSettings = await prisma.schoolSettings.findUnique({
+      where: { schoolId: student.schoolId },
+      select: { installmentReminderDates: true },
+    });
+
+    let installmentReminderDates: string[] = [];
+    const rawReminderDates = schoolSettings?.installmentReminderDates;
+    if (typeof rawReminderDates === "string" && rawReminderDates.trim()) {
+      try {
+        const parsed = JSON.parse(rawReminderDates);
+        if (Array.isArray(parsed)) {
+          installmentReminderDates = parsed
+            .map((x) => (typeof x === "string" ? x : ""))
+            .filter(Boolean);
+        }
+      } catch {
+        installmentReminderDates = [];
+      }
+    }
+
     const payments = await prisma.payment.findMany({
       where: { studentId: id },
       orderBy: { createdAt: "desc" },
@@ -88,6 +108,21 @@ export async function GET(_req: Request, context: RouteParams) {
               componentIndex: true,
               componentName: true,
               extraFeeId: true,
+              allocatedAmount: true,
+            },
+          })
+        : [];
+    const refundAllocations =
+      paymentIds.length > 0
+        ? await prisma.paymentFeeAllocation.findMany({
+            where: {
+              paymentId: { in: paymentIds },
+              allocationType: "REFUND",
+            },
+            select: {
+              paymentId: true,
+              headType: true,
+              componentIndex: true,
               allocatedAmount: true,
             },
           })
@@ -144,6 +179,14 @@ export async function GET(_req: Request, context: RouteParams) {
       }
       if (bestAmount > 0.00001) feeTypeNameAmountByPaymentId.set(paymentId, { name: bestName, amount: bestAmount });
     }
+
+    const tuitionPaidFromAllocations =
+      paymentAllocations
+        .filter((a) => a.headType === "BASE_COMPONENT" && a.componentIndex === -1)
+        .reduce((s, a) => s + a.allocatedAmount, 0) -
+      refundAllocations
+        .filter((a) => a.headType === "BASE_COMPONENT" && a.componentIndex === -1)
+        .reduce((s, a) => s + a.allocatedAmount, 0);
 
     const attendances = await prisma.attendance.findMany({
       where: { studentId: id },
@@ -251,6 +294,12 @@ export async function GET(_req: Request, context: RouteParams) {
             totalFee: student.fee.finalFee,
             amountPaid: student.fee.amountPaid,
             remainingFee: student.fee.remainingFee,
+            installments: student.fee.installments,
+            installmentReminderDates,
+            tuitionPaid:
+              tuitionPaidFromAllocations > 0.00001
+                ? tuitionPaidFromAllocations
+                : student.fee.amountPaid,
             moneyForStudent: (student.fee as { moneyForStudent?: number }).moneyForStudent ?? null,
           }
         : null,

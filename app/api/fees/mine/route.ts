@@ -82,9 +82,7 @@ export async function GET() {
       )) as { id: string; paymentId: string; amount: number; status: string; createdAt: Date }[];
     }
 
-    // Due amount per fee head (base components + applicable extra fees)
-    const discountRatio = fee.totalFee > 0 ? fee.finalFee / fee.totalFee : 0;
-
+    // Due amount per fee head (tuition + base components + applicable extra fees)
     const baseComponents =
       ((components?.components as Array<{ name: string; amount: number }>) || []).map((c) => ({
         name: String(c.name),
@@ -96,34 +94,28 @@ export async function GET() {
       | { key: string; headType: "EXTRA_FEE"; extraFeeId: string; label: string; snapshotDue: number };
 
     const heads: HeadKey[] = [
+      {
+        key: `BASE:-1`,
+        headType: "BASE_COMPONENT" as const,
+        componentIndex: -1,
+        label: "Tuition Fee",
+        snapshotDue: Math.max(fee.finalFee, 0),
+      },
       ...baseComponents.map((c, idx) => ({
         key: `BASE:${idx}`,
         headType: "BASE_COMPONENT" as const,
         componentIndex: idx,
         label: c.name,
-        snapshotDue: c.amount * discountRatio,
+        snapshotDue: c.amount,
       })),
       ...extraFees.map((ef) => ({
         key: `EXTRA:${ef.id}`,
         headType: "EXTRA_FEE" as const,
         extraFeeId: ef.id,
         label: ef.name,
-        snapshotDue: Number(ef.amount) * discountRatio,
+        snapshotDue: Number(ef.amount) || 0,
       })),
     ];
-
-    const sumHeadsDue = heads.reduce((s, h) => s + h.snapshotDue, 0);
-    const manualDue = Math.max(fee.finalFee - sumHeadsDue, 0);
-
-    if (manualDue > 0.00001) {
-      heads.push({
-        key: `BASE:-1`,
-        headType: "BASE_COMPONENT" as const,
-        componentIndex: -1,
-        label: "General Tuition Fee",
-        snapshotDue: manualDue,
-      });
-    }
 
     const [paymentAllocations, refundAllocations] = await Promise.all([
       prisma.paymentFeeAllocation.findMany({
@@ -150,7 +142,7 @@ export async function GET() {
 
     const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);
     const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);
-    const totalSnapshotDue = Math.max(fee.finalFee, 0);
+    const totalSnapshotDue = Math.max(heads.reduce((s, h) => s + h.snapshotDue, 0), 0);
 
     const dueHeads = heads.map((h) => {
       const paidAlloc = netPaidByHead.get(h.key) ?? 0;

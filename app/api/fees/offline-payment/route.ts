@@ -53,12 +53,6 @@ export async function POST(req: Request) {
     }
 
     const fee = student.fee;
-    if (amount > fee.remainingFee + 0.01) {
-      return NextResponse.json(
-        { message: `Amount cannot exceed remaining due (₹${fee.remainingFee.toFixed(2)})` },
-        { status: 400 }
-      );
-    }
 
     type SelectedHead =
       | { headType: "BASE_COMPONENT"; componentIndex: number; componentName?: string }
@@ -82,8 +76,6 @@ export async function POST(req: Request) {
           })
           .filter((x): x is SelectedHead => x !== null)
       : [];
-
-    const discountRatio = fee.totalFee > 0 ? fee.finalFee / fee.totalFee : 0;
 
     const classFeeStructure = student.class?.id
       ? await prisma.classFeeStructure.findUnique({
@@ -121,13 +113,20 @@ export async function POST(req: Request) {
       | { key: string; headType: "EXTRA_FEE"; extraFeeId: string; extraFeeName: string; snapshotDue: number };
 
     const allHeads: Head[] = [];
+    allHeads.push({
+      key: "BASE:-1",
+      headType: "BASE_COMPONENT",
+      componentIndex: -1,
+      componentName: "Tuition Fee",
+      snapshotDue: Math.max(fee.finalFee, 0),
+    });
     baseComponents.forEach((c, idx) => {
       allHeads.push({
         key: `BASE:${idx}`,
         headType: "BASE_COMPONENT",
         componentIndex: idx,
         componentName: c.name,
-        snapshotDue: c.amount * discountRatio,
+        snapshotDue: c.amount,
       });
     });
     for (const ef of extraFees) {
@@ -136,20 +135,7 @@ export async function POST(req: Request) {
         headType: "EXTRA_FEE",
         extraFeeId: ef.id,
         extraFeeName: ef.name,
-        snapshotDue: Number(ef.amount) * discountRatio,
-      });
-    }
-
-    const sumHeadsDue = allHeads.reduce((s, h) => s + h.snapshotDue, 0);
-    const manualDue = Math.max(fee.finalFee - sumHeadsDue, 0);
-
-    if (manualDue > 0.00001) {
-      allHeads.push({
-        key: 'BASE:-1',
-        headType: 'BASE_COMPONENT',
-        componentIndex: -1,
-        componentName: 'General Tuition Fee',
-        snapshotDue: manualDue,
+        snapshotDue: Number(ef.amount) || 0,
       });
     }
 
@@ -189,7 +175,7 @@ export async function POST(req: Request) {
     const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);
     const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);
 
-    const totalSnapshotDue = Math.max(fee.finalFee, 0);
+    const totalSnapshotDue = Math.max(allHeads.reduce((s, h) => s + h.snapshotDue, 0), 0);
 
     const headsWithDueBefore: Array<Head & { paidBefore: number; dueBefore: number }> = allHeads.map((h) => {
       const paidAlloc = netPaidByHead.get(h.key) ?? 0;
@@ -217,6 +203,13 @@ export async function POST(req: Request) {
     const selectedDueSum = selectedHeads.reduce((s, h) => s + h.dueBefore, 0);
     const unselectedDueSum = unselectedHeads.reduce((s, h) => s + h.dueBefore, 0);
     const totalDueSum = headsWithDueBefore.reduce((s, h) => s + h.dueBefore, 0);
+
+    if (amount > totalDueSum + 0.01) {
+      return NextResponse.json(
+        { message: `Amount cannot exceed remaining due (₹${totalDueSum.toFixed(2)})` },
+        { status: 400 }
+      );
+    }
 
     if (totalDueSum <= 0.00001) {
       return NextResponse.json({ message: "Nothing due for this student" }, { status: 400 });
@@ -275,7 +268,7 @@ export async function POST(req: Request) {
         if (key.startsWith("BASE:")) {
           const componentIndex = Number(key.slice("BASE:".length));
           const componentName = componentIndex === -1 
-            ? "General Tuition Fee" 
+            ? "Tuition Fee" 
             : baseComponents[componentIndex]?.name ?? `Component-${componentIndex + 1}`;
           return {
             paymentId: "__PAYMENT_ID__",
@@ -304,7 +297,7 @@ export async function POST(req: Request) {
       });
 
     const newAmountPaid = fee.amountPaid + amount;
-    const newRemaining = Math.max(fee.finalFee - newAmountPaid, 0);
+    const newRemaining = Math.max(totalSnapshotDue - newAmountPaid, 0);
 
     const txId = transactionId || refNo || `OFF-${Date.now()}`;
 

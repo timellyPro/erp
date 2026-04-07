@@ -57,6 +57,7 @@ export async function PUT(req: Request) {
       rollNoPrefix,
       emailDomain,
       defaultInstallments,
+      installmentReminderDates,
 
       hyperpgMerchantId,
       hyperpgApiKey,
@@ -71,6 +72,7 @@ export async function PUT(req: Request) {
       hyperpgMerchantId?: string | null;
       hyperpgApiKey?: string | null;
       defaultInstallments?: number;
+      installmentReminderDates?: string | null;
     } = {};
     if (typeof admissionPrefix === "string") data.admissionPrefix = admissionPrefix;
     if (typeof rollNoPrefix === "string") data.rollNoPrefix = rollNoPrefix;
@@ -81,6 +83,23 @@ export async function PUT(req: Request) {
         return NextResponse.json({ message: "defaultInstallments must be a positive integer" }, { status: 400 });
       }
       data.defaultInstallments = n;
+    }
+    if (installmentReminderDates !== undefined) {
+      if (installmentReminderDates === null) {
+        data.installmentReminderDates = null;
+      } else if (!Array.isArray(installmentReminderDates)) {
+        return NextResponse.json({ message: "installmentReminderDates must be an array of YYYY-MM-DD values" }, { status: 400 });
+      } else {
+        const normalized = installmentReminderDates.map((v) => String(v ?? "").trim());
+        const validDate = /^\d{4}-\d{2}-\d{2}$/;
+        for (const d of normalized) {
+          if (!d) continue;
+          if (!validDate.test(d) || Number.isNaN(new Date(`${d}T00:00:00Z`).getTime())) {
+            return NextResponse.json({ message: "Each installment reminder date must be a valid YYYY-MM-DD date" }, { status: 400 });
+          }
+        }
+        data.installmentReminderDates = JSON.stringify(normalized);
+      }
     }
 
     if (hyperpgMerchantId !== undefined) data.hyperpgMerchantId = hyperpgMerchantId === "" ? null : String(hyperpgMerchantId);

@@ -36,6 +36,22 @@ interface UserFormProps {
   initialData?: UserFormData & { id?: string };
 }
 
+function toDateInputValue(value: unknown): string {
+  if (!value) return "";
+  const raw = String(value).trim();
+  if (!raw) return "";
+
+  const ddmmyyyy = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (ddmmyyyy) {
+    const [, d, m, y] = ddmmyyyy;
+    return `${y}-${String(parseInt(m, 10)).padStart(2, "0")}-${String(parseInt(d, 10)).padStart(2, "0")}`;
+  }
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
 const AVAILABLE_FEATURES_FOR_TEACHERS = [
   { key: Permission.DASHBOARD, label: "Dashboard" },
   { key: Permission.ADMISSION, label: "Admission" },
@@ -115,9 +131,7 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
           });
           if (!res.ok) throw new Error("Failed to fetch user");
           const userData = await res.json();
-          const joinDate = userData.joiningDate
-            ? new Date(userData.joiningDate).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" }).replace(/\//g, "-")
-            : "";
+          const joinDate = toDateInputValue(userData.joiningDate);
           setFormData({
             name: userData.name || "",
             email: userData.email || "",
@@ -529,7 +543,7 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
                   label="Joining Date"
                   value={formData.joiningDate || ""}
                   onChange={(v) => handleChange("joiningDate", v)}
-                  placeholder="dd-mm-yyyy"
+                  type="date"
                   icon={<Calendar className="w-4 h-4" />}
                   error={fieldErrors.joiningDate}
                 />
