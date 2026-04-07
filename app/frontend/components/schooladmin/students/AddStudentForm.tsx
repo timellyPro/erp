@@ -70,7 +70,7 @@ export default function AddStudentForm({
         </div>
         <div>
           <InputField
-            label="Student ID"
+            label="Timelly ID"
             value={form.rollNo}
             onChange={(value) => onFieldChange("rollNo", value.slice(0, 40))}
             placeholder="e.g. STU001"
