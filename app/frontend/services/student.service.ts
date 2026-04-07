@@ -5,7 +5,7 @@ import { IStudent } from "../interfaces/student";
 import { IUpdateStudentPayload } from "../constants/student";
 
 export const getStudents = (classId?: string) =>
-  api(`/api/students${classId ? `?classId=${classId}` : ""}`);
+  api(`/api/student${classId ? `?classId=${classId}` : ""}`);
 
 export const addStudent = (payload: any) =>
   api("/api/student/create", {
