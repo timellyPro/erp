@@ -1,11 +1,11 @@
-;
+
 import axios from "axios";
 import { api } from "./api.service";
 import { IStudent } from "../interfaces/student";
 import { IUpdateStudentPayload } from "../constants/student";
 
 export const getStudents = (classId?: string) =>
-  api(`/api/students${classId ? `?classId=${classId}` : ""}`);
+  api(`/api/student${classId ? `?classId=${classId}` : ""}`);
 
 export const addStudent = (payload: any) =>
   api("/api/student/create", {
@@ -21,7 +21,7 @@ export const uploadStudentsCSV = (file: File, classId: string) => {
   formData.append("file", file);
   formData.append("classId", classId);
 
-  return fetch("/api/students/upload", {
+  return fetch("/api/student/bulk-upload", {
     method: "POST",
     body: formData,
   }).then(res => res.json());
@@ -80,7 +80,6 @@ export const studentApi = {
       { admissionNo, updates }
     ),
 };
-
 
 
 
