@@ -438,7 +438,7 @@ model Student {
   fatherName      String
   motherName      String?
   occupation      String?
-  aadhaarNo       String   @unique
+  aadhaarNo       String
   phoneNo         String
   rollNo          String? // modifiable by admin
   dob             DateTime
@@ -470,6 +470,8 @@ model Student {
   createdAt              DateTime                @default(now())
 
   application StudentApplication?
+
+  @@unique([schoolId, aadhaarNo])
 }
 
 // =====================
@@ -1149,6 +1151,14 @@ model StudentApplication {
   discountPercent  Float?
   applicationFee   Float? // record-only; no payment gateway
   admissionFee     Float?
+  applicationFeePaid          Boolean   @default(false)
+  applicationFeePaidAt        DateTime?
+  applicationFeePaymentMode   String?
+  applicationFeePaymentMethod String?
+  admissionFeePaid            Boolean   @default(false)
+  admissionFeePaidAt          DateTime?
+  admissionFeePaymentMode     String?
+  admissionFeePaymentMethod   String?
 
   // Optional identifiers (for bulk upload compatibility)
   rollNo String?
@@ -1159,7 +1169,7 @@ model StudentApplication {
   lastName      String
   gender        Gender
   dateOfBirth   DateTime
-  aadharNo      String @unique
+  aadharNo      String
 
   firstLanguage   String
   nationality     String
@@ -1204,6 +1214,7 @@ model StudentApplication {
   @@index([boardingType])
   @@index([residencyType])
   @@index([createdAt])
+  @@unique([schoolId, aadharNo])
 }
 
 // ENUMS

@@ -246,13 +246,10 @@ export async function POST(req: Request) {
 
         const dobDate = parseDob(rawDob);
 
-        const existingStudent = await prisma.student.findUnique({
-          where: { aadhaarNo },
+        const existingStudent = await prisma.student.findFirst({
+          where: { schoolId, aadhaarNo },
           select: { id: true, userId: true, schoolId: true },
         });
-        if (existingStudent && existingStudent.schoolId !== schoolId) {
-          throw new Error("Aadhaar number already exists in another school.");
-        }
 
         // Optional: Class + Section mapping — if not found, student is created unassigned
         const className = toStr(row.class ?? row.className ?? row.Class);

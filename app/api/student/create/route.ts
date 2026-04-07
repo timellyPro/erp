@@ -303,8 +303,8 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-    const existingAadhaar = await prisma.student.findUnique({
-      where: { aadhaarNo: aadhaarCleaned },
+    const existingAadhaar = await prisma.student.findFirst({
+      where: { schoolId, aadhaarNo: aadhaarCleaned },
       select: { id: true },
     });
     if (existingAadhaar) {
@@ -331,27 +331,36 @@ export async function POST(req: Request) {
             data: { schoolId, admissionPrefix: "ADM", rollNoPrefix: "", admissionCounter: 0, defaultInstallments: 3 } as any,
           });
         }
-        const nextNum = settings.admissionCounter + 1;
         const defaultInstallments =
           Number.isInteger((settings as any)?.defaultInstallments) && (settings as any).defaultInstallments > 0
             ? (settings as any).defaultInstallments
             : 3;
-        const admissionNumber =
-          `${settings.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
-        
-        // Check if admission number already exists (race condition protection)
-        const existingAdmission = await tx.student.findUnique({
-          where: { admissionNumber },
-          select: { id: true },
-        });
-        if (existingAdmission) {
-          throw new Error("Admission number conflict. Please try again.");
-        }
+        let nextNum = 0;
+        let admissionNumber = "";
+        let admissionNumberReady = false;
+        // Generate admission number with atomic counter increments + retry.
+        // This heals stale counters and avoids race-condition conflicts.
+        for (let attempt = 0; attempt < 20; attempt++) {
+          const updatedSettings = await tx.schoolSettings.update({
+            where: { schoolId },
+            data: { admissionCounter: { increment: 1 } },
+            select: { admissionCounter: true, admissionPrefix: true },
+          });
+          nextNum = updatedSettings.admissionCounter;
+          admissionNumber = `${updatedSettings.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
 
-        await tx.schoolSettings.update({
-          where: { schoolId },
-          data: { admissionCounter: nextNum },
-        });
+          const existingAdmission = await tx.student.findUnique({
+            where: { admissionNumber },
+            select: { id: true },
+          });
+          if (!existingAdmission) {
+            admissionNumberReady = true;
+            break;
+          }
+        }
+        if (!admissionNumberReady) {
+          throw new Error("Unable to generate admission number. Please try again.");
+        }
 
         const rollNoPrefix = settings.rollNoPrefix || "";
         const finalRollNo =
@@ -573,6 +582,7 @@ export async function POST(req: Request) {
     if (err?.code === "P2002") {
       const target = err?.meta?.target;
       const field = Array.isArray(target) ? target[0] : undefined;
+      const targetFields = Array.isArray(target) ? target : [];
       if (field === "email") {
         return NextResponse.json(
           { message: "Email already exists. Please use a different email or leave it blank to auto-generate." },
@@ -588,6 +598,18 @@ export async function POST(req: Request) {
       if (field === "aadhaarNo") {
         return NextResponse.json(
           { message: "Aadhaar number already exists. Please check the Aadhaar number." },
+          { status: 400 }
+        );
+      }
+      if (
+        targetFields.includes("schoolId") &&
+        targetFields.includes("aadhaarNo")
+      ) {
+        return NextResponse.json(
+          {
+            message:
+              "Aadhaar number already exists in this school. Please check the Aadhaar number.",
+          },
           { status: 400 }
         );
       }

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
-import { Download, FileText, Pencil, PlusCircle, Save, Search, Trash2 } from "lucide-react";
+import { Download, Pencil, PlusCircle, Save, Search, Trash2 } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
 import PageTabs from "../../schooladmin/schooladmincomponents/PageHeaderTabs";
 import InputField from "../../schooladmin/schooladmincomponents/InputField";
@@ -42,6 +42,14 @@ type AdmissionRow = {
   discountPercent?: number | null;
   applicationFee?: number | null;
   admissionFee?: number | null;
+  applicationFeePaid?: boolean;
+  applicationFeePaidAt?: string | null;
+  applicationFeePaymentMode?: string | null;
+  applicationFeePaymentMethod?: string | null;
+  admissionFeePaid?: boolean;
+  admissionFeePaidAt?: string | null;
+  admissionFeePaymentMode?: string | null;
+  admissionFeePaymentMethod?: string | null;
   firstName: string;
   middleName: string | null;
   lastName: string;
@@ -56,6 +64,8 @@ type AdmissionRow = {
   pinCode: string;
   createdAt: string;
 };
+
+type FeeType = "APPLICATION" | "ADMISSION";
 
 type FormState = {
   applicationNo: string;
@@ -250,6 +260,11 @@ export default function TeacherAdmissionTab() {
   const [schoolAddress, setSchoolAddress] = useState("");
   const [receiptData, setReceiptData] = useState<AdmissionReceiptData | null>(null);
   const receiptRef = useRef<HTMLDivElement>(null);
+  const [paymentDialog, setPaymentDialog] = useState<{
+    row: AdmissionRow;
+    feeType: FeeType;
+  } | null>(null);
+  const [paying, setPaying] = useState(false);
 
   useEffect(() => {
     fetch("/api/school/mine", { credentials: "include", cache: "no-store" })
@@ -265,9 +280,11 @@ export default function TeacherAdmissionTab() {
       });
   }, []);
 
-  const downloadFeeReceipt = async (r: AdmissionRow) => {
-    const app = Number(r.applicationFee ?? 0);
-    const adm = Number(r.admissionFee ?? 0);
+  const downloadFeeReceipt = async (r: AdmissionRow, feeType: FeeType) => {
+    const app = feeType === "APPLICATION" ? Number(r.applicationFee ?? 0) : 0;
+    const adm = feeType === "ADMISSION" ? Number(r.admissionFee ?? 0) : 0;
+    const paidAt =
+      feeType === "APPLICATION" ? r.applicationFeePaidAt : r.admissionFeePaidAt;
     const data: AdmissionReceiptData = {
       schoolName: schoolName || "School",
       schoolAddress: schoolAddress || "-",
@@ -279,7 +296,7 @@ export default function TeacherAdmissionTab() {
       residencyType: normalizeResidencyType(r.residencyType),
       parentName: r.parentName || "-",
       parentPhone: r.parentPhone || "-",
-      createdAt: new Date(r.createdAt).toLocaleString(),
+      createdAt: paidAt ? new Date(paidAt).toLocaleString() : new Date(r.createdAt).toLocaleString(),
       applicationFee: app,
       admissionFee: adm,
       total: app + adm,
@@ -287,8 +304,77 @@ export default function TeacherAdmissionTab() {
 
     setReceiptData(data);
     setTimeout(async () => {
-      await generatePDF(receiptRef, `fee-receipt-${(r.applicationNo || "APP").replace(/[^\w-]+/g, "_")}.pdf`);
+      await generatePDF(
+        receiptRef,
+        `${feeType.toLowerCase()}-fee-receipt-${(r.applicationNo || "APP").replace(/[^\w-]+/g, "_")}.pdf`
+      );
     }, 200);
+  };
+
+  const markFeePaid = async (row: AdmissionRow, feeType: FeeType) => {
+    setPaying(true);
+    try {
+      const res = await fetch(`/api/admissions/${row.id}/fee-payment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          feeType,
+          paymentMode: "OFFLINE",
+          paymentMethod: "CASH",
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.message || "Failed to mark fee as paid");
+      }
+      setRows((prev) =>
+        prev.map((r) =>
+          r.id === row.id
+            ? {
+                ...r,
+                applicationFeePaid:
+                  feeType === "APPLICATION"
+                    ? true
+                    : r.applicationFeePaid ?? false,
+                applicationFeePaidAt:
+                  feeType === "APPLICATION"
+                    ? new Date().toISOString()
+                    : r.applicationFeePaidAt ?? null,
+                applicationFeePaymentMode:
+                  feeType === "APPLICATION"
+                    ? "OFFLINE"
+                    : r.applicationFeePaymentMode ?? null,
+                applicationFeePaymentMethod:
+                  feeType === "APPLICATION"
+                    ? "CASH"
+                    : r.applicationFeePaymentMethod ?? null,
+                admissionFeePaid:
+                  feeType === "ADMISSION" ? true : r.admissionFeePaid ?? false,
+                admissionFeePaidAt:
+                  feeType === "ADMISSION"
+                    ? new Date().toISOString()
+                    : r.admissionFeePaidAt ?? null,
+                admissionFeePaymentMode:
+                  feeType === "ADMISSION"
+                    ? "OFFLINE"
+                    : r.admissionFeePaymentMode ?? null,
+                admissionFeePaymentMethod:
+                  feeType === "ADMISSION"
+                    ? "CASH"
+                    : r.admissionFeePaymentMethod ?? null,
+              }
+            : r
+        )
+      );
+      setMessageTone("success");
+      setMessage(data?.message || "Fee marked as paid");
+      setPaymentDialog(null);
+    } catch (e) {
+      setMessageTone("error");
+      setMessage(e instanceof Error ? e.message : "Failed to mark fee as paid");
+    } finally {
+      setPaying(false);
+    }
   };
 
   useEffect(() => {
@@ -354,21 +440,79 @@ export default function TeacherAdmissionTab() {
           <span className="text-sm text-white/70">{formatInrCell(r.admissionFee)}</span>
         ),
       },
+      {
+        header: "App Fee Status",
+        render: (r: AdmissionRow) => {
+          const amount = Number(r.applicationFee ?? 0);
+          const isPaid = Boolean(r.applicationFeePaid);
+          if (amount <= 0) return <span className="text-xs text-white/40">Not set</span>;
+          if (isPaid) {
+            return (
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-1 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  Paid
+                </span>
+                <button
+                  type="button"
+                  onClick={() => downloadFeeReceipt(r, "APPLICATION")}
+                  className="inline-flex items-center justify-center p-1.5 rounded-lg bg-lime-400/10 border border-lime-400/25 text-lime-300 hover:bg-lime-400/20"
+                  title="Download application fee receipt"
+                >
+                  <Download size={14} />
+                </button>
+              </div>
+            );
+          }
+          return (
+            <button
+              type="button"
+              onClick={() => setPaymentDialog({ row: r, feeType: "APPLICATION" })}
+              className="px-2 py-1 rounded-lg text-[10px] bg-amber-500/10 border border-amber-500/25 text-amber-300 hover:bg-amber-500/20"
+            >
+              Pay Now
+            </button>
+          );
+        },
+      },
+      {
+        header: "Adm Fee Status",
+        render: (r: AdmissionRow) => {
+          const amount = Number(r.admissionFee ?? 0);
+          const isPaid = Boolean(r.admissionFeePaid);
+          if (amount <= 0) return <span className="text-xs text-white/40">Not set</span>;
+          if (isPaid) {
+            return (
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-1 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  Paid
+                </span>
+                <button
+                  type="button"
+                  onClick={() => downloadFeeReceipt(r, "ADMISSION")}
+                  className="inline-flex items-center justify-center p-1.5 rounded-lg bg-lime-400/10 border border-lime-400/25 text-lime-300 hover:bg-lime-400/20"
+                  title="Download admission fee receipt"
+                >
+                  <Download size={14} />
+                </button>
+              </div>
+            );
+          }
+          return (
+            <button
+              type="button"
+              onClick={() => setPaymentDialog({ row: r, feeType: "ADMISSION" })}
+              className="px-2 py-1 rounded-lg text-[10px] bg-amber-500/10 border border-amber-500/25 text-amber-300 hover:bg-amber-500/20"
+            >
+              Pay Now
+            </button>
+          );
+        },
+      },
       { header: "Created", render: (r: AdmissionRow) => <span className="text-sm text-white/60">{new Date(r.createdAt).toLocaleDateString()}</span> },
       {
         header: "Actions",
         render: (r: AdmissionRow) => (
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() =>
-                downloadFeeReceipt(r)
-              }
-              className="p-2 rounded-lg bg-lime-400/10 border border-lime-400/25 text-lime-300 hover:bg-lime-400/20"
-              title="Download fee receipt (PDF)"
-            >
-              <FileText size={14} />
-            </button>
             <button
               type="button"
               onClick={() => router.push(`?tab=admission&view=add&editId=${r.id}`)}
@@ -389,7 +533,7 @@ export default function TeacherAdmissionTab() {
         ),
       },
     ],
-    [router, schoolName]
+    [router, schoolName, schoolAddress]
   );
 
   useEffect(() => {
@@ -650,7 +794,7 @@ export default function TeacherAdmissionTab() {
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <InputField
-                  label="Fedena No (optional)"
+                  label="Timelly No (optional)"
                   value={form.fedenaNo}
                   onChange={(v) => setForm((p) => ({ ...p, fedenaNo: v }))}
                 />
@@ -951,30 +1095,69 @@ export default function TeacherAdmissionTab() {
                     <div className="text-white/50 text-xs mt-1">
                       App fee: {formatInrCell(r.applicationFee)} · Adm fee: {formatInrCell(r.admissionFee)}
                     </div>
-                    <div className="mt-3 flex items-center gap-2 flex-wrap">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          downloadFeeReceipt(r)
-                        }
-                        className="px-3 py-2 rounded-xl bg-lime-400/15 border border-lime-400/30 text-lime-300 text-xs"
-                      >
-                        Receipt
-                      </button>
+                    <div className="mt-3 flex flex-col gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {Number(r.applicationFee ?? 0) > 0 && !r.applicationFeePaid && (
+                        <button
+                          type="button"
+                          onClick={() => setPaymentDialog({ row: r, feeType: "APPLICATION" })}
+                          className="w-full px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs"
+                        >
+                          Pay App Fee
+                        </button>
+                      )}
+                      {Number(r.admissionFee ?? 0) > 0 && !r.admissionFeePaid && (
+                        <button
+                          type="button"
+                          onClick={() => setPaymentDialog({ row: r, feeType: "ADMISSION" })}
+                          className="w-full px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs"
+                        >
+                          Pay Adm Fee
+                        </button>
+                      )}
+                      </div>
+
+                      <div className="flex items-center gap-2 flex-wrap">
+                      {r.applicationFeePaid && (
+                        <button
+                          type="button"
+                          onClick={() => downloadFeeReceipt(r, "APPLICATION")}
+                          className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-lime-400/15 border border-lime-400/30 text-lime-300 text-xs"
+                          title="Download application fee receipt"
+                        >
+                          <Download size={13} />
+                          App Receipt
+                        </button>
+                      )}
+                      {r.admissionFeePaid && (
+                        <button
+                          type="button"
+                          onClick={() => downloadFeeReceipt(r, "ADMISSION")}
+                          className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-lime-400/15 border border-lime-400/30 text-lime-300 text-xs"
+                          title="Download admission fee receipt"
+                        >
+                          <Download size={13} />
+                          Adm Receipt
+                        </button>
+                      )}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
                         onClick={() => router.push(`?tab=admission&view=add&editId=${r.id}`)}
-                        className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white/70 text-xs"
+                        className="w-full px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white/70 text-xs"
                       >
                         Edit
                       </button>
                       <button
                         type="button"
                         onClick={() => setDeleteRow(r)}
-                        className="px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-xs"
+                        className="w-full px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-xs"
                       >
                         Delete
                       </button>
+                      </div>
                     </div>
                   </div>
                 ))
@@ -1002,6 +1185,45 @@ export default function TeacherAdmissionTab() {
           </motion.div>
         )}
       </div>
+
+      {paymentDialog && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0B1220] p-5 space-y-4">
+            <div className="text-white font-semibold">
+              {paymentDialog.feeType === "APPLICATION"
+                ? "Pay Application Fee"
+                : "Pay Admission Fee"}
+            </div>
+            <p className="text-sm text-white/70">
+              {`${paymentDialog.row.firstName} ${paymentDialog.row.lastName}`}
+            </p>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3 space-y-1">
+              <div className="text-xs text-white/60">Payment Mode</div>
+              <div className="text-sm text-white">Offline</div>
+              <div className="text-xs text-white/60 pt-2">Payment Method</div>
+              <div className="text-sm text-white">Cash</div>
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setPaymentDialog(null)}
+                disabled={paying}
+                className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-white/70"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => markFeePaid(paymentDialog.row, paymentDialog.feeType)}
+                disabled={paying}
+                className="px-4 py-2 rounded-xl bg-lime-400 text-black font-semibold disabled:opacity-60"
+              >
+                {paying ? "Processing..." : "Pay Now"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {deleteRow && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">

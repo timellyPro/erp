@@ -47,7 +47,7 @@ export default function UploadCsvPanel({
       <div className="bg-[#0F172A] rounded-2xl shadow-2xl max-w-lg w-full animate-scaleIn border border-white/10">
         <div className="flex items-center justify-between px-6 py-5 border-b border-white/10">
           <div className="text-lg md:text-xl font-bold text-gray-100">Upload CSV File</div>
-          <button onClick={onCancel} className="text-white/60 hover:text-white">
+          <button type="button" onClick={onCancel} className="text-white/60 hover:text-white">
             <X size={18} />
           </button>
         </div>
@@ -136,6 +136,7 @@ export default function UploadCsvPanel({
 
           <div className="flex items-center justify-end gap-3 pt-1">
             <button
+              type="button"
               onClick={onCancel}
               className="flex-1 px-4 md:px-6 py-2.5 border border-white/10 rounded-xl 
               text-gray-400 font-medium hover:bg-white/5 transition-all text-sm"
@@ -143,6 +144,7 @@ export default function UploadCsvPanel({
               Cancel
             </button>
             <motion.button
+              type="button"
               onClick={handleUpload}
               disabled={uploading || !uploadFile}
               whileHover={{ scale: uploadFile && !uploading ? 1.02 : 1 }}

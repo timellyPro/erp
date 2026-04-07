@@ -91,6 +91,8 @@ const DEFAULT_FORM: StudentFormState = {
   emergencyGuardianNo: "",
 };
 
+const EMPTY_CLASSES: ClassItem[] = [];
+
 const digitsOnly = (value: string) => value.replace(/\D/g, "");
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -214,7 +216,8 @@ const validateForm = (
   return newErrors;
 };
 
-export default function useStudentPage({ classes = [], reload }: Props) {
+export default function useStudentPage({ classes, reload }: Props) {
+  const stableClasses = classes ?? EMPTY_CLASSES;
   const router = useRouter();
   const bumpAfterMutation = useCallback(() => {
     reload?.();
@@ -226,7 +229,7 @@ export default function useStudentPage({ classes = [], reload }: Props) {
   }, [reload, router]);
 
   const [availableClasses, setAvailableClasses] = useState<ClassItem[]>(
-    classes.length ? classes : classesCache ?? []
+    stableClasses.length ? stableClasses : classesCache ?? []
   );
   const [classesLoading, setClassesLoading] = useState(false);
   const [selectedClass, setSelectedClass] = useState("");
@@ -268,13 +271,13 @@ export default function useStudentPage({ classes = [], reload }: Props) {
   const [showSuccess, setShowSuccess] = useState(false);
 
   useEffect(() => {
-    if (classes && classes.length) {
-      setAvailableClasses(classes);
+    if (stableClasses.length) {
+      setAvailableClasses(stableClasses);
     }
-  }, [classes]);
+  }, [stableClasses]);
 
   useEffect(() => {
-    if (classes && classes.length) return;
+    if (stableClasses.length) return;
 
     if (classesCache?.length) {
       setAvailableClasses(classesCache);
@@ -295,7 +298,7 @@ export default function useStudentPage({ classes = [], reload }: Props) {
     return () => {
       active = false;
     };
-  }, [classes]);
+  }, [stableClasses]);
 
   useEffect(() => {
     if (!form.classId && selectedClassIdForFetch) {

@@ -339,18 +339,21 @@ export default function AddStudentForm({
 
       <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
         <button
+          type="button"
           onClick={onReset}
           className="rounded-xl border border-white/10 bg-white/5 px-5 py-2 text-sm font-semibold text-white/70 hover:bg-white/10"
         >
           Reset
         </button>
         <button
+          type="button"
           onClick={onCancel}
           className="rounded-xl border border-white/10 bg-white/5 px-5 py-2 text-sm font-semibold text-white/70 hover:bg-white/10"
         >
           Cancel
         </button>
         <button
+          type="button"
           onClick={onSave}
           disabled={saving}
           className="inline-flex items-center gap-2 rounded-xl bg-lime-400

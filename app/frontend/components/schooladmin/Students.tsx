@@ -22,8 +22,11 @@ type Props = {
   reload?: () => void;
 };
 
-export default function StudentsManagementPage({ classes = [], reload }: Props) {
-  const page = useStudentPage({ classes, reload });
+const EMPTY_CLASSES: ClassItem[] = [];
+
+export default function StudentsManagementPage({ classes, reload }: Props) {
+  const stableClasses = classes ?? EMPTY_CLASSES;
+  const page = useStudentPage({ classes: stableClasses, reload });
   const [tablePage, setTablePage] = useState(1);
   const pageSize = 5;
   const totalPages = Math.max(
