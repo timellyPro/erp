@@ -27,6 +27,7 @@ export async function GET(req: Request) {
     const gradeSought = (searchParams.get("gradeSought") ?? "").trim();
     const boardingType = (searchParams.get("boardingType") ?? "").trim();
     const classId = (searchParams.get("classId") ?? "").trim();
+    const unconvertedOnly = (searchParams.get("unconvertedOnly") ?? "").trim() === "1";
 
     const from = searchParams.get("from");
     const to = searchParams.get("to");
@@ -34,6 +35,7 @@ export async function GET(req: Request) {
     const toDate = to ? new Date(to) : null;
 
     const where: any = { schoolId };
+    if (unconvertedOnly) where.studentId = null;
 
     if (gradeSought) where.gradeSought = gradeSought;
     if (boardingType) where.boardingType = boardingType;
