@@ -13,6 +13,8 @@ let redisDisabledUntil = 0;
 let redisFailureCount = 0;
 let localCacheVersion = 0;
 let lastVersionReadAt = 0;
+const ISO_DATETIME_REGEX =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 export const redis = redisEnabled
   ? new Redis({
@@ -52,6 +54,23 @@ function markRedisFailure(context: string, error?: unknown) {
     redisFailureCount = 0;
     console.warn(`[Redis] Temporarily disabled for ${redisCircuitCooldownMs}ms to keep APIs fast.`);
   }
+}
+
+function reviveDates<T>(value: T): T {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string" && ISO_DATETIME_REGEX.test(value)) {
+    const parsed = new Date(value);
+    return (Number.isNaN(parsed.getTime()) ? value : parsed) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => reviveDates(item)) as T;
+  }
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const revivedEntries = Object.entries(obj).map(([k, v]) => [k, reviveDates(v)]);
+    return Object.fromEntries(revivedEntries) as T;
+  }
+  return value;
 }
 
 export async function getRedisCacheVersion(): Promise<number> {
@@ -97,7 +116,7 @@ export async function redisGet(key: string) {
   try {
     const value = await withTimeout(redis!.get(key), redisTimeoutMs);
     markRedisSuccess();
-    return value;
+    return reviveDates(value);
   } catch (error) {
     markRedisFailure(`GET ${key}`, error);
     return null;

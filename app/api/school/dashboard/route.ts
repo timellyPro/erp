@@ -20,6 +20,16 @@ function maybePurgeExpiredNewsFeeds() {
   });
 }
 
+function toDate(value: unknown): Date | null {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  if (typeof value === "string" || typeof value === "number") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
+}
+
 export async function GET() {
   const session = await getServerSession(authOptions);
 
@@ -210,13 +220,16 @@ export async function GET() {
       return `₹${Math.round(n)}`;
     };
 
-    const workshops = eventsUpcoming.map((e) => ({
+    const workshops = eventsUpcoming.map((e) => {
+      const eventDate = toDate(e.eventDate);
+      return {
       id: e.id,
       title: e.title,
-      date: e.eventDate?.toISOString().slice(0, 10),
+      date: eventDate ? eventDate.toISOString().slice(0, 10) : null,
       participants: e._count.registrations,
-      status: e.eventDate && e.eventDate <= new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) ? "Confirmed" : "Scheduled",
-    }));
+      status: eventDate && eventDate <= new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) ? "Confirmed" : "Scheduled",
+    };
+    });
 
     const teachersOnLeave = leaves
       .filter((l) => l.status === "APPROVED" || l.status === "PENDING")
@@ -293,7 +306,10 @@ export async function GET() {
         totalTeachersChange: teacherCount - teacherCountLastMonth,
         upcomingWorkshops: eventsUpcoming.length,
         workshopsThisWeek: eventsUpcoming.filter(
-          (e) => e.eventDate && e.eventDate <= new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+          (e) => {
+            const eventDate = toDate(e.eventDate);
+            return eventDate !== null && eventDate <= new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+          }
         ).length,
         feesCollected: formatCurrency(totalPaid),
         feesCollectedRaw: totalPaid,

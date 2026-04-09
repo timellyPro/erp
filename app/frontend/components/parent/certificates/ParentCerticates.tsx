@@ -65,9 +65,9 @@ export default function ParentCertificatesTab() {
 
     setLoading(true);
     try {
-      let certReqRes = await fetch("/api/certificates/requests/list", { credentials: "include" });
+      let certReqRes = await fetch("/api/tc/list", { credentials: "include" });
       if (certReqRes.status === 404) {
-        certReqRes = await fetch("/api/tc/list", { credentials: "include" });
+        certReqRes = await fetch("/api/certificates/requests/list", { credentials: "include" });
       }
       if (certReqRes.ok) {
         const certReqData = await certReqRes.json();
