@@ -541,6 +541,7 @@ export default function TeacherAdmissionTab() {
     const params = new URLSearchParams();
     params.set("page", String(page));
     params.set("pageSize", "10");
+    params.set("unconvertedOnly", "1");
     if (search.trim()) params.set("search", search.trim());
     if (filters.gradeSought) params.set("gradeSought", filters.gradeSought);
     if (filters.boardingType) params.set("boardingType", filters.boardingType);

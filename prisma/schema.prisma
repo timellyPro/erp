@@ -237,6 +237,7 @@ model School {
   circulars            Circular[]
   examTerms            ExamTerm[]
   examTypes            ExamType[]
+  examSubjects         ExamSubject[]
 
   // SaaS / billing configuration
   // PARENT_SUBSCRIPTION -> each parent subscribes individually
@@ -580,6 +581,19 @@ model Mark {
 }
 
 model ExamType {
+  id       String @id @default(cuid())
+  name     String // stored in CAPS only
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([schoolId, name])
+  @@index([schoolId])
+}
+
+model ExamSubject {
   id       String @id @default(cuid())
   name     String // stored in CAPS only
 

@@ -54,6 +54,7 @@ const DEFAULT_EXAM_TYPES = ["TERM 1", "TERM 2", "FINAL"];
 export default function TeacherMarksTab() {
   const router = useRouter();
   const [classes, setClasses] = useState<ClassOption[]>([]);
+  const [subjectOptions, setSubjectOptions] = useState<string[]>(DEFAULT_SUBJECTS);
   const [examTypeOptions, setExamTypeOptions] =
     useState<string[]>(DEFAULT_EXAM_TYPES);
   const [form, setForm] = useState({
@@ -83,8 +84,6 @@ export default function TeacherMarksTab() {
         return ["Section A"];
       })()
     : ["Section A"];
-  const subjectOptions = DEFAULT_SUBJECTS;
-
   const fetchClasses = useCallback(async () => {
     try {
       const res = await fetch("/api/class/list");
@@ -186,6 +185,75 @@ export default function TeacherMarksTab() {
     }
   }, []);
 
+  const fetchSavedExamFields = useCallback(async () => {
+    try {
+      const subjectsRes = await fetch("/api/exam-subjects", {
+        cache: "no-store",
+        credentials: "include",
+      });
+      if (subjectsRes.ok) {
+        const subjectsData = await subjectsRes.json();
+        const savedSubjects = Array.isArray(subjectsData.subjects)
+          ? subjectsData.subjects
+              .map((subject: string) => subject?.trim())
+              .filter((subject: string | undefined): subject is string => Boolean(subject))
+          : [];
+        if (savedSubjects.length > 0) {
+          setSubjectOptions((prev) => Array.from(new Set([...savedSubjects, ...prev])));
+          setForm((prev) =>
+            savedSubjects.includes(prev.subject)
+              ? prev
+              : { ...prev, subject: savedSubjects[0] }
+          );
+        }
+      }
+
+      const params = new URLSearchParams();
+      if (form.classId) params.set("classId", form.classId);
+      const res = await fetch(`/api/exams/terms?${params.toString()}`, {
+        cache: "no-store",
+        credentials: "include",
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const exams = Array.isArray(data.exams) ? data.exams : [];
+
+      const savedSubjects: string[] = Array.from(
+        new Set<string>(
+          exams
+            .map((exam: { subject?: string }) => exam.subject?.trim())
+            .filter((subject: string | undefined): subject is string => Boolean(subject))
+        )
+      );
+      const savedExamNames: string[] = Array.from(
+        new Set<string>(
+          exams
+            .map((exam: { name?: string }) => exam.name?.trim().toUpperCase())
+            .filter((name: string | undefined): name is string => Boolean(name))
+        )
+      );
+
+      if (savedSubjects.length > 0) {
+        setSubjectOptions((prev) =>
+          Array.from(new Set<string>([...savedSubjects, ...prev]))
+        );
+      }
+
+      if (savedExamNames.length > 0) {
+        setExamTypeOptions((prev) =>
+          Array.from(new Set<string>([...savedExamNames, ...prev]))
+        );
+        setForm((prev) =>
+          savedExamNames.includes(prev.examType)
+            ? prev
+            : { ...prev, examType: savedExamNames[0] }
+        );
+      }
+    } catch {
+      /* noop */
+    }
+  }, [form.classId]);
+
   useEffect(() => {
     fetchClasses();
   }, [fetchClasses]);
@@ -197,6 +265,10 @@ export default function TeacherMarksTab() {
   useEffect(() => {
     fetchExamTypes();
   }, [fetchExamTypes]);
+
+  useEffect(() => {
+    fetchSavedExamFields();
+  }, [fetchSavedExamFields]);
 
   useEffect(() => {
     setPage(1);
