@@ -138,18 +138,16 @@ export async function POST(req: Request) {
           where: studentWhere,
           select: { id: true },
         });
-        for (const s of students) {
-          const fee = await tx.studentFee.findUnique({ where: { studentId: s.id } });
-          if (fee) {
-            await tx.studentFee.update({
-              where: { studentId: s.id },
-              data: {
-                totalFee: fee.totalFee + amount,
-                finalFee: fee.finalFee + amount,
-                remainingFee: fee.remainingFee + amount,
-              },
-            });
-          }
+        const studentIds = students.map((s) => s.id);
+        if (studentIds.length > 0) {
+          await tx.studentFee.updateMany({
+            where: { studentId: { in: studentIds } },
+            data: {
+              totalFee: { increment: amount },
+              finalFee: { increment: amount },
+              remainingFee: { increment: amount },
+            },
+          });
         }
       }
       return created;

@@ -116,6 +116,10 @@ function extractTimellyId(row: Record<string, unknown>) {
   );
 }
 
+function normalizeStudentName(value: unknown) {
+  return toStr(value).toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -260,20 +264,46 @@ export async function POST(req: Request) {
         }
 
         const dobDate = parseDob(rawDob);
+        const timellyId = extractTimellyId(row);
+        const normalizedName = normalizeStudentName(name);
 
         const existingStudent = await prisma.student.findFirst({
-          where: { schoolId, aadhaarNo },
+          where: { aadhaarNo },
           select: { id: true, userId: true, schoolId: true },
         });
+
+        if (existingStudent && existingStudent.schoolId !== schoolId) {
+          throw new Error("Aadhaar number already exists in another school");
+        }
+
+        if (timellyId) {
+          const existingByRoll = await prisma.student.findFirst({
+            where: { schoolId, rollNo: timellyId },
+            select: { id: true, user: { select: { name: true } } },
+          });
+          if (existingByRoll && existingByRoll.id !== existingStudent?.id) {
+            const existingName = normalizeStudentName(existingByRoll.user?.name ?? "");
+            if (existingName && existingName === normalizedName) {
+              throw new Error("Student name and Timelly ID already exist");
+            }
+            throw new Error("Timelly ID already exists");
+          }
+        }
 
         // Optional: Class + Section mapping — if not found, student is created unassigned
         const className = toStr(row.class ?? row.className ?? row.Class);
         const section = toStr(row.section ?? row.Section);
         let classId: string | null = null;
         if (className) {
+          const normalizedClass = className.toLowerCase().replace(/\s+/g, "");
+          const numericClass = normalizedClass.replace(/[^0-9]/g, "");
           const match = classes.find((c) => {
+            const classLabel = (c.name || "").trim().toLowerCase();
+            const normalizedLabel = classLabel.replace(/\s+/g, "");
+            const numericLabel = normalizedLabel.replace(/[^0-9]/g, "");
             const sameName =
-              (c.name || "").trim().toLowerCase() === className.toLowerCase();
+              normalizedLabel === normalizedClass ||
+              (numericClass && numericLabel && numericClass === numericLabel);
             const sameSection =
               !section ||
               (c.section || "").trim().toLowerCase() === section.toLowerCase();
@@ -327,7 +357,6 @@ export async function POST(req: Request) {
                 },
               });
 
-              const timellyId = extractTimellyId(row);
               const student = await tx.student.update({
                 where: { id: existingStudent.id },
                 data: {
@@ -392,14 +421,14 @@ export async function POST(req: Request) {
               });
             }
 
-            const timellyId = extractTimellyId(row);
+            const rowTimellyId = timellyId;
             let nextNum = 0;
             let updatedSettings: any = null;
             let admissionNumber = "";
 
-            if (timellyId) {
+            if (rowTimellyId) {
               updatedSettings = settings;
-              admissionNumber = `${settings.admissionPrefix}/${year}/${timellyId}`;
+              admissionNumber = `${settings.admissionPrefix}/${year}/${rowTimellyId}`;
               const existingAdmission = await tx.student.findUnique({
                 where: { admissionNumber },
                 select: { id: true },
@@ -442,8 +471,8 @@ export async function POST(req: Request) {
                 ? (updatedSettings as any).defaultInstallments
                 : schoolDefaultInstallments;
             const rollNoPrefix = updatedSettings.rollNoPrefix || "";
-            const finalRollNo = timellyId
-              ? timellyId
+            const finalRollNo = rowTimellyId
+              ? rowTimellyId
               : rollNoPrefix
               ? `${rollNoPrefix}${nextNum}`
               : String(nextNum);
