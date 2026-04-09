@@ -1,5 +1,6 @@
 
 import { PrismaClient } from "@prisma/client";
+import { bumpRedisCacheVersion, getRedisCacheVersion, isRedisEnabled, redisGet, redisSet } from "@/lib/redis";
 
 // Prefer DATABASE_URL (port 6543, transaction pooler) for runtime - better for serverless and avoids
 // connection resets. Use DIRECT_URL only for migrations (schema directUrl).
@@ -40,11 +41,133 @@ const prismaClientSingleton = () => {
   });
 };
 
+const READ_OPERATIONS = new Set(["findUnique", "findFirst", "findMany", "count", "aggregate", "groupBy"]);
+const WRITE_OPERATIONS = new Set(["create", "createMany", "update", "updateMany", "upsert", "delete", "deleteMany"]);
+const localCacheEnabled = (process.env.LOCAL_QUERY_CACHE_ENABLED || "true").toLowerCase() !== "false";
+const localCacheTtlMs = Number(process.env.LOCAL_QUERY_CACHE_TTL_MS || "4000");
+
+type LocalCacheEntry = {
+  value: unknown;
+  expiresAt: number;
+};
+
+const localQueryCache = new Map<string, LocalCacheEntry>();
+
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) return String(value);
+  if (typeof value === "bigint") return value.toString();
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const keys = Object.keys(obj).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(obj[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function isReadOperation(operation: string) {
+  return READ_OPERATIONS.has(operation);
+}
+
+function isWriteOperation(operation: string) {
+  return WRITE_OPERATIONS.has(operation);
+}
+
+function getCacheKey(model: string | undefined, operation: string, args: unknown, version: number) {
+  const modelName = model ?? "raw";
+  return `prisma:${modelName}:${operation}:v${version}:${stableStringify(args)}`;
+}
+
+function getLocalCachedValue(cacheKey: string) {
+  if (!localCacheEnabled) return null;
+  const entry = localQueryCache.get(cacheKey);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    localQueryCache.delete(cacheKey);
+    return null;
+  }
+  return entry.value;
+}
+
+function setLocalCachedValue(cacheKey: string, value: unknown) {
+  if (!localCacheEnabled) return;
+  localQueryCache.set(cacheKey, {
+    value,
+    expiresAt: Date.now() + localCacheTtlMs,
+  });
+}
+
+function clearLocalCache() {
+  if (!localCacheEnabled) return;
+  localQueryCache.clear();
+}
+
 declare const globalThis: {
-  prismaGlobal?: ReturnType<typeof prismaClientSingleton>;
+  prismaGlobal?: ReturnType<typeof createPrismaWithRedis>;
 } & typeof global;
 
-const prisma = globalThis.prismaGlobal ?? prismaClientSingleton();
+const createPrismaWithRedis = () => {
+  const client = prismaClientSingleton();
+
+  return client.$extends({
+    query: {
+      async $allOperations({ model, operation, args, query }) {
+        if (!isRedisEnabled() || !model) {
+          return query(args);
+        }
+
+        if (isReadOperation(operation)) {
+          const version = await getRedisCacheVersion();
+          const cacheKey = getCacheKey(model, operation, args, version);
+          const localCached = getLocalCachedValue(cacheKey);
+          if (localCached !== null) {
+            console.info(`[LocalCache] HIT ${model}.${operation}`);
+            return localCached;
+          }
+
+          try {
+            const cached = await redisGet(cacheKey);
+            if (cached !== null) {
+              console.info(`[Redis] HIT ${model}.${operation}`);
+              setLocalCachedValue(cacheKey, cached);
+              return cached;
+            }
+            console.info(`[Redis] MISS ${model}.${operation}`);
+          } catch (error) {
+            console.warn(`[Redis] Read failed for ${model}.${operation}. Falling back to DB.`, error);
+          }
+
+          const result = await query(args);
+          setLocalCachedValue(cacheKey, result);
+
+          try {
+            const stored = await redisSet(cacheKey, result, 300);
+            if (stored) {
+              console.info(`[Redis] SET ${model}.${operation}`);
+            }
+          } catch (error) {
+            console.warn(`[Redis] Write failed for ${model}.${operation}.`, error);
+          }
+
+          return result;
+        }
+
+        const result = await query(args);
+
+        if (isWriteOperation(operation)) {
+          clearLocalCache();
+          await bumpRedisCacheVersion();
+          console.info(`[Redis] INVALIDATE ${model}.${operation}`);
+        }
+
+        return result;
+      },
+    },
+  });
+};
+
+const prisma = globalThis.prismaGlobal ?? createPrismaWithRedis();
 
 export default prisma;
 

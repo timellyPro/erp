@@ -29,10 +29,10 @@ export async function GET() {
         schoolId = student?.schoolId ?? null;
       }
       if (schoolId) {
-        await prisma.user.update({
+        prisma.user.update({
           where: { id: session.user.id },
           data: { schoolId },
-        });
+        }).catch(() => {});
       }
     }
 

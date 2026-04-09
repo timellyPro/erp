@@ -4,6 +4,22 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { purgeExpiredNewsFeeds } from "@/lib/newsfeedRetention";
 
+declare const globalThis: {
+  schoolDashboardPurgeLastRunAt?: number;
+} & typeof global;
+
+function maybePurgeExpiredNewsFeeds() {
+  const now = Date.now();
+  const lastRun = globalThis.schoolDashboardPurgeLastRunAt ?? 0;
+  const intervalMs = 10 * 60 * 1000;
+  if (now - lastRun < intervalMs) return;
+  globalThis.schoolDashboardPurgeLastRunAt = now;
+  // Run in background so dashboard response is not blocked by maintenance.
+  purgeExpiredNewsFeeds().catch((error) => {
+    console.warn("Newsfeed purge skipped due to error:", error);
+  });
+}
+
 export async function GET() {
   const session = await getServerSession(authOptions);
 
@@ -59,7 +75,7 @@ export async function GET() {
       }
     }
 
-    await purgeExpiredNewsFeeds();
+    maybePurgeExpiredNewsFeeds();
 
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -94,9 +110,10 @@ export async function GET() {
           schoolId,
           eventDate: { gte: todayStart },
         },
-        include: {
-          class: { select: { id: true, name: true, section: true } },
-          teacher: { select: { id: true, name: true } },
+        select: {
+          id: true,
+          title: true,
+          eventDate: true,
           _count: { select: { registrations: true } },
         },
         orderBy: { eventDate: "asc" },
@@ -134,9 +151,11 @@ export async function GET() {
           student: { schoolId },
           status: "SUCCESS",
         },
-        include: {
+        select: {
+          amount: true,
+          createdAt: true,
           student: {
-            include: { user: { select: { name: true } } },
+            select: { user: { select: { name: true } } },
           },
         },
         orderBy: { createdAt: "desc" },
@@ -145,25 +164,27 @@ export async function GET() {
     ]);
 
     // Class count change (this month)
-    const classCountLastMonth = await prisma.class.count({
-      where: {
-        schoolId,
-        createdAt: { lt: startOfMonth },
-      },
-    });
-    const studentCountLastMonth = await prisma.student.count({
-      where: {
-        schoolId,
-        createdAt: { lt: startOfMonth },
-      },
-    });
-    const teacherCountLastMonth = await prisma.user.count({
-      where: {
-        schoolId,
-        role: "TEACHER",
-        createdAt: { lt: startOfMonth },
-      },
-    });
+    const [classCountLastMonth, studentCountLastMonth, teacherCountLastMonth] = await Promise.all([
+      prisma.class.count({
+        where: {
+          schoolId,
+          createdAt: { lt: startOfMonth },
+        },
+      }),
+      prisma.student.count({
+        where: {
+          schoolId,
+          createdAt: { lt: startOfMonth },
+        },
+      }),
+      prisma.user.count({
+        where: {
+          schoolId,
+          role: "TEACHER",
+          createdAt: { lt: startOfMonth },
+        },
+      }),
+    ]);
 
     const totalPaid = feeSummary._sum.amountPaid ?? 0;
     const totalFee = feeSummary._sum.finalFee ?? 0;
