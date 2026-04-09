@@ -46,12 +46,14 @@ export async function GET(req: Request) {
     const search = (searchParams.get("search") ?? "").trim();
     const gradeSought = (searchParams.get("gradeSought") ?? "").trim();
     const boardingType = (searchParams.get("boardingType") ?? "").trim();
+    const unconvertedOnly = (searchParams.get("unconvertedOnly") ?? "").trim() === "1";
     const from = searchParams.get("from");
     const to = searchParams.get("to");
     const fromDate = from ? new Date(from) : null;
     const toDate = to ? new Date(to) : null;
 
     const where: any = { schoolId };
+    if (unconvertedOnly) where.studentId = null;
     if (gradeSought) where.gradeSought = gradeSought;
     if (boardingType) where.boardingType = boardingType;
     if (fromDate && !Number.isNaN(fromDate.getTime())) {

@@ -49,9 +49,11 @@ export async function PATCH(req: Request, context: RouteParams) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
 
-  const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
-  const hasFeature = session.user.role === "TEACHER" && (session.user.allowedFeatures?.includes("FEES") || session.user.allowedFeatures?.includes("PAYMENTS"));
-  if (!isAdmin && !hasFeature) {
+  const canManageFees =
+    session.user.role === "SCHOOLADMIN" ||
+    session.user.role === "SUPERADMIN" ||
+    session.user.role === "TEACHER";
+  if (!canManageFees) {
     return NextResponse.json(
       { message: "Forbidden" },
       { status: 403 }

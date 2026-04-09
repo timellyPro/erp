@@ -13,6 +13,20 @@ async function resolveSchoolId(session: { user: { id: string; schoolId?: string 
         });
         schoolId = adminSchool?.id ?? null;
     }
+    if (!schoolId && session.user.role === "TEACHER") {
+        const teacherClass = await prisma.class.findFirst({
+            where: { teacherId: session.user.id },
+            select: { schoolId: true },
+        });
+        schoolId = teacherClass?.schoolId ?? null;
+    }
+    if (!schoolId && session.user.role === "TEACHER") {
+        const teacherSchool = await prisma.school.findFirst({
+            where: { teachers: { some: { id: session.user.id } } },
+            select: { id: true },
+        });
+        schoolId = teacherSchool?.id ?? null;
+    }
     return schoolId;
 }
 

@@ -12,6 +12,20 @@ async function getSchoolId(session: { user: { id: string; schoolId?: string | nu
     });
     schoolId = adminSchool?.id ?? null;
   }
+  if (!schoolId) {
+    const teacherClass = await prisma.class.findFirst({
+      where: { teacherId: session.user.id },
+      select: { schoolId: true },
+    });
+    schoolId = teacherClass?.schoolId ?? null;
+  }
+  if (!schoolId) {
+    const teacherSchool = await prisma.school.findFirst({
+      where: { teachers: { some: { id: session.user.id } } },
+      select: { id: true },
+    });
+    schoolId = teacherSchool?.id ?? null;
+  }
   return schoolId;
 }
 
@@ -35,8 +49,11 @@ export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
 
-  const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
-  if (!isAdmin) return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+  const canManageFees =
+    session.user.role === "SCHOOLADMIN" ||
+    session.user.role === "SUPERADMIN" ||
+    session.user.role === "TEACHER";
+  if (!canManageFees) return NextResponse.json({ message: "Forbidden" }, { status: 403 });
 
   try {
     const schoolId = await getSchoolId(session);
