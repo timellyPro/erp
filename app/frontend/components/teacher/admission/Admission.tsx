@@ -716,6 +716,7 @@ export default function TeacherAdmissionTab() {
 
   const exportExcel = async () => {
     const params = new URLSearchParams();
+    params.set("unconvertedOnly", "1");
     if (search.trim()) params.set("search", search.trim());
     if (filters.gradeSought) params.set("gradeSought", filters.gradeSought);
     if (filters.boardingType) params.set("boardingType", filters.boardingType);
