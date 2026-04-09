@@ -34,10 +34,11 @@ export default function SchoolAdminCertificatesTab() {
     setLoading(true);
     setError(null);
     try {
-      let res = await fetch("/api/certificates/requests/list", { credentials: "include" });
-      // Backward-compatible fallback: some environments still expose this data on /api/tc/list.
+      // Primary source is /api/tc/list which is stable across environments.
+      let res = await fetch("/api/tc/list", { credentials: "include" });
+      // Fallback for environments still serving certificate request route directly.
       if (res.status === 404) {
-        res = await fetch("/api/tc/list", { credentials: "include" });
+        res = await fetch("/api/certificates/requests/list", { credentials: "include" });
       }
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
