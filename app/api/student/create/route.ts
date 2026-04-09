@@ -289,6 +289,41 @@ export async function POST(req: Request) {
       }
     }
 
+    const normalizedStudentName = String(effectiveName).trim();
+    const normalizedTimellyId =
+      typeof effectiveRollNo === "string" ? effectiveRollNo.trim() : "";
+
+    if (normalizedTimellyId) {
+      const duplicateTimellyId = await prisma.student.findFirst({
+        where: {
+          schoolId,
+          rollNo: normalizedTimellyId,
+        },
+        include: {
+          user: {
+            select: { name: true },
+          },
+        },
+      });
+
+      if (duplicateTimellyId) {
+        const existingName = duplicateTimellyId.user?.name?.trim() || "";
+        if (
+          existingName &&
+          existingName.toLowerCase() === normalizedStudentName.toLowerCase()
+        ) {
+          return NextResponse.json(
+            { message: "Student name and Timelly ID already exist" },
+            { status: 400 }
+          );
+        }
+        return NextResponse.json(
+          { message: "Timelly ID already exists" },
+          { status: 400 }
+        );
+      }
+    }
+
     const password = dobDate.toISOString().split("T")[0].replace(/-/g, "");
     const hashedPassword = await bcrypt.hash(password, 10);
 

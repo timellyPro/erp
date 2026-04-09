@@ -9,7 +9,11 @@ type Props = {
   onFileChange: (file: File | null) => void;
   uploading: boolean;
   onCancel: () => void;
-  onUpload: () => Promise<{ createdCount?: number; failedCount?: number } | void>;
+  onUpload: () => Promise<{
+    createdCount?: number;
+    failedCount?: number;
+    failed?: { row?: number; error?: string }[];
+  } | void>;
 };
 
 export default function UploadCsvPanel({
@@ -19,9 +23,25 @@ export default function UploadCsvPanel({
   onCancel,
   onUpload,
 }: Props) {
+  const formatUploadError = (message?: string) => {
+    const text = (message || "").trim();
+    const normalized = text.toLowerCase();
+    if (normalized.includes("student name and timelly id already exist")) {
+      return "Student with same name and Timelly ID already exists.";
+    }
+    if (normalized.includes("timelly id already exists")) {
+      return "Timelly ID already exists.";
+    }
+    if (normalized.includes("aadhaar number already exists in another school")) {
+      return "Aadhaar number already exists in another school.";
+    }
+    return text || "Something went wrong.";
+  };
+
   const [result, setResult] = useState<{
     createdCount?: number;
     failedCount?: number;
+    failed?: { row?: number; error?: string }[];
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -120,6 +140,23 @@ export default function UploadCsvPanel({
                   </p>
                 </div>
               </div>
+              {Array.isArray(result.failed) && result.failed.length > 0 && (
+                <div className="mt-3 border-t border-white/10 pt-3">
+                  <p className="text-xs text-yellow-300 mb-2">Failed rows</p>
+                  <div className="max-h-36 overflow-auto space-y-1 pr-1">
+                    {result.failed.slice(0, 5).map((item, idx) => (
+                      <p key={`${item.row ?? idx}-${idx}`} className="text-xs text-yellow-200">
+                        {`Row ${item.row ?? "-"}: ${formatUploadError(item.error)}`}
+                      </p>
+                    ))}
+                    {result.failed.length > 5 && (
+                      <p className="text-[11px] text-yellow-300/80">
+                        +{result.failed.length - 5} more failed rows
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
             </motion.div>
           )}
 

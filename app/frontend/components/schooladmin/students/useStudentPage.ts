@@ -27,6 +27,34 @@ type StudentsListResponse = {
   students: StudentRow[];
 };
 
+type UploadFailedRow = {
+  row?: number;
+  error?: string;
+};
+
+type UploadResult = {
+  createdCount?: number;
+  failedCount?: number;
+  failed?: UploadFailedRow[];
+};
+
+const formatStudentMessage = (message: string) => {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("student name and timelly id already exist")) {
+    return "Student with same name and Timelly ID already exists.";
+  }
+  if (normalized.includes("timelly id already exists")) {
+    return "Timelly ID already exists.";
+  }
+  if (normalized.includes("aadhaar number already exists in another school")) {
+    return "Aadhaar number already exists in another school.";
+  }
+  if (normalized.includes("upload failed at row")) {
+    return message;
+  }
+  return message || "Something went wrong. Please try again.";
+};
+
 let classesCache: ClassItem[] | null = null;
 let classesPromise: Promise<ClassItem[] | null> | null = null;
 
@@ -499,7 +527,23 @@ export default function useStudentPage({ classes, reload }: Props) {
       const data = await res.json();
 
       if (!res.ok) {
-        toast.error(data.message || "Failed to add student");
+        const message = formatStudentMessage(data.message || "Failed to add student");
+        if (
+          typeof message === "string" &&
+          message.toLowerCase().includes("timelly id already exists")
+        ) {
+          setErrors((prev) => ({ ...prev, rollNo: message }));
+        } else if (
+          typeof message === "string" &&
+          message.toLowerCase().includes("student name and timelly id already exist")
+        ) {
+          setErrors((prev) => ({
+            ...prev,
+            name: message,
+            rollNo: message,
+          }));
+        }
+        toast.error(message);
         return;
       }
 
@@ -557,7 +601,19 @@ export default function useStudentPage({ classes, reload }: Props) {
       const uploadData = await uploadRes.json();
 
       if (!uploadRes.ok) {
-        const message = uploadData.message || "Upload failed";
+        const message = formatStudentMessage(uploadData.message || "Upload failed");
+        toast.error(message);
+        throw new Error(message);
+      }
+
+      if ((uploadData.createdCount || 0) === 0 && (uploadData.failedCount || 0) > 0) {
+        const firstFailed =
+          Array.isArray(uploadData.failed) && uploadData.failed.length > 0
+            ? uploadData.failed[0]
+            : null;
+        const message = firstFailed?.error
+          ? `Upload failed at row ${firstFailed.row}: ${formatStudentMessage(firstFailed.error)}`
+          : "Upload failed. No students were created.";
         toast.error(message);
         throw new Error(message);
       }
@@ -574,6 +630,7 @@ export default function useStudentPage({ classes, reload }: Props) {
       return {
         createdCount: uploadData.createdCount || 0,
         failedCount: uploadData.failedCount || 0,
+        failed: Array.isArray(uploadData.failed) ? uploadData.failed : [],
       };
     } catch (e) {
       if (e instanceof Error) {
