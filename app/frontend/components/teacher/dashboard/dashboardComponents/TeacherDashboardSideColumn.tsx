@@ -10,6 +10,29 @@ type Props = {
   onOpenChat: () => void;
 };
 
+const TYPE_LABELS: Record<string, string> = {
+  LEAVE: "Leave",
+  FEES: "Fees",
+  CERTIFICATES: "Certificates",
+  ATTENDANCE: "Attendance",
+  WORKSHOPS: "Workshop",
+  NEWS: "News Feed",
+  CIRCULAR: "Circular",
+  MARKS: "Marks",
+  HOMEWORK: "Homework",
+};
+
+function notificationTypeLabel(type: string, title: string, message: string) {
+  const normalizedType = (type || "").toUpperCase();
+  if (normalizedType === "LEAVE") {
+    const text = `${title} ${message}`.toLowerCase();
+    if (text.includes("student leave")) return "Student Leave";
+    if (text.includes("teacher leave")) return "Teacher Leave";
+    return "Leave";
+  }
+  return TYPE_LABELS[normalizedType] || normalizedType || "General";
+}
+
 export default function TeacherDashboardSideColumn({
   notifications,
   recentChats,
@@ -37,6 +60,9 @@ export default function TeacherDashboardSideColumn({
                   <h4 className="font-semibold text-gray-200 text-sm group-hover:text-white transition-colors truncate">
                     {n.title}
                   </h4>
+                  <p className="text-[11px] text-blue-300 mt-1">
+                    {notificationTypeLabel(n.type, n.title, n.message)}
+                  </p>
                   <p className="text-xs text-gray-400 mt-1 line-clamp-2">{n.message}</p>
                   <p className="text-[10px] text-gray-600 mt-2 uppercase tracking-wider">
                     {formatRelativeTime(n.createdAt)}
