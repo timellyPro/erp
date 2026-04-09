@@ -16,6 +16,31 @@ interface NotificationPanelProps {
   onClose: () => void;
 }
 
+const TYPE_LABELS: Record<string, string> = {
+  LEAVE: "Leave",
+  FEES: "Fees",
+  CERTIFICATES: "Certificates",
+  ATTENDANCE: "Attendance",
+  WORKSHOPS: "Workshop",
+  NEWS: "News Feed",
+  CIRCULAR: "Circular",
+  MARKS: "Marks",
+  HOMEWORK: "Homework",
+};
+
+function getLeaveScope(title: string, message: string) {
+  const text = `${title} ${message}`.toLowerCase();
+  if (text.includes("student leave")) return "Student Leave";
+  if (text.includes("teacher leave")) return "Teacher Leave";
+  return "Leave";
+}
+
+function getNotificationCategory(type: string, title: string, message: string) {
+  const normalizedType = (type || "").toUpperCase();
+  if (normalizedType === "LEAVE") return getLeaveScope(title, message);
+  return TYPE_LABELS[normalizedType] || normalizedType || "General";
+}
+
 export default function NotificationPanel({ onClose }: NotificationPanelProps) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -24,7 +49,10 @@ export default function NotificationPanel({ onClose }: NotificationPanelProps) {
   const loadNotifications = async () => {
     try {
       setLoading(true);
-      const res = await fetch("/api/notifications?take=50", { credentials: "include" });
+      const res = await fetch("/api/notifications?take=100", {
+        credentials: "include",
+        cache: "no-store",
+      });
       const data = await res.json();
       if (res.ok) {
         setNotifications(data.notifications || []);
@@ -121,6 +149,7 @@ export default function NotificationPanel({ onClose }: NotificationPanelProps) {
                 key={n.id}
                 title={n.title}
                 description={n.message}
+                category={getNotificationCategory(n.type, n.title, n.message)}
                 time={formatTime(n.createdAt)}
                 priority={!n.isRead}
                 isRead={n.isRead}
@@ -151,6 +180,7 @@ export default function NotificationPanel({ onClose }: NotificationPanelProps) {
 function NotificationItem({
   title,
   description,
+  category,
   time,
   priority,
   isRead,
@@ -158,6 +188,7 @@ function NotificationItem({
 }: {
   title: string;
   description: string;
+  category: string;
   time: string;
   priority?: boolean;
   isRead?: boolean;
@@ -180,6 +211,8 @@ function NotificationItem({
           </span>
         )}
       </div>
+
+      <p className="text-[11px] text-blue-300 mt-1">{category}</p>
 
       <p className="text-sm text-gray-300 mt-1 line-clamp-2">
         {description}

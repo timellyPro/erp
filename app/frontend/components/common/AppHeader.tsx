@@ -84,7 +84,11 @@ export default function AppHeader({ title, profile, hideSearchAndNotifications =
     const controller = new AbortController();
     unreadAbortRef.current = controller;
     try {
-      const res = await fetch("/api/notifications?take=1", { credentials: "include", signal: controller.signal });
+      const res = await fetch("/api/notifications?take=1", {
+        credentials: "include",
+        cache: "no-store",
+        signal: controller.signal,
+      });
       const data = await res.json();
       if (res.ok && typeof data.unreadCount === "number") {
         setUnreadCount(data.unreadCount);
