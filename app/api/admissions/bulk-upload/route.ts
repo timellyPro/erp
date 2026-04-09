@@ -35,6 +35,36 @@ function parseDob(rawDob: any): Date {
   return dt;
 }
 
+function buildName(row: Record<string, unknown>) {
+  const compactName = toStr(row.name);
+  if (compactName) return compactName;
+  const firstName = toStr(row["First Name"]);
+  const middleName = toStr(row["Middle Name"]);
+  const lastName = toStr(row["Last Name"]);
+  return [firstName, middleName, lastName].filter(Boolean).join(" ").trim();
+}
+
+function extractTimellyId(row: Record<string, unknown>) {
+  const rawId = toStr(
+    row.rollNo ??
+      row.studentId ??
+      row.admissionNo ??
+      row["Admission No"] ??
+      row["Student ID"] ??
+      row["Roll No"] ??
+      row["Timelly Number"] ??
+      row["Timelly No"] ??
+      row["Timely Number"] ??
+      row["Timely No"]
+  );
+  if (!rawId) return "";
+  if (rawId.includes("/")) {
+    const parts = rawId.split("/").map((part) => part.trim()).filter(Boolean);
+    return parts[parts.length - 1] || "";
+  }
+  return rawId;
+}
+
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -81,18 +111,34 @@ export async function POST(req: Request) {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       try {
-        const name = toStr(row.name);
-        const fatherName = toStr(row.fatherName);
-        const rollNo = toStr(row.rollNo ?? row.studentId);
-        const phoneNo = normalizePhone(row.phoneNo ?? row.contactNumber);
-        const aadhaarNo = normalizeAadhaar(row.aadhaarNo ?? row.aadhaarNoRaw);
-        const genderRaw = toStr(row.gender);
-        const dobDate = parseDob(row.dob ?? row.dateOfBirth);
-        const previousSchool = toStr(row.previousSchool);
-        const className = toStr(row.class ?? row.className);
-        const section = toStr(row.section);
-        const totalFee = row.totalFee === "" || row.totalFee == null ? null : Number(row.totalFee);
-        const discountPercent = row.discountPercent === "" || row.discountPercent == null ? null : Number(row.discountPercent);
+        const name = buildName(row);
+        const fatherName = toStr(row.fatherName ?? row.parentName ?? row["Parent Name"]);
+        const rollNo = extractTimellyId(row);
+        const phoneNo = normalizePhone(
+          row.phoneNo ?? row.contactNumber ?? row.parentPhone ?? row["Parent Phone"]
+        );
+        const aadhaarNo = normalizeAadhaar(
+          row.aadhaarNo ?? row.aadhaarNoRaw ?? row.aadharNo ?? row["Aadhar No"]
+        );
+        const genderRaw = toStr(row.gender ?? row.Gender);
+        const dobDate = parseDob(row.dob ?? row.dateOfBirth ?? row["Date of Birth"]);
+        const previousSchool = toStr(
+          row.previousSchool ?? row.previousSchoolName ?? row["Previous School Name"]
+        );
+        const className = toStr(row.class ?? row.className ?? row.Class);
+        const section = toStr(row.section ?? row.Section);
+        const totalFee =
+          row.totalFee === "" || row.totalFee == null
+            ? row["Total Fee"] === "" || row["Total Fee"] == null
+              ? null
+              : Number(row["Total Fee"])
+            : Number(row.totalFee);
+        const discountPercent =
+          row.discountPercent === "" || row.discountPercent == null
+            ? row["Discount %"] === "" || row["Discount %"] == null
+              ? null
+              : Number(row["Discount %"])
+            : Number(row.discountPercent);
         const applicationFee =
           row.applicationFee === "" || row.applicationFee == null || row["Application Fee"] === ""
             ? null
@@ -101,8 +147,19 @@ export async function POST(req: Request) {
           row.admissionFee === "" || row.admissionFee == null || row["Admission Fee"] === ""
             ? null
             : Number(row.admissionFee ?? row["Admission Fee"]);
-        const email = toStr(row.email);
-        const address = toStr(row.address);
+        const email = toStr(row.email ?? row.parentEmail ?? row["Parent Email"]);
+        const address =
+          toStr(row.address) ||
+          [
+            toStr(row["House No"]),
+            toStr(row.Street),
+            toStr(row.Town),
+            toStr(row.City),
+            toStr(row.State),
+            toStr(row["Pin Code"]),
+          ]
+            .filter(Boolean)
+            .join(", ");
 
         if (!name || name.length < 2) throw new Error("Name is required (min 2 characters)");
         if (!fatherName || fatherName.length < 2) throw new Error("Parent name is required (min 2 characters)");
@@ -115,8 +172,15 @@ export async function POST(req: Request) {
 
         let classId: string | null = null;
         if (className) {
+          const normalizedClass = className.toLowerCase().replace(/\s+/g, "");
+          const numericClass = normalizedClass.replace(/[^0-9]/g, "");
           const match = classes.find((c) => {
-            const sameName = (c.name || "").trim().toLowerCase() === className.toLowerCase();
+            const classLabel = (c.name || "").trim().toLowerCase();
+            const normalizedLabel = classLabel.replace(/\s+/g, "");
+            const numericLabel = normalizedLabel.replace(/[^0-9]/g, "");
+            const sameName =
+              normalizedLabel === normalizedClass ||
+              (numericClass && numericLabel && numericClass === numericLabel);
             const sameSection = !section || (c.section || "").trim().toLowerCase() === section.toLowerCase();
             return sameName && sameSection;
           });
@@ -210,6 +274,9 @@ export async function POST(req: Request) {
         if (app.studentId) continue; // already converted
 
         // Convert to student + create user access
+        const password = dobDate.toISOString().split("T")[0].replace(/-/g, "");
+        const hashedPassword = await bcrypt.hash(password, 10);
+
         const student = await prisma.$transaction(async (tx) => {
           // admission number counter
           let settings = await tx.schoolSettings.findUnique({ where: { schoolId } });
@@ -241,39 +308,45 @@ export async function POST(req: Request) {
               throw new Error("This Timelly ID is already used. Please use a different Timelly ID.");
             }
           } else {
-            let admissionNumberReady = false;
-            // Keep retrying for a larger window so stale counters don't block conversion
-            // when many existing admissions already occupy early numbers.
-            for (let attempt = 0; attempt < 1000; attempt++) {
-              const candidate = await tx.schoolSettings.update({
-                where: { schoolId },
-                data: { admissionCounter: { increment: 1 } },
-                select: { admissionPrefix: true, rollNoPrefix: true, admissionCounter: true, defaultInstallments: true } as any,
-              });
-              nextNum = candidate.admissionCounter;
-              admissionNumber = `${candidate.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
+            const candidate = await tx.schoolSettings.update({
+              where: { schoolId },
+              data: { admissionCounter: { increment: 1 } },
+              select: { admissionPrefix: true, rollNoPrefix: true, admissionCounter: true, defaultInstallments: true } as any,
+            });
+            nextNum = candidate.admissionCounter;
+            updated = candidate;
+            admissionNumber = `${candidate.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
 
-              const existingAdmission = await tx.student.findUnique({
-                where: { admissionNumber },
-                select: { id: true },
-              });
-              if (!existingAdmission) {
-                updated = candidate;
-                admissionNumberReady = true;
-                break;
+            const existingAdmission = await tx.student.findUnique({
+              where: { admissionNumber },
+              select: { id: true },
+            });
+            if (existingAdmission) {
+              let fallbackReady = false;
+              for (let attempt = 0; attempt < 50; attempt++) {
+                const token = `${Date.now().toString().slice(-6)}${Math.floor(
+                  Math.random() * 900 + 100
+                )}`;
+                const fallbackAdmissionNo = `${candidate.admissionPrefix}/${year}/${token}`;
+                const fallbackExists = await tx.student.findUnique({
+                  where: { admissionNumber: fallbackAdmissionNo },
+                  select: { id: true },
+                });
+                if (!fallbackExists) {
+                  admissionNumber = fallbackAdmissionNo;
+                  fallbackReady = true;
+                  break;
+                }
               }
-            }
-            if (!admissionNumberReady || !updated) {
-              throw new Error("Unable to generate admission number. Please try again.");
+              if (!fallbackReady) {
+                throw new Error("Unable to generate admission number. Please try again.");
+              }
             }
           }
           const defaultInstallments =
             Number.isInteger((updated as any).defaultInstallments) && (updated as any).defaultInstallments > 0
               ? (updated as any).defaultInstallments
               : schoolDefaultInstallments;
-
-          const password = dobDate.toISOString().split("T")[0].replace(/-/g, "");
-          const hashedPassword = await bcrypt.hash(password, 10);
 
           const local = emailLocalPartFromFullName(name);
           let userEmail = email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : `${local}@${schoolDomain}`;
@@ -323,7 +396,7 @@ export async function POST(req: Request) {
 
           await tx.studentApplication.update({ where: { id: app.id }, data: { studentId: studentRecord.id } });
           return studentRecord;
-        });
+        }, { maxWait: 10000, timeout: 120000 });
 
         convertedStudents.push({ row: i + 2, studentId: student.id });
       } catch (e: any) {
