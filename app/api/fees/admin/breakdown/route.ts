@@ -48,7 +48,21 @@ export async function GET(req: Request) {
 
     const student = await prisma.student.findFirst({
       where: { id: studentId, schoolId },
-      include: { fee: true, class: true },
+      select: {
+        id: true,
+        fee: {
+          select: {
+            amountPaid: true,
+            finalFee: true,
+          },
+        },
+        class: {
+          select: {
+            id: true,
+            section: true,
+          },
+        },
+      },
     });
     if (!student) return NextResponse.json({ message: "Student not found in your school" }, { status: 404 });
     if (!student.fee) return NextResponse.json({ message: "Fee record not found for this student" }, { status: 404 });
@@ -109,24 +123,26 @@ export async function GET(req: Request) {
 
     // Net already-paid by head via allocations (new payments only).
     const [paymentAllocations, refundAllocations] = await Promise.all([
-      prisma.paymentFeeAllocation.findMany({
+      prisma.paymentFeeAllocation.groupBy({
+        by: ["headType", "componentIndex", "extraFeeId"],
         where: { studentId: student.id, allocationType: "PAYMENT", payment: { status: "SUCCESS" } },
-        select: { headType: true, componentIndex: true, extraFeeId: true, allocatedAmount: true },
+        _sum: { allocatedAmount: true },
       }),
-      prisma.paymentFeeAllocation.findMany({
+      prisma.paymentFeeAllocation.groupBy({
+        by: ["headType", "componentIndex", "extraFeeId"],
         where: { studentId: student.id, allocationType: "REFUND", payment: { status: "SUCCESS" } },
-        select: { headType: true, componentIndex: true, extraFeeId: true, allocatedAmount: true },
+        _sum: { allocatedAmount: true },
       }),
     ]);
 
     const netPaidByHead = new Map<string, number>();
     for (const a of paymentAllocations) {
       const key = a.headType === "BASE_COMPONENT" ? `BASE:${a.componentIndex}` : `EXTRA:${a.extraFeeId}`;
-      netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) + a.allocatedAmount);
+      netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) + (a._sum.allocatedAmount ?? 0));
     }
     for (const a of refundAllocations) {
       const key = a.headType === "BASE_COMPONENT" ? `BASE:${a.componentIndex}` : `EXTRA:${a.extraFeeId}`;
-      netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) - a.allocatedAmount);
+      netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) - (a._sum.allocatedAmount ?? 0));
     }
 
     const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);

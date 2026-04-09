@@ -34,13 +34,17 @@ export default function SchoolAdminCertificatesTab() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/certificates/requests/list", { credentials: "include" });
+      let res = await fetch("/api/certificates/requests/list", { credentials: "include" });
+      // Backward-compatible fallback: some environments still expose this data on /api/tc/list.
+      if (res.status === 404) {
+        res = await fetch("/api/tc/list", { credentials: "include" });
+      }
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data?.message || "Failed to load certificate requests");
       }
       const data = await res.json();
-      setCertificateRequests(data.certificateRequests ?? []);
+      setCertificateRequests(data.certificateRequests ?? data.tcs ?? []);
     } catch (e: any) {
       setError(e?.message || "Something went wrong");
       setCertificateRequests([]);
