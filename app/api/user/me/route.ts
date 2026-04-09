@@ -18,6 +18,8 @@ export async function GET() {
         email: true,
         mobile: true,
         address: true,
+        qualification: true,
+        experience: true,
         language: true,
         photoUrl: true,
         teacherId: true,
@@ -61,6 +63,8 @@ export async function PUT(req: Request) {
     const data: {
       mobile?: string | null;
       address?: string | null;
+      qualification?: string | null;
+      experience?: string | null;
       language?: string | null;
       photoUrl?: string | null;
       name?: string | null;
@@ -74,6 +78,14 @@ export async function PUT(req: Request) {
     }
     if (typeof body.address === "string" || body.address === null) {
       data.address = body.address && body.address.trim() ? body.address.trim() : null;
+    }
+    if (typeof body.qualification === "string" || body.qualification === null) {
+      data.qualification =
+        body.qualification && body.qualification.trim() ? body.qualification.trim() : null;
+    }
+    if (typeof body.experience === "string" || body.experience === null) {
+      data.experience =
+        body.experience && body.experience.trim() ? body.experience.trim() : null;
     }
     if (typeof body.language === "string" || body.language === null) {
       data.language = body.language;
@@ -100,6 +112,8 @@ export async function PUT(req: Request) {
           email: true,
           mobile: true,
           address: true,
+          qualification: true,
+          experience: true,
           language: true,
           photoUrl: true,
           teacherId: true,

@@ -181,6 +181,7 @@ export default function CertificatesTab({
   };
 
   const handleReject = async (id: string) => {
+    setApprovingId(null);
     setActingId(id);
     try {
       const res = await fetch(`/api/certificates/requests/${id}/reject`, {
@@ -317,7 +318,7 @@ export default function CertificatesTab({
                       onClick={() => openApproveModal(row.id)}
                       className="flex items-center justify-center gap-1 px-3 py-2 rounded-full bg-lime-400 text-black text-xs font-semibold disabled:opacity-50"
                     >
-                      {actingId === row.id ? (
+                      {actingId === row.id && approvingId === row.id ? (
                         <Loader2 size={14} className="animate-spin" />
                       ) : (
                         <CheckCircle size={14} />
@@ -442,7 +443,7 @@ export default function CertificatesTab({
                             onClick={() => openApproveModal(row.id)}
                             className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-lime-400 text-black text-xs font-semibold disabled:opacity-50"
                           >
-                            {actingId === row.id ? (
+                            {actingId === row.id && approvingId === row.id ? (
                               <Loader2 size={14} className="animate-spin" />
                             ) : (
                               <CheckCircle size={14} />
@@ -576,7 +577,7 @@ export default function CertificatesTab({
                             onClick={() => openApproveModal(row.id)}
                             className="flex items-center gap-1 px-3 py-2 rounded-full bg-lime-400 text-black text-xs font-semibold disabled:opacity-50"
                           >
-                            {actingId === row.id ? (
+                            {actingId === row.id && approvingId === row.id ? (
                               <Loader2 size={14} className="animate-spin" />
                             ) : (
                               <CheckCircle size={14} />
