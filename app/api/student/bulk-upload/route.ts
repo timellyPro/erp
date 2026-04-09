@@ -102,18 +102,27 @@ function buildAddress(row: Record<string, unknown>) {
 }
 
 function extractTimellyId(row: Record<string, unknown>) {
-  return toStr(
+  const rawId = toStr(
     row.rollNo ??
       row.studentId ??
+      row.admissionNo ??
       row.timellyNumber ??
       row.timelyNumber ??
       row["Timelly Number"] ??
       row["Timelly No"] ??
       row["Timely Number"] ??
       row["Timely No"] ??
+      row["Admission No"] ??
       row["Student ID"] ??
       row["Roll No"]
   );
+  if (!rawId) return "";
+  // Support admission-export style values like ADM/2026/123 by extracting last segment.
+  if (rawId.includes("/")) {
+    const parts = rawId.split("/").map((part) => part.trim()).filter(Boolean);
+    return parts[parts.length - 1] || "";
+  }
+  return rawId;
 }
 
 function normalizeStudentName(value: unknown) {
@@ -313,18 +322,18 @@ export async function POST(req: Request) {
           // If no match, leave classId null (unassigned) instead of throwing
         }
 
+        const password = dobDate
+          .toISOString()
+          .split("T")[0]
+          .replace(/-/g, "");
+        const hashedPassword = await bcrypt.hash(password, 10);
+
         // Each student is created in its own short transaction
         await prisma.$transaction(
           async (tx) => {
             const nameLocalPart = emailLocalPartFromFullName(name);
             // Student login email is always name@schoolDomain — CSV/row "email" is parent contact only, not User.email.
             let userEmail = `${nameLocalPart}@${schoolDomain}`;
-
-            const password = dobDate
-              .toISOString()
-              .split("T")[0]
-              .replace(/-/g, "");
-            const hashedPassword = await bcrypt.hash(password, 10);
 
             if (existingStudent) {
               let existingUser = await tx.user.findUnique({
@@ -437,32 +446,47 @@ export async function POST(req: Request) {
                 throw new Error("This Timelly number is already used.");
               }
             } else {
-              let admissionNumberReady = false;
-              for (let attempt = 0; attempt < 1000; attempt++) {
-                const candidate = await tx.schoolSettings.update({
-                  where: { schoolId },
-                  data: { admissionCounter: { increment: 1 } },
-                  select: {
-                    admissionPrefix: true,
-                    rollNoPrefix: true,
-                    admissionCounter: true,
-                    defaultInstallments: true,
-                  } as any,
-                });
-                nextNum = candidate.admissionCounter;
-                admissionNumber = `${candidate.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
-                const existingAdmission = await tx.student.findUnique({
-                  where: { admissionNumber },
-                  select: { id: true },
-                });
-                if (!existingAdmission) {
-                  updatedSettings = candidate;
-                  admissionNumberReady = true;
-                  break;
+              const candidate = await tx.schoolSettings.update({
+                where: { schoolId },
+                data: { admissionCounter: { increment: 1 } },
+                select: {
+                  admissionPrefix: true,
+                  rollNoPrefix: true,
+                  admissionCounter: true,
+                  defaultInstallments: true,
+                } as any,
+              });
+              nextNum = candidate.admissionCounter;
+              updatedSettings = candidate;
+              admissionNumber = `${candidate.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
+
+              const existingAdmission = await tx.student.findUnique({
+                where: { admissionNumber },
+                select: { id: true },
+              });
+
+              if (existingAdmission) {
+                // Counter may be stale in older databases. Fallback to a unique token
+                // without repeated counter updates inside the same transaction.
+                let fallbackReady = false;
+                for (let attempt = 0; attempt < 50; attempt++) {
+                  const token = `${Date.now().toString().slice(-6)}${Math.floor(
+                    Math.random() * 900 + 100
+                  )}`;
+                  const fallbackAdmissionNo = `${candidate.admissionPrefix}/${year}/${token}`;
+                  const fallbackExists = await tx.student.findUnique({
+                    where: { admissionNumber: fallbackAdmissionNo },
+                    select: { id: true },
+                  });
+                  if (!fallbackExists) {
+                    admissionNumber = fallbackAdmissionNo;
+                    fallbackReady = true;
+                    break;
+                  }
                 }
-              }
-              if (!admissionNumberReady) {
-                throw new Error("Unable to generate admission number. Please try again.");
+                if (!fallbackReady) {
+                  throw new Error("Unable to generate admission number. Please try again.");
+                }
               }
             }
 
@@ -552,7 +576,7 @@ export async function POST(req: Request) {
           },
           {
             maxWait: 10000,
-            timeout: 30000,
+            timeout: 120000,
           }
         );
 
