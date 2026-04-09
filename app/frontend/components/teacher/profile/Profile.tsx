@@ -30,6 +30,9 @@ type MeUserResponse = {
   name: string | null;
   email: string | null;
   mobile: string | null;
+  address: string | null;
+  qualification: string | null;
+  experience: string | null;
   photoUrl: string | null;
   teacherId: string | null;
   subject: string | null;
@@ -103,7 +106,10 @@ export default function TeacherProfileTab() {
           ...DEFAULT_TEACHER_PROFILE,
           name: user.name ?? DEFAULT_TEACHER_PROFILE.name,
           email: user.email ?? DEFAULT_TEACHER_PROFILE.email,
-          phone: user.mobile ?? DEFAULT_TEACHER_PROFILE.phone,
+          phone: user.mobile ?? "-",
+          address: user.address ?? "-",
+          qualification: user.qualification ?? "-",
+          experience: user.experience ?? "-",
           avatarUrl: user.photoUrl ?? DEFAULT_TEACHER_PROFILE.avatarUrl,
           teacherId: user.teacherId ?? DEFAULT_TEACHER_PROFILE.teacherId,
           subject: user.subject ?? DEFAULT_TEACHER_PROFILE.subject,
@@ -163,6 +169,9 @@ export default function TeacherProfileTab() {
         body: JSON.stringify({
           name: draftData.name,
           mobile: draftData.phone,
+          address: draftData.address,
+          qualification: draftData.qualification,
+          experience: draftData.experience,
           photoUrl: draftData.avatarUrl,
           teacherId: draftData.teacherId,
           subject: draftData.subject,
@@ -187,6 +196,9 @@ export default function TeacherProfileTab() {
           name: user.name ?? draftData.name,
           email: user.email ?? draftData.email,
           phone: user.mobile ?? draftData.phone,
+          address: user.address ?? draftData.address,
+          qualification: user.qualification ?? draftData.qualification,
+          experience: user.experience ?? draftData.experience,
           avatarUrl: user.photoUrl ?? draftData.avatarUrl,
           teacherId: user.teacherId ?? draftData.teacherId,
           subject: user.subject ?? draftData.subject,
