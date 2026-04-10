@@ -6,10 +6,15 @@ export function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
+  // Per-user responses must not be cached by the browser (e.g. parent portal bell).
+  const skipApiCache =
+    pathname.startsWith("/api/auth/") ||
+    pathname.startsWith("/api/notifications");
+
   if (
     request.method === "GET" &&
     pathname.startsWith("/api/") &&
-    !pathname.startsWith("/api/auth/")
+    !skipApiCache
   ) {
     response.headers.set(
       "Cache-Control",
