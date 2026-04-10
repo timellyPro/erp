@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 
 export async function GET(
   req: Request,
@@ -15,9 +16,9 @@ export async function GET(
     }
 
     const { id } = await params;
-    const schoolId = session.user.schoolId;
     const classId = id;
 
+    const schoolId = await resolveFeesSchoolId({ user: session.user });
     if (!schoolId) {
       return NextResponse.json(
         { message: "School not found in session" },

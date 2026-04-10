@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -11,23 +12,16 @@ export async function GET() {
   }
 
   const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
-  if (!isAdmin) {
+  const isTeacher = session.user.role === "TEACHER";
+  if (!isAdmin && !isTeacher) {
     return NextResponse.json(
-      { message: "Only admins can view fee summary" },
+      { message: "Only school staff can view fee summary" },
       { status: 403 }
     );
   }
 
   try {
-    let schoolId = session.user.schoolId;
-
-    if (!schoolId) {
-      const adminSchool = await prisma.school.findFirst({
-        where: { admins: { some: { id: session.user.id } } },
-        select: { id: true },
-      });
-      schoolId = adminSchool?.id ?? null;
-    }
+    const schoolId = await resolveFeesSchoolId(session);
 
     if (!schoolId) {
       return NextResponse.json(
