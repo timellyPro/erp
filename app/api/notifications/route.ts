@@ -37,7 +37,15 @@ export async function GET(req: Request) {
       }),
     ]);
 
-    return NextResponse.json({ notifications, unreadCount }, { status: 200 });
+    return NextResponse.json(
+      { notifications, unreadCount },
+      {
+        status: 200,
+        headers: {
+          "Cache-Control": "private, no-store, must-revalidate",
+        },
+      }
+    );
   } catch (e: unknown) {
     console.error("Notifications GET:", e);
     return NextResponse.json(

@@ -100,16 +100,38 @@ export default function AppHeader({ title, profile, hideSearchAndNotifications =
     }
   }, [hideSearchAndNotifications]);
 
+  const onNotificationSnapshot = useCallback(({ unreadCount: n }: { unreadCount: number }) => {
+    setUnreadCount(n);
+  }, []);
+
   useEffect(() => {
     fetchUnreadCount();
-    const interval = setInterval(fetchUnreadCount, 60000); // refresh every 60s
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        void fetchUnreadCount();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
+    // Panel open: list poll + onSnapshot refresh the badge — skip duplicate header polling
+    if (showNotifications) {
+      return () => {
+        document.removeEventListener("visibilitychange", onVisible);
+        unreadAbortRef.current?.abort();
+        unreadAbortRef.current = null;
+        unreadInFlightRef.current = false;
+      };
+    }
+
+    const interval = setInterval(fetchUnreadCount, 10000);
     return () => {
       clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
       unreadAbortRef.current?.abort();
       unreadAbortRef.current = null;
       unreadInFlightRef.current = false;
     };
-  }, [fetchUnreadCount]);
+  }, [fetchUnreadCount, showNotifications]);
   const displayName = (liveProfile?.name && liveProfile.name.trim())
     ? liveProfile.name
     : baseProfile.name;
@@ -397,6 +419,8 @@ export default function AppHeader({ title, profile, hideSearchAndNotifications =
       {/* PANELS */}
       {showNotifications && (
         <NotificationPanel
+          parentPortal={Boolean(pathname?.includes("/frontend/pages/parent"))}
+          onSnapshot={onNotificationSnapshot}
           onClose={() => {
             setShowNotifications(false);
             fetchUnreadCount();

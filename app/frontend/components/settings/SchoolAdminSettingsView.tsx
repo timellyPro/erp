@@ -37,7 +37,10 @@ export default function SchoolAdminSettingsView({
     const loadNotifications = async () => {
       try {
         setLoadingNotifications(true);
-        const res = await fetch("/api/notifications?take=10", { credentials: "include" });
+        const res = await fetch("/api/notifications?take=10", {
+          credentials: "include",
+          cache: "no-store",
+        });
         const data = await res.json();
         if (res.ok) {
           setNotifications(data.notifications || []);
