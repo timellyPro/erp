@@ -26,6 +26,7 @@ type Grade =
   | "GRADE_7"
   | "GRADE_8"
   | "GRADE_9"
+  | "GRADE_10"
   | "GRADE_11";
 
 type AdmissionRow = {
@@ -123,6 +124,7 @@ const GRADES: { label: string; value: Grade }[] = [
   { label: "Grade 7", value: "GRADE_7" },
   { label: "Grade 8", value: "GRADE_8" },
   { label: "Grade 9", value: "GRADE_9" },
+  { label: "Grade 10", value: "GRADE_10" },
   { label: "Grade 11", value: "GRADE_11" },
 ];
 
