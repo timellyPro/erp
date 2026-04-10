@@ -48,7 +48,8 @@ export async function PUT(req: Request) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
   const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
-  if (!isAdmin) {
+  const isTeacher = session.user.role === "TEACHER";
+  if (!isAdmin && !isTeacher) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
 
@@ -65,6 +66,17 @@ export async function PUT(req: Request) {
       return NextResponse.json(
         { message: "classId and components (array) required" },
         { status: 400 }
+      );
+    }
+
+    const classInSchool = await prisma.class.findFirst({
+      where: { id: classId, schoolId },
+      select: { id: true },
+    });
+    if (!classInSchool) {
+      return NextResponse.json(
+        { message: "Class not found in your school" },
+        { status: 404 }
       );
     }
 
@@ -171,7 +183,8 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
   const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
-  if (!isAdmin) {
+  const isTeacher = session.user.role === "TEACHER";
+  if (!isAdmin && !isTeacher) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
 

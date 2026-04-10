@@ -2,18 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
-
-async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
-  let schoolId = session.user.schoolId;
-  if (!schoolId) {
-    const adminSchool = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = adminSchool?.id ?? null;
-  }
-  return schoolId;
-}
+import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 
 function getStudentWhere(
   targetType: string,
@@ -46,12 +35,13 @@ export async function PATCH(
   }
   const isAdmin =
     session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
-  if (!isAdmin) {
+  const isTeacher = session.user.role === "TEACHER";
+  if (!isAdmin && !isTeacher) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
 
   try {
-    const schoolId = await getSchoolId(session);
+    const schoolId = await resolveFeesSchoolId(session);
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
@@ -142,12 +132,13 @@ export async function DELETE(
   }
   const isAdmin =
     session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
-  if (!isAdmin) {
+  const isTeacher = session.user.role === "TEACHER";
+  if (!isAdmin && !isTeacher) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
 
   try {
-    const schoolId = await getSchoolId(session);
+    const schoolId = await resolveFeesSchoolId(session);
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
