@@ -65,8 +65,8 @@ export default function AddStudentForm({
             onChange={(value) => onFieldChange("name", value)}
             placeholder="Student Name"
             bgColor="white"
+            error={errors.name}
           />
-          {renderError(errors, "name")}
         </div>
         <div>
           <InputField
@@ -75,8 +75,8 @@ export default function AddStudentForm({
             onChange={(value) => onFieldChange("rollNo", value.slice(0, 40))}
             placeholder="e.g. STU001"
             bgColor="white"
+            error={errors.rollNo}
           />
-          {renderError(errors, "rollNo")}
         </div>
         <div>
           <InputField

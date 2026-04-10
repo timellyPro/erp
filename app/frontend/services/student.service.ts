@@ -7,14 +7,18 @@ import { IUpdateStudentPayload } from "../constants/student";
 export const getStudents = (classId?: string) =>
   api(`/api/students${classId ? `?classId=${classId}` : ""}`);
 
-export const addStudent = (payload: any) =>
-  api("/api/student/create", {
+/** Returns the raw Response on success and failure so callers can map field errors (do not use `api()` here — it throws on 4xx). */
+export const addStudent = (payload: unknown) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 90_000);
+  return fetch("/api/student/create", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify(payload),
-    // Student create runs a large Prisma transaction; allow extra time vs default.
-    timeoutMs: 90000,
-  });
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeout));
+};
 
 export const uploadStudentsCSV = (file: File, classId: string) => {
   const formData = new FormData();
