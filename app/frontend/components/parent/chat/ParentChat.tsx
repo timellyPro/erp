@@ -95,15 +95,17 @@ export default function TeacherParentChatTab() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br flex flex-col px-3 sm:px-0 pb-20 lg:pb-6 overflow-x-hidden">
-      <div className="flex flex-1 flex-col sm:flex-row gap-4 sm:gap-6 overflow-hidden min-h-0">
+    <div
+      className="flex h-[calc(100dvh-7.25rem)] max-h-[calc(100dvh-7.25rem)] min-h-0 w-full max-w-full min-w-0 flex-col overflow-x-hidden bg-gradient-to-br sm:h-auto sm:max-h-none sm:min-h-[36rem] lg:min-h-0 sm:pb-20 lg:pb-6"
+    >
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden sm:flex-row sm:gap-6">
 
         {/* ================= Sidebar ================= */}
         <div
           className={`backdrop-blur-xl bg-white/5 border border-white/10 
-          rounded-xl sm:rounded-2xl flex flex-col overflow-hidden
+          rounded-xl sm:rounded-2xl flex min-h-0 flex-1 flex-col overflow-hidden
           ${activeChat ? "hidden lg:flex" : "flex"}
-          w-full lg:w-96 min-h-[280px] lg:min-h-0`}
+          w-full min-w-0 lg:w-96 lg:flex-none lg:min-h-[280px]`}
         >
 
           {/* Tabs */}
@@ -146,34 +148,32 @@ export default function TeacherParentChatTab() {
                 <button
                   key={chat.id}
                   onClick={() => setActiveChatId(chat.id)}
-                  className="w-full p-2.5 sm:p-3 rounded-xl flex gap-2 sm:gap-3 
-                  bg-white/5 hover:bg-white/15 active:bg-white/20
-                  transition-all duration-200 text-left touch-manipulation"
+                  className="flex w-full min-w-0 max-w-full gap-2 rounded-xl p-2.5 text-left touch-manipulation transition-all duration-200 sm:gap-3 sm:p-3
+                  bg-white/5 hover:bg-white/15 active:bg-white/20"
                 >
                   <img
                     src={chat.avatar}
                     alt={chat.parent}
-                    className="w-10 h-10 sm:w-12 sm:h-12 rounded-full object-cover shrink-0"
+                    className="h-10 w-10 shrink-0 rounded-full object-cover sm:h-12 sm:w-12"
                   />
 
-                  <div className="flex-1 min-w-0">
-                    <div className="flex justify-between items-center">
-                      <p className="font-semibold text-sm text-white truncate">
+                  <div className="min-w-0 flex-1 overflow-hidden">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <p className="min-w-0 flex-1 truncate font-semibold text-sm text-white">
                         {chat.parent}
                       </p>
-
                       {chat.status === "pending" && (
-                        <span className="text-[10px] bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded-full">
+                        <span className="shrink-0 whitespace-nowrap rounded-full bg-yellow-500/20 px-2 py-0.5 text-[10px] text-yellow-400">
                           Pending
                         </span>
                       )}
                     </div>
 
-                    <p className="text-xs text-lime-400 truncate">
+                    <p className="truncate text-xs text-lime-400">
                       Requested for {chat.student}
                     </p>
 
-                    <p className="text-xs text-gray-400 truncate">
+                    <p className="line-clamp-2 break-words text-xs text-gray-400">
                       {chat.lastMessage}
                     </p>
                   </div>
@@ -199,9 +199,10 @@ export default function TeacherParentChatTab() {
             )}
         {/* ================= Chat Window ================= */}
         <div
-          className={`flex-1 min-w-0 min-h-[300px] sm:min-h-0 backdrop-blur-xl bg-white/5 border border-white/10 
-          rounded-xl sm:rounded-2xl overflow-hidden flex flex-col
-          ${activeChat ? "flex" : "hidden lg:flex"}`}
+          className={`flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-white/10 bg-white/5 backdrop-blur-xl sm:rounded-2xl
+          ${activeChat
+            ? "flex min-h-[calc(100dvh-7.25rem)] max-h-[calc(100dvh-7.25rem)] sm:max-h-none sm:min-h-[300px]"
+            : "hidden lg:flex"}`}
         >
           {activeChat ? (
             <ChatWindow

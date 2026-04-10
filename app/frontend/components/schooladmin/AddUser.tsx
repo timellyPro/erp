@@ -201,6 +201,7 @@ export default function AddUser() {
               { label: "Add User", value: "add" },
             ]}
             queryKey="view"
+            defaultWhenMissing="add"
           />
         }
       />
