@@ -527,22 +527,25 @@ export default function useStudentPage({ classes, reload }: Props) {
       const data = await res.json();
 
       if (!res.ok) {
-        const message = formatStudentMessage(data.message || "Failed to add student");
-        if (
-          typeof message === "string" &&
-          message.toLowerCase().includes("timelly id already exists")
-        ) {
-          setErrors((prev) => ({ ...prev, rollNo: message }));
-        } else if (
-          typeof message === "string" &&
-          message.toLowerCase().includes("student name and timelly id already exist")
-        ) {
+        const rawMessage = typeof data.message === "string" ? data.message : "";
+        const lowerRaw = rawMessage.toLowerCase();
+        const message = formatStudentMessage(rawMessage || "Failed to add student");
+
+        // Use raw API text for classification: formatted `message` can match the generic
+        // "timelly id already exists" substring even for the name+ID combined error.
+        if (lowerRaw.includes("student name and timelly id already exist")) {
           setErrors((prev) => ({
             ...prev,
-            name: message,
-            rollNo: message,
+            name: "Already exist.",
+            rollNo: "Already exist.",
           }));
+        } else if (
+          lowerRaw.includes("timelly id already exists") ||
+          lowerRaw.includes("timelly id is already used")
+        ) {
+          setErrors((prev) => ({ ...prev, rollNo: "Already exist." }));
         }
+
         toast.error(message);
         return;
       }
