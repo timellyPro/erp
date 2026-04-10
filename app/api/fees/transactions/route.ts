@@ -2,18 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
-
-async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
-  let schoolId = session.user.schoolId;
-  if (!schoolId) {
-    const adminSchool = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = adminSchool?.id ?? null;
-  }
-  return schoolId;
-}
+import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 
 /**
  * GET /api/fees/transactions
@@ -25,13 +14,13 @@ export async function GET(req: Request) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
   const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
-  const hasFeature = session.user.role === "TEACHER" && (session.user.allowedFeatures?.includes("FEES") || session.user.allowedFeatures?.includes("PAYMENTS"));
-  if (!isAdmin && !hasFeature) {
+  const isTeacher = session.user.role === "TEACHER";
+  if (!isAdmin && !isTeacher) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
 
   try {
-    const schoolId = await getSchoolId(session);
+    const schoolId = await resolveFeesSchoolId(session);
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
