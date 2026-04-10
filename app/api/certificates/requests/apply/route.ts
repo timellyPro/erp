@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import {
+  createNotificationsForUserIds,
+  getClassStaffNotifyUserIds,
+} from "@/lib/notificationService";
 
 export async function POST(req: Request) {
   try {
@@ -77,12 +81,29 @@ export async function POST(req: Request) {
               select: { id: true, name: true, email: true },
             },
             class: {
-              select: { id: true, name: true, section: true },
+              select: { id: true, name: true, section: true, teacherId: true },
             },
           },
         },
       },
     });
+
+    try {
+      const classTeacherId = certificateRequest.student.class?.teacherId ?? null;
+      const notifyIds = await getClassStaffNotifyUserIds(schoolId, classTeacherId);
+      if (notifyIds.length > 0) {
+        const studentName =
+          certificateRequest.student.user?.name?.trim() || "A student";
+        await createNotificationsForUserIds(
+          notifyIds,
+          "CERTIFICATES",
+          "New certificate request",
+          `${studentName} submitted a certificate request`
+        );
+      }
+    } catch (nErr) {
+      console.warn("Certificate request notification failed:", nErr);
+    }
 
     return NextResponse.json(
       { message: "Certificate request submitted successfully", certificateRequest },

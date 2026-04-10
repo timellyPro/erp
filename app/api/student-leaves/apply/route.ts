@@ -3,6 +3,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { LeaveType } from "@prisma/client";
+import {
+  createNotificationsForUserIds,
+  getClassStaffNotifyUserIds,
+} from "@/lib/notificationService";
 
 export async function POST(req: Request) {
   try {
@@ -52,6 +56,37 @@ export async function POST(req: Request) {
         toDate: new Date(toDate),
       },
     });
+
+    try {
+      const st = await prisma.student.findUnique({
+        where: { id: studentId },
+        select: {
+          schoolId: true,
+          classId: true,
+          user: { select: { name: true } },
+        },
+      });
+      let classTeacherId: string | null = null;
+      if (st?.classId) {
+        const cls = await prisma.class.findUnique({
+          where: { id: st.classId },
+          select: { teacherId: true },
+        });
+        classTeacherId = cls?.teacherId ?? null;
+      }
+      const notifyIds = await getClassStaffNotifyUserIds(st?.schoolId ?? student.schoolId, classTeacherId);
+      if (notifyIds.length > 0) {
+        const studentLabel = st?.user?.name?.trim() || "A student";
+        await createNotificationsForUserIds(
+          notifyIds,
+          "LEAVE",
+          "New student leave request",
+          `${studentLabel} submitted a leave request pending your review`
+        );
+      }
+    } catch (nErr) {
+      console.warn("Student leave request notification failed:", nErr);
+    }
 
     return NextResponse.json({ leave }, { status: 201 });
   } catch (e: unknown) {
