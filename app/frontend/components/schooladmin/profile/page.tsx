@@ -73,6 +73,7 @@ type StudentOption = {
   id: string;
   name: string;
   admissionNumber: string;
+  parentName: string;
   classDisplay: string;
   classId: string;
   section: string | null;
@@ -104,10 +105,11 @@ function StudentDetailsPageContent() {
         ]);
         if (!cancelled && studentsRes.ok) {
           const d = await studentsRes.json();
-          const list: StudentOption[] = (d.students || []).map((s: { id: string; user?: { name?: string }; admissionNumber?: string; class?: { id: string; name: string; section: string | null } }) => ({
+          const list: StudentOption[] = (d.students || []).map((s: { id: string; user?: { name?: string }; admissionNumber?: string; fatherName?: string; parentName?: string; class?: { id: string; name: string; section: string | null } }) => ({
             id: s.id,
             name: s.user?.name ?? "Unknown",
             admissionNumber: s.admissionNumber ?? "",
+            parentName: s.fatherName?.trim() || s.parentName?.trim() || "-",
             classDisplay: s.class ? `${s.class.name}${s.class.section ? `-${s.class.section}` : ""}` : "-",
             classId: s.class?.id ?? "",
             section: s.class?.section ?? null,
@@ -245,7 +247,7 @@ function StudentDetailsPageContent() {
               options={[
                 { label: "Select student", value: "" },
                 ...filtered.map((s) => ({
-                  label: `${s.name} (${s.admissionNumber || "-"})`,
+                  label: `${s.name} -${s.admissionNumber || "-"} | ${s.classDisplay || "-"} | ${s.parentName || "-"}`,
                   value: s.id,
                 })),
               ]}

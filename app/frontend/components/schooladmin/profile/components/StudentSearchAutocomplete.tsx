@@ -6,6 +6,7 @@ type StudentOption = {
     id: string;
     name: string;
     admissionNumber: string;
+    parentName: string;
     classDisplay: string;
     classId: string;
     section: string | null;
@@ -150,9 +151,8 @@ export const StudentSearchAutocomplete = ({
                                         : "text-gray-300 hover:bg-white/5"
                                     }`}
                             >
-                                <div className="font-semibold text-white">{student.name}</div>
-                                <div className="text-xs text-gray-400 mt-0.5">
-                                    {student.admissionNumber} • Class {student.classDisplay}
+                                <div className="font-semibold text-white">
+                                    {`${student.name} -${student.admissionNumber || "-"} | ${student.classDisplay || "-"} | ${student.parentName || "-"}`}
                                 </div>
                             </button>
                         ))}
