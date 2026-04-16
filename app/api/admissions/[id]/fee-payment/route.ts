@@ -6,6 +6,12 @@ import { assertCanManageAdmissions, getSessionSchoolId } from "../../_utils";
 
 type FeeType = "APPLICATION" | "ADMISSION";
 
+function parseString(value: unknown, fallback = "") {
+  if (typeof value !== "string") return fallback;
+  const v = value.trim();
+  return v || fallback;
+}
+
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const session = await getServerSession(authOptions);
@@ -34,10 +40,25 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       );
     }
 
-    const paymentModeRaw = String(body?.paymentMode ?? "OFFLINE").trim();
-    const paymentMethodRaw = String(body?.paymentMethod ?? "CASH").trim();
+    const paymentModeRaw = parseString(body?.paymentMode, "OFFLINE").toUpperCase();
+    const paymentMethodRaw = parseString(body?.paymentMethod, "CASH").toUpperCase();
+    const remarks = parseString(body?.remarks, "");
+    const referenceNo = parseString(body?.referenceNo, "");
     const paymentMode = paymentModeRaw || "OFFLINE";
     const paymentMethod = paymentMethodRaw || "CASH";
+    const validModes = ["CASH", "CHEQUE", "UPI", "BANK_TRANSFER", "CARD"];
+    if (!validModes.includes(paymentMethod)) {
+      return NextResponse.json(
+        { message: "paymentMethod must be CASH, CHEQUE, UPI, BANK_TRANSFER or CARD" },
+        { status: 400 }
+      );
+    }
+    if ((paymentMethod === "UPI" || paymentMethod === "BANK_TRANSFER") && !referenceNo) {
+      return NextResponse.json(
+        { message: "Reference number / UTR is required for UPI and Bank Transfer" },
+        { status: 400 }
+      );
+    }
 
     const admission = await prisma.studentApplication.findFirst({
       where: { id, schoolId },
@@ -75,7 +96,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
           applicationFeePaid: true,
           applicationFeePaidAt: now,
           applicationFeePaymentMode: paymentMode,
-          applicationFeePaymentMethod: paymentMethod,
+          applicationFeePaymentMethod: referenceNo
+            ? `${paymentMethod} | REF:${referenceNo}${remarks ? ` | REMARKS:${remarks}` : ""}`
+            : `${paymentMethod}${remarks ? ` | REMARKS:${remarks}` : ""}`,
         },
         select: {
           id: true,
@@ -114,7 +137,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
         admissionFeePaid: true,
         admissionFeePaidAt: now,
         admissionFeePaymentMode: paymentMode,
-        admissionFeePaymentMethod: paymentMethod,
+        admissionFeePaymentMethod: referenceNo
+          ? `${paymentMethod} | REF:${referenceNo}${remarks ? ` | REMARKS:${remarks}` : ""}`
+          : `${paymentMethod}${remarks ? ` | REMARKS:${remarks}` : ""}`,
       },
       select: {
         id: true,

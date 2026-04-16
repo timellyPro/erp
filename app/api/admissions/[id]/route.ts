@@ -29,6 +29,7 @@ function normalizeResidencyType(value: unknown) {
   if (normalized === "hostler" || normalized === "hosteler" || normalized === "hosteller" || normalized === "hoster") {
     return "Hosteller";
   }
+  if (normalized === "rte") return "RTE";
   return raw;
 }
 
@@ -98,7 +99,8 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
       return NextResponse.json({ message: "applicationNo is required" }, { status: 400 });
     }
 
-    const aadharForParent = requiredString(body.aadharNo, "aadharNo").replace(/\D/g, "");
+    const aadharValue = optionalString(body.aadharNo) ?? `TMP-${id.slice(0, 8).toUpperCase()}-${Date.now()}`;
+    const aadharForParent = aadharValue.replace(/\D/g, "");
     const parentAadharDefault =
       aadharForParent.length >= 8 ? `${aadharForParent.slice(0, 8)}0000` : `${aadharForParent.padEnd(8, "0")}0000`;
 
@@ -143,7 +145,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
         lastName: requiredString(body.lastName, "lastName"),
         gender: body.gender,
         dateOfBirth: dob,
-        aadharNo: requiredString(body.aadharNo, "aadharNo"),
+        aadharNo: aadharValue,
         firstLanguage: optionalString(body.firstLanguage) ?? "English",
         nationality: requiredString(body.nationality, "nationality"),
         languagesAtHome: requiredString(body.languagesAtHome, "languagesAtHome"),
@@ -159,15 +161,15 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
         parentOccupation: requiredString(body.parentOccupation, "parentOccupation"),
         officeAddress: requiredString(body.officeAddress, "officeAddress"),
         parentPhone: requiredString(body.parentPhone, "parentPhone"),
-        parentEmail: requiredString(body.parentEmail, "parentEmail"),
+        parentEmail: optionalString(body.parentEmail) ?? "-",
         parentAadharNo: optionalString(body.parentAadharNo) ?? parentAadharDefault,
         parentWhatsapp: requiredString(body.parentWhatsapp, "parentWhatsapp"),
-        bankAccountNo: requiredString(body.bankAccountNo, "bankAccountNo"),
+        bankAccountNo: optionalString(body.bankAccountNo) ?? "-",
         previousSchoolName: optionalString(body.previousSchoolName) ?? "-",
         previousSchoolAddress: optionalString(body.previousSchoolAddress) ?? "-",
-        emergencyFatherNo: requiredString(body.emergencyFatherNo, "emergencyFatherNo"),
-        emergencyMotherNo: requiredString(body.emergencyMotherNo, "emergencyMotherNo"),
-        emergencyGuardianNo: requiredString(body.emergencyGuardianNo, "emergencyGuardianNo"),
+        emergencyFatherNo: optionalString(body.emergencyFatherNo) ?? "-",
+        emergencyMotherNo: optionalString(body.emergencyMotherNo) ?? "-",
+        emergencyGuardianNo: optionalString(body.emergencyGuardianNo) ?? "-",
       },
       select: { id: true },
     });

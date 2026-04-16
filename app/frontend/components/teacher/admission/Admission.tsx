@@ -3,13 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
-import { Download, Pencil, PlusCircle, Save, Search, Trash2 } from "lucide-react";
+import { Download, Pencil, PlusCircle, Printer, Save, Search, Trash2 } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
 import PageTabs from "../../schooladmin/schooladmincomponents/PageHeaderTabs";
 import InputField from "../../schooladmin/schooladmincomponents/InputField";
 import DataTable from "../../common/TableLayout";
 import SearchInput from "../../common/SearchInput";
-import { generatePDF } from "@/lib/pdfUtils";
 import AdmissionReceiptTemplate, { type AdmissionReceiptData } from "../../pdf/AdmissionReceiptTemplate";
 
 type Gender = "MALE" | "FEMALE";
@@ -51,6 +50,7 @@ type AdmissionRow = {
   admissionFeePaidAt?: string | null;
   admissionFeePaymentMode?: string | null;
   admissionFeePaymentMethod?: string | null;
+  remarks?: string | null;
   firstName: string;
   middleName: string | null;
   lastName: string;
@@ -80,9 +80,7 @@ type FormState = {
   discountPercent: string;
   applicationFee: string;
   admissionFee: string;
-  firstName: string;
-  middleName: string;
-  lastName: string;
+  studentName: string;
   gender: Gender;
   dateOfBirth: string; // yyyy-mm-dd
   aadharNo: string;
@@ -91,12 +89,8 @@ type FormState = {
   languagesAtHome: string;
   caste: string;
   religion: string;
-  houseNo: string;
-  street: string;
-  city: string;
-  town: string;
-  state: string;
-  pinCode: string;
+  presentAddress: string;
+  permanentAddress: string;
   parentName: string;
   parentOccupation: string;
   officeAddress: string;
@@ -105,6 +99,11 @@ type FormState = {
   parentAadharNo: string;
   parentWhatsapp: string;
   bankAccountNo: string;
+  motherName: string;
+  motherPhone: string;
+  motherAadharNo: string;
+  motherEmail: string;
+  panNumber: string;
   previousSchoolName: string;
   previousSchoolAddress: string;
   emergencyFatherNo: string;
@@ -150,9 +149,7 @@ const defaultForm = (): FormState => ({
   discountPercent: "0",
   applicationFee: "",
   admissionFee: "",
-  firstName: "",
-  middleName: "",
-  lastName: "",
+  studentName: "",
   gender: "MALE",
   dateOfBirth: "",
   aadharNo: "",
@@ -161,12 +158,8 @@ const defaultForm = (): FormState => ({
   languagesAtHome: "",
   caste: "",
   religion: "",
-  houseNo: "",
-  street: "",
-  city: "",
-  town: "",
-  state: "",
-  pinCode: "",
+  presentAddress: "",
+  permanentAddress: "",
   parentName: "",
   parentOccupation: "",
   officeAddress: "",
@@ -175,6 +168,11 @@ const defaultForm = (): FormState => ({
   parentAadharNo: "",
   parentWhatsapp: "",
   bankAccountNo: "",
+  motherName: "",
+  motherPhone: "",
+  motherAadharNo: "",
+  motherEmail: "",
+  panNumber: "",
   previousSchoolName: "",
   previousSchoolAddress: "",
   emergencyFatherNo: "",
@@ -225,7 +223,18 @@ function normalizeResidencyType(value: string | null | undefined): string {
   if (!v) return "Day Scholar";
   if (v === "dayscholar" || v === "dayscholer") return "Day Scholar";
   if (v === "hostler" || v === "hosteler" || v === "hosteller" || v === "hoster") return "Hosteller";
+  if (v === "rte") return "RTE";
   return value?.trim() || "Day Scholar";
+}
+
+function extractRemarks(row: AdmissionRow): string {
+  const app = row.applicationFeePaymentMethod ?? "";
+  const adm = row.admissionFeePaymentMethod ?? "";
+  const source = adm.includes("REMARKS:") ? adm : app;
+  const marker = "REMARKS:";
+  const idx = source.indexOf(marker);
+  if (idx < 0) return "";
+  return source.slice(idx + marker.length).trim();
 }
 
 export default function TeacherAdmissionTab() {
@@ -267,6 +276,17 @@ export default function TeacherAdmissionTab() {
     feeType: FeeType;
   } | null>(null);
   const [paying, setPaying] = useState(false);
+  const [paymentForm, setPaymentForm] = useState<{
+    paymentMode: string;
+    paymentMethod: string;
+    referenceNo: string;
+    remarks: string;
+  }>({
+    paymentMode: "OFFLINE",
+    paymentMethod: "CASH",
+    referenceNo: "",
+    remarks: "",
+  });
 
   useEffect(() => {
     fetch("/api/school/mine", { credentials: "include", cache: "no-store" })
@@ -282,7 +302,7 @@ export default function TeacherAdmissionTab() {
       });
   }, []);
 
-  const downloadFeeReceipt = async (r: AdmissionRow, feeType: FeeType) => {
+  const printFeeReceipt = async (r: AdmissionRow, feeType: FeeType) => {
     const app = feeType === "APPLICATION" ? Number(r.applicationFee ?? 0) : 0;
     const adm = feeType === "ADMISSION" ? Number(r.admissionFee ?? 0) : 0;
     const paidAt =
@@ -305,24 +325,34 @@ export default function TeacherAdmissionTab() {
     };
 
     setReceiptData(data);
-    setTimeout(async () => {
-      await generatePDF(
-        receiptRef,
-        `${feeType.toLowerCase()}-fee-receipt-${(r.applicationNo || "APP").replace(/[^\w-]+/g, "_")}.pdf`
-      );
+    setTimeout(() => {
+      const html = receiptRef.current?.innerHTML;
+      if (!html) return;
+      const printWindow = window.open("", "_blank", "noopener,noreferrer,width=900,height=700");
+      if (!printWindow) return;
+      printWindow.document.write(`<html><head><title>Fee Receipt</title></head><body>${html}</body></html>`);
+      printWindow.document.close();
+      printWindow.focus();
+      printWindow.print();
+      printWindow.close();
     }, 200);
   };
 
   const markFeePaid = async (row: AdmissionRow, feeType: FeeType) => {
     setPaying(true);
     try {
+      if ((paymentForm.paymentMethod === "UPI" || paymentForm.paymentMethod === "BANK_TRANSFER") && !paymentForm.referenceNo.trim()) {
+        throw new Error("Reference number / UTR is required for UPI and Bank Transfer");
+      }
       const res = await fetch(`/api/admissions/${row.id}/fee-payment`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           feeType,
-          paymentMode: "OFFLINE",
-          paymentMethod: "CASH",
+          paymentMode: paymentForm.paymentMode,
+          paymentMethod: paymentForm.paymentMethod,
+          referenceNo: paymentForm.referenceNo,
+          remarks: paymentForm.remarks,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -344,11 +374,13 @@ export default function TeacherAdmissionTab() {
                     : r.applicationFeePaidAt ?? null,
                 applicationFeePaymentMode:
                   feeType === "APPLICATION"
-                    ? "OFFLINE"
+                    ? paymentForm.paymentMode
                     : r.applicationFeePaymentMode ?? null,
                 applicationFeePaymentMethod:
                   feeType === "APPLICATION"
-                    ? "CASH"
+                    ? paymentForm.referenceNo
+                      ? `${paymentForm.paymentMethod} | REF:${paymentForm.referenceNo}${paymentForm.remarks ? ` | REMARKS:${paymentForm.remarks}` : ""}`
+                      : `${paymentForm.paymentMethod}${paymentForm.remarks ? ` | REMARKS:${paymentForm.remarks}` : ""}`
                     : r.applicationFeePaymentMethod ?? null,
                 admissionFeePaid:
                   feeType === "ADMISSION" ? true : r.admissionFeePaid ?? false,
@@ -358,12 +390,18 @@ export default function TeacherAdmissionTab() {
                     : r.admissionFeePaidAt ?? null,
                 admissionFeePaymentMode:
                   feeType === "ADMISSION"
-                    ? "OFFLINE"
+                    ? paymentForm.paymentMode
                     : r.admissionFeePaymentMode ?? null,
                 admissionFeePaymentMethod:
                   feeType === "ADMISSION"
-                    ? "CASH"
+                    ? paymentForm.referenceNo
+                      ? `${paymentForm.paymentMethod} | REF:${paymentForm.referenceNo}${paymentForm.remarks ? ` | REMARKS:${paymentForm.remarks}` : ""}`
+                      : `${paymentForm.paymentMethod}${paymentForm.remarks ? ` | REMARKS:${paymentForm.remarks}` : ""}`
                     : r.admissionFeePaymentMethod ?? null,
+                remarks:
+                  feeType === "ADMISSION" || feeType === "APPLICATION"
+                    ? paymentForm.remarks || null
+                    : r.remarks ?? null,
               }
             : r
         )
@@ -371,6 +409,7 @@ export default function TeacherAdmissionTab() {
       setMessageTone("success");
       setMessage(data?.message || "Fee marked as paid");
       setPaymentDialog(null);
+      setPaymentForm({ paymentMode: "OFFLINE", paymentMethod: "CASH", referenceNo: "", remarks: "" });
     } catch (e) {
       setMessageTone("error");
       setMessage(e instanceof Error ? e.message : "Failed to mark fee as paid");
@@ -456,11 +495,11 @@ export default function TeacherAdmissionTab() {
                 </span>
                 <button
                   type="button"
-                  onClick={() => downloadFeeReceipt(r, "APPLICATION")}
+                  onClick={() => printFeeReceipt(r, "APPLICATION")}
                   className="inline-flex items-center justify-center p-1.5 rounded-lg bg-lime-400/10 border border-lime-400/25 text-lime-300 hover:bg-lime-400/20"
-                  title="Download application fee receipt"
+                  title="Print application fee receipt"
                 >
-                  <Download size={14} />
+                  <Printer size={14} />
                 </button>
               </div>
             );
@@ -468,7 +507,10 @@ export default function TeacherAdmissionTab() {
           return (
             <button
               type="button"
-              onClick={() => setPaymentDialog({ row: r, feeType: "APPLICATION" })}
+              onClick={() => {
+                setPaymentForm({ paymentMode: "OFFLINE", paymentMethod: "CASH", referenceNo: "", remarks: "" });
+                setPaymentDialog({ row: r, feeType: "APPLICATION" });
+              }}
               className="px-2 py-1 rounded-lg text-[10px] bg-amber-500/10 border border-amber-500/25 text-amber-300 hover:bg-amber-500/20"
             >
               Pay Now
@@ -490,11 +532,11 @@ export default function TeacherAdmissionTab() {
                 </span>
                 <button
                   type="button"
-                  onClick={() => downloadFeeReceipt(r, "ADMISSION")}
+                  onClick={() => printFeeReceipt(r, "ADMISSION")}
                   className="inline-flex items-center justify-center p-1.5 rounded-lg bg-lime-400/10 border border-lime-400/25 text-lime-300 hover:bg-lime-400/20"
-                  title="Download admission fee receipt"
+                  title="Print admission fee receipt"
                 >
-                  <Download size={14} />
+                  <Printer size={14} />
                 </button>
               </div>
             );
@@ -502,13 +544,20 @@ export default function TeacherAdmissionTab() {
           return (
             <button
               type="button"
-              onClick={() => setPaymentDialog({ row: r, feeType: "ADMISSION" })}
+              onClick={() => {
+                setPaymentForm({ paymentMode: "OFFLINE", paymentMethod: "CASH", referenceNo: "", remarks: "" });
+                setPaymentDialog({ row: r, feeType: "ADMISSION" });
+              }}
               className="px-2 py-1 rounded-lg text-[10px] bg-amber-500/10 border border-amber-500/25 text-amber-300 hover:bg-amber-500/20"
             >
               Pay Now
             </button>
           );
         },
+      },
+      {
+        header: "Remarks",
+        render: (r: AdmissionRow) => <span className="text-xs text-white/60">{extractRemarks(r) || "—"}</span>,
       },
       { header: "Created", render: (r: AdmissionRow) => <span className="text-sm text-white/60">{new Date(r.createdAt).toLocaleDateString()}</span> },
       {
@@ -535,7 +584,7 @@ export default function TeacherAdmissionTab() {
         ),
       },
     ],
-    [router, schoolName, schoolAddress]
+    [router, schoolName, schoolAddress, printFeeReceipt]
   );
 
   useEffect(() => {
@@ -596,9 +645,7 @@ export default function TeacherAdmissionTab() {
           applicationFee:
             a.applicationFee === null || a.applicationFee === undefined ? "" : String(a.applicationFee),
           admissionFee: a.admissionFee === null || a.admissionFee === undefined ? "" : String(a.admissionFee),
-          firstName: a.firstName ?? "",
-          middleName: a.middleName ?? "",
-          lastName: a.lastName ?? "",
+          studentName: [a.firstName, a.middleName, a.lastName].filter(Boolean).join(" "),
           gender: a.gender,
           dateOfBirth: a.dateOfBirth ? String(a.dateOfBirth).slice(0, 10) : "",
           aadharNo: a.aadharNo ?? "",
@@ -607,12 +654,8 @@ export default function TeacherAdmissionTab() {
           languagesAtHome: a.languagesAtHome ?? "",
           caste: a.caste ?? "",
           religion: a.religion ?? "",
-          houseNo: a.houseNo ?? "",
-          street: a.street ?? "",
-          city: a.city ?? "",
-          town: a.town ?? "",
-          state: a.state ?? "",
-          pinCode: a.pinCode ?? "",
+          presentAddress: a.houseNo ?? "",
+          permanentAddress: a.street ?? "",
           parentName: a.parentName ?? "",
           parentOccupation: a.parentOccupation ?? "",
           officeAddress: a.officeAddress ?? "",
@@ -621,6 +664,11 @@ export default function TeacherAdmissionTab() {
           parentAadharNo: a.parentAadharNo ?? "",
           parentWhatsapp: a.parentWhatsapp ?? "",
           bankAccountNo: a.bankAccountNo ?? "",
+          motherName: (a as any).motherName ?? "",
+          motherPhone: (a as any).motherPhone ?? "",
+          motherAadharNo: (a as any).motherAadharNo ?? "",
+          motherEmail: (a as any).motherEmail ?? "",
+          panNumber: (a as any).panNumber ?? "",
           previousSchoolName: a.previousSchoolName ?? "",
           previousSchoolAddress: a.previousSchoolAddress ?? "",
           emergencyFatherNo: a.emergencyFatherNo ?? "",
@@ -671,8 +719,15 @@ export default function TeacherAdmissionTab() {
       const aadharDigits = form.aadharNo.replace(/\D/g, "");
       const derivedParentAadhar =
         aadharDigits.length >= 8 ? `${aadharDigits.slice(0, 8)}0000` : `${aadharDigits.padEnd(8, "0")}0000`;
+      const nameParts = form.studentName.trim().split(/\s+/).filter(Boolean);
+      const firstName = nameParts[0] ?? "";
+      const middleName = nameParts.length > 2 ? nameParts.slice(1, -1).join(" ") : null;
+      const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1] : ".";
       const payload: any = {
         ...form,
+        firstName,
+        middleName,
+        lastName,
         classId: form.classId || null,
         totalFee: form.totalFee || null,
         discountPercent: form.discountPercent || null,
@@ -680,16 +735,23 @@ export default function TeacherAdmissionTab() {
         admissionFee: form.admissionFee.trim() ? Number(form.admissionFee) : null,
         fedenaNo: form.fedenaNo || null,
         admissionNo: editId ? form.admissionNo?.trim() || null : null,
-        middleName: form.middleName || null,
         caste: form.caste || null,
         religion: form.religion || null,
-        town: form.town || null,
-        applicationNo: editId ? form.applicationNo || undefined : null,
+        houseNo: form.presentAddress.trim(),
+        street: form.permanentAddress.trim(),
+        city: form.presentAddress.trim() || "-",
+        town: null,
+        state: "-",
+        pinCode: "000000",
+        applicationNo: form.applicationNo.trim(),
         firstLanguage: form.firstLanguage?.trim() || "English",
         parentAadharNo: form.parentAadharNo?.trim() || derivedParentAadhar,
         previousSchoolName: form.previousSchoolName?.trim() || "-",
         previousSchoolAddress: form.previousSchoolAddress?.trim() || "-",
         residencyType: normalizeResidencyType(form.residencyType),
+        emergencyFatherNo: form.parentPhone?.trim() || "-",
+        emergencyMotherNo: form.motherPhone?.trim() || "-",
+        emergencyGuardianNo: form.parentPhone?.trim() || "-",
       };
       const endpoint = editId ? `/api/admissions/${editId}` : "/api/admissions/create";
       const method = editId ? "PUT" : "POST";
@@ -806,12 +868,6 @@ export default function TeacherAdmissionTab() {
 
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <Select
-                  label="Grade Sought"
-                  value={form.gradeSought}
-                  onChange={(v) => setForm((p) => ({ ...p, gradeSought: v as Grade }))}
-                  options={GRADES}
-                />
-                <Select
                   label="Boarding Type"
                   value={form.boardingType}
                   onChange={(v) => setForm((p) => ({ ...p, boardingType: v as BoardingType }))}
@@ -824,6 +880,7 @@ export default function TeacherAdmissionTab() {
                   options={[
                     { label: "Day Scholar", value: "Day Scholar" },
                     { label: "Hosteller", value: "Hosteller" },
+                    { label: "RTE", value: "RTE" },
                   ]}
                 />
                 <Select
@@ -853,20 +910,15 @@ export default function TeacherAdmissionTab() {
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <InputField
-                  label="First Name"
-                  value={form.firstName}
-                  onChange={(v) => setForm((p) => ({ ...p, firstName: v }))}
+                  label="Application Number"
+                  value={form.applicationNo}
+                  onChange={(v) => setForm((p) => ({ ...p, applicationNo: v }))}
                   required
                 />
                 <InputField
-                  label="Middle Name (optional)"
-                  value={form.middleName}
-                  onChange={(v) => setForm((p) => ({ ...p, middleName: v }))}
-                />
-                <InputField
-                  label="Last Name"
-                  value={form.lastName}
-                  onChange={(v) => setForm((p) => ({ ...p, lastName: v }))}
+                  label="STUDENT NAME"
+                  value={form.studentName}
+                  onChange={(v) => setForm((p) => ({ ...p, studentName: v }))}
                   required
                 />
               </div>
@@ -880,10 +932,14 @@ export default function TeacherAdmissionTab() {
                   required
                 />
                 <InputField
-                  label="Aadhar No"
+                  label="ADHAAR ID (optional)"
                   value={form.aadharNo}
                   onChange={(v) => setForm((p) => ({ ...p, aadharNo: v }))}
-                  required
+                />
+                <InputField
+                  label="PAN Number (optional)"
+                  value={form.panNumber}
+                  onChange={(v) => setForm((p) => ({ ...p, panNumber: v }))}
                 />
                 <InputField
                   label="Total Fee (optional)"
@@ -944,15 +1000,9 @@ export default function TeacherAdmissionTab() {
 
               <div className="pt-2 border-t border-white/10 space-y-4">
                 <SectionTitle title="Address" />
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <InputField label="House No" value={form.houseNo} onChange={(v) => setForm((p) => ({ ...p, houseNo: v }))} required />
-                  <InputField label="Street" value={form.street} onChange={(v) => setForm((p) => ({ ...p, street: v }))} required />
-                  <InputField label="City" value={form.city} onChange={(v) => setForm((p) => ({ ...p, city: v }))} required />
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <InputField label="Town (optional)" value={form.town} onChange={(v) => setForm((p) => ({ ...p, town: v }))} />
-                  <InputField label="State" value={form.state} onChange={(v) => setForm((p) => ({ ...p, state: v }))} required />
-                  <InputField label="Pin Code" value={form.pinCode} onChange={(v) => setForm((p) => ({ ...p, pinCode: v }))} required />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <InputField label="Present Address" value={form.presentAddress} onChange={(v) => setForm((p) => ({ ...p, presentAddress: v }))} required />
+                  <InputField label="Permanent Address" value={form.permanentAddress} onChange={(v) => setForm((p) => ({ ...p, permanentAddress: v }))} required />
                 </div>
               </div>
 
@@ -965,20 +1015,21 @@ export default function TeacherAdmissionTab() {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <InputField label="Parent Phone" value={form.parentPhone} onChange={(v) => setForm((p) => ({ ...p, parentPhone: v }))} required />
-                  <InputField label="Parent Email" value={form.parentEmail} onChange={(v) => setForm((p) => ({ ...p, parentEmail: v }))} required />
+                  <InputField label="Parent Email" value={form.parentEmail} onChange={(v) => setForm((p) => ({ ...p, parentEmail: v }))} />
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <InputField label="WhatsApp" value={form.parentWhatsapp} onChange={(v) => setForm((p) => ({ ...p, parentWhatsapp: v }))} required />
-                  <InputField label="Bank Account No" value={form.bankAccountNo} onChange={(v) => setForm((p) => ({ ...p, bankAccountNo: v }))} required />
+                  <InputField label="Aadhar Number (optional)" value={form.bankAccountNo} onChange={(v) => setForm((p) => ({ ...p, bankAccountNo: v }))} />
                 </div>
               </div>
 
               <div className="pt-2 border-t border-white/10 space-y-4">
-                <SectionTitle title="Emergency Contacts" />
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <InputField label="Father No" value={form.emergencyFatherNo} onChange={(v) => setForm((p) => ({ ...p, emergencyFatherNo: v }))} required />
-                  <InputField label="Mother No" value={form.emergencyMotherNo} onChange={(v) => setForm((p) => ({ ...p, emergencyMotherNo: v }))} required />
-                  <InputField label="Guardian No" value={form.emergencyGuardianNo} onChange={(v) => setForm((p) => ({ ...p, emergencyGuardianNo: v }))} required />
+                <SectionTitle title="Mother Details" />
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <InputField label="Mother Name" value={form.motherName} onChange={(v) => setForm((p) => ({ ...p, motherName: v }))} />
+                  <InputField label="Phone Number" value={form.motherPhone} onChange={(v) => setForm((p) => ({ ...p, motherPhone: v }))} />
+                  <InputField label="Aadhar Number" value={form.motherAadharNo} onChange={(v) => setForm((p) => ({ ...p, motherAadharNo: v }))} />
+                  <InputField label="Email ID" value={form.motherEmail} onChange={(v) => setForm((p) => ({ ...p, motherEmail: v }))} />
                 </div>
               </div>
             </div>
@@ -1104,7 +1155,10 @@ export default function TeacherAdmissionTab() {
                       {Number(r.applicationFee ?? 0) > 0 && !r.applicationFeePaid && (
                         <button
                           type="button"
-                          onClick={() => setPaymentDialog({ row: r, feeType: "APPLICATION" })}
+                          onClick={() => {
+                            setPaymentForm({ paymentMode: "OFFLINE", paymentMethod: "CASH", referenceNo: "", remarks: "" });
+                            setPaymentDialog({ row: r, feeType: "APPLICATION" });
+                          }}
                           className="w-full px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs"
                         >
                           Pay App Fee
@@ -1113,7 +1167,10 @@ export default function TeacherAdmissionTab() {
                       {Number(r.admissionFee ?? 0) > 0 && !r.admissionFeePaid && (
                         <button
                           type="button"
-                          onClick={() => setPaymentDialog({ row: r, feeType: "ADMISSION" })}
+                          onClick={() => {
+                            setPaymentForm({ paymentMode: "OFFLINE", paymentMethod: "CASH", referenceNo: "", remarks: "" });
+                            setPaymentDialog({ row: r, feeType: "ADMISSION" });
+                          }}
                           className="w-full px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs"
                         >
                           Pay Adm Fee
@@ -1125,23 +1182,23 @@ export default function TeacherAdmissionTab() {
                       {r.applicationFeePaid && (
                         <button
                           type="button"
-                          onClick={() => downloadFeeReceipt(r, "APPLICATION")}
+                          onClick={() => printFeeReceipt(r, "APPLICATION")}
                           className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-lime-400/15 border border-lime-400/30 text-lime-300 text-xs"
-                          title="Download application fee receipt"
+                          title="Print application fee receipt"
                         >
-                          <Download size={13} />
-                          App Receipt
+                          <Printer size={13} />
+                          Print App Receipt
                         </button>
                       )}
                       {r.admissionFeePaid && (
                         <button
                           type="button"
-                          onClick={() => downloadFeeReceipt(r, "ADMISSION")}
+                          onClick={() => printFeeReceipt(r, "ADMISSION")}
                           className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-lime-400/15 border border-lime-400/30 text-lime-300 text-xs"
-                          title="Download admission fee receipt"
+                          title="Print admission fee receipt"
                         >
-                          <Download size={13} />
-                          Adm Receipt
+                          <Printer size={13} />
+                          Print Adm Receipt
                         </button>
                       )}
                       </div>
@@ -1202,10 +1259,42 @@ export default function TeacherAdmissionTab() {
               {`${paymentDialog.row.firstName} ${paymentDialog.row.lastName}`}
             </p>
             <div className="rounded-xl border border-white/10 bg-white/5 p-3 space-y-1">
-              <div className="text-xs text-white/60">Payment Mode</div>
-              <div className="text-sm text-white">Offline</div>
-              <div className="text-xs text-white/60 pt-2">Payment Method</div>
-              <div className="text-sm text-white">Cash</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Select
+                  label="Payment Mode"
+                  value={paymentForm.paymentMode}
+                  onChange={(v) => setPaymentForm((p) => ({ ...p, paymentMode: v }))}
+                  options={[
+                    { label: "Offline", value: "OFFLINE" },
+                    { label: "Online", value: "ONLINE" },
+                  ]}
+                />
+                <Select
+                  label="Payment Method"
+                  value={paymentForm.paymentMethod}
+                  onChange={(v) => setPaymentForm((p) => ({ ...p, paymentMethod: v }))}
+                  options={[
+                    { label: "Cash", value: "CASH" },
+                    { label: "Cheque", value: "CHEQUE" },
+                    { label: "UPI", value: "UPI" },
+                    { label: "Bank Transfer", value: "BANK_TRANSFER" },
+                    { label: "Card", value: "CARD" },
+                  ]}
+                />
+              </div>
+              {(paymentForm.paymentMethod === "UPI" || paymentForm.paymentMethod === "BANK_TRANSFER") && (
+                <InputField
+                  label="Reference Number / UTR"
+                  value={paymentForm.referenceNo}
+                  onChange={(v) => setPaymentForm((p) => ({ ...p, referenceNo: v }))}
+                  required
+                />
+              )}
+              <InputField
+                label="Remarks"
+                value={paymentForm.remarks}
+                onChange={(v) => setPaymentForm((p) => ({ ...p, remarks: v }))}
+              />
             </div>
             <div className="flex justify-end gap-3">
               <button
