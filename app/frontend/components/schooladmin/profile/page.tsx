@@ -10,7 +10,8 @@ import { ProfileSidebar } from "./components/ProfileSidebar";
 import { AttendanceTrends } from "./components/AttendanceTrends";
 import { Certificates } from "./components/Certificates";
 import { StudentSearchAutocomplete } from "./components/StudentSearchAutocomplete";
-import { Calendar, BookOpen, Activity, Clock, Search } from "lucide-react";
+import { Calendar, BookOpen, Activity, Clock, FileSpreadsheet } from "lucide-react";
+import BulkExtraFeeByTimellyModal from "./components/BulkExtraFeeByTimellyModal";
 import PageHeader from "../../common/PageHeader";
 import Spinner from "../../common/Spinner";
 import SelectInput from "../../common/SelectInput";
@@ -94,6 +95,7 @@ function StudentDetailsPageContent() {
   const [filterClass, setFilterClass] = useState("");
   const [filterSection, setFilterSection] = useState("");
   const [classes, setClasses] = useState<{ id: string; name: string; section: string | null }[]>([]);
+  const [bulkExtraFeeOpen, setBulkExtraFeeOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -201,12 +203,25 @@ function StudentDetailsPageContent() {
         title="Student Details"
         subtitle="View comprehensive academic and personal records."
         rightSlot={
-          <div className="w-full sm:w-auto flex justify-center sm:justify-end">
-            <div className="bg-[#0F172A]/40 border border-white/10 px-3 py-2 sm:px-4 rounded-xl text-xs sm:text-sm text-gray-200 whitespace-nowrap">
+          <div className="w-full sm:w-auto flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setBulkExtraFeeOpen(true)}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-lime-500/40 bg-lime-500/15 px-3 py-2 text-xs sm:text-sm font-semibold text-lime-200 hover:bg-lime-500/25 transition-colors"
+            >
+              <FileSpreadsheet className="h-4 w-4 shrink-0" />
+              Bulk extra fees (Excel)
+            </button>
+            <div className="bg-[#0F172A]/40 border border-white/10 px-3 py-2 sm:px-4 rounded-xl text-xs sm:text-sm text-gray-200 whitespace-nowrap text-center">
               {new Date().getFullYear() - 1}-{new Date().getFullYear() + 1}
             </div>
           </div>
         }
+      />
+      <BulkExtraFeeByTimellyModal
+        open={bulkExtraFeeOpen}
+        onClose={() => setBulkExtraFeeOpen(false)}
+        onApplied={() => setReloadKey((k) => k + 1)}
       />
       <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-xl sm:rounded-2xl p-3 sm:p-6 overflow-visible relative z-20 min-w-0">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 sm:gap-4 md:gap-6 overflow-visible">
@@ -356,6 +371,7 @@ function StudentDetailsPageContent() {
               installmentCount={detail.fee?.installments}
               installmentDates={detail.fee?.installmentReminderDates || []}
               tuitionPaidAmount={detail.fee?.tuitionPaid}
+              onPaymentsChanged={() => setReloadKey((k) => k + 1)}
             />
 
             {detail.fee && (

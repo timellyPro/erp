@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -142,12 +143,20 @@ export async function GET(req: Request) {
     const [paymentAllocations, refundAllocations] = await Promise.all([
       prisma.paymentFeeAllocation.groupBy({
         by: ["headType", "componentIndex", "extraFeeId"],
-        where: { studentId: student.id, allocationType: "PAYMENT", payment: { status: "SUCCESS" } },
+        where: {
+          studentId: student.id,
+          allocationType: "PAYMENT",
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+        },
         _sum: { allocatedAmount: true },
       }),
       prisma.paymentFeeAllocation.groupBy({
         by: ["headType", "componentIndex", "extraFeeId"],
-        where: { studentId: student.id, allocationType: "REFUND", payment: { status: "SUCCESS" } },
+        where: {
+          studentId: student.id,
+          allocationType: "REFUND",
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+        },
         _sum: { allocatedAmount: true },
       }),
     ]);

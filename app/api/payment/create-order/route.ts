@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import type { Prisma } from "@prisma/client";
 
 const hyperpgBaseUrl = process.env.HYPERPG_BASE_URL || "https://sandbox.hyperpg.in";
@@ -195,11 +196,19 @@ export async function POST(req: Request) {
 
       const [paymentAllocations, refundAllocations] = await Promise.all([
         prisma.paymentFeeAllocation.findMany({
-          where: { studentId: student.id, allocationType: "PAYMENT", payment: { status: "SUCCESS" } },
+          where: {
+            studentId: student.id,
+            allocationType: "PAYMENT",
+            payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+          },
           select: { headType: true, componentIndex: true, extraFeeId: true, allocatedAmount: true },
         }),
         prisma.paymentFeeAllocation.findMany({
-          where: { studentId: student.id, allocationType: "REFUND", payment: { status: "SUCCESS" } },
+          where: {
+            studentId: student.id,
+            allocationType: "REFUND",
+            payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+          },
           select: { headType: true, componentIndex: true, extraFeeId: true, allocatedAmount: true },
         }),
       ]);

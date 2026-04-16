@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -164,11 +165,19 @@ export async function POST(req: Request) {
     // Net already-paid by head via allocations (new payments only).
     const [paymentAllocations, refundAllocations] = await Promise.all([
       prisma.paymentFeeAllocation.findMany({
-        where: { studentId: student.id, allocationType: "PAYMENT", payment: { status: "SUCCESS" } },
+        where: {
+          studentId: student.id,
+          allocationType: "PAYMENT",
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+        },
         select: { headType: true, componentIndex: true, componentName: true, extraFeeId: true, allocatedAmount: true },
       }),
       prisma.paymentFeeAllocation.findMany({
-        where: { studentId: student.id, allocationType: "REFUND", payment: { status: "SUCCESS" } },
+        where: {
+          studentId: student.id,
+          allocationType: "REFUND",
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+        },
         select: { headType: true, componentIndex: true, componentName: true, extraFeeId: true, allocatedAmount: true },
       }),
     ]);

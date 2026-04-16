@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 
 export async function GET() {
@@ -175,7 +176,7 @@ export async function GET() {
         where: {
           studentId: { in: studentIds },
           allocationType: "PAYMENT",
-          payment: { status: "SUCCESS" },
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
         },
         select: {
           studentId: true,
@@ -190,7 +191,7 @@ export async function GET() {
         where: {
           studentId: { in: studentIds },
           allocationType: "REFUND",
-          payment: { status: "SUCCESS" },
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
         },
         select: {
           studentId: true,
