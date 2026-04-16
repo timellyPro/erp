@@ -56,16 +56,28 @@ export const FeesBreakdown = ({
 
   // Calculate breakdown by fee type from payments
   const feeBreakdown = new Map<string, { amount: number; paidAmount: number }>();
+  const resolveDisplayAmount = (payment: { amount: number; feeTypeAmount?: number }) => {
+    const typeAmount = payment.feeTypeAmount;
+    if (typeof typeAmount !== "number" || !Number.isFinite(typeAmount) || typeAmount <= 0) {
+      return payment.amount;
+    }
+    // Ignore tiny paise-level values that can appear from gateway-side noise.
+    if (payment.amount >= 1 && typeAmount < 1) {
+      return payment.amount;
+    }
+    return typeAmount;
+  };
 
   // Aggregate payment amounts by fee type
   for (const payment of payments) {
     const feeType = payment.feeTypeName || "Other Fees";
-    const paidAmount = payment.feeTypeAmount || payment.amount;
+    const paidAmount = resolveDisplayAmount(payment);
 
     if (!feeBreakdown.has(feeType)) {
       feeBreakdown.set(feeType, { amount: paidAmount, paidAmount });
     } else {
       const existing = feeBreakdown.get(feeType)!;
+      existing.amount += paidAmount;
       existing.paidAmount += paidAmount;
     }
   }

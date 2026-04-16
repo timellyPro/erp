@@ -18,18 +18,22 @@ export default function FeeStructureConfig({
   onSuccess,
 }: FeeStructureConfigProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingOriginalClassId, setEditingOriginalClassId] = useState<string | null>(null);
   const [structureClassId, setStructureClassId] = useState("");
   const [components, setComponents] = useState<Array<{ name: string; amount: number }>>([]);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const startEdit = (s: FeeStructure) => {
     setEditingId(s.id);
+    setEditingOriginalClassId(s.classId);
     setStructureClassId(s.classId);
     setComponents((s.components as Array<{ name: string; amount: number }>) || []);
   };
 
   const startNew = () => {
     setEditingId("new");
+    setEditingOriginalClassId(null);
     setStructureClassId(classes[0]?.id || "");
     setComponents([
       { name: "Tuition Fee", amount: 35000 },
@@ -40,7 +44,7 @@ export default function FeeStructureConfig({
   };
 
   const handleSave = async () => {
-    if (!structureClassId || components.length === 0) return;
+    if (!structureClassId) return;
     if (saving) return;
     const normalizedComponents = components
       .map((c) => ({
@@ -50,6 +54,35 @@ export default function FeeStructureConfig({
       .filter((c) => c.name.length > 0 && Number.isFinite(c.amount));
 
     if (normalizedComponents.length === 0) {
+      if (editingId !== "new") {
+        const deleteClassId = editingOriginalClassId || structureClassId;
+        const shouldDelete = confirm(
+          "No components left. Do you want to delete this entire class fee structure?"
+        );
+        if (!shouldDelete) return;
+        try {
+          setSaving(true);
+          const res = await fetch(
+            `/api/fees/structure?classId=${encodeURIComponent(deleteClassId)}`,
+            { method: "DELETE" }
+          );
+          if (!res.ok) {
+            const d = await res.json();
+            alert(d.message || "Failed to delete structure");
+            return;
+          }
+          setEditingId(null);
+          setEditingOriginalClassId(null);
+          setStructureClassId("");
+          setComponents([]);
+          onSuccess();
+        } catch (e) {
+          console.error(e);
+        } finally {
+          setSaving(false);
+        }
+        return;
+      }
       alert("Please enter valid fee components (name + numeric amount).");
       return;
     }
@@ -66,6 +99,9 @@ export default function FeeStructureConfig({
         return;
       }
       setEditingId(null);
+      setEditingOriginalClassId(null);
+      setStructureClassId("");
+      setComponents([]);
       onSuccess();
     } catch (e) {
       console.error(e);
@@ -120,6 +156,7 @@ export default function FeeStructureConfig({
             label="Class"
             value={structureClassId}
             onChange={setStructureClassId}
+            disabled={editingId !== "new"}
             options={classes.map((c) => ({
               label: `${c.name}${c.section ? `-${c.section}` : ""}`,
               value: c.id,
@@ -176,7 +213,12 @@ export default function FeeStructureConfig({
             />
             <button
               type="button"
-              onClick={() => setEditingId(null)}
+              onClick={() => {
+                setEditingId(null);
+                setEditingOriginalClassId(null);
+                setStructureClassId("");
+                setComponents([]);
+              }}
               className="px-4 py-2 rounded-xl border border-white/20"
             >
               Cancel
@@ -185,9 +227,11 @@ export default function FeeStructureConfig({
               <button
                 type="button"
                 onClick={async () => {
-                  if (!structureClassId || !confirm("Do you really want to delete this entire class fee structure? Student amounts will be recalculated. This action cannot be undone.")) return;
+                  const deleteClassId = editingOriginalClassId || structureClassId;
+                  if (!deleteClassId || !confirm("Do you really want to delete this entire class fee structure? Student amounts will be recalculated. This action cannot be undone.")) return;
                   try {
-                    const res = await fetch(`/api/fees/structure?classId=${encodeURIComponent(structureClassId)}`, {
+                    setDeleting(true);
+                    const res = await fetch(`/api/fees/structure?classId=${encodeURIComponent(deleteClassId)}`, {
                       method: "DELETE",
                     });
                     if (!res.ok) {
@@ -196,14 +240,20 @@ export default function FeeStructureConfig({
                       return;
                     }
                     setEditingId(null);
+                    setEditingOriginalClassId(null);
+                    setStructureClassId("");
+                    setComponents([]);
                     onSuccess();
                   } catch (e) {
                     console.error(e);
+                  } finally {
+                    setDeleting(false);
                   }
                 }}
-                className="px-4 py-2 rounded-xl border border-red-500/50 text-red-400 hover:bg-red-500/10"
+                disabled={saving || deleting}
+                className="px-4 py-2 rounded-xl border border-red-500/50 text-red-400 hover:bg-red-500/10 disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                Delete Structure
+                {deleting ? "Deleting..." : "Delete Structure"}
               </button>
             )}
           </div>

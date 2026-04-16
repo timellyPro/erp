@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Search } from "lucide-react";
+import { Download, Search } from "lucide-react";
+import * as XLSX from "xlsx";
 import SelectInput from "../../common/SelectInput";
 import type { Class, FeeRecord } from "./types";
 import { schoolAdminStudentDetailsFeesUrl } from "./studentDetailsNav";
@@ -24,6 +25,67 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     if (selectedClass && f.student.class?.id !== selectedClass) return false;
     return true;
   });
+
+  const classLabelById = new Map(
+    classes.map((c) => [c.id, `${c.name}${c.section ? `-${c.section}` : ""}`])
+  );
+
+  const toSheetRows = (rows: FeeRecord[]) =>
+    rows.map((f) => {
+      const classLabel = f.student.class
+        ? `${f.student.class.name}${f.student.class.section ? `-${f.student.class.section}` : ""}`
+        : "-";
+      const status = f.remainingFee <= 0 ? "Paid" : "Pending";
+      const discountAmount = Math.max((f.totalFee || 0) - (f.finalFee || 0), 0);
+      return {
+        "Student Name": f.student.user?.name || "-",
+        "Admission Email": f.student.user?.email || "-",
+        Class: classLabel,
+        "Fee Type": f.feeTypes
+          ? `${f.feeTypes}${typeof f.feeTypeDueAmount === "number" ? ` (₹${f.feeTypeDueAmount.toLocaleString()})` : ""}`
+          : "-",
+        "Total Fee": f.totalFee,
+        "Discount %": f.discountPercent,
+        "Discount Amount": discountAmount,
+        "Final Fee": f.finalFee,
+        Paid: f.amountPaid,
+        Pending: f.remainingFee,
+        Status: status,
+      };
+    });
+
+  const downloadExcel = (filename: string, rows: FeeRecord[]) => {
+    const workbook = XLSX.utils.book_new();
+    const worksheet = XLSX.utils.json_to_sheet(toSheetRows(rows));
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Fee Records");
+    XLSX.writeFile(workbook, filename);
+  };
+
+  const exportAllClasses = () => {
+    if (fees.length === 0) {
+      alert("No fee records available to export.");
+      return;
+    }
+    downloadExcel(`fee-records-all-classes-${new Date().toISOString().slice(0, 10)}.xlsx`, fees);
+  };
+
+  const exportSelectedClass = () => {
+    if (!selectedClass) {
+      alert("Please select a class for class-wise export.");
+      return;
+    }
+    const rows = fees.filter((f) => f.student.class?.id === selectedClass);
+    if (rows.length === 0) {
+      alert("No fee records found for the selected class.");
+      return;
+    }
+    const className = classLabelById.get(selectedClass) || "class";
+    const safeClassName = className.replaceAll(/[^\w-]+/g, "_");
+    downloadExcel(
+      `fee-records-${safeClassName}-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      rows
+    );
+  };
 
   return (
     <section className="rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur sm:p-6">
@@ -52,6 +114,22 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
             ]}
           />
         </div>
+        <button
+          type="button"
+          onClick={exportAllClasses}
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-lime-500/40 bg-lime-500/10 px-3 py-2 text-sm text-lime-300 hover:bg-lime-500/20"
+        >
+          <Download size={16} />
+          Export All Classes
+        </button>
+        <button
+          type="button"
+          onClick={exportSelectedClass}
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm text-blue-300 hover:bg-blue-500/20"
+        >
+          <Download size={16} />
+          Export Class-wise
+        </button>
       </div>
       <div className="space-y-3 sm:hidden">
         {filteredFees.length === 0 ? (
@@ -91,6 +169,12 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
                   <span className="text-white">₹{f.finalFee.toLocaleString()}</span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
+                  <span className="text-gray-400">Discount</span>
+                  <span className="text-cyan-300">
+                    {f.discountPercent}% (₹{Math.max((f.totalFee || 0) - (f.finalFee || 0), 0).toLocaleString()})
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
                   <span className="text-gray-400">Paid</span>
                   <span className="text-emerald-400">₹{f.amountPaid.toLocaleString()}</span>
                 </div>
@@ -122,6 +206,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
               <th className="py-3">Class</th>
               <th className="py-3">Fee Type</th>
               <th className="py-3">Total</th>
+              <th className="py-3">Discount</th>
               <th className="py-3">Paid</th>
               <th className="py-3">Pending</th>
               <th className="py-3">Status</th>
@@ -149,6 +234,9 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
                     : "-"}
                 </td>
                 <td className="py-3">₹{f.finalFee.toLocaleString()}</td>
+                <td className="py-3 text-cyan-300">
+                  {f.discountPercent}% (₹{Math.max((f.totalFee || 0) - (f.finalFee || 0), 0).toLocaleString()})
+                </td>
                 <td className="py-3 text-emerald-400">₹{f.amountPaid.toLocaleString()}</td>
                 <td className="py-3 text-amber-400">₹{f.remainingFee.toLocaleString()}</td>
                 <td className="py-3">

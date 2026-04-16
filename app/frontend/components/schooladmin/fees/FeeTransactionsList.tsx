@@ -276,6 +276,12 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
                     </div>
                   </div>
                   <div className="flex items-center justify-between gap-3">
+                    <span className="text-gray-400">Reference / UTR</span>
+                    <span className="text-right text-gray-300 break-all">
+                      {t.transactionId || "-"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
                     <span className="text-gray-400">Amount</span>
                     <span className="text-emerald-400">₹{t.amount.toLocaleString()}</span>
                   </div>
@@ -313,6 +319,7 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
                 <th className="pb-3 font-medium">Student</th>
                 <th className="pb-3 font-medium">Class</th>
                 <th className="pb-3 font-medium">Gateway</th>
+                <th className="pb-3 font-medium">Reference No / UTR</th>
                 <th className="pb-3 font-medium">Amount</th>
                 <th className="pb-3 font-medium">Refunded</th>
                 <th className="pb-3 font-medium text-right">Action</th>
@@ -354,6 +361,9 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
                         </span>
                       ) : null}
                     </div>
+                  </td>
+                  <td className="py-3 text-gray-300 break-all">
+                    {t.transactionId || "-"}
                   </td>
                   <td className="py-3 text-emerald-400">₹{t.amount.toLocaleString()}</td>
                   <td className="py-3">

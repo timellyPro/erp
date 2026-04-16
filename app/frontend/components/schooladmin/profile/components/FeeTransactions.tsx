@@ -44,6 +44,16 @@ export const FeeTransactions = ({
   tuitionPaidAmount = 0,
 }: Props) => {
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const resolveDisplayAmount = (payment: { amount: number; feeTypeAmount?: number }) => {
+    const typeAmount = payment.feeTypeAmount;
+    if (typeof typeAmount !== "number" || !Number.isFinite(typeAmount) || typeAmount <= 0) {
+      return payment.amount;
+    }
+    if (payment.amount >= 1 && typeAmount < 1) {
+      return payment.amount;
+    }
+    return typeAmount;
+  };
 
   const hasFee = fee && (fee.totalFee > 0 || fee.amountPaid > 0 || fee.remainingFee > 0);
   
@@ -209,7 +219,7 @@ export const FeeTransactions = ({
                     </span>
                   </td>
                   <td className="py-4 sm:py-5 text-right font-bold text-white whitespace-nowrap">
-                    ₹{(typeof p.feeTypeAmount === "number" ? p.feeTypeAmount : p.amount).toLocaleString("en-IN")}
+                    ₹{resolveDisplayAmount(p).toLocaleString("en-IN")}
                   </td>
                   <td className="py-4 sm:py-5 text-center">
                     <div className="flex gap-2 justify-center items-center flex-wrap">

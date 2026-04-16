@@ -200,57 +200,63 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ message: "classId required" }, { status: 400 });
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.classFeeStructure.deleteMany({
-        where: { classId, schoolId },
-      });
-
-      const students = await tx.student.findMany({
-        where: { classId, schoolId },
-        include: { class: { select: { section: true } }, fee: true },
-      });
-
-      const extraFees = await tx.extraFee.findMany({
-        where: { schoolId },
-        select: {
-          amount: true,
-          targetType: true,
-          targetClassId: true,
-          targetSection: true,
-          targetStudentId: true,
-        },
-      });
-
-      for (const student of students) {
-        const fee = student.fee;
-        if (!fee) continue;
-
-        let extraTotal = 0;
-        for (const ef of extraFees) {
-          const applies =
-            ef.targetType === "SCHOOL" ||
-            (ef.targetType === "CLASS" && ef.targetClassId === classId) ||
-            (ef.targetType === "SECTION" &&
-              ef.targetClassId === classId &&
-              ef.targetSection === student.class?.section) ||
-            (ef.targetType === "STUDENT" && ef.targetStudentId === student.id);
-          if (applies) extraTotal += ef.amount;
-        }
-
-        const discount = (fee.discountPercent || 0) / 100;
-        const newFinalFee = Math.round(extraTotal * (1 - discount) * 100) / 100;
-        const newRemainingFee = Math.max(0, newFinalFee - fee.amountPaid);
-
-        await tx.studentFee.update({
-          where: { studentId: student.id },
-          data: {
-            totalFee: extraTotal,
-            finalFee: newFinalFee,
-            remainingFee: newRemainingFee,
-          },
-        });
-      }
+    // Avoid long interactive transactions (can throw P2028 "Transaction not found")
+    // when many student fee rows are updated.
+    await prisma.classFeeStructure.deleteMany({
+      where: { classId, schoolId },
     });
+
+    const students = await prisma.student.findMany({
+      where: { classId, schoolId },
+      include: { class: { select: { section: true } }, fee: true },
+    });
+
+    const extraFees = await prisma.extraFee.findMany({
+      where: { schoolId },
+      select: {
+        amount: true,
+        targetType: true,
+        targetClassId: true,
+        targetSection: true,
+        targetStudentId: true,
+      },
+    });
+
+    const chunkSize = 8;
+    for (let i = 0; i < students.length; i += chunkSize) {
+      const chunk = students.slice(i, i + chunkSize);
+      await Promise.all(
+        chunk.map(async (student) => {
+          const fee = student.fee;
+          if (!fee) return;
+
+          let extraTotal = 0;
+          for (const ef of extraFees) {
+            const applies =
+              ef.targetType === "SCHOOL" ||
+              (ef.targetType === "CLASS" && ef.targetClassId === classId) ||
+              (ef.targetType === "SECTION" &&
+                ef.targetClassId === classId &&
+                ef.targetSection === student.class?.section) ||
+              (ef.targetType === "STUDENT" && ef.targetStudentId === student.id);
+            if (applies) extraTotal += ef.amount;
+          }
+
+          const discount = (fee.discountPercent || 0) / 100;
+          const newFinalFee = Math.round(extraTotal * (1 - discount) * 100) / 100;
+          const newRemainingFee = Math.max(0, newFinalFee - fee.amountPaid);
+
+          await prisma.studentFee.update({
+            where: { studentId: student.id },
+            data: {
+              totalFee: extraTotal,
+              finalFee: newFinalFee,
+              remainingFee: newRemainingFee,
+            },
+          });
+        })
+      );
+    }
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
