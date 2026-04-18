@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { getApplicationGateRow } from "@/lib/admissionsListQuery";
+import { studentApplicationDetailSelect } from "@/lib/studentApplicationSafeSelect";
 import { assertCanManageAdmissions, getSessionSchoolId } from "../_utils";
 
 function optionalString(value: unknown) {
@@ -29,6 +31,7 @@ function normalizeResidencyType(value: unknown) {
   if (normalized === "hostler" || normalized === "hosteler" || normalized === "hosteller" || normalized === "hoster") {
     return "Hosteller";
   }
+  if (normalized === "rte") return "RTE";
   return raw;
 }
 
@@ -44,10 +47,22 @@ export async function GET(_: Request, ctx: { params: Promise<{ id: string }> }) 
     const { id } = await ctx.params;
     const application = await prisma.studentApplication.findFirst({
       where: { id, schoolId },
-      include: { class: { select: { id: true, name: true, section: true } } },
+      select: {
+        ...studentApplicationDetailSelect,
+        class: { select: { id: true, name: true, section: true } },
+      },
     });
     if (!application) return NextResponse.json({ message: "Not found" }, { status: 404 });
-    return NextResponse.json({ application }, { status: 200 });
+    const gate = await getApplicationGateRow(prisma, id, schoolId);
+    return NextResponse.json(
+      {
+        application: {
+          ...application,
+          workflowStatus: gate?.workflowStatus ?? "PENDING",
+        },
+      },
+      { status: 200 }
+    );
   } catch (e: unknown) {
     const err = e as { message?: string; statusCode?: number };
     return NextResponse.json({ message: err?.message ?? "Internal server error" }, { status: err?.statusCode ?? 500 });
@@ -98,7 +113,8 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
       return NextResponse.json({ message: "applicationNo is required" }, { status: 400 });
     }
 
-    const aadharForParent = requiredString(body.aadharNo, "aadharNo").replace(/\D/g, "");
+    const aadharValue = optionalString(body.aadharNo) ?? `TMP-${id.slice(0, 8).toUpperCase()}-${Date.now()}`;
+    const aadharForParent = aadharValue.replace(/\D/g, "");
     const parentAadharDefault =
       aadharForParent.length >= 8 ? `${aadharForParent.slice(0, 8)}0000` : `${aadharForParent.padEnd(8, "0")}0000`;
 
@@ -114,18 +130,8 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
         gradeSought: body.gradeSought,
         boardingType: body.boardingType,
         residencyType: normalizeResidencyType(body.residencyType),
-        totalFee:
-          typeof body.totalFee === "number"
-            ? body.totalFee
-            : typeof body.totalFee === "string" && body.totalFee.trim()
-            ? Number(body.totalFee)
-            : null,
-        discountPercent:
-          typeof body.discountPercent === "number"
-            ? body.discountPercent
-            : typeof body.discountPercent === "string" && body.discountPercent.trim()
-            ? Number(body.discountPercent)
-            : null,
+        totalFee: null,
+        discountPercent: null,
         applicationFee:
           typeof body.applicationFee === "number"
             ? body.applicationFee
@@ -143,7 +149,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
         lastName: requiredString(body.lastName, "lastName"),
         gender: body.gender,
         dateOfBirth: dob,
-        aadharNo: requiredString(body.aadharNo, "aadharNo"),
+        aadharNo: aadharValue,
         firstLanguage: optionalString(body.firstLanguage) ?? "English",
         nationality: requiredString(body.nationality, "nationality"),
         languagesAtHome: requiredString(body.languagesAtHome, "languagesAtHome"),
@@ -159,15 +165,15 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
         parentOccupation: requiredString(body.parentOccupation, "parentOccupation"),
         officeAddress: requiredString(body.officeAddress, "officeAddress"),
         parentPhone: requiredString(body.parentPhone, "parentPhone"),
-        parentEmail: requiredString(body.parentEmail, "parentEmail"),
+        parentEmail: optionalString(body.parentEmail) ?? "-",
         parentAadharNo: optionalString(body.parentAadharNo) ?? parentAadharDefault,
         parentWhatsapp: requiredString(body.parentWhatsapp, "parentWhatsapp"),
-        bankAccountNo: requiredString(body.bankAccountNo, "bankAccountNo"),
+        bankAccountNo: optionalString(body.bankAccountNo) ?? "-",
         previousSchoolName: optionalString(body.previousSchoolName) ?? "-",
         previousSchoolAddress: optionalString(body.previousSchoolAddress) ?? "-",
-        emergencyFatherNo: requiredString(body.emergencyFatherNo, "emergencyFatherNo"),
-        emergencyMotherNo: requiredString(body.emergencyMotherNo, "emergencyMotherNo"),
-        emergencyGuardianNo: requiredString(body.emergencyGuardianNo, "emergencyGuardianNo"),
+        emergencyFatherNo: optionalString(body.emergencyFatherNo) ?? "-",
+        emergencyMotherNo: optionalString(body.emergencyMotherNo) ?? "-",
+        emergencyGuardianNo: optionalString(body.emergencyGuardianNo) ?? "-",
       },
       select: { id: true },
     });
@@ -197,8 +203,17 @@ export async function DELETE(_: Request, ctx: { params: Promise<{ id: string }> 
     if (!schoolId) return NextResponse.json({ message: "School not found in session" }, { status: 400 });
 
     const { id } = await ctx.params;
-    const exists = await prisma.studentApplication.findFirst({ where: { id, schoolId }, select: { id: true } });
+    const exists = await prisma.studentApplication.findFirst({
+      where: { id, schoolId },
+      select: { id: true, studentId: true },
+    });
     if (!exists) return NextResponse.json({ message: "Not found" }, { status: 404 });
+    if (exists.studentId) {
+      return NextResponse.json(
+        { message: "Cannot delete an application that has been converted to a student" },
+        { status: 400 }
+      );
+    }
 
     await prisma.studentApplication.delete({ where: { id } });
     return NextResponse.json({ message: "Deleted" }, { status: 200 });

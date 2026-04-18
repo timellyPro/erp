@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
+import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
+import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -107,6 +110,8 @@ export async function POST(req: Request) {
         amount: Number(c.amount) || 0,
       }));
 
+    const structMult = structureMultiplierAfterDiscount(fee.discountPercent);
+
     const classId = student.class?.id ?? null;
     const classSection = student.class?.section ?? null;
 
@@ -130,20 +135,13 @@ export async function POST(req: Request) {
       | { key: string; headType: "EXTRA_FEE"; extraFeeId: string; extraFeeName: string; snapshotDue: number };
 
     const allHeads: Head[] = [];
-    allHeads.push({
-      key: "BASE:-1",
-      headType: "BASE_COMPONENT",
-      componentIndex: -1,
-      componentName: "Tuition Fee",
-      snapshotDue: Math.max(fee.finalFee, 0),
-    });
     baseComponents.forEach((c, idx) => {
       allHeads.push({
         key: `BASE:${idx}`,
         headType: "BASE_COMPONENT",
         componentIndex: idx,
         componentName: c.name,
-        snapshotDue: c.amount,
+        snapshotDue: c.amount * structMult,
       });
     });
     for (const ef of extraFees) {
@@ -164,11 +162,19 @@ export async function POST(req: Request) {
     // Net already-paid by head via allocations (new payments only).
     const [paymentAllocations, refundAllocations] = await Promise.all([
       prisma.paymentFeeAllocation.findMany({
-        where: { studentId: student.id, allocationType: "PAYMENT", payment: { status: "SUCCESS" } },
+        where: {
+          studentId: student.id,
+          allocationType: "PAYMENT",
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+        },
         select: { headType: true, componentIndex: true, componentName: true, extraFeeId: true, allocatedAmount: true },
       }),
       prisma.paymentFeeAllocation.findMany({
-        where: { studentId: student.id, allocationType: "REFUND", payment: { status: "SUCCESS" } },
+        where: {
+          studentId: student.id,
+          allocationType: "REFUND",
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+        },
         select: { headType: true, componentIndex: true, componentName: true, extraFeeId: true, allocatedAmount: true },
       }),
     ]);
@@ -188,6 +194,11 @@ export async function POST(req: Request) {
           : `EXTRA:${a.extraFeeId}`;
       netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) - a.allocatedAmount);
     }
+
+    redistributeBaseMinusOneAllocations(
+      netPaidByHead,
+      allHeads.map((h) => ({ key: h.key, snapshotDue: h.snapshotDue }))
+    );
 
     const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);
     const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);
@@ -284,9 +295,8 @@ export async function POST(req: Request) {
       .map(([key, allocatedAmount]) => {
         if (key.startsWith("BASE:")) {
           const componentIndex = Number(key.slice("BASE:".length));
-          const componentName = componentIndex === -1 
-            ? "Tuition Fee" 
-            : baseComponents[componentIndex]?.name ?? `Component-${componentIndex + 1}`;
+          const componentName =
+            baseComponents[componentIndex]?.name ?? `Component-${componentIndex + 1}`;
           return {
             paymentId: "__PAYMENT_ID__",
             studentId: student.id,

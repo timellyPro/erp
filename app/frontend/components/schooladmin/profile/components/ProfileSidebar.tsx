@@ -51,7 +51,12 @@ export const ProfileSidebar = ({
       <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-6 sm:mb-8">
         <div className="bg-white/5 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl border border-white/5 min-w-0 px-1">
           <p className="text-[9px] sm:text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Class</p>
-          <p className="text-xs sm:text-sm font-bold text-white truncate">{student.className}</p>
+          <p
+            className="text-xs sm:text-sm font-bold text-white break-words whitespace-normal leading-snug"
+            title={student.className}
+          >
+            {student.className}
+          </p>
         </div>
         <div className="bg-white/5 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl border border-white/5 min-w-0 px-1">
           <p className="text-[9px] sm:text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Roll No</p>

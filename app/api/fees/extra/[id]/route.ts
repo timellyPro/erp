@@ -94,14 +94,15 @@ export async function PATCH(
             where: { studentId: s.id },
           });
           if (fee) {
-            const discount = (fee.discountPercent || 0) / 100;
-            const finalDelta = Math.round(delta * (1 - discount) * 100) / 100;
+            const newTotalFee = fee.totalFee + delta;
+            const newFinalFee = fee.finalFee + delta;
+            const newRemainingFee = Math.max(0, newFinalFee - fee.amountPaid);
             await tx.studentFee.update({
               where: { studentId: s.id },
               data: {
-                totalFee: fee.totalFee + delta,
-                finalFee: fee.finalFee + finalDelta,
-                remainingFee: Math.max(0, fee.remainingFee + finalDelta),
+                totalFee: newTotalFee,
+                finalFee: newFinalFee,
+                remainingFee: newRemainingFee,
               },
             });
           }
@@ -173,16 +174,15 @@ export async function DELETE(
             where: { studentId: s.id },
           });
           if (fee) {
-            const discount = (fee.discountPercent || 0) / 100;
-            const finalDelta = Math.round(
-              -extraFee.amount * (1 - discount) * 100
-            ) / 100;
+            const newTotalFee = fee.totalFee - extraFee.amount;
+            const newFinalFee = fee.finalFee - extraFee.amount;
+            const newRemainingFee = Math.max(0, newFinalFee - fee.amountPaid);
             await tx.studentFee.update({
               where: { studentId: s.id },
               data: {
-                totalFee: fee.totalFee - extraFee.amount,
-                finalFee: fee.finalFee + finalDelta,
-                remainingFee: Math.max(0, fee.remainingFee + finalDelta),
+                totalFee: newTotalFee,
+                finalFee: newFinalFee,
+                remainingFee: newRemainingFee,
               },
             });
           }

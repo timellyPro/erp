@@ -3,6 +3,8 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 
+export const dynamic = "force-dynamic";
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export async function GET(req: Request) {
@@ -205,10 +207,244 @@ export async function GET(req: Request) {
       orderBy: { name: "asc" },
     });
 
+    // Fee collection: class + section (each Class row is one section).
+    // Seed from Class rows, then add any classId seen on students (covers stale FKs / partial data).
+    const feeAgg = new Map<
+      string,
+      {
+        label: string;
+        withFee: number;
+        sumTotalFee: number;
+        sumDiscountPercent: number;
+        sumFinalFee: number;
+        sumPaid: number;
+        sumPending: number;
+      }
+    >();
+
+    const emptyAggRow = (label: string) => ({
+      label,
+      withFee: 0,
+      sumTotalFee: 0,
+      sumDiscountPercent: 0,
+      sumFinalFee: 0,
+      sumPaid: 0,
+      sumPending: 0,
+    });
+
+    const classesForFeeTable = classId
+      ? classes.filter((c) => c.id === classId)
+      : classes;
+
+    for (const c of classesForFeeTable) {
+      feeAgg.set(c.id, emptyAggRow(`${c.name}${c.section ? `-${c.section}` : ""}`));
+    }
+
+    const studentsForClassDiscovery = await prisma.student.findMany({
+      where: {
+        schoolId,
+        classId: { not: null },
+        ...(classId ? { classId } : {}),
+      },
+      select: {
+        classId: true,
+        class: { select: { id: true, name: true, section: true } },
+      },
+    });
+
+    const seenClassIds = new Set<string>(feeAgg.keys());
+    for (const row of studentsForClassDiscovery) {
+      if (!row.classId || seenClassIds.has(row.classId)) continue;
+      seenClassIds.add(row.classId);
+      const c = row.class;
+      const label = c ? `${c.name}${c.section ? `-${c.section}` : ""}` : "Unknown class";
+      feeAgg.set(row.classId, emptyAggRow(label));
+    }
+
+    const studentsWithFee = await prisma.student.findMany({
+      where: {
+        schoolId,
+        classId: { not: null },
+        ...(classId ? { classId } : {}),
+      },
+      select: {
+        classId: true,
+        fee: {
+          select: {
+            totalFee: true,
+            discountPercent: true,
+            finalFee: true,
+            amountPaid: true,
+            remainingFee: true,
+          },
+        },
+      },
+    });
+
+    for (const s of studentsWithFee) {
+      if (!s.classId || !s.fee) continue;
+      const row = feeAgg.get(s.classId);
+      if (!row) continue;
+      const f = s.fee;
+      row.withFee += 1;
+      row.sumTotalFee += f.totalFee ?? 0;
+      row.sumDiscountPercent += f.discountPercent ?? 0;
+      row.sumFinalFee += f.finalFee ?? 0;
+      row.sumPaid += f.amountPaid ?? 0;
+      row.sumPending += f.remainingFee ?? 0;
+    }
+
+    const feeCollectionByClass = Array.from(feeAgg.entries())
+      .map(([id, r]) => {
+        const totalFees = Math.round(r.sumTotalFee * 100) / 100;
+        const finalFees = Math.round(r.sumFinalFee * 100) / 100;
+        const paidFee = Math.round(r.sumPaid * 100) / 100;
+        const pendingFee = Math.round(r.sumPending * 100) / 100;
+        const avgDiscountPercent =
+          r.withFee > 0 ? Math.round((r.sumDiscountPercent / r.withFee) * 10) / 10 : 0;
+        const collectionPercent =
+          finalFees > 0.01 ? Math.min(100, Math.round((paidFee / finalFees) * 1000) / 10) : 0;
+        const duePercent =
+          finalFees > 0.01 ? Math.min(100, Math.round((pendingFee / finalFees) * 1000) / 10) : 0;
+
+        return {
+          classId: id,
+          label: r.label,
+          totalFees,
+          avgDiscountPercent,
+          finalFees,
+          paidFee,
+          pendingFee,
+          collectionPercent,
+          duePercent,
+        };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+
+    let sumTotalFeesAll = 0;
+    let sumFinalFeesAll = 0;
+    let sumPaidAll = 0;
+    let sumPendingAll = 0;
+    let studentsWithFeeAll = 0;
+    let sumDiscountPercentAll = 0;
+    for (const [, r] of feeAgg) {
+      sumTotalFeesAll += r.sumTotalFee;
+      sumFinalFeesAll += r.sumFinalFee;
+      sumPaidAll += r.sumPaid;
+      sumPendingAll += r.sumPending;
+      studentsWithFeeAll += r.withFee;
+      sumDiscountPercentAll += r.sumDiscountPercent;
+    }
+
+    const feeCollectionTotals = {
+      label: classId ? "Selected class total" : "School total",
+      totalFees: Math.round(sumTotalFeesAll * 100) / 100,
+      avgDiscountPercent:
+        studentsWithFeeAll > 0
+          ? Math.round((sumDiscountPercentAll / studentsWithFeeAll) * 10) / 10
+          : 0,
+      finalFees: Math.round(sumFinalFeesAll * 100) / 100,
+      paidFee: Math.round(sumPaidAll * 100) / 100,
+      pendingFee: Math.round(sumPendingAll * 100) / 100,
+      collectionPercent:
+        sumFinalFeesAll > 0.01
+          ? Math.min(100, Math.round((sumPaidAll / sumFinalFeesAll) * 1000) / 10)
+          : 0,
+      duePercent:
+        sumFinalFeesAll > 0.01
+          ? Math.min(100, Math.round((sumPendingAll / sumFinalFeesAll) * 1000) / 10)
+          : 0,
+    };
+
+    const genderBucket = (g: string | null | undefined): "male" | "female" | "other" => {
+      const x = (g ?? "").trim().toLowerCase();
+      if (["male", "m", "boy", "boys"].includes(x)) return "male";
+      if (["female", "f", "girl", "girls"].includes(x)) return "female";
+      return "other";
+    };
+
+    type EnrollAgg = {
+      className: string;
+      section: string;
+      male: number;
+      female: number;
+      total: number;
+    };
+    const enrollAgg = new Map<string, EnrollAgg>();
+    const emptyEnroll = (name: string, section: string): EnrollAgg => ({
+      className: name,
+      section: section ?? "",
+      male: 0,
+      female: 0,
+      total: 0,
+    });
+
+    for (const c of classesForFeeTable) {
+      enrollAgg.set(c.id, emptyEnroll(c.name, c.section ?? ""));
+    }
+
+    const studentsForGender = await prisma.student.findMany({
+      where: {
+        schoolId,
+        classId: { not: null },
+        ...(classId ? { classId } : {}),
+      },
+      select: {
+        classId: true,
+        gender: true,
+        class: { select: { id: true, name: true, section: true } },
+      },
+    });
+
+    for (const s of studentsForGender) {
+      if (!s.classId) continue;
+      if (!enrollAgg.has(s.classId)) {
+        const c = s.class;
+        enrollAgg.set(
+          s.classId,
+          emptyEnroll(c?.name ?? "Unknown", c?.section ?? "")
+        );
+      }
+      const row = enrollAgg.get(s.classId)!;
+      row.total += 1;
+      const b = genderBucket(s.gender);
+      if (b === "male") row.male += 1;
+      else if (b === "female") row.female += 1;
+    }
+
+    const enrollmentByClassSection = Array.from(enrollAgg.entries())
+      .map(([id, r]) => ({
+        classId: id,
+        className: r.className,
+        section: r.section || null,
+        male: r.male,
+        female: r.female,
+        total: r.total,
+      }))
+      .sort((a, b) => {
+        const cn = a.className.localeCompare(b.className, undefined, { numeric: true });
+        if (cn !== 0) return cn;
+        return (a.section || "").localeCompare(b.section || "", undefined, { numeric: true });
+      });
+
+    const enrollmentByClassSectionTotals = enrollmentByClassSection.reduce(
+      (acc, r) => {
+        acc.male += r.male;
+        acc.female += r.female;
+        acc.total += r.total;
+        return acc;
+      },
+      { male: 0, female: 0, total: 0 }
+    );
+
     return NextResponse.json({
       availableYears,
       classes,
       selectedYear: startYear,
+      enrollmentByClassSection,
+      enrollmentByClassSectionTotals,
+      feeCollectionByClass,
+      feeCollectionTotals,
       stats: {
         feesCollected,
         totalEnrollment,

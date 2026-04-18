@@ -18,29 +18,29 @@ export default function FeeStructureConfig({
   onSuccess,
 }: FeeStructureConfigProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingOriginalClassId, setEditingOriginalClassId] = useState<string | null>(null);
   const [structureClassId, setStructureClassId] = useState("");
   const [components, setComponents] = useState<Array<{ name: string; amount: number }>>([]);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const startEdit = (s: FeeStructure) => {
     setEditingId(s.id);
+    setEditingOriginalClassId(s.classId);
     setStructureClassId(s.classId);
     setComponents((s.components as Array<{ name: string; amount: number }>) || []);
   };
 
   const startNew = () => {
     setEditingId("new");
+    setEditingOriginalClassId(null);
     setStructureClassId(classes[0]?.id || "");
-    setComponents([
-      { name: "Tuition Fee", amount: 35000 },
-      { name: "Transport Fee", amount: 10000 },
-      { name: "Lab Charges", amount: 2500 },
-      { name: "Activity Fee", amount: 2500 },
-    ]);
+    // Only user-defined components count — no preset rows (avoids duplicate "Tuition" naming).
+    setComponents([{ name: "", amount: 0 }]);
   };
 
   const handleSave = async () => {
-    if (!structureClassId || components.length === 0) return;
+    if (!structureClassId) return;
     if (saving) return;
     const normalizedComponents = components
       .map((c) => ({
@@ -50,6 +50,35 @@ export default function FeeStructureConfig({
       .filter((c) => c.name.length > 0 && Number.isFinite(c.amount));
 
     if (normalizedComponents.length === 0) {
+      if (editingId !== "new") {
+        const deleteClassId = editingOriginalClassId || structureClassId;
+        const shouldDelete = confirm(
+          "No components left. Do you want to delete this entire class fee structure?"
+        );
+        if (!shouldDelete) return;
+        try {
+          setSaving(true);
+          const res = await fetch(
+            `/api/fees/structure?classId=${encodeURIComponent(deleteClassId)}`,
+            { method: "DELETE" }
+          );
+          if (!res.ok) {
+            const d = await res.json();
+            alert(d.message || "Failed to delete structure");
+            return;
+          }
+          setEditingId(null);
+          setEditingOriginalClassId(null);
+          setStructureClassId("");
+          setComponents([]);
+          onSuccess();
+        } catch (e) {
+          console.error(e);
+        } finally {
+          setSaving(false);
+        }
+        return;
+      }
       alert("Please enter valid fee components (name + numeric amount).");
       return;
     }
@@ -66,6 +95,9 @@ export default function FeeStructureConfig({
         return;
       }
       setEditingId(null);
+      setEditingOriginalClassId(null);
+      setStructureClassId("");
+      setComponents([]);
       onSuccess();
     } catch (e) {
       console.error(e);
@@ -78,8 +110,10 @@ export default function FeeStructureConfig({
     <section className="rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur sm:p-6">
       <h3 className="text-lg font-semibold mb-4">Global Fee Breakdown Configuration</h3>
       <p className="text-sm text-gray-400 mb-4">
-        Manage base fee structures for different classes. Changes apply to all students in the
-        selected class.
+        Set the fee heads and amounts for each class. Student totals use{" "}
+        <span className="text-gray-300">only the sum of these components</span>, plus any{" "}
+        <span className="text-gray-300">extra fees</span> you configure below. Nothing is added on top
+        automatically. Saving updates all students already in that class.
       </p>
       <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {structures.map((s) => (
@@ -120,6 +154,7 @@ export default function FeeStructureConfig({
             label="Class"
             value={structureClassId}
             onChange={setStructureClassId}
+            disabled={editingId !== "new"}
             options={classes.map((c) => ({
               label: `${c.name}${c.section ? `-${c.section}` : ""}`,
               value: c.id,
@@ -176,7 +211,12 @@ export default function FeeStructureConfig({
             />
             <button
               type="button"
-              onClick={() => setEditingId(null)}
+              onClick={() => {
+                setEditingId(null);
+                setEditingOriginalClassId(null);
+                setStructureClassId("");
+                setComponents([]);
+              }}
               className="px-4 py-2 rounded-xl border border-white/20"
             >
               Cancel
@@ -185,9 +225,11 @@ export default function FeeStructureConfig({
               <button
                 type="button"
                 onClick={async () => {
-                  if (!structureClassId || !confirm("Do you really want to delete this entire class fee structure? Student amounts will be recalculated. This action cannot be undone.")) return;
+                  const deleteClassId = editingOriginalClassId || structureClassId;
+                  if (!deleteClassId || !confirm("Do you really want to delete this entire class fee structure? Student amounts will be recalculated. This action cannot be undone.")) return;
                   try {
-                    const res = await fetch(`/api/fees/structure?classId=${encodeURIComponent(structureClassId)}`, {
+                    setDeleting(true);
+                    const res = await fetch(`/api/fees/structure?classId=${encodeURIComponent(deleteClassId)}`, {
                       method: "DELETE",
                     });
                     if (!res.ok) {
@@ -196,14 +238,20 @@ export default function FeeStructureConfig({
                       return;
                     }
                     setEditingId(null);
+                    setEditingOriginalClassId(null);
+                    setStructureClassId("");
+                    setComponents([]);
                     onSuccess();
                   } catch (e) {
                     console.error(e);
+                  } finally {
+                    setDeleting(false);
                   }
                 }}
-                className="px-4 py-2 rounded-xl border border-red-500/50 text-red-400 hover:bg-red-500/10"
+                disabled={saving || deleting}
+                className="px-4 py-2 rounded-xl border border-red-500/50 text-red-400 hover:bg-red-500/10 disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                Delete Structure
+                {deleting ? "Deleting..." : "Delete Structure"}
               </button>
             )}
           </div>

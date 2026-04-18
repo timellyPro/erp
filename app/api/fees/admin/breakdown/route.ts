@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
+import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
+import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -43,6 +46,20 @@ type HeadDueResponse =
       label: string;
       snapshotAmount: number;
       dueBefore: number;
+      extraFeeId: string;
+      /** Only student-assigned extras can be removed from this profile without affecting others. */
+      canDeleteOnStudentProfile: boolean;
+    };
+
+type InternalHead =
+  | { key: string; headType: "BASE_COMPONENT"; label: string; snapshotDue: number }
+  | {
+      key: string;
+      headType: "EXTRA_FEE";
+      label: string;
+      snapshotDue: number;
+      extraFeeId: string;
+      canDeleteOnStudentProfile: boolean;
     };
 
 export async function GET(req: Request) {
@@ -71,6 +88,8 @@ export async function GET(req: Request) {
           select: {
             amountPaid: true,
             finalFee: true,
+            totalFee: true,
+            discountPercent: true,
           },
         },
         class: {
@@ -99,6 +118,8 @@ export async function GET(req: Request) {
         amount: Number(c.amount) || 0,
       }));
 
+    const structMult = structureMultiplierAfterDiscount(fee.discountPercent);
+
     const classId = student.class?.id ?? null;
     const classSection = student.class?.section ?? null;
 
@@ -114,40 +135,49 @@ export async function GET(req: Request) {
           { targetType: "STUDENT", targetStudentId: student.id },
         ],
       },
-      select: { id: true, name: true, amount: true },
+      select: { id: true, name: true, amount: true, targetType: true, targetStudentId: true },
     });
 
-    const allHeads = [
-      {
-        key: `BASE:-1`,
-        headType: "BASE_COMPONENT" as const,
-        label: "Tuition Fee",
-        snapshotDue: Math.max(fee.finalFee, 0),
-      },
-      ...baseComps.map((c, idx) => ({
-        key: `BASE:${idx}`,
-        headType: "BASE_COMPONENT" as const,
-        label: c.name,
-        snapshotDue: c.amount,
-      })),
-      ...extraFees.map((ef) => ({
-        key: `EXTRA:${ef.id}`,
-        headType: "EXTRA_FEE" as const,
-        label: ef.name,
-        snapshotDue: Number(ef.amount) || 0,
-      })),
+    const allHeads: InternalHead[] = [
+      ...baseComps.map(
+        (c, idx): InternalHead => ({
+          key: `BASE:${idx}`,
+          headType: "BASE_COMPONENT",
+          label: c.name,
+          snapshotDue: c.amount * structMult,
+        })
+      ),
+      ...extraFees.map(
+        (ef): InternalHead => ({
+          key: `EXTRA:${ef.id}`,
+          headType: "EXTRA_FEE",
+          label: ef.name,
+          snapshotDue: Number(ef.amount) || 0,
+          extraFeeId: ef.id,
+          canDeleteOnStudentProfile:
+            ef.targetType === "STUDENT" && ef.targetStudentId === student.id,
+        })
+      ),
     ];
 
     // Net already-paid by head via allocations (new payments only).
     const [paymentAllocations, refundAllocations] = await Promise.all([
       prisma.paymentFeeAllocation.groupBy({
         by: ["headType", "componentIndex", "extraFeeId"],
-        where: { studentId: student.id, allocationType: "PAYMENT", payment: { status: "SUCCESS" } },
+        where: {
+          studentId: student.id,
+          allocationType: "PAYMENT",
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+        },
         _sum: { allocatedAmount: true },
       }),
       prisma.paymentFeeAllocation.groupBy({
         by: ["headType", "componentIndex", "extraFeeId"],
-        where: { studentId: student.id, allocationType: "REFUND", payment: { status: "SUCCESS" } },
+        where: {
+          studentId: student.id,
+          allocationType: "REFUND",
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+        },
         _sum: { allocatedAmount: true },
       }),
     ]);
@@ -161,6 +191,8 @@ export async function GET(req: Request) {
       const key = a.headType === "BASE_COMPONENT" ? `BASE:${a.componentIndex}` : `EXTRA:${a.extraFeeId}`;
       netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) - (a._sum.allocatedAmount ?? 0));
     }
+
+    redistributeBaseMinusOneAllocations(netPaidByHead, allHeads);
 
     const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);
     const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);
@@ -187,6 +219,8 @@ export async function GET(req: Request) {
         label: h.label,
         snapshotAmount: h.snapshotDue,
         dueBefore,
+        extraFeeId: h.extraFeeId,
+        canDeleteOnStudentProfile: h.canDeleteOnStudentProfile,
       };
     });
 

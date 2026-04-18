@@ -313,7 +313,7 @@ export const OfflinePayments = ({ studentId, studentName, remainingFee, onPaymen
                             <textarea
                                 value={formData.description}
                                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                                placeholder="e.g., Fee payment for monthly installment"
+                                placeholder="e.g., Lab fee payment"
                                 rows={2}
                                 className="w-full bg-black/20 border border-white/10 rounded-xl px-4 py-2.5 text-gray-200 text-sm outline-none focus:ring-1 focus:ring-blue-400/50"
                             />

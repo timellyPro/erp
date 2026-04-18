@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -175,7 +177,7 @@ export async function GET() {
         where: {
           studentId: { in: studentIds },
           allocationType: "PAYMENT",
-          payment: { status: "SUCCESS" },
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
         },
         select: {
           studentId: true,
@@ -190,7 +192,7 @@ export async function GET() {
         where: {
           studentId: { in: studentIds },
           allocationType: "REFUND",
-          payment: { status: "SUCCESS" },
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
         },
         select: {
           studentId: true,
@@ -239,7 +241,7 @@ export async function GET() {
       const selectedHead = selectedHeadByStudentId.get(studentId) ?? null;
       const targetHeadKey = selectedHead?.headKey ?? null;
 
-      const discountRatio = fee.totalFee > 0 ? fee.finalFee / fee.totalFee : 0;
+      const structMult = structureMultiplierAfterDiscount(fee.discountPercent);
       const totalSnapshotDue = Math.max(fee.finalFee, 0);
       const allocationsNetTotal = allocationsNetTotalByStudent.get(studentId) ?? 0;
       const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);
@@ -260,7 +262,7 @@ export async function GET() {
 
       for (let i = 0; i < baseComponents.length; i++) {
         const headKey = `BASE:${i}`;
-        const snapshotDue = baseComponents[i].amount * discountRatio;
+        const snapshotDue = baseComponents[i].amount * structMult;
         const paidAlloc = netPaidByStudentHead.get(`${studentId}|${headKey}`) ?? 0;
         const paidLegacy = totalSnapshotDue > 0 ? legacyPaidTotal * (snapshotDue / totalSnapshotDue) : 0;
         const paidBefore = Math.max(paidAlloc + paidLegacy, 0);
@@ -278,7 +280,7 @@ export async function GET() {
 
       for (const ef of applicableExtraFees) {
         const headKey = `EXTRA:${ef.id}`;
-        const snapshotDue = Number(ef.amount) * discountRatio;
+        const snapshotDue = Number(ef.amount) || 0;
         const paidAlloc = netPaidByStudentHead.get(`${studentId}|${headKey}`) ?? 0;
         const paidLegacy = totalSnapshotDue > 0 ? legacyPaidTotal * (snapshotDue / totalSnapshotDue) : 0;
         const paidBefore = Math.max(paidAlloc + paidLegacy, 0);

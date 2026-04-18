@@ -8,6 +8,8 @@ import { Role } from "@prisma/client";
 import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
 import { randomUUID } from "crypto";
 import { assertCanManageAdmissions, getSessionSchoolId } from "../_utils";
+import { setApplicationEnrolled } from "@/lib/admissionsListQuery";
+import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
 
 function toStr(value: unknown) {
   if (value === null || value === undefined) return "";
@@ -94,14 +96,10 @@ export async function POST(req: Request) {
     });
     const [school, settings] = await Promise.all([
       prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } }),
-      prisma.schoolSettings.findUnique({ where: { schoolId }, select: { emailDomain: true, defaultInstallments: true } as any }),
+      prisma.schoolSettings.findUnique({ where: { schoolId }, select: { emailDomain: true } }),
     ]);
     const schoolDomain =
       normalizeEmailDomain(settings?.emailDomain) ?? schoolDomainFromName(school?.name ?? "school");
-    const schoolDefaultInstallments =
-      Number.isInteger((settings as any)?.defaultInstallments) && (settings as any).defaultInstallments > 0
-        ? (settings as any).defaultInstallments
-        : 3;
     const year = new Date().getFullYear();
 
     const createdApplications: any[] = [];
@@ -127,18 +125,6 @@ export async function POST(req: Request) {
         );
         const className = toStr(row.class ?? row.className ?? row.Class);
         const section = toStr(row.section ?? row.Section);
-        const totalFee =
-          row.totalFee === "" || row.totalFee == null
-            ? row["Total Fee"] === "" || row["Total Fee"] == null
-              ? null
-              : Number(row["Total Fee"])
-            : Number(row.totalFee);
-        const discountPercent =
-          row.discountPercent === "" || row.discountPercent == null
-            ? row["Discount %"] === "" || row["Discount %"] == null
-              ? null
-              : Number(row["Discount %"])
-            : Number(row.discountPercent);
         const applicationFee =
           row.applicationFee === "" || row.applicationFee == null || row["Application Fee"] === ""
             ? null
@@ -165,11 +151,6 @@ export async function POST(req: Request) {
         if (!fatherName || fatherName.length < 2) throw new Error("Parent name is required (min 2 characters)");
         if (!phoneNo || !/^\d{10}$/.test(phoneNo)) throw new Error("Contact number must be exactly 10 digits");
         if (!aadhaarNo || !/^\d{12}$/.test(aadhaarNo)) throw new Error("Aadhaar number must be exactly 12 digits");
-        if (totalFee != null && (!Number.isFinite(totalFee) || totalFee <= 0)) throw new Error("totalFee must be a positive number");
-        if (discountPercent != null && (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100)) {
-          throw new Error("discountPercent must be between 0 and 100");
-        }
-
         let classId: string | null = null;
         if (className) {
           const normalizedClass = className.toLowerCase().replace(/\s+/g, "");
@@ -203,8 +184,8 @@ export async function POST(req: Request) {
           classId,
           className: className || null,
           section: section || null,
-          totalFee,
-          discountPercent,
+          totalFee: null,
+          discountPercent: null,
           applicationFee:
             applicationFee != null && Number.isFinite(applicationFee) ? applicationFee : null,
           admissionFee: admissionFee != null && Number.isFinite(admissionFee) ? admissionFee : null,
@@ -230,8 +211,8 @@ export async function POST(req: Request) {
                 applicationNo,
                 gradeSought: "GRADE_1",
                 boardingType: "SEMI_RESIDENTIAL",
-                totalFee,
-                discountPercent,
+                totalFee: null,
+                discountPercent: null,
                 applicationFee:
                   applicationFee != null && Number.isFinite(applicationFee) ? applicationFee : null,
                 admissionFee:
@@ -282,7 +263,7 @@ export async function POST(req: Request) {
           let settings = await tx.schoolSettings.findUnique({ where: { schoolId } });
           if (!settings) {
             settings = await tx.schoolSettings.create({
-              data: { schoolId, admissionPrefix: "ADM", rollNoPrefix: "", admissionCounter: 0, defaultInstallments: schoolDefaultInstallments } as any,
+              data: { schoolId, admissionPrefix: "ADM", rollNoPrefix: "", admissionCounter: 0 },
             });
           }
 
@@ -293,7 +274,7 @@ export async function POST(req: Request) {
           if (timellyId) {
             const current = await tx.schoolSettings.findUnique({
               where: { schoolId },
-              select: { admissionPrefix: true, rollNoPrefix: true, admissionCounter: true, defaultInstallments: true } as any,
+              select: { admissionPrefix: true, rollNoPrefix: true, admissionCounter: true },
             });
             if (!current) {
               throw new Error("School settings not found while generating admission number.");
@@ -311,7 +292,7 @@ export async function POST(req: Request) {
             const candidate = await tx.schoolSettings.update({
               where: { schoolId },
               data: { admissionCounter: { increment: 1 } },
-              select: { admissionPrefix: true, rollNoPrefix: true, admissionCounter: true, defaultInstallments: true } as any,
+              select: { admissionPrefix: true, rollNoPrefix: true, admissionCounter: true },
             });
             nextNum = candidate.admissionCounter;
             updated = candidate;
@@ -343,11 +324,6 @@ export async function POST(req: Request) {
               }
             }
           }
-          const defaultInstallments =
-            Number.isInteger((updated as any).defaultInstallments) && (updated as any).defaultInstallments > 0
-              ? (updated as any).defaultInstallments
-              : schoolDefaultInstallments;
-
           const local = emailLocalPartFromFullName(name);
           let userEmail = email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : `${local}@${schoolDomain}`;
           let counter = 1;
@@ -378,23 +354,25 @@ export async function POST(req: Request) {
             },
           });
 
-          if (totalFee != null) {
-            const disc = discountPercent ?? 0;
-            const finalFee = totalFee * (1 - disc / 100);
-            await tx.studentFee.create({
-              data: {
-                studentId: studentRecord.id,
-                totalFee,
-                discountPercent: disc,
-                finalFee,
-                amountPaid: 0,
-                remainingFee: finalFee,
-                installments: defaultInstallments,
-              },
-            });
-          }
+          const classSection =
+            classId != null
+              ? (
+                  await tx.class.findUnique({
+                    where: { id: classId },
+                    select: { section: true },
+                  })
+                )?.section ?? null
+              : null;
+          await upsertStudentFeeFromStructure(tx, {
+            schoolId,
+            studentId: studentRecord.id,
+            classId,
+            section: classSection,
+            discountPercent: 0,
+            amountPaid: 0,
+          });
 
-          await tx.studentApplication.update({ where: { id: app.id }, data: { studentId: studentRecord.id } });
+          await setApplicationEnrolled(tx, app.id, studentRecord.id, schoolId);
           return studentRecord;
         }, { maxWait: 10000, timeout: 120000 });
 

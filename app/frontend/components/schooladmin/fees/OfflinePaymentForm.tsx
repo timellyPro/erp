@@ -412,12 +412,13 @@ export default function OfflinePaymentForm({
             ))}
           </div>
           <div>
-            <label className="block text-xs text-white/70 mb-1">Ref / Cheque No.</label>
+            <label className="block text-xs text-white/70 mb-1">Reference No. / UTR No.</label>
             <input
               type="text"
               value={refNo}
               onChange={(e) => setRefNo(e.target.value)}
               className="w-full rounded-xl bg-black/20 border border-white/10 px-4 py-2.5 text-white"
+              placeholder="Enter reference / UTR / cheque number"
             />
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">

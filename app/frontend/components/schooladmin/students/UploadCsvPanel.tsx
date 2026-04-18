@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { motion } from "framer-motion";
 import { CheckCircle2, FileSpreadsheet, Loader2, Upload, X, XCircle } from "lucide-react";
+import { downloadBulkStudentTemplateXlsx } from "@/lib/bulkStudentTemplateXlsx";
 
 type Props = {
   uploadFile: File | null;
@@ -23,6 +24,10 @@ export default function UploadCsvPanel({
   onCancel,
   onUpload,
 }: Props) {
+  const downloadTemplate = useCallback(() => {
+    downloadBulkStudentTemplateXlsx();
+  }, []);
+
   const formatUploadError = (message?: string) => {
     const text = (message || "").trim();
     const normalized = text.toLowerCase();
@@ -66,7 +71,7 @@ export default function UploadCsvPanel({
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] animate-fadeIn p-4">
       <div className="bg-[#0F172A] rounded-2xl shadow-2xl max-w-lg w-full animate-scaleIn border border-white/10">
         <div className="flex items-center justify-between px-6 py-5 border-b border-white/10">
-          <div className="text-lg md:text-xl font-bold text-gray-100">Upload CSV File</div>
+          <div className="text-lg md:text-xl font-bold text-gray-100">Bulk upload students</div>
           <button type="button" onClick={onCancel} className="text-white/60 hover:text-white">
             <X size={18} />
           </button>
@@ -100,18 +105,25 @@ export default function UploadCsvPanel({
                 <Upload className="w-9 h-9" />
                 <div className="text-center">
                   <p className="font-semibold text-white">Click to upload or drag and drop</p>
-                  <p className="text-xs mt-1">CSV file (max. 10MB)</p>
+                  <p className="text-xs mt-1">CSV or Excel (max. 10MB)</p>
                 </div>
               </div>
             )}
           </label>
 
-          <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+          <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 space-y-2">
             <p className="text-xs text-blue-300">
-              <strong className="text-[#8fd3ff]">Note:</strong> CSV should include: Student ID,
-              Name, Class, Section, Date of Birth, Parent Name, Parent Email, Parent Phone,
-              Address, Status.
+              <strong className="text-[#8fd3ff]">Note:</strong> Same layout as admission bulk export: required fields include First Name, Last Name, Parent Name, Parent Phone, Aadhar No, and Date of Birth. Optional leading column{" "}
+              <strong className="text-white/90">Timelly ID</strong> (roll number, or e.g.{" "}
+              <code className="text-lime-300/90">ADM/2026/123</code> → <code className="text-lime-300/90">123</code>).
             </p>
+            <button
+              type="button"
+              onClick={downloadTemplate}
+              className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-white hover:bg-white/10"
+            >
+              Download Excel template
+            </button>
           </div>
 
           {result && (

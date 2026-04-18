@@ -29,7 +29,6 @@ export interface FeeRecord {
   feeTypes?: string;
   feeTypeDueAmount?: number;
   discountPercent: number;
-  installments: number;
   student: {
     id: string;
     user: { name: string | null; email: string | null };

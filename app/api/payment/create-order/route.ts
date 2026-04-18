@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
+import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
 import type { Prisma } from "@prisma/client";
 
 const hyperpgBaseUrl = process.env.HYPERPG_BASE_URL || "https://sandbox.hyperpg.in";
@@ -96,7 +98,13 @@ export async function POST(req: Request) {
     if (!eventRegistrationId) {
       const fee = await prisma.studentFee.findUnique({
         where: { studentId: session.user.studentId },
-        select: { amountPaid: true, finalFee: true, totalFee: true, remainingFee: true },
+        select: {
+          amountPaid: true,
+          finalFee: true,
+          totalFee: true,
+          remainingFee: true,
+          discountPercent: true,
+        },
       });
 
       if (!fee) {
@@ -129,7 +137,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Please select at least one fee type before paying." }, { status: 400 });
       }
 
-      const discountRatio = fee.totalFee > 0 ? fee.finalFee / fee.totalFee : 0;
+      const structMult = structureMultiplierAfterDiscount(fee.discountPercent);
 
       const classId = student.classId ?? null;
       const classSection = student.class?.section ?? null;
@@ -181,25 +189,33 @@ export async function POST(req: Request) {
         ...baseComponents.map((c, idx): Head => ({
           key: `BASE:${idx}`,
           headType: "BASE_COMPONENT",
-          snapshotDue: c.amount * discountRatio,
+          snapshotDue: c.amount * structMult,
           componentIndex: idx,
           componentName: c.name,
         })),
         ...extraFees.map((ef): Head => ({
           key: `EXTRA:${ef.id}`,
           headType: "EXTRA_FEE",
-          snapshotDue: Number(ef.amount) * discountRatio,
+          snapshotDue: Number(ef.amount) || 0,
           extraFeeId: ef.id,
         })),
       ];
 
       const [paymentAllocations, refundAllocations] = await Promise.all([
         prisma.paymentFeeAllocation.findMany({
-          where: { studentId: student.id, allocationType: "PAYMENT", payment: { status: "SUCCESS" } },
+          where: {
+            studentId: student.id,
+            allocationType: "PAYMENT",
+            payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+          },
           select: { headType: true, componentIndex: true, extraFeeId: true, allocatedAmount: true },
         }),
         prisma.paymentFeeAllocation.findMany({
-          where: { studentId: student.id, allocationType: "REFUND", payment: { status: "SUCCESS" } },
+          where: {
+            studentId: student.id,
+            allocationType: "REFUND",
+            payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+          },
           select: { headType: true, componentIndex: true, extraFeeId: true, allocatedAmount: true },
         }),
       ]);

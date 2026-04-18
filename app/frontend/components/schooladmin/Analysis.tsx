@@ -19,17 +19,91 @@ import {
   Star,
   Award,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CalendarCheck,
   TrendingUp,
   BookOpen,
 } from "lucide-react";
 
+const TABLE_PAGE_SIZE = 5;
+
+function TablePagination({
+  page,
+  totalPages,
+  totalRows,
+  onPageChange,
+}: {
+  page: number;
+  totalPages: number;
+  totalRows: number;
+  onPageChange: (p: number) => void;
+}) {
+  if (totalRows <= TABLE_PAGE_SIZE) return null;
+
+  const from = (page - 1) * TABLE_PAGE_SIZE + 1;
+  const to = Math.min(page * TABLE_PAGE_SIZE, totalRows);
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3 text-xs text-white/70">
+      <button
+        type="button"
+        disabled={page <= 1}
+        onClick={() => onPageChange(page - 1)}
+        className="inline-flex items-center gap-1 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1.5 font-medium text-white/90 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        <ChevronLeft className="h-3.5 w-3.5" />
+        Previous
+      </button>
+      <span className="tabular-nums text-center text-white/60">
+        Page {page} of {totalPages}
+        <span className="text-white/40"> · </span>
+        Showing {from}–{to} of {totalRows}
+      </span>
+      <button
+        type="button"
+        disabled={page >= totalPages}
+        onClick={() => onPageChange(page + 1)}
+        className="inline-flex items-center gap-1 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1.5 font-medium text-white/90 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Next
+        <ChevronRight className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
 /* ---------------- Types ---------------- */
+
+type FeeCollectionRow = {
+  classId: string;
+  label: string;
+  totalFees: number;
+  avgDiscountPercent: number;
+  finalFees: number;
+  paidFee: number;
+  pendingFee: number;
+  collectionPercent: number;
+  duePercent: number;
+};
+
+type EnrollmentByClassSectionRow = {
+  classId: string;
+  className: string;
+  section: string | null;
+  male: number;
+  female: number;
+  total: number;
+};
 
 type AnalysisResponse = {
   availableYears: number[];
   classes?: { id: string; name: string; section: string | null }[];
   selectedYear: number;
+  enrollmentByClassSection?: EnrollmentByClassSectionRow[];
+  enrollmentByClassSectionTotals?: { male: number; female: number; total: number };
+  feeCollectionByClass?: FeeCollectionRow[];
+  feeCollectionTotals?: Omit<FeeCollectionRow, "classId">;
   stats: {
     feesCollected: number;
     totalEnrollment: number;
@@ -57,6 +131,8 @@ export default function AnalysisDashboard() {
   // year is the start academic year; 0 indicates not yet loaded
   const [year, setYear] = useState<number>(0);
   const [classId, setClassId] = useState("");
+  const [enrollmentPage, setEnrollmentPage] = useState(1);
+  const [feePage, setFeePage] = useState(1);
 
   useEffect(() => {
     setLoading(true);
@@ -66,7 +142,10 @@ export default function AnalysisDashboard() {
     if (year !== 0) params.set("year", String(year));
     if (classId) params.set("classId", classId);
 
-    fetch(`/api/school/analysis?${params}`, { credentials: "include" })
+    fetch(`/api/school/analysis?${params}`, {
+      credentials: "include",
+      cache: "no-store",
+    })
       .then((res) => res.json())
       .then((res: AnalysisResponse & { message?: string }) => {
         if (res.message && !res.stats) {
@@ -86,6 +165,21 @@ export default function AnalysisDashboard() {
       })
       .finally(() => setLoading(false));
   }, [year, classId]);
+
+  useEffect(() => {
+    setEnrollmentPage(1);
+    setFeePage(1);
+  }, [year, classId]);
+
+  useEffect(() => {
+    if (!data) return;
+    const er = Array.isArray(data.enrollmentByClassSection) ? data.enrollmentByClassSection : [];
+    const fr = Array.isArray(data.feeCollectionByClass) ? data.feeCollectionByClass : [];
+    const ep = Math.max(1, Math.ceil(er.length / TABLE_PAGE_SIZE));
+    const fp = Math.max(1, Math.ceil(fr.length / TABLE_PAGE_SIZE));
+    setEnrollmentPage((p) => Math.min(Math.max(1, p), ep));
+    setFeePage((p) => Math.min(Math.max(1, p), fp));
+  }, [data]);
 
   if (loading) {
     return (
@@ -182,6 +276,25 @@ export default function AnalysisDashboard() {
 
   // All teachers sorted best to least (API returns already sorted)
   const topTeachers = data.topTeachers ?? [];
+  const feeRows = Array.isArray(data.feeCollectionByClass) ? data.feeCollectionByClass : [];
+  const feeTotals = data.feeCollectionTotals;
+  const enrollmentRows = Array.isArray(data.enrollmentByClassSection)
+    ? data.enrollmentByClassSection
+    : [];
+  const enrollmentTotals = data.enrollmentByClassSectionTotals;
+
+  const formatInr = (n: number) =>
+    `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}`;
+
+  const enrollmentTotalPages = Math.max(1, Math.ceil(enrollmentRows.length / TABLE_PAGE_SIZE));
+  const feeTotalPages = Math.max(1, Math.ceil(feeRows.length / TABLE_PAGE_SIZE));
+  const enrollmentPageEff = Math.min(Math.max(1, enrollmentPage), enrollmentTotalPages);
+  const feePageEff = Math.min(Math.max(1, feePage), feeTotalPages);
+  const enrollmentPaged = enrollmentRows.slice(
+    (enrollmentPageEff - 1) * TABLE_PAGE_SIZE,
+    enrollmentPageEff * TABLE_PAGE_SIZE
+  );
+  const feePaged = feeRows.slice((feePageEff - 1) * TABLE_PAGE_SIZE, feePageEff * TABLE_PAGE_SIZE);
 
   /* ---------------- UI ---------------- */
 
@@ -479,6 +592,189 @@ export default function AnalysisDashboard() {
             ))}
           </div>
         )}
+      </div>
+
+      {/* Enrollment by gender: class & section */}
+      <div className="mt-4 sm:mt-6 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
+        <div className="mb-4">
+          <div className="flex items-center gap-2">
+            <Users className="w-4 h-4 sm:w-5 sm:h-5 text-sky-400 shrink-0" />
+            <h3 className="font-semibold text-white text-sm sm:text-base">
+              Students by class & section (gender)
+            </h3>
+          </div>
+          <p className="text-xs sm:text-sm text-white/50 mt-1 pl-0 sm:pl-7">
+            Male / female counts follow the gender saved on each student; other or blank genders
+            are included in total only.
+          </p>
+        </div>
+
+        <div className="-mx-1 overflow-x-auto overscroll-x-contain touch-pan-x pb-1 sm:mx-0">
+          <table className="w-full min-w-[520px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/10 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                <th className="py-3 pr-3 font-medium">Class</th>
+                <th className="py-3 px-2 font-medium">Section</th>
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Male</th>
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Female</th>
+                <th className="py-3 pl-2 text-right font-medium whitespace-nowrap">Total</th>
+              </tr>
+            </thead>
+            <tbody className="text-white/90">
+              {enrollmentRows.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="py-8 text-center text-white/40">
+                    No class sections found for this school.
+                  </td>
+                </tr>
+              ) : (
+                enrollmentPaged.map((row) => (
+                  <tr
+                    key={row.classId}
+                    className="border-b border-white/5 last:border-0 hover:bg-white/[0.03]"
+                  >
+                    <td className="py-3 pr-3 font-semibold text-white">{row.className}</td>
+                    <td className="py-3 px-2 text-gray-300">
+                      {row.section && row.section.trim() !== "" ? row.section : "—"}
+                    </td>
+                    <td className="py-3 px-2 text-right tabular-nums text-sky-300">
+                      {row.male.toLocaleString("en-IN")}
+                    </td>
+                    <td className="py-3 px-2 text-right tabular-nums text-fuchsia-300/90">
+                      {row.female.toLocaleString("en-IN")}
+                    </td>
+                    <td className="py-3 pl-2 text-right tabular-nums text-white font-medium">
+                      {row.total.toLocaleString("en-IN")}
+                    </td>
+                  </tr>
+                ))
+              )}
+              {enrollmentTotals && enrollmentRows.length > 0 ? (
+                <tr className="border-t border-white/20 bg-white/[0.06] font-semibold">
+                  <td className="py-3 pr-3 text-white" colSpan={2}>
+                    {classId ? "Selected class total" : "School total"}
+                  </td>
+                  <td className="py-3 px-2 text-right tabular-nums text-sky-300">
+                    {enrollmentTotals.male.toLocaleString("en-IN")}
+                  </td>
+                  <td className="py-3 px-2 text-right tabular-nums text-fuchsia-300">
+                    {enrollmentTotals.female.toLocaleString("en-IN")}
+                  </td>
+                  <td className="py-3 pl-2 text-right tabular-nums text-white">
+                    {enrollmentTotals.total.toLocaleString("en-IN")}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+        <TablePagination
+          page={enrollmentPageEff}
+          totalPages={enrollmentTotalPages}
+          totalRows={enrollmentRows.length}
+          onPageChange={setEnrollmentPage}
+        />
+      </div>
+
+      {/* Fee collection: class & section */}
+      <div className="mt-4 sm:mt-6 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
+        <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <IndianRupee className="w-4 h-4 sm:w-5 sm:h-5 text-lime-400 shrink-0" />
+              <h3 className="font-semibold text-white text-sm sm:text-base">
+                Fee collection (class & section)
+              </h3>
+            </div>
+            <p className="text-xs sm:text-sm text-white/50 mt-1 pl-0 sm:pl-7">
+              From student fee records for each class / section.
+            </p>
+          </div>
+        </div>
+
+        <div className="-mx-1 overflow-x-auto overscroll-x-contain touch-pan-x pb-1 sm:mx-0">
+          <table className="w-full min-w-[880px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/10 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                <th className="py-3 pr-3 font-medium">Class / section</th>
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Total fees</th>
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Avg discount %</th>
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Final fees</th>
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Paid</th>
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Pending</th>
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Collection %</th>
+                <th className="py-3 pl-2 text-right font-medium whitespace-nowrap">Due %</th>
+              </tr>
+            </thead>
+            <tbody className="text-white/90">
+              {feeRows.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="py-8 text-center text-white/40">
+                    No class sections found for this school.
+                  </td>
+                </tr>
+              ) : (
+                feePaged.map((row) => (
+                  <tr
+                    key={row.classId}
+                    className="border-b border-white/5 last:border-0 hover:bg-white/[0.03]"
+                  >
+                    <td className="py-3 pr-3 font-semibold text-white">{row.label}</td>
+                    <td className="py-3 px-2 text-right tabular-nums text-gray-300">
+                      {formatInr(row.totalFees)}
+                    </td>
+                    <td className="py-3 px-2 text-right tabular-nums text-cyan-300/90">
+                      {row.avgDiscountPercent.toLocaleString("en-IN")}%
+                    </td>
+                    <td className="py-3 px-2 text-right tabular-nums text-amber-200/90">
+                      {formatInr(row.finalFees)}
+                    </td>
+                    <td className="py-3 px-2 text-right tabular-nums text-lime-400">
+                      {formatInr(row.paidFee)}
+                    </td>
+                    <td className="py-3 px-2 text-right tabular-nums text-rose-300/90">
+                      {formatInr(row.pendingFee)}
+                    </td>
+                    <td className="py-3 px-2 text-right tabular-nums text-lime-300/80">
+                      {row.collectionPercent.toLocaleString("en-IN")}%
+                    </td>
+                    <td className="py-3 pl-2 text-right tabular-nums text-amber-300/80">
+                      {row.duePercent.toLocaleString("en-IN")}%
+                    </td>
+                  </tr>
+                ))
+              )}
+              {feeTotals && feeRows.length > 0 ? (
+                <tr className="border-t border-white/20 bg-white/[0.06] font-semibold">
+                  <td className="py-3 pr-3 text-white">{feeTotals.label}</td>
+                  <td className="py-3 px-2 text-right tabular-nums">{formatInr(feeTotals.totalFees)}</td>
+                  <td className="py-3 px-2 text-right tabular-nums text-cyan-300">
+                    {feeTotals.avgDiscountPercent.toLocaleString("en-IN")}%
+                  </td>
+                  <td className="py-3 px-2 text-right tabular-nums">{formatInr(feeTotals.finalFees)}</td>
+                  <td className="py-3 px-2 text-right tabular-nums text-lime-400">
+                    {formatInr(feeTotals.paidFee)}
+                  </td>
+                  <td className="py-3 px-2 text-right tabular-nums text-rose-300">
+                    {formatInr(feeTotals.pendingFee)}
+                  </td>
+                  <td className="py-3 px-2 text-right tabular-nums text-lime-300">
+                    {feeTotals.collectionPercent.toLocaleString("en-IN")}%
+                  </td>
+                  <td className="py-3 pl-2 text-right tabular-nums text-amber-300">
+                    {feeTotals.duePercent.toLocaleString("en-IN")}%
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+        <TablePagination
+          page={feePageEff}
+          totalPages={feeTotalPages}
+          totalRows={feeRows.length}
+          onPageChange={setFeePage}
+        />
       </div>
     </div>
   );
