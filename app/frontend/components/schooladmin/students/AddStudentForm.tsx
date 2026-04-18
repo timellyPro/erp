@@ -169,49 +169,12 @@ export default function AddStudentForm({
             bgColor="white"
           />
         </div>
-        <div>
-          <InputField
-            label="Tuition Fee Amount*"
-            value={form.totalFee}
-            onChange={(value) => onFieldChange("totalFee", value)}
-            placeholder="e.g. 12000"
-            type="number"
-            bgColor="white"
-          />
-          {renderError(errors, "totalFee")}
-        </div>
-        <div>
-          <InputField
-            label="Discount Amount (₹)"
-            value={form.discountPercent}
-            onChange={(value) => onFieldChange("discountPercent", value)}
-            placeholder="e.g. 1200"
-            type="number"
-            bgColor="white"
-          />
-          {renderError(errors, "discountPercent")}
-        </div>
-        <div>
-          <InputField
-            label="Application Fee (record only)"
-            value={form.applicationFee}
-            onChange={(value) => onFieldChange("applicationFee", value)}
-            placeholder="e.g. 500"
-            type="number"
-            bgColor="white"
-          />
-        </div>
-        <div>
-          <InputField
-            label="Admission Fee (record only)"
-            value={form.admissionFee}
-            onChange={(value) => onFieldChange("admissionFee", value)}
-            placeholder="e.g. 5000"
-            type="number"
-            bgColor="white"
-          />
-        </div>
       </div>
+
+      <p className="text-xs text-white/50 mt-2 mb-4">
+        Tuition is set from{" "}
+        <span className="text-white/70">Fees → Global fee breakdown</span> for the student&apos;s class (plus any extra fees). It is not entered here.
+      </p>
 
       <div className="mt-6">
         <h3 className="text-sm font-semibold text-white/80 mb-3">

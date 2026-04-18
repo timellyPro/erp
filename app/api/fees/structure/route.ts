@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import { computeStudentTuitionTotalFee } from "@/lib/studentTuitionFromStructure";
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -106,25 +107,11 @@ export async function PUT(req: Request) {
       include: { class: { select: { id: true, name: true, section: true } } },
     });
 
-    const comps = normalizedComponents as Array<{ name: string; amount: number }>;
-    const baseTotal = comps.reduce((a, c) => a + (c.amount || 0), 0);
-
     const students = await prisma.student.findMany({
       where: { classId, schoolId },
       include: {
         class: { select: { section: true } },
         fee: true,
-      },
-    });
-
-    const extraFees = await prisma.extraFee.findMany({
-      where: { schoolId },
-      select: {
-        amount: true,
-        targetType: true,
-        targetClassId: true,
-        targetSection: true,
-        targetStudentId: true,
       },
     });
 
@@ -138,19 +125,12 @@ export async function PUT(req: Request) {
           const fee = student.fee;
           if (!fee) return;
 
-          let extraTotal = 0;
-          for (const ef of extraFees) {
-            const applies =
-              ef.targetType === "SCHOOL" ||
-              (ef.targetType === "CLASS" && ef.targetClassId === classId) ||
-              (ef.targetType === "SECTION" &&
-                ef.targetClassId === classId &&
-                ef.targetSection === student.class?.section) ||
-              (ef.targetType === "STUDENT" && ef.targetStudentId === student.id);
-            if (applies) extraTotal += ef.amount;
-          }
-
-          const newTotalFee = baseTotal + extraTotal;
+          const newTotalFee = await computeStudentTuitionTotalFee(prisma, {
+            schoolId,
+            classId,
+            section: student.class?.section ?? null,
+            studentId: student.id,
+          });
           const discount = (fee.discountPercent || 0) / 100;
           const newFinalFee = Math.round(newTotalFee * (1 - discount) * 100) / 100;
           const newRemainingFee = Math.max(0, newFinalFee - fee.amountPaid);

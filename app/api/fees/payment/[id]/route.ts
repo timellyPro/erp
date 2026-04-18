@@ -283,11 +283,6 @@ export async function DELETE(_req: Request, context: RouteParams) {
     const shouldReverseFee = fee && (st === "SUCCESS" || st === "COMPLETED");
 
     await prisma.$transaction(async (tx) => {
-      await tx.feeInstallment.updateMany({
-        where: { paymentId: payment.id },
-        data: { paymentId: null },
-      });
-
       if (shouldReverseFee) {
         const newPaid = Math.max(0, Math.round((fee!.amountPaid - payment.amount) * 100) / 100);
         const newRemaining = Math.max(0, Math.round((fee!.finalFee - newPaid) * 100) / 100);

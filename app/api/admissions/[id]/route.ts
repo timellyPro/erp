@@ -116,18 +116,8 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
         gradeSought: body.gradeSought,
         boardingType: body.boardingType,
         residencyType: normalizeResidencyType(body.residencyType),
-        totalFee:
-          typeof body.totalFee === "number"
-            ? body.totalFee
-            : typeof body.totalFee === "string" && body.totalFee.trim()
-            ? Number(body.totalFee)
-            : null,
-        discountPercent:
-          typeof body.discountPercent === "number"
-            ? body.discountPercent
-            : typeof body.discountPercent === "string" && body.discountPercent.trim()
-            ? Number(body.discountPercent)
-            : null,
+        totalFee: null,
+        discountPercent: null,
         applicationFee:
           typeof body.applicationFee === "number"
             ? body.applicationFee

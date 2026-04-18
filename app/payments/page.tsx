@@ -14,7 +14,6 @@ interface StudentFee {
   finalFee: number;
   amountPaid: number;
   remainingFee: number;
-  installments: number;
 }
 
 interface FeeWithStudent extends StudentFee {
@@ -39,13 +38,11 @@ export default function Page() {
   const verifiedRef = useRef(false);
   const [fee, setFee] = useState<StudentFee | null>(null);
   const [loading, setLoading] = useState(true);
-  const [plan, setPlan] = useState(1);
   const [adminFees, setAdminFees] = useState<FeeWithStudent[]>([]);
   const [stats, setStats] = useState<FeeStats | null>(null);
   const [selectedFee, setSelectedFee] = useState<FeeWithStudent | null>(null);
   const [totalFeeInput, setTotalFeeInput] = useState<number | "">("");
   const [feesInput, setFeesInput] = useState<number | "">("");
-  const [installmentsInput, setInstallmentsInput] = useState<number | "">("");
   const [saving, setSaving] = useState(false);
 
   const fetchFee = async () => {
@@ -82,7 +79,6 @@ export default function Page() {
         setSelectedFee(first);
         setTotalFeeInput(first.totalFee);
         setFeesInput(first.finalFee);
-        setInstallmentsInput(first.installments);
       } else {
         setSelectedFee(null);
       }
@@ -152,13 +148,6 @@ export default function Page() {
     }
   }, [status, session?.user?.role]);
 
-  useEffect(() => {
-    if (!fee) return;
-    if (plan !== 1 && plan !== fee.installments) {
-      setPlan(1);
-    }
-  }, [fee, plan]);
-
   if (status === "loading" || loading) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
@@ -210,8 +199,7 @@ export default function Page() {
 
   if (role === "STUDENT" && fee) {
     const remainingAmount = fee.remainingFee;
-    const planOptions = fee.installments > 1 ? [1, fee.installments] : [1];
-    const payable = plan === 1 ? remainingAmount : remainingAmount / plan;
+    const payable = remainingAmount;
     const progress =
       fee.finalFee > 0 ? Math.min((fee.amountPaid / fee.finalFee) * 100, 100) : 0;
 
@@ -245,45 +233,14 @@ export default function Page() {
               </p>
             </div>
 
-            {/* Plan Selector */}
-            <div className="space-y-3">
-              {planOptions.map((p) => (
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.97 }}
-                  key={p}
-                  onClick={() => setPlan(p)}
-                  className={`w-full p-4 rounded-xl border flex justify-between items-center transition-all duration-300 ${
-                    plan === p
-                      ? "bg-gradient-to-r from-green-500/20 to-green-600/20 border-green-500/50 text-white shadow-lg"
-                      : "bg-[#2d2d2d] border-[#404040] text-[#808080] hover:border-[#808080] hover:text-white hover:bg-[#404040]"
-                  }`}
-                >
-                  <span className="font-medium">
-                    {p === 1 ? "Pay Full Remaining" : `${p} Installments`}
-                  </span>
-                  <span className="font-semibold">
-                    ₹{(remainingAmount / p).toFixed(2)}
-                  </span>
-                </motion.button>
-              ))}
-            </div>
-
             {/* Payment Summary */}
             <div className="bg-[#2d2d2d]/50 border border-[#404040] rounded-xl p-4 space-y-2">
               <div className="flex justify-between">
-                <span className="text-[#808080]">Pay Now</span>
+                <span className="text-[#808080]">Pay now (full remaining)</span>
                 <span className="font-bold text-green-400">
                   ₹{payable.toFixed(2)}
                 </span>
               </div>
-
-              {plan !== 1 && (
-                <div className="flex justify-between text-sm text-[#808080]">
-                  <span>Remaining</span>
-                  <span>₹{(remainingAmount - payable).toFixed(2)}</span>
-                </div>
-              )}
             </div>
 
             {/* Progress Bar */}
@@ -383,7 +340,6 @@ export default function Page() {
                     setSelectedFee(feeItem);
                     setTotalFeeInput(feeItem.totalFee);
                     setFeesInput(feeItem.finalFee);
-                    setInstallmentsInput(feeItem.installments);
                   }}
                   className={`w-full text-left p-3 rounded-xl border transition-all duration-300 ${
                     selectedFee?.student.id === feeItem.student.id
@@ -487,15 +443,12 @@ export default function Page() {
                           className="h-3 bg-gradient-to-r from-green-500 to-green-600 rounded-full"
                         />
                       </div>
-                      <p className="text-xs text-[#808080] mt-3">
-                        Installments allowed: {selectedFee.installments}
-                      </p>
                     </div>
                     <div className="p-5 rounded-xl bg-[#2d2d2d]/50 border border-[#404040] space-y-4">
                       <h4 className="font-semibold text-white text-sm flex items-center gap-2">
                         💰 Update Fees
                       </h4>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                         <div className="space-y-2">
                           <label className="text-[#808080] block">Total Fee</label>
                           <input
@@ -513,17 +466,6 @@ export default function Page() {
                             value={feesInput}
                             onChange={(e) =>
                               setFeesInput(e.target.value === "" ? "" : Number(e.target.value))
-                            }
-                            className="w-full bg-[#1a1a1a] border border-[#404040] text-white rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#808080] focus:border-transparent hover:border-[#808080] transition placeholder-[#6b6b6b]"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-[#808080] block">Installments</label>
-                          <input
-                            type="number"
-                            value={installmentsInput}
-                            onChange={(e) =>
-                              setInstallmentsInput(e.target.value === "" ? "" : Number(e.target.value))
                             }
                             className="w-full bg-[#1a1a1a] border border-[#404040] text-white rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#808080] focus:border-transparent hover:border-[#808080] transition placeholder-[#6b6b6b]"
                           />
@@ -563,8 +505,6 @@ export default function Page() {
                               body: JSON.stringify({
                                 totalFee: nextTotalFee,
                                 discountPercent: derivedDiscountPercent,
-                                installments:
-                                  installmentsInput === "" ? undefined : Number(installmentsInput),
                               }),
                             });
                             const data = await res.json();

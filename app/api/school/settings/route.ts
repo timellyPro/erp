@@ -29,7 +29,7 @@ export async function GET() {
 
     if (!settings) {
       const created = await prisma.schoolSettings.create({
-        data: { schoolId, admissionPrefix: "ADM", rollNoPrefix: "", admissionCounter: 0, defaultInstallments: 3 },
+        data: { schoolId, admissionPrefix: "ADM", rollNoPrefix: "", admissionCounter: 0 },
       });
       return NextResponse.json({ settings: created }, { status: 200 });
     }
@@ -56,8 +56,6 @@ export async function PUT(req: Request) {
       admissionPrefix,
       rollNoPrefix,
       emailDomain,
-      defaultInstallments,
-      installmentReminderDates,
 
       hyperpgMerchantId,
       hyperpgApiKey,
@@ -67,40 +65,12 @@ export async function PUT(req: Request) {
       admissionPrefix?: string;
       rollNoPrefix?: string;
       emailDomain?: string | null;
-      juspayMerchantId?: string | null;
-      juspayApiKey?: string | null;
       hyperpgMerchantId?: string | null;
       hyperpgApiKey?: string | null;
-      defaultInstallments?: number;
-      installmentReminderDates?: string | null;
     } = {};
     if (typeof admissionPrefix === "string") data.admissionPrefix = admissionPrefix;
     if (typeof rollNoPrefix === "string") data.rollNoPrefix = rollNoPrefix;
     if (emailDomain !== undefined) data.emailDomain = emailDomain === "" ? null : String(emailDomain);
-    if (defaultInstallments !== undefined) {
-      const n = Number(defaultInstallments);
-      if (!Number.isInteger(n) || n <= 0) {
-        return NextResponse.json({ message: "defaultInstallments must be a positive integer" }, { status: 400 });
-      }
-      data.defaultInstallments = n;
-    }
-    if (installmentReminderDates !== undefined) {
-      if (installmentReminderDates === null) {
-        data.installmentReminderDates = null;
-      } else if (!Array.isArray(installmentReminderDates)) {
-        return NextResponse.json({ message: "installmentReminderDates must be an array of YYYY-MM-DD values" }, { status: 400 });
-      } else {
-        const normalized = installmentReminderDates.map((v) => String(v ?? "").trim());
-        const validDate = /^\d{4}-\d{2}-\d{2}$/;
-        for (const d of normalized) {
-          if (!d) continue;
-          if (!validDate.test(d) || Number.isNaN(new Date(`${d}T00:00:00Z`).getTime())) {
-            return NextResponse.json({ message: "Each installment reminder date must be a valid YYYY-MM-DD date" }, { status: 400 });
-          }
-        }
-        data.installmentReminderDates = JSON.stringify(normalized);
-      }
-    }
 
     if (hyperpgMerchantId !== undefined) data.hyperpgMerchantId = hyperpgMerchantId === "" ? null : String(hyperpgMerchantId);
     if (hyperpgApiKey !== undefined) data.hyperpgApiKey = hyperpgApiKey === "" ? null : String(hyperpgApiKey);
@@ -110,7 +80,6 @@ export async function PUT(req: Request) {
       admissionPrefix: "ADM",
       rollNoPrefix: "",
       admissionCounter: 0,
-      defaultInstallments: 3,
       ...data,
     };
     const settings = await prisma.schoolSettings.upsert({
@@ -119,12 +88,6 @@ export async function PUT(req: Request) {
       update: data,
     });
 
-    if (typeof data.defaultInstallments === "number") {
-      await prisma.studentFee.updateMany({
-        where: { student: { schoolId } },
-        data: { installments: data.defaultInstallments },
-      });
-    }
     return NextResponse.json({ settings }, { status: 200 });
   } catch (e: unknown) {
     console.error("School settings PUT:", e);

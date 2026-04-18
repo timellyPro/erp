@@ -264,9 +264,6 @@ model SchoolSettings {
   admissionPrefix  String @default("ADM") // e.g. ADM -> ADM/2026/001
   rollNoPrefix     String @default("") // optional prefix for roll numbers
   admissionCounter Int    @default(0) // last used number for admission
-  defaultInstallments Int @default(3) // default installments for newly created student fees
-  // JSON string array of YYYY-MM-DD dates (index = installment number - 1), for reminders only
-  installmentReminderDates String?
 
   // Email domain override for auto-generated emails (e.g. "myschool.in")
   emailDomain String?
@@ -940,33 +937,10 @@ model StudentFee {
   amountPaid   Float @default(0)
   remainingFee Float
 
-  // How many installments student is allowed to pay in
-  installments Int @default(3)
-
-  installmentsList FeeInstallment[]
-
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([studentId])
-}
-
-model FeeInstallment {
-  id                String     @id @default(cuid())
-  studentFeeId      String
-  studentFee        StudentFee @relation(fields: [studentFeeId], references: [id], onDelete: Cascade)
-  installmentNumber Int
-  dueDate           DateTime   @db.Date
-  amount            Float
-  paidAmount        Float      @default(0)
-  status            String     @default("PENDING") // PENDING | PAID | PARTIAL
-  paymentId         String? // Links to Payment when paid
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([studentFeeId, installmentNumber])
-  @@index([studentFeeId])
 }
 
 // Global fee breakdown per class (Tuition, Transport, Lab, etc.)

@@ -12,9 +12,9 @@ export default function UploadCSVModal({ classId, onClose, onSuccess }: any) {
     // Template aligned with the admission export format.
     // Parent Email is optional. If empty, email becomes <student-name>@<school-domain>.
     // Password is auto-generated from DOB in YYYYMMDD format.
-    const csvContent = `Fedena No,Grade Sought,Boarding Type,Class,Section,First Name,Middle Name,Last Name,Gender,Date of Birth,Aadhar No,Total Fee,Discount %,Application Fee,Admission Fee,Nationality,Languages at Home,Caste,Religion,House No,Street,City,Town,State,Pin Code,Parent Name,Occupation,Office Address,Parent Phone,Parent Email,WhatsApp,Bank Account No,Father No,Mother No,Guardian No
-,Grade 1,Semi Residential,Class 1,A,Rahul,,Sharma,Male,2015-06-15,123412341234,30000,10,500,5000,Indian,Hindi,,,12,MG Road,Delhi,,Delhi,110001,Rajesh Sharma,Engineer,Delhi Office,9876543210,,9876543210,1234567890,9876543210,9876543211,9876543212
-,Grade 1,Semi Residential,Class 1,A,Anita,,Verma,Female,2014-09-20,567856785678,28000,0,300,4000,Indian,English,,,45,Park Street,Mumbai,,Maharashtra,400001,Sunil Verma,Manager,Mumbai Office,9876501234,parent2@example.com,9876501234,2233445566,9876501234,9876501235,9876501236`;
+    const csvContent = `Fedena No,Grade Sought,Boarding Type,Class,Section,First Name,Middle Name,Last Name,Gender,Date of Birth,Aadhar No,Application Fee,Admission Fee,Nationality,Languages at Home,Caste,Religion,House No,Street,City,Town,State,Pin Code,Parent Name,Occupation,Office Address,Parent Phone,Parent Email,WhatsApp,Bank Account No,Father No,Mother No,Guardian No
+,Grade 1,Semi Residential,Class 1,A,Rahul,,Sharma,Male,2015-06-15,123412341234,500,5000,Indian,Hindi,,,12,MG Road,Delhi,,Delhi,110001,Rajesh Sharma,Engineer,Delhi Office,9876543210,,9876543210,1234567890,9876543210,9876543211,9876543212
+,Grade 1,Semi Residential,Class 1,A,Anita,,Verma,Female,2014-09-20,567856785678,300,4000,Indian,English,,,45,Park Street,Mumbai,,Maharashtra,400001,Sunil Verma,Manager,Mumbai Office,9876501234,parent2@example.com,9876501234,2233445566,9876501234,9876501235,9876501236`;
 
     const element = document.createElement("a");
     element.setAttribute(
@@ -148,7 +148,7 @@ export default function UploadCSVModal({ classId, onClose, onSuccess }: any) {
       <div className="bg-white p-6 rounded-xl w-[400px]">
         <h3 className="font-semibold mb-2">Upload Students CSV / Excel</h3>
         <p className="text-xs text-gray-500 mb-3">
-          Upload the same Excel/CSV format used by the admission export. Required
+          Tuition is calculated from the admin global fee structure for the student&apos;s class (plus extra fees), not from this file. Upload the same Excel/CSV format used by the admission export. Required
           fields include <span className="font-medium">First Name</span>,{" "}
           <span className="font-medium">Last Name</span>,{" "}
           <span className="font-medium">Parent Name</span>,{" "}

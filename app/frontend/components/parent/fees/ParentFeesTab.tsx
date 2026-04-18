@@ -6,7 +6,6 @@ import { motion } from "framer-motion";
 import {
   CreditCard,
   CheckCircle,
-  Receipt,
   AlertCircle,
   IndianRupee,
   Shield,
@@ -17,15 +16,6 @@ import PageHeader from "../../common/PageHeader";
 import PayButton from "@/app/frontend/components/common/PayButton";
 import { generatePDF } from "@/lib/pdfUtils";
 import InvoiceTemplate, { type InvoiceData } from "../../pdf/InvoiceTemplate";
-
-interface InstallmentItem {
-  installmentNumber: number;
-  dueDate: string;
-  amount: number;
-  paidAmount: number;
-  status: string;
-  paymentId?: string;
-}
 
 interface PaymentItem {
   id: string;
@@ -62,7 +52,6 @@ interface FeeData {
   finalFee: number;
   amountPaid: number;
   remainingFee: number;
-  installments: number;
   dueHeads?: Array<{
     key: string;
     headType: "BASE_COMPONENT" | "EXTRA_FEE";
@@ -73,7 +62,6 @@ interface FeeData {
   extraFees?: ExtraFeeItem[];
   payments: PaymentItem[];
   refunds?: RefundItem[];
-  installmentsList: InstallmentItem[];
 }
 
 export default function ParentFeesTab() {
@@ -81,7 +69,6 @@ export default function ParentFeesTab() {
   const [fee, setFee] = useState<FeeData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [plan, setPlan] = useState(1);
   const [selectedComponents, setSelectedComponents] = useState<Set<number>>(new Set());
   const [selectedExtraIds, setSelectedExtraIds] = useState<Set<string>>(new Set());
   const [customAmount, setCustomAmount] = useState<string>("");
@@ -153,8 +140,8 @@ export default function ParentFeesTab() {
             document.cookie = "hyperpg_pending=; path=/; max-age=0";
           }
         } catch (_) {}
-        }
       }
+    }
     if (orderIdToVerify && !isNaN(amountToVerify) && amountToVerify > 0) {
       verifiedRef.current = true;
       fetch("/api/payment/verify", {
@@ -181,13 +168,6 @@ export default function ParentFeesTab() {
   useEffect(() => {
     fetchFee();
   }, [fetchFee]);
-
-  useEffect(() => {
-    if (!fee) return;
-    if (plan !== 1 && plan !== fee.installments) {
-      setPlan(1);
-    }
-  }, [fee, plan]);
 
   const dueByKey = useMemo(() => {
     const m = new Map<string, number>();
@@ -258,7 +238,6 @@ export default function ParentFeesTab() {
   }
 
   const remainingAmount = fee.remainingFee;
-  const planOptions = fee.installments > 1 ? [1, fee.installments] : [1];
 
   // Selected fees "due" amount (when user picks specific items)
   const selectedAmount = (() => {
@@ -277,7 +256,7 @@ export default function ParentFeesTab() {
   const maxPayable = hasFeeSelection ? Math.min(selectedDueSum, remainingAmount) : 0;
 
   const basePayable = hasFeeSelection ? maxPayable : 0;
-  const suggestedPayable = plan === 1 ? basePayable : basePayable / plan;
+  const suggestedPayable = basePayable;
   const canPay = hasFeeSelection && maxPayable >= 1;
   // Editable amount: use custom if valid, else suggested
   const customNum = customAmount.trim() === "" ? null : parseFloat(customAmount);
@@ -439,21 +418,6 @@ export default function ParentFeesTab() {
             </div>
           ) : (
             <div className="space-y-4">
-              <div className="flex flex-wrap gap-2">
-                {planOptions.map((p) => (
-                  <button
-                    key={p}
-                    onClick={() => setPlan(p)}
-                    className={`px-4 py-2.5 sm:py-2 rounded-lg text-sm font-medium transition min-h-[44px] touch-manipulation ${
-                      plan === p
-                        ? "bg-lime-500 text-black"
-                        : "bg-white/5 text-gray-400 hover:bg-white/10"
-                    }`}
-                  >
-                    {p === 1 ? "Pay full" : `${p} installments`}
-                  </button>
-                ))}
-              </div>
               <div className="flex flex-col gap-4 p-4 rounded-xl bg-white/5 border border-white/10">
                 <div>
                   <label className="block text-sm text-gray-400 mb-1">Amount to pay (₹)</label>
@@ -496,7 +460,7 @@ export default function ParentFeesTab() {
           )}
         </motion.div>
 
-        {/* Installments & History */}
+        {/* Payment history */}
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -504,36 +468,6 @@ export default function ParentFeesTab() {
           className="glass-card rounded-2xl p-4 sm:p-6 space-y-4 sm:space-y-6"
         >
           <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-            <Receipt className="w-5 h-5 text-lime-400" />
-            Installments
-          </h3>
-          <div className="space-y-2 max-h-48 overflow-y-auto">
-            {fee.installmentsList?.map((inst) => (
-              <div
-                key={inst.installmentNumber}
-                className="flex justify-between items-center p-3 rounded-lg bg-white/5 border border-white/5"
-              >
-                <div>
-                  <p className="text-sm font-medium text-white">Installment {inst.installmentNumber}</p>
-                  <p className="text-xs text-gray-500">
-                    Due: {new Date(inst.dueDate).toLocaleDateString("en-IN")}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-semibold text-white">₹{inst.amount.toFixed(0)}</p>
-                  <span
-                    className={`text-xs ${
-                      inst.status === "PAID" ? "text-emerald-400" : "text-amber-400"
-                    }`}
-                  >
-                    {inst.status}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <h3 className="text-lg font-semibold text-white flex items-center gap-2 pt-4 border-t border-white/10">
             <CreditCard className="w-5 h-5 text-lime-400" />
             Payment & Refund history
           </h3>

@@ -25,10 +25,6 @@ type Props = {
   applicationFee?: number | null;
   admissionFee?: number | null;
   studentCreatedAt?: string;
-  tuitionFeeAmount?: number;
-  installmentCount?: number;
-  installmentDates?: string[];
-  tuitionPaidAmount?: number;
   /** Refetch student detail after payment edit/delete */
   onPaymentsChanged?: () => void;
 };
@@ -51,10 +47,6 @@ export const FeeTransactions = ({
   applicationFee,
   admissionFee,
   studentCreatedAt,
-  tuitionFeeAmount = 0,
-  installmentCount = 0,
-  installmentDates = [],
-  tuitionPaidAmount = 0,
   onPaymentsChanged,
 }: Props) => {
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
@@ -262,26 +254,6 @@ export const FeeTransactions = ({
   const totalPaid = hasFee ? fee!.amountPaid : 0;
   const total = hasFee ? fee!.amountPaid + fee!.remainingFee : 0;
   const hasAny = hasFee || activePayments.length > 0;
-  const safeInstallmentCount = Number.isInteger(installmentCount) && installmentCount > 0 ? installmentCount : 0;
-  const tuitionInstallmentAmount =
-    safeInstallmentCount > 0 ? tuitionFeeAmount / safeInstallmentCount : 0;
-  const installmentCards = Array.from({ length: safeInstallmentCount }, (_, idx) => {
-    const installmentNo = idx + 1;
-    const start = tuitionInstallmentAmount * idx;
-    const paidForThis = Math.max(
-      Math.min((tuitionPaidAmount || 0) - start, tuitionInstallmentAmount),
-      0
-    );
-    const remainingForThis = Math.max(tuitionInstallmentAmount - paidForThis, 0);
-    const dueDate = installmentDates[idx] || "";
-    return {
-      installmentNo,
-      dueDate,
-      total: tuitionInstallmentAmount,
-      paid: paidForThis,
-      remaining: remainingForThis,
-    };
-  });
 
   const handleDownloadReceipt = async (payment: (typeof activePayments)[0], copyType: "admin" | "parent") => {
     if (!studentId.trim()) {
@@ -347,33 +319,6 @@ export const FeeTransactions = ({
           </div>
         )}
       </div>
-      {installmentCards.length > 0 && (
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="text-sm font-semibold text-white">Tuition Installments</h4>
-            <p className="text-xs text-gray-400">
-              Tuition ₹{tuitionFeeAmount.toLocaleString("en-IN")} split into {safeInstallmentCount}
-            </p>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {installmentCards.map((it) => (
-              <div key={it.installmentNo} className="rounded-xl border border-white/10 bg-white/5 p-3">
-                <p className="text-xs text-gray-400 uppercase tracking-wide">Installment {it.installmentNo}</p>
-                <p className="text-xs text-gray-500 mt-1">Date: {it.dueDate || "Not set in Settings"}</p>
-                <p className="text-sm text-white mt-2">
-                  Total: ₹{it.total.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-                </p>
-                <p className="text-sm text-lime-400">
-                  Paid: ₹{it.paid.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-                </p>
-                <p className="text-sm text-red-400">
-                  Remaining: ₹{it.remaining.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {!hasAny ? (
         <div className="py-8 text-center text-gray-500 text-sm">No fee records</div>

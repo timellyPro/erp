@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
 
 type RouteParams =
   | { params: { id: string } }
@@ -64,26 +65,6 @@ export async function GET(_req: Request, context: RouteParams) {
 
     if (!student) {
       return NextResponse.json({ message: "Student not found" }, { status: 404 });
-    }
-
-    const schoolSettings = await prisma.schoolSettings.findUnique({
-      where: { schoolId: student.schoolId },
-      select: { installmentReminderDates: true },
-    });
-
-    let installmentReminderDates: string[] = [];
-    const rawReminderDates = schoolSettings?.installmentReminderDates;
-    if (typeof rawReminderDates === "string" && rawReminderDates.trim()) {
-      try {
-        const parsed = JSON.parse(rawReminderDates);
-        if (Array.isArray(parsed)) {
-          installmentReminderDates = parsed
-            .map((x) => (typeof x === "string" ? x : ""))
-            .filter(Boolean);
-        }
-      } catch {
-        installmentReminderDates = [];
-      }
     }
 
     const payments = await prisma.payment.findMany({
@@ -294,8 +275,6 @@ export async function GET(_req: Request, context: RouteParams) {
             totalFee: student.fee.finalFee,
             amountPaid: student.fee.amountPaid,
             remainingFee: student.fee.remainingFee,
-            installments: student.fee.installments,
-            installmentReminderDates,
             tuitionPaid:
               tuitionPaidFromAllocations > 0.00001
                 ? tuitionPaidFromAllocations
@@ -437,6 +416,27 @@ export async function PUT(req: Request, context: RouteParams) {
         where: { id },
         data: studentUpdate as Record<string, never>,
       });
+    }
+
+    if (classId !== undefined) {
+      const refreshed = await prisma.student.findFirst({
+        where: { id, schoolId },
+        include: { class: { select: { section: true } } },
+      });
+      if (refreshed) {
+        const fee = await prisma.studentFee.findUnique({
+          where: { studentId: id },
+          select: { discountPercent: true, amountPaid: true },
+        });
+        await upsertStudentFeeFromStructure(prisma, {
+          schoolId,
+          studentId: id,
+          classId: refreshed.classId,
+          section: refreshed.class?.section ?? null,
+          discountPercent: fee?.discountPercent ?? 0,
+          amountPaid: fee?.amountPaid ?? 0,
+        });
+      }
     }
 
     return NextResponse.json({ message: "Student updated successfully" }, { status: 200 });

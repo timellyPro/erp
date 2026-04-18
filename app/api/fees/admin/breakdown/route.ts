@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
+import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -72,6 +73,7 @@ export async function GET(req: Request) {
           select: {
             amountPaid: true,
             finalFee: true,
+            totalFee: true,
           },
         },
         class: {
@@ -100,6 +102,8 @@ export async function GET(req: Request) {
         amount: Number(c.amount) || 0,
       }));
 
+    const discountRatio = fee.totalFee > 0 ? fee.finalFee / fee.totalFee : 1;
+
     const classId = student.class?.id ?? null;
     const classSection = student.class?.section ?? null;
 
@@ -119,23 +123,17 @@ export async function GET(req: Request) {
     });
 
     const allHeads = [
-      {
-        key: `BASE:-1`,
-        headType: "BASE_COMPONENT" as const,
-        label: "Tuition Fee",
-        snapshotDue: Math.max(fee.finalFee, 0),
-      },
       ...baseComps.map((c, idx) => ({
         key: `BASE:${idx}`,
         headType: "BASE_COMPONENT" as const,
         label: c.name,
-        snapshotDue: c.amount,
+        snapshotDue: Math.round(c.amount * discountRatio * 100) / 100,
       })),
       ...extraFees.map((ef) => ({
         key: `EXTRA:${ef.id}`,
         headType: "EXTRA_FEE" as const,
         label: ef.name,
-        snapshotDue: Number(ef.amount) || 0,
+        snapshotDue: Math.round((Number(ef.amount) || 0) * discountRatio * 100) / 100,
       })),
     ];
 
@@ -170,6 +168,8 @@ export async function GET(req: Request) {
       const key = a.headType === "BASE_COMPONENT" ? `BASE:${a.componentIndex}` : `EXTRA:${a.extraFeeId}`;
       netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) - (a._sum.allocatedAmount ?? 0));
     }
+
+    redistributeBaseMinusOneAllocations(netPaidByHead, allHeads);
 
     const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);
     const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);

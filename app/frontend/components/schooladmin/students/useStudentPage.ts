@@ -128,7 +128,6 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const validateForm = (
   form: StudentFormState,
   options: {
-    requireFees: boolean;
     requireAadhaar: boolean;
     requirePhone: boolean;
     requireClass?: boolean;
@@ -172,26 +171,6 @@ const validateForm = (
 
   if (options.requireClass && !form.classId.trim()) {
     newErrors.classId = "Please select a class";
-  }
-
-  if (options.requireFees) {
-    const feeNum = Number(form.totalFee);
-    if (
-      !form.totalFee?.trim() ||
-      Number.isNaN(feeNum) ||
-      feeNum <= 0
-    ) {
-      newErrors.totalFee = "Total fee must be a positive number";
-    }
-
-    if (
-      form.discountPercent?.trim() &&
-      (Number.isNaN(Number(form.discountPercent)) ||
-        Number(form.discountPercent) < 0 ||
-        Number(form.discountPercent) > feeNum)
-    ) {
-        newErrors.discountPercent = "Discount amount must be between 0 and tuition fee";
-    }
   }
 
   if (form.address.trim() && form.address.trim().length < 5) {
@@ -476,7 +455,6 @@ export default function useStudentPage({ classes, reload }: Props) {
 
   const handleSaveStudent = async () => {
     const nextErrors = validateForm(form, {
-      requireFees: true,
       requireAadhaar: true,
       requirePhone: true,
       requireClass: true,
@@ -488,14 +466,6 @@ export default function useStudentPage({ classes, reload }: Props) {
 
     const aadhaarDigits = form.aadhaarNo.replace(/\D/g, "");
     const phoneDigits = form.phoneNo.replace(/\D/g, "");
-    const totalFeeAmount = Number(form.totalFee);
-    const discountAmount = form.discountPercent.trim()
-      ? Number(form.discountPercent)
-      : 0;
-    const derivedDiscountPercent =
-      totalFeeAmount > 0
-        ? Number(((discountAmount / totalFeeAmount) * 100).toFixed(2))
-        : 0;
 
     try {
       setSaving(true);
@@ -513,12 +483,6 @@ export default function useStudentPage({ classes, reload }: Props) {
         dob: form.dob,
         classId: classIdPayload,
         address: form.address?.trim() || undefined,
-        totalFee: totalFeeAmount,
-        discountPercent: derivedDiscountPercent,
-        applicationFee: form.applicationFee.trim()
-          ? Number(form.applicationFee)
-          : null,
-        admissionFee: form.admissionFee.trim() ? Number(form.admissionFee) : null,
         rollNo: form.rollNo?.trim() || undefined,
         gender: form.gender?.trim() || undefined,
         residencyType: form.residencyType?.trim() || "Day Scholar",
@@ -664,7 +628,6 @@ export default function useStudentPage({ classes, reload }: Props) {
   const handleEditSave = async () => {
     if (!editStudent) return;
     const nextErrors = validateForm(editForm, {
-      requireFees: false,
       requireAadhaar: false,
       requirePhone: false,
     });

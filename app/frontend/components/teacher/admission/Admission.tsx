@@ -76,8 +76,6 @@ type FormState = {
   gradeSought: Grade;
   boardingType: BoardingType;
   residencyType: string;
-  totalFee: string;
-  discountPercent: string;
   applicationFee: string;
   admissionFee: string;
   studentName: string;
@@ -145,8 +143,6 @@ const defaultForm = (): FormState => ({
   gradeSought: "GRADE_1",
   boardingType: "SEMI_RESIDENTIAL",
   residencyType: "Day Scholar",
-  totalFee: "",
-  discountPercent: "0",
   applicationFee: "",
   admissionFee: "",
   studentName: "",
@@ -639,9 +635,6 @@ export default function TeacherAdmissionTab() {
           gradeSought: a.gradeSought,
           boardingType: a.boardingType,
           residencyType: normalizeResidencyType(a.residencyType),
-          totalFee: a.totalFee === null || a.totalFee === undefined ? "" : String(a.totalFee),
-          discountPercent:
-            a.discountPercent === null || a.discountPercent === undefined ? "0" : String(a.discountPercent),
           applicationFee:
             a.applicationFee === null || a.applicationFee === undefined ? "" : String(a.applicationFee),
           admissionFee: a.admissionFee === null || a.admissionFee === undefined ? "" : String(a.admissionFee),
@@ -729,8 +722,6 @@ export default function TeacherAdmissionTab() {
         middleName,
         lastName,
         classId: form.classId || null,
-        totalFee: form.totalFee || null,
-        discountPercent: form.discountPercent || null,
         applicationFee: form.applicationFee.trim() ? Number(form.applicationFee) : null,
         admissionFee: form.admissionFee.trim() ? Number(form.admissionFee) : null,
         fedenaNo: form.fedenaNo || null,
@@ -941,21 +932,13 @@ export default function TeacherAdmissionTab() {
                   value={form.panNumber}
                   onChange={(v) => setForm((p) => ({ ...p, panNumber: v }))}
                 />
-                <InputField
-                  label="Total Fee (optional)"
-                  value={form.totalFee}
-                  onChange={(v) => setForm((p) => ({ ...p, totalFee: v }))}
-                  placeholder="e.g. 30000"
-                />
               </div>
 
+              <p className="text-xs text-white/50 -mt-2 mb-2">
+                Tuition for enrolled students comes from the school admin global fee structure for each class, not from this form.
+              </p>
+
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <InputField
-                  label="Discount % (optional)"
-                  value={form.discountPercent}
-                  onChange={(v) => setForm((p) => ({ ...p, discountPercent: v }))}
-                  placeholder="0-100"
-                />
                 <InputField
                   label="Application Fee (optional, record only)"
                   value={form.applicationFee}

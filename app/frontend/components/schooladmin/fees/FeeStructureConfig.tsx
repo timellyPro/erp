@@ -35,12 +35,8 @@ export default function FeeStructureConfig({
     setEditingId("new");
     setEditingOriginalClassId(null);
     setStructureClassId(classes[0]?.id || "");
-    setComponents([
-      { name: "Tuition Fee", amount: 35000 },
-      { name: "Transport Fee", amount: 10000 },
-      { name: "Lab Charges", amount: 2500 },
-      { name: "Activity Fee", amount: 2500 },
-    ]);
+    // Only user-defined components count — no preset rows (avoids duplicate "Tuition" naming).
+    setComponents([{ name: "", amount: 0 }]);
   };
 
   const handleSave = async () => {
@@ -114,8 +110,10 @@ export default function FeeStructureConfig({
     <section className="rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur sm:p-6">
       <h3 className="text-lg font-semibold mb-4">Global Fee Breakdown Configuration</h3>
       <p className="text-sm text-gray-400 mb-4">
-        Manage base fee structures for different classes. Changes apply to all students in the
-        selected class.
+        Set the fee heads and amounts for each class. Student totals use{" "}
+        <span className="text-gray-300">only the sum of these components</span>, plus any{" "}
+        <span className="text-gray-300">extra fees</span> you configure below. Nothing is added on top
+        automatically. Saving updates all students already in that class.
       </p>
       <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {structures.map((s) => (

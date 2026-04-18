@@ -195,7 +195,7 @@ export const FeesBreakdown = ({
           <p className="text-xs text-amber-300/70 uppercase tracking-widest font-bold">Total Fees (All Heads)</p>
           <p className="text-2xl font-bold text-white mt-2">₹{displayTotalAmount.toLocaleString("en-IN")}</p>
           <p className="text-xs text-amber-300 mt-1 font-semibold">
-            Tuition: ₹{baseTotalFee.toLocaleString("en-IN")}
+            Pre-discount (structure + extras): ₹{baseTotalFee.toLocaleString("en-IN")}
           </p>
           <p className="text-xs text-amber-300 mt-1 font-semibold">
             Discount: ₹{discountAmount.toLocaleString("en-IN")}

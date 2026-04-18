@@ -55,8 +55,6 @@ export async function POST(req: Request) {
       "gradeSought",
       "boardingType",
       "residencyType",
-      "totalFee",
-      "discountPercent",
       "applicationFee",
       "admissionFee",
       "firstName",
@@ -134,18 +132,8 @@ export async function POST(req: Request) {
         gradeSought: body.gradeSought,
         boardingType: body.boardingType,
         residencyType: normalizeResidencyType(body.residencyType),
-        totalFee:
-          typeof body.totalFee === "number"
-            ? body.totalFee
-            : typeof body.totalFee === "string" && body.totalFee.trim()
-            ? Number(body.totalFee)
-            : null,
-        discountPercent:
-          typeof body.discountPercent === "number"
-            ? body.discountPercent
-            : typeof body.discountPercent === "string" && body.discountPercent.trim()
-            ? Number(body.discountPercent)
-            : null,
+        totalFee: null,
+        discountPercent: null,
         applicationFee:
           typeof body.applicationFee === "number"
             ? body.applicationFee

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
 
 export async function PUT(req: Request) {
   try {
@@ -86,6 +87,20 @@ export async function PUT(req: Request) {
           select: { id: true, name: true, section: true },
         },
       },
+    });
+
+    const fee = await prisma.studentFee.findUnique({
+      where: { studentId },
+      select: { discountPercent: true, amountPaid: true },
+    });
+
+    await upsertStudentFeeFromStructure(prisma, {
+      schoolId,
+      studentId,
+      classId: updatedStudent.classId,
+      section: updatedStudent.class?.section ?? null,
+      discountPercent: fee?.discountPercent ?? 0,
+      amountPaid: fee?.amountPaid ?? 0,
     });
 
     return NextResponse.json(

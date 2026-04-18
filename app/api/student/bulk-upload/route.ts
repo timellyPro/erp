@@ -6,6 +6,7 @@ import bcrypt from "bcryptjs";
 import { Role } from "@prisma/client";
 import * as XLSX from "xlsx";
 import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
+import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
 
 function toStr(value: unknown) {
   if (value === null || value === undefined) return "";
@@ -187,14 +188,10 @@ export async function POST(req: Request) {
 
     const [school, settings] = await Promise.all([
       prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } }),
-      prisma.schoolSettings.findUnique({ where: { schoolId }, select: { emailDomain: true, defaultInstallments: true } as any }),
+      prisma.schoolSettings.findUnique({ where: { schoolId }, select: { emailDomain: true } }),
     ]);
     const schoolDomain =
       normalizeEmailDomain(settings?.emailDomain) ?? schoolDomainFromName(school?.name ?? "school");
-    const schoolDefaultInstallments =
-      Number.isInteger((settings as any)?.defaultInstallments) && (settings as any).defaultInstallments > 0
-        ? (settings as any).defaultInstallments
-        : 3;
 
     const year = new Date().getFullYear();
 
@@ -218,10 +215,6 @@ export async function POST(req: Request) {
         const previousSchool =
           toStr(row.previousSchool ?? row.previousSchoolName ?? row["Previous School Name"]) ||
           null;
-        const totalFee = parseOptionalNumber(row.totalFee ?? row["Total Fee"]);
-        const discountPercent = parseOptionalNumber(
-          row.discountPercent ?? row["Discount %"] ?? 0
-        );
         const applicationFee = parseOptionalNumber(
           row.applicationFee ?? row["Application Fee"]
         );
@@ -239,8 +232,6 @@ export async function POST(req: Request) {
           aadhaarNo,
           gender,
           previousSchool,
-          totalFee,
-          discountPercent,
           rawDob,
           className: toStr(row.class ?? row.className ?? row.Class),
           section: toStr(row.section ?? row.Section),
@@ -260,18 +251,6 @@ export async function POST(req: Request) {
         if (!aadhaarNo || aadhaarNo.length < 2) {
           throw new Error("Aadhaar number is required");
         }
-        if (totalFee != null && (!Number.isFinite(totalFee) || totalFee <= 0)) {
-          throw new Error("totalFee must be a positive number");
-        }
-        if (
-          discountPercent == null ||
-          !Number.isFinite(discountPercent) ||
-          discountPercent < 0 ||
-          discountPercent > 100
-        ) {
-          throw new Error("discountPercent must be between 0 and 100");
-        }
-
         const dobDate = parseDob(rawDob);
         const timellyId = extractTimellyId(row);
         const normalizedName = normalizeStudentName(name);
@@ -387,30 +366,27 @@ export async function POST(req: Request) {
                 },
               });
 
-              if (totalFee != null) {
-                const finalFee = Number(
-                  (totalFee * (1 - discountPercent / 100)).toFixed(2)
-                );
-
-                await tx.studentFee.upsert({
-                  where: { studentId: student.id },
-                  update: {
-                    totalFee,
-                    discountPercent,
-                    finalFee,
-                    remainingFee: finalFee,
-                  },
-                  create: {
-                    studentId: student.id,
-                    totalFee,
-                    discountPercent,
-                    finalFee,
-                    amountPaid: 0,
-                    remainingFee: finalFee,
-                    installments: schoolDefaultInstallments,
-                  },
-                });
-              }
+              const classSection =
+                classId != null
+                  ? (
+                      await tx.class.findUnique({
+                        where: { id: classId },
+                        select: { section: true },
+                      })
+                    )?.section ?? null
+                  : null;
+              const feeRow = await tx.studentFee.findUnique({
+                where: { studentId: student.id },
+                select: { discountPercent: true, amountPaid: true },
+              });
+              await upsertStudentFeeFromStructure(tx, {
+                schoolId,
+                studentId: student.id,
+                classId,
+                section: classSection,
+                discountPercent: feeRow?.discountPercent ?? 0,
+                amountPaid: feeRow?.amountPaid ?? 0,
+              });
 
               return;
             }
@@ -425,8 +401,7 @@ export async function POST(req: Request) {
                   admissionPrefix: "ADM",
                   rollNoPrefix: "",
                   admissionCounter: 0,
-                  defaultInstallments: schoolDefaultInstallments,
-                } as any,
+                },
               });
             }
 
@@ -453,8 +428,7 @@ export async function POST(req: Request) {
                   admissionPrefix: true,
                   rollNoPrefix: true,
                   admissionCounter: true,
-                  defaultInstallments: true,
-                } as any,
+                },
               });
               nextNum = candidate.admissionCounter;
               updatedSettings = candidate;
@@ -490,10 +464,6 @@ export async function POST(req: Request) {
               }
             }
 
-            const defaultInstallments =
-              Number.isInteger((updatedSettings as any).defaultInstallments) && (updatedSettings as any).defaultInstallments > 0
-                ? (updatedSettings as any).defaultInstallments
-                : schoolDefaultInstallments;
             const rollNoPrefix = updatedSettings.rollNoPrefix || "";
             const finalRollNo = rowTimellyId
               ? rowTimellyId
@@ -556,23 +526,23 @@ export async function POST(req: Request) {
               },
             });
 
-            if (totalFee != null) {
-              const finalFee = Number(
-                (totalFee * (1 - discountPercent / 100)).toFixed(2)
-              );
-
-              await tx.studentFee.create({
-                data: {
-                  studentId: student.id,
-                  totalFee,
-                  discountPercent,
-                  finalFee,
-                  amountPaid: 0,
-                  remainingFee: finalFee,
-                  installments: defaultInstallments,
-                },
-              });
-            }
+            const classSectionNew =
+              classId != null
+                ? (
+                    await tx.class.findUnique({
+                      where: { id: classId },
+                      select: { section: true },
+                    })
+                  )?.section ?? null
+                : null;
+            await upsertStudentFeeFromStructure(tx, {
+              schoolId,
+              studentId: student.id,
+              classId,
+              section: classSectionNew,
+              discountPercent: 0,
+              amountPaid: 0,
+            });
           },
           {
             maxWait: 10000,

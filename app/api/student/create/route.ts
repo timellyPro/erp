@@ -6,6 +6,10 @@ import bcrypt from "bcryptjs";
 import { Role } from "@prisma/client";
 import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
 import { randomUUID } from "crypto";
+import {
+  computeStudentTuitionTotalFee,
+  upsertStudentFeeFromStructure,
+} from "@/lib/studentTuitionFromStructure";
 
 function normalizeResidencyType(value: unknown) {
   if (typeof value !== "string") return "Day Scholar";
@@ -64,8 +68,6 @@ export async function POST(req: Request) {
       parentEmail: body.email,
       dob: body.dob,
       classId: body.classId,
-      totalFee: body.totalFee,
-      discountPercent: body.discountPercent,
     });
 
     const {
@@ -82,8 +84,6 @@ export async function POST(req: Request) {
       dob,
       classId: classIdInput,
       address: addressInput,
-      totalFee: totalFeeInput,
-      discountPercent: discountPercentInput,
       rollNo,
       gender: genderInput,
       previousSchool: previousSchoolInput,
@@ -130,8 +130,6 @@ export async function POST(req: Request) {
     let effectiveDob = dob;
     let effectiveClassIdInput = classIdInput;
     let effectiveAddressInput = addressInput;
-    let effectiveTotalFeeInput = totalFeeInput;
-    let effectiveDiscountPercentInput = discountPercentInput;
     let effectiveRollNo = rollNo;
     let effectiveGenderInput = genderInput;
     let effectiveResidencyType = normalizeResidencyType(residencyTypeInput);
@@ -162,8 +160,6 @@ export async function POST(req: Request) {
       effectiveDob = app.dateOfBirth.toISOString();
       effectiveClassIdInput = app.classId ?? null;
       effectiveAddressInput = `${app.houseNo}, ${app.street}, ${app.town ? `${app.town}, ` : ""}${app.city}, ${app.state} - ${app.pinCode}`;
-      effectiveTotalFeeInput = app.totalFee ?? effectiveTotalFeeInput;
-      effectiveDiscountPercentInput = app.discountPercent ?? effectiveDiscountPercentInput;
       if (effectiveApplicationFee === null && app.applicationFee != null) {
         effectiveApplicationFee = app.applicationFee;
       }
@@ -174,6 +170,11 @@ export async function POST(req: Request) {
       effectiveResidencyType = normalizeResidencyType(app.residencyType);
       effectivePreviousSchoolInput = app.previousSchoolName;
       applicationToLink = { id: app.id };
+    }
+
+    if (!applicationToLink) {
+      effectiveApplicationFee = null;
+      effectiveAdmissionFee = null;
     }
 
     // Validate all required fields
@@ -218,41 +219,12 @@ export async function POST(req: Request) {
       ? effectiveClassIdInput.trim() 
       : null;
 
-    // Validate and parse totalFee
-    let totalFee: number;
-    if (typeof effectiveTotalFeeInput === "number") {
-      totalFee = effectiveTotalFeeInput;
-    } else if (typeof effectiveTotalFeeInput === "string" && effectiveTotalFeeInput.trim()) {
-      totalFee = Number(effectiveTotalFeeInput);
-    } else if (effectiveTotalFeeInput === null || effectiveTotalFeeInput === undefined || effectiveTotalFeeInput === "") {
-      console.error("Validation failed: totalFee is required", { totalFeeInput, type: typeof totalFeeInput });
+    if (!applicationToLink && !classId) {
       return NextResponse.json(
-        { message: "totalFee is required and must be a number" },
-        { status: 400 }
-      );
-    } else {
-      totalFee = Number(effectiveTotalFeeInput);
-    }
-    if (Number.isNaN(totalFee) || totalFee <= 0) {
-      console.error("Validation failed: totalFee must be a positive number", { totalFee, totalFeeInput });
-      return NextResponse.json(
-        { message: "totalFee must be a positive number" },
-        { status: 400 }
-      );
-    }
-
-    // Validate and parse discountPercent
-    let safeDiscount: number;
-    if (typeof effectiveDiscountPercentInput === "number") {
-      safeDiscount = effectiveDiscountPercentInput;
-    } else if (typeof effectiveDiscountPercentInput === "string" && effectiveDiscountPercentInput.trim()) {
-      safeDiscount = Number(effectiveDiscountPercentInput);
-    } else {
-      safeDiscount = 0;
-    }
-    if (Number.isNaN(safeDiscount) || safeDiscount < 0 || safeDiscount > 100) {
-      return NextResponse.json(
-        { message: "discountPercent must be a number between 0 and 100" },
+        {
+          message:
+            "Class is required. Tuition is taken from the global fee structure for that class, not entered here.",
+        },
         { status: 400 }
       );
     }
@@ -354,7 +326,7 @@ export async function POST(req: Request) {
       async (tx) => {
         const [school, emailSettings] = await Promise.all([
           tx.school.findUnique({ where: { id: schoolId }, select: { name: true } }),
-          tx.schoolSettings.findUnique({ where: { schoolId }, select: { emailDomain: true, defaultInstallments: true } as any }),
+          tx.schoolSettings.findUnique({ where: { schoolId }, select: { emailDomain: true } }),
         ]);
         const schoolDomain =
           normalizeEmailDomain(emailSettings?.emailDomain) ?? schoolDomainFromName(school?.name ?? "school");
@@ -363,13 +335,9 @@ export async function POST(req: Request) {
         let settings = await tx.schoolSettings.findUnique({ where: { schoolId } });
         if (!settings) {
           settings = await tx.schoolSettings.create({
-            data: { schoolId, admissionPrefix: "ADM", rollNoPrefix: "", admissionCounter: 0, defaultInstallments: 3 } as any,
+            data: { schoolId, admissionPrefix: "ADM", rollNoPrefix: "", admissionCounter: 0 },
           });
         }
-        const defaultInstallments =
-          Number.isInteger((settings as any)?.defaultInstallments) && (settings as any).defaultInstallments > 0
-            ? (settings as any).defaultInstallments
-            : 3;
         let nextNum = 0;
         let admissionNumber = "";
         const timellyId =
@@ -521,17 +489,30 @@ export async function POST(req: Request) {
           });
         }
 
-        const finalFee = totalFee * (1 - safeDiscount / 100);
-        await tx.studentFee.create({
-          data: {
-            studentId: studentRecord.id,
-            totalFee,
-            discountPercent: safeDiscount,
-            finalFee,
-            amountPaid: 0,
-            remainingFee: finalFee,
-            installments: defaultInstallments,
-          },
+        const classSection =
+          classId != null
+            ? (
+                await tx.class.findUnique({
+                  where: { id: classId },
+                  select: { section: true },
+                })
+              )?.section ?? null
+            : null;
+
+        await upsertStudentFeeFromStructure(tx, {
+          schoolId,
+          studentId: studentRecord.id,
+          classId,
+          section: classSection,
+          discountPercent: 0,
+          amountPaid: 0,
+        });
+
+        const tuitionSnapshot = await computeStudentTuitionTotalFee(tx, {
+          schoolId,
+          classId,
+          section: classSection,
+          studentId: studentRecord.id,
         });
 
         // Create (or link) StudentApplication to keep all admission fields for this student.
@@ -559,8 +540,8 @@ export async function POST(req: Request) {
               gradeSought: "GRADE_1",
               boardingType: "SEMI_RESIDENTIAL",
               residencyType: effectiveResidencyType,
-              totalFee,
-              discountPercent: safeDiscount,
+              totalFee: tuitionSnapshot,
+              discountPercent: 0,
               applicationFee: effectiveApplicationFee,
               admissionFee: effectiveAdmissionFee,
               rollNo: typeof effectiveRollNo === "string" && effectiveRollNo.trim() ? effectiveRollNo.trim() : null,

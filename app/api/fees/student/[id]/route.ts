@@ -73,7 +73,7 @@ export async function PATCH(req: Request, context: RouteParams) {
     }
 
     const body = await req.json();
-    const { totalFee, discountPercent, installments } = body;
+    const { totalFee, discountPercent } = body;
 
     let newTotalFee = typeof totalFee === "number" ? totalFee : existing.totalFee;
     let newDiscount =
@@ -103,10 +103,6 @@ export async function PATCH(req: Request, context: RouteParams) {
         discountPercent: newDiscount,
         finalFee,
         remainingFee,
-        installments:
-          typeof installments === "number" && installments > 0
-            ? installments
-            : existing.installments,
       },
     });
 

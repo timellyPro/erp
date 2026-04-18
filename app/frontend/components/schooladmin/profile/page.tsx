@@ -44,8 +44,6 @@ type StudentDetail = {
     totalFee: number;
     amountPaid: number;
     remainingFee: number;
-    installments: number;
-    installmentReminderDates?: string[];
     tuitionPaid?: number;
     moneyForStudent: number | null;
   } | null;
@@ -367,10 +365,6 @@ function StudentDetailsPageContent() {
               studentName={detail.student.name}
               studentId={detail.student.id}
               admissionNumber={detail.student.admissionNumber}
-              tuitionFeeAmount={detail.fee?.totalFee}
-              installmentCount={detail.fee?.installments}
-              installmentDates={detail.fee?.installmentReminderDates || []}
-              tuitionPaidAmount={detail.fee?.tuitionPaid}
               onPaymentsChanged={() => setReloadKey((k) => k + 1)}
             />
 
