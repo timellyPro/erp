@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
+import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -109,7 +110,7 @@ export async function POST(req: Request) {
         amount: Number(c.amount) || 0,
       }));
 
-    const discountRatio = fee.totalFee > 0 ? fee.finalFee / fee.totalFee : 1;
+    const structMult = structureMultiplierAfterDiscount(fee.discountPercent);
 
     const classId = student.class?.id ?? null;
     const classSection = student.class?.section ?? null;
@@ -140,7 +141,7 @@ export async function POST(req: Request) {
         headType: "BASE_COMPONENT",
         componentIndex: idx,
         componentName: c.name,
-        snapshotDue: Math.round(c.amount * discountRatio * 100) / 100,
+        snapshotDue: c.amount * structMult,
       });
     });
     for (const ef of extraFees) {
@@ -149,7 +150,7 @@ export async function POST(req: Request) {
         headType: "EXTRA_FEE",
         extraFeeId: ef.id,
         extraFeeName: ef.name,
-        snapshotDue: Math.round((Number(ef.amount) || 0) * discountRatio * 100) / 100,
+        snapshotDue: Number(ef.amount) || 0,
       });
     }
 

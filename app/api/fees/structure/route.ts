@@ -3,7 +3,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
-import { computeStudentTuitionTotalFee } from "@/lib/studentTuitionFromStructure";
+import {
+  computeStudentTuitionParts,
+  finalFeeFromStructureAndExtras,
+} from "@/lib/studentTuitionFromStructure";
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -125,14 +128,14 @@ export async function PUT(req: Request) {
           const fee = student.fee;
           if (!fee) return;
 
-          const newTotalFee = await computeStudentTuitionTotalFee(prisma, {
+          const parts = await computeStudentTuitionParts(prisma, {
             schoolId,
             classId,
             section: student.class?.section ?? null,
             studentId: student.id,
           });
-          const discount = (fee.discountPercent || 0) / 100;
-          const newFinalFee = Math.round(newTotalFee * (1 - discount) * 100) / 100;
+          const newTotalFee = parts.totalFee;
+          const newFinalFee = finalFeeFromStructureAndExtras(parts.base, parts.extrasTotal, fee.discountPercent);
           const newRemainingFee = Math.max(0, newFinalFee - fee.amountPaid);
 
           await prisma.studentFee.update({
@@ -222,8 +225,7 @@ export async function DELETE(req: Request) {
             if (applies) extraTotal += ef.amount;
           }
 
-          const discount = (fee.discountPercent || 0) / 100;
-          const newFinalFee = Math.round(extraTotal * (1 - discount) * 100) / 100;
+          const newFinalFee = finalFeeFromStructureAndExtras(0, extraTotal, fee.discountPercent);
           const newRemainingFee = Math.max(0, newFinalFee - fee.amountPaid);
 
           await prisma.studentFee.update({

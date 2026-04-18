@@ -104,7 +104,9 @@ function buildAddress(row: Record<string, unknown>) {
 
 function extractTimellyId(row: Record<string, unknown>) {
   const rawId = toStr(
-    row.rollNo ??
+    row["Timelly ID"] ??
+      row["Timelly Id"] ??
+      row.rollNo ??
       row.studentId ??
       row.admissionNo ??
       row.timellyNumber ??

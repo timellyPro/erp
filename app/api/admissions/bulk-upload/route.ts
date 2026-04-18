@@ -8,6 +8,7 @@ import { Role } from "@prisma/client";
 import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
 import { randomUUID } from "crypto";
 import { assertCanManageAdmissions, getSessionSchoolId } from "../_utils";
+import { setApplicationEnrolled } from "@/lib/admissionsListQuery";
 import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
 
 function toStr(value: unknown) {
@@ -371,7 +372,7 @@ export async function POST(req: Request) {
             amountPaid: 0,
           });
 
-          await tx.studentApplication.update({ where: { id: app.id }, data: { studentId: studentRecord.id } });
+          await setApplicationEnrolled(tx, app.id, studentRecord.id, schoolId);
           return studentRecord;
         }, { maxWait: 10000, timeout: 120000 });
 

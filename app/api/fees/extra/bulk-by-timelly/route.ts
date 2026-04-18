@@ -130,7 +130,7 @@ export async function POST(req: Request) {
         index,
         token: normTimellyToken(tid),
         feeName,
-        amount: Math.round(amountNum * 100) / 100,
+        amount: amountNum,
         expectedName: studentName,
       });
     });

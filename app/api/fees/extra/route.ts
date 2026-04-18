@@ -138,14 +138,18 @@ export async function POST(req: Request) {
           where: studentWhere,
           select: { id: true },
         });
-        const studentIds = students.map((s) => s.id);
-        if (studentIds.length > 0) {
-          await tx.studentFee.updateMany({
-            where: { studentId: { in: studentIds } },
+        for (const s of students) {
+          const fee = await tx.studentFee.findUnique({ where: { studentId: s.id } });
+          if (!fee) continue;
+          const newTotalFee = fee.totalFee + amount;
+          const newFinalFee = fee.finalFee + amount;
+          const newRemainingFee = Math.max(0, newFinalFee - fee.amountPaid);
+          await tx.studentFee.update({
+            where: { studentId: s.id },
             data: {
-              totalFee: { increment: amount },
-              finalFee: { increment: amount },
-              remainingFee: { increment: amount },
+              totalFee: newTotalFee,
+              finalFee: newFinalFee,
+              remainingFee: newRemainingFee,
             },
           });
         }

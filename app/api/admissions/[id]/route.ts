@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { getApplicationGateRow } from "@/lib/admissionsListQuery";
+import { studentApplicationDetailSelect } from "@/lib/studentApplicationSafeSelect";
 import { assertCanManageAdmissions, getSessionSchoolId } from "../_utils";
 
 function optionalString(value: unknown) {
@@ -45,10 +47,22 @@ export async function GET(_: Request, ctx: { params: Promise<{ id: string }> }) 
     const { id } = await ctx.params;
     const application = await prisma.studentApplication.findFirst({
       where: { id, schoolId },
-      include: { class: { select: { id: true, name: true, section: true } } },
+      select: {
+        ...studentApplicationDetailSelect,
+        class: { select: { id: true, name: true, section: true } },
+      },
     });
     if (!application) return NextResponse.json({ message: "Not found" }, { status: 404 });
-    return NextResponse.json({ application }, { status: 200 });
+    const gate = await getApplicationGateRow(prisma, id, schoolId);
+    return NextResponse.json(
+      {
+        application: {
+          ...application,
+          workflowStatus: gate?.workflowStatus ?? "PENDING",
+        },
+      },
+      { status: 200 }
+    );
   } catch (e: unknown) {
     const err = e as { message?: string; statusCode?: number };
     return NextResponse.json({ message: err?.message ?? "Internal server error" }, { status: err?.statusCode ?? 500 });
@@ -189,8 +203,17 @@ export async function DELETE(_: Request, ctx: { params: Promise<{ id: string }> 
     if (!schoolId) return NextResponse.json({ message: "School not found in session" }, { status: 400 });
 
     const { id } = await ctx.params;
-    const exists = await prisma.studentApplication.findFirst({ where: { id, schoolId }, select: { id: true } });
+    const exists = await prisma.studentApplication.findFirst({
+      where: { id, schoolId },
+      select: { id: true, studentId: true },
+    });
     if (!exists) return NextResponse.json({ message: "Not found" }, { status: 404 });
+    if (exists.studentId) {
+      return NextResponse.json(
+        { message: "Cannot delete an application that has been converted to a student" },
+        { status: 400 }
+      );
+    }
 
     await prisma.studentApplication.delete({ where: { id } });
     return NextResponse.json({ message: "Deleted" }, { status: 200 });

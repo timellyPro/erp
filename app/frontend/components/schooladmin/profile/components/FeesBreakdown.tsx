@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Download, Zap, Settings, PlusCircle } from "lucide-react";
+import { Download, Zap, Settings, PlusCircle, Trash2, Pencil } from "lucide-react";
 import { generatePDF } from "@/lib/pdfUtils";
 import { ModifyFeeModal } from "./ModifyFeeModal";
 import { AddExtraFeeModal } from "./AddExtraFeeModal";
+import { EditExtraFeeModal } from "./EditExtraFeeModal";
 
 type Props = {
   studentId: string;
@@ -47,9 +48,19 @@ export const FeesBreakdown = ({
   const [isGeneratingReceipt, setIsGeneratingReceipt] = useState(false);
   const [showModifyFee, setShowModifyFee] = useState(false);
   const [showAddExtraFee, setShowAddExtraFee] = useState(false);
+  const [editExtra, setEditExtra] = useState<{ id: string; name: string; amount: number } | null>(null);
   const [headsLoading, setHeadsLoading] = useState(false);
+  const [deletingExtraId, setDeletingExtraId] = useState<string | null>(null);
   const [headCards, setHeadCards] = useState<
-    Array<{ key: string; label: string; amount: number; paid: number; due: number }>
+    Array<{
+      key: string;
+      label: string;
+      amount: number;
+      paid: number;
+      due: number;
+      extraFeeId?: string;
+      canDeleteExtra?: boolean;
+    }>
   >([]);
   const [headsTotalAmount, setHeadsTotalAmount] = useState<number | null>(null);
   const [headsRemainingAmount, setHeadsRemainingAmount] = useState<number | null>(null);
@@ -102,12 +113,14 @@ export const FeesBreakdown = ({
         if (cancelled) return;
 
         const dueHeads = Array.isArray(data?.dueHeads) ? data.dueHeads : [];
-        const normalized = dueHeads.map((h: any) => ({
+        const normalized = dueHeads.map((h: Record<string, unknown>) => ({
           key: String(h.key),
           label: String(h.label || "Fee Head"),
           amount: Number(h.snapshotAmount) || 0,
           paid: Math.max((Number(h.snapshotAmount) || 0) - (Number(h.dueBefore) || 0), 0),
           due: Number(h.dueBefore) || 0,
+          extraFeeId: typeof h.extraFeeId === "string" ? h.extraFeeId : undefined,
+          canDeleteExtra: Boolean(h.canDeleteOnStudentProfile),
         }));
         setHeadCards(normalized);
         setHeadsTotalAmount(
@@ -225,13 +238,71 @@ export const FeesBreakdown = ({
         {headCards.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {headCards.map((h) => (
-              <div key={h.key} className="rounded-xl border border-white/10 bg-white/5 p-4">
-                <p className="text-xs text-gray-400 uppercase tracking-wide">{h.label}</p>
-                <p className="text-lg font-bold text-white mt-2">₹{h.amount.toLocaleString("en-IN")}</p>
-                <p className="text-xs text-lime-400 mt-1">
+              <div
+                key={h.key}
+                className="rounded-xl border border-white/10 bg-white/5 p-4 flex flex-col gap-2 min-h-[8.5rem]"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-xs text-gray-400 uppercase tracking-wide min-w-0 flex-1">{h.label}</p>
+                  {h.canDeleteExtra && h.extraFeeId ? (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        title="Edit this student extra fee"
+                        disabled={deletingExtraId === h.extraFeeId}
+                        onClick={() =>
+                          setEditExtra({
+                            id: h.extraFeeId!,
+                            name: h.label,
+                            amount: h.amount,
+                          })
+                        }
+                        className="p-2 rounded-lg border border-white/15 text-gray-300 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        title="Remove this student extra fee"
+                        disabled={deletingExtraId === h.extraFeeId}
+                        onClick={async () => {
+                          if (
+                            !confirm(
+                              `Remove extra fee "${h.label}" from this student? Their total due will be reduced by this fee amount.`
+                            )
+                          ) {
+                            return;
+                          }
+                          try {
+                            setDeletingExtraId(h.extraFeeId!);
+                            const res = await fetch(`/api/fees/extra/${encodeURIComponent(h.extraFeeId!)}`, {
+                              method: "DELETE",
+                              credentials: "include",
+                            });
+                            const data = await res.json().catch(() => ({}));
+                            if (!res.ok) {
+                              alert(typeof data.message === "string" ? data.message : "Delete failed");
+                              return;
+                            }
+                            onFeeModified?.();
+                          } catch {
+                            alert("Delete failed");
+                          } finally {
+                            setDeletingExtraId(null);
+                          }
+                        }}
+                        className="p-2 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/15 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+                <p className="text-lg font-bold text-white">₹{h.amount.toLocaleString("en-IN")}</p>
+                <p className="text-xs text-lime-400 mt-auto">
                   Paid: ₹{h.paid.toLocaleString("en-IN")}
                 </p>
-                <p className="text-xs text-red-400 mt-1">
+                <p className="text-xs text-red-400">
                   Remaining: ₹{h.due.toLocaleString("en-IN")}
                 </p>
               </div>
@@ -496,6 +567,19 @@ export const FeesBreakdown = ({
           onClose={() => setShowAddExtraFee(false)}
           onSuccess={() => {
             setShowAddExtraFee(false);
+            onFeeModified?.();
+          }}
+        />
+      )}
+
+      {editExtra && (
+        <EditExtraFeeModal
+          extraFeeId={editExtra.id}
+          initialName={editExtra.name}
+          initialAmount={editExtra.amount}
+          onClose={() => setEditExtra(null)}
+          onSuccess={() => {
+            setEditExtra(null);
             onFeeModified?.();
           }}
         />

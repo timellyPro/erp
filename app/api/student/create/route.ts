@@ -10,6 +10,8 @@ import {
   computeStudentTuitionTotalFee,
   upsertStudentFeeFromStructure,
 } from "@/lib/studentTuitionFromStructure";
+import { setApplicationEnrolled } from "@/lib/admissionsListQuery";
+import { studentApplicationForStudentCreateSelect } from "@/lib/studentApplicationSafeSelect";
 
 function normalizeResidencyType(value: unknown) {
   if (typeof value !== "string") return "Day Scholar";
@@ -142,7 +144,7 @@ export async function POST(req: Request) {
     if (typeof applicationId === "string" && applicationId.trim()) {
       const app = await prisma.studentApplication.findFirst({
         where: { id: applicationId.trim(), schoolId },
-        include: { class: { select: { id: true } } },
+        select: studentApplicationForStudentCreateSelect,
       });
       if (!app) {
         return NextResponse.json({ message: "Admission application not found" }, { status: 400 });
@@ -483,10 +485,7 @@ export async function POST(req: Request) {
         });
 
         if (applicationToLink) {
-          await tx.studentApplication.update({
-            where: { id: applicationToLink.id },
-            data: { studentId: studentRecord.id },
-          });
+          await setApplicationEnrolled(tx, applicationToLink.id, studentRecord.id, schoolId);
         }
 
         const classSection =

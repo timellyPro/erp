@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
+import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -90,7 +91,7 @@ export async function GET() {
         amount: Number(c.amount) || 0,
       }));
 
-    const discountRatio = fee.totalFee > 0 ? fee.finalFee / fee.totalFee : 1;
+    const structMult = structureMultiplierAfterDiscount(fee.discountPercent);
 
     type HeadKey =
       | { key: string; headType: "BASE_COMPONENT"; componentIndex: number; label: string; snapshotDue: number }
@@ -102,14 +103,14 @@ export async function GET() {
         headType: "BASE_COMPONENT" as const,
         componentIndex: idx,
         label: c.name,
-        snapshotDue: Math.round(c.amount * discountRatio * 100) / 100,
+        snapshotDue: c.amount * structMult,
       })),
       ...extraFees.map((ef) => ({
         key: `EXTRA:${ef.id}`,
         headType: "EXTRA_FEE" as const,
         extraFeeId: ef.id,
         label: ef.name,
-        snapshotDue: Math.round((Number(ef.amount) || 0) * discountRatio * 100) / 100,
+        snapshotDue: Number(ef.amount) || 0,
       })),
     ];
 

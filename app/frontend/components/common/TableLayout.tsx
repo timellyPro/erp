@@ -28,6 +28,12 @@ type DataTableProps<T> = {
     totalPages: number;
     onChange: (page: number) => void;
   };
+  /** Columns size to content; outer area scrolls horizontally (avoids cramped fixed columns). */
+  scrollableWide?: boolean;
+  /** Pin the first column while scrolling horizontally (pair with scrollableWide). */
+  stickyFirstColumn?: boolean;
+  /** Tighter footer row inside the same card (no extra bordered box). */
+  paginationInline?: boolean;
 };
 
 const ALIGN_CLASS = {
@@ -56,6 +62,9 @@ function DataTable<T>({
   rowClassName = "",
   tdClassName = "",
   pagination,
+  scrollableWide = false,
+  stickyFirstColumn = false,
+  paginationInline = false,
 }: DataTableProps<T>) {
   const canPaginate =
     Boolean(pagination) &&
@@ -86,9 +95,9 @@ function DataTable<T>({
   };
 
   return (
-    <div className="w-full space-y-4">
+    <div className="w-full min-w-0 max-w-full space-y-4">
       <div
-        className={`block ${
+        className={`block min-w-0 max-w-full ${
           container
             ? `
               ${rounded ? "rounded-3xl" : "rounded-none"}
@@ -112,10 +121,17 @@ function DataTable<T>({
           </div>
         )}
 
-        {/* 🔥 FIXED TABLE WRAPPER */}
-        <div className="w-full overflow-x-auto">
+        <div
+          className={`w-full min-w-0 max-w-full overscroll-x-contain ${
+            scrollableWide
+              ? "relative z-0 scroll-smooth overflow-x-scroll pb-3 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.35)_rgba(255,255,255,0.08)] [&::-webkit-scrollbar]:h-2.5 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-white/[0.08] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/30 hover:[&::-webkit-scrollbar-thumb]:bg-white/45"
+              : "overflow-x-auto"
+          }`}
+        >
           <table
-            className={`w-full table-fixed text-sm border-collapse ${tableClassName}`}
+            className={`${
+              scrollableWide ? "w-max min-w-full table-auto" : "w-full table-fixed"
+            } text-sm border-collapse ${tableClassName}`}
             aria-busy={loading}
           >
             {caption && <caption className="sr-only">{caption}</caption>}
@@ -130,6 +146,10 @@ function DataTable<T>({
                     scope="col"
                     className={`px-3 md:px-4 lg:px-6 py-3 md:py-4 text-[11px] md:text-xs font-semibold text-gray-400 uppercase tracking-wider ${
                       ALIGN_CLASS[col.align ?? "left"]
+                    } ${
+                      scrollableWide && stickyFirstColumn && i === 0
+                        ? "sticky left-0 z-20 border-r border-white/10 bg-white/[0.08] backdrop-blur-md"
+                        : ""
                     } ${thClassName}`}
                   >
                     {col.header}
@@ -167,13 +187,17 @@ function DataTable<T>({
                 data.map((row, rowIndex) => (
                   <tr
                     key={getKey(row, rowIndex)}
-                    className={`hover:bg-white/5 transition-colors duration-200 ${rowClassName}`}
+                    className={`group hover:bg-white/5 transition-colors duration-200 ${rowClassName}`}
                   >
                     {columns.map((col, colIndex) => (
                       <td
                         key={colIndex}
-                        className={`px-3 md:px-4 lg:px-6 py-3 md:py-4 text-sm text-white truncate ${
-                          ALIGN_CLASS[col.align ?? "left"]
+                        className={`px-3 md:px-4 lg:px-6 py-3 md:py-4 text-sm text-white ${
+                          scrollableWide ? "align-top whitespace-normal" : "truncate"
+                        } ${ALIGN_CLASS[col.align ?? "left"]} ${
+                          scrollableWide && stickyFirstColumn && colIndex === 0
+                            ? "sticky left-0 z-10 border-r border-white/10 bg-zinc-950/95 backdrop-blur-sm shadow-[4px_0_14px_rgba(0,0,0,0.35)] group-hover:bg-zinc-900/95"
+                            : ""
                         } ${tdClassName}`}
                       >
                         {renderCell(col, row, rowIndex)}
@@ -188,7 +212,13 @@ function DataTable<T>({
 
       {/* PAGINATION */}
       {canPaginate && pagination && (
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+        <div
+          className={
+            paginationInline
+              ? "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-t border-white/10 bg-white/[0.03] px-4 py-3"
+              : "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3"
+          }
+        >
           <span className="text-xs text-white/60">
             Page {pagination.page} of {pagination.totalPages}
           </span>

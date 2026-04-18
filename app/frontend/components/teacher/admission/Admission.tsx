@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
-import { Download, Pencil, PlusCircle, Printer, Save, Search, Trash2 } from "lucide-react";
+import { CheckCircle, Pencil, PlusCircle, Printer, Save, Search, Trash2, UserPlus } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
 import PageTabs from "../../schooladmin/schooladmincomponents/PageHeaderTabs";
 import InputField from "../../schooladmin/schooladmincomponents/InputField";
@@ -33,6 +33,8 @@ type AdmissionRow = {
   applicationNo: string;
   admissionNo: string | null;
   fedenaNo: string | null;
+  studentId?: string | null;
+  workflowStatus?: "PENDING" | "UPCOMING" | "APPROVED";
   classId?: string | null;
   class?: { id: string; name: string; section: string | null } | null;
   gradeSought: Grade;
@@ -214,6 +216,24 @@ function formatInrCell(n: number | null | undefined) {
   return `₹ ${Number(n).toLocaleString("en-IN")}`;
 }
 
+function formatGradeLabel(g: string) {
+  return g.replace(/^GRADE_/i, "Grade ").replace(/_/g, " ");
+}
+
+function formatBoardingLabel(b: string) {
+  return b
+    .split("_")
+    .map((p) => p.charAt(0) + p.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function classLabel(r: AdmissionRow) {
+  if (r.class?.name) {
+    return r.class.section ? `${r.class.name} · ${r.class.section}` : r.class.name;
+  }
+  return "—";
+}
+
 function normalizeResidencyType(value: string | null | undefined): string {
   const v = (value ?? "").trim().toLowerCase().replace(/\s+/g, "");
   if (!v) return "Day Scholar";
@@ -221,16 +241,6 @@ function normalizeResidencyType(value: string | null | undefined): string {
   if (v === "hostler" || v === "hosteler" || v === "hosteller" || v === "hoster") return "Hosteller";
   if (v === "rte") return "RTE";
   return value?.trim() || "Day Scholar";
-}
-
-function extractRemarks(row: AdmissionRow): string {
-  const app = row.applicationFeePaymentMethod ?? "";
-  const adm = row.admissionFeePaymentMethod ?? "";
-  const source = adm.includes("REMARKS:") ? adm : app;
-  const marker = "REMARKS:";
-  const idx = source.indexOf(marker);
-  if (idx < 0) return "";
-  return source.slice(idx + marker.length).trim();
 }
 
 export default function TeacherAdmissionTab() {
@@ -255,6 +265,8 @@ export default function TeacherAdmissionTab() {
     to: "",
     classId: "",
   });
+  const [listPhase, setListPhase] = useState<"all" | "pending" | "upcoming" | "approved">("all");
+  const [workflowBusyId, setWorkflowBusyId] = useState<string | null>(null);
 
   const [reloadKey, setReloadKey] = useState(0);
   const [deleteRow, setDeleteRow] = useState<AdmissionRow | null>(null);
@@ -414,6 +426,50 @@ export default function TeacherAdmissionTab() {
     }
   };
 
+  const patchWorkflow = useCallback(async (row: AdmissionRow, workflowStatus: "PENDING" | "UPCOMING") => {
+    setWorkflowBusyId(row.id);
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/admissions/${row.id}/workflow`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ workflowStatus }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || "Failed to update status");
+      setMessageTone("success");
+      setMessage(data?.message || "Status updated");
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      setMessageTone("error");
+      setMessage(e instanceof Error ? e.message : "Failed to update status");
+    } finally {
+      setWorkflowBusyId(null);
+    }
+  }, []);
+
+  const enrollFromRow = useCallback(async (row: AdmissionRow) => {
+    setWorkflowBusyId(row.id);
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/admissions/${row.id}/enroll`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || "Enrollment failed");
+      setMessageTone("success");
+      setMessage(data?.message || "Student created successfully");
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      setMessageTone("error");
+      setMessage(e instanceof Error ? e.message : "Enrollment failed");
+    } finally {
+      setWorkflowBusyId(null);
+    }
+  }, []);
+
   useEffect(() => {
     fetch("/api/class/list")
       .then((res) => res.json())
@@ -460,127 +516,206 @@ export default function TeacherAdmissionTab() {
 
   const tableColumns: any[] = useMemo(
     () => [
-      { header: "Student", render: (r: AdmissionRow) => <span className="text-sm text-white/80">{`${r.firstName} ${r.lastName}`}</span> },
-      { header: "Grade", render: (r: AdmissionRow) => <span className="text-sm text-white/70">{r.gradeSought}</span> },
-      { header: "Boarding", render: (r: AdmissionRow) => <span className="text-sm text-white/70">{r.boardingType}</span> },
-      { header: "Residency", render: (r: AdmissionRow) => <span className="text-sm text-white/70">{normalizeResidencyType(r.residencyType)}</span> },
-      { header: "Parent Phone", render: (r: AdmissionRow) => <span className="text-sm text-white/70">{r.parentPhone}</span> },
       {
-        header: "Application Fee",
+        header: "Application no.",
         render: (r: AdmissionRow) => (
-          <span className="text-sm text-white/70">{formatInrCell(r.applicationFee)}</span>
+          <span className="text-sm font-mono text-white/85">{r.applicationNo || "—"}</span>
         ),
       },
       {
-        header: "Admission Fee",
+        header: "Applicant",
         render: (r: AdmissionRow) => (
-          <span className="text-sm text-white/70">{formatInrCell(r.admissionFee)}</span>
+          <span className="text-sm text-white/80">{`${r.firstName} ${r.lastName}`.trim()}</span>
         ),
       },
       {
-        header: "App Fee Status",
-        render: (r: AdmissionRow) => {
-          const amount = Number(r.applicationFee ?? 0);
-          const isPaid = Boolean(r.applicationFeePaid);
-          if (amount <= 0) return <span className="text-xs text-white/40">Not set</span>;
-          if (isPaid) {
-            return (
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-1 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  Paid
-                </span>
-                <button
-                  type="button"
-                  onClick={() => printFeeReceipt(r, "APPLICATION")}
-                  className="inline-flex items-center justify-center p-1.5 rounded-lg bg-lime-400/10 border border-lime-400/25 text-lime-300 hover:bg-lime-400/20"
-                  title="Print application fee receipt"
-                >
-                  <Printer size={14} />
-                </button>
-              </div>
-            );
-          }
-          return (
-            <button
-              type="button"
-              onClick={() => {
-                setPaymentForm({ paymentMode: "OFFLINE", paymentMethod: "CASH", referenceNo: "", remarks: "" });
-                setPaymentDialog({ row: r, feeType: "APPLICATION" });
-              }}
-              className="px-2 py-1 rounded-lg text-[10px] bg-amber-500/10 border border-amber-500/25 text-amber-300 hover:bg-amber-500/20"
-            >
-              Pay Now
-            </button>
-          );
-        },
-      },
-      {
-        header: "Adm Fee Status",
-        render: (r: AdmissionRow) => {
-          const amount = Number(r.admissionFee ?? 0);
-          const isPaid = Boolean(r.admissionFeePaid);
-          if (amount <= 0) return <span className="text-xs text-white/40">Not set</span>;
-          if (isPaid) {
-            return (
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-1 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  Paid
-                </span>
-                <button
-                  type="button"
-                  onClick={() => printFeeReceipt(r, "ADMISSION")}
-                  className="inline-flex items-center justify-center p-1.5 rounded-lg bg-lime-400/10 border border-lime-400/25 text-lime-300 hover:bg-lime-400/20"
-                  title="Print admission fee receipt"
-                >
-                  <Printer size={14} />
-                </button>
-              </div>
-            );
-          }
-          return (
-            <button
-              type="button"
-              onClick={() => {
-                setPaymentForm({ paymentMode: "OFFLINE", paymentMethod: "CASH", referenceNo: "", remarks: "" });
-                setPaymentDialog({ row: r, feeType: "ADMISSION" });
-              }}
-              className="px-2 py-1 rounded-lg text-[10px] bg-amber-500/10 border border-amber-500/25 text-amber-300 hover:bg-amber-500/20"
-            >
-              Pay Now
-            </button>
-          );
-        },
-      },
-      {
-        header: "Remarks",
-        render: (r: AdmissionRow) => <span className="text-xs text-white/60">{extractRemarks(r) || "—"}</span>,
-      },
-      { header: "Created", render: (r: AdmissionRow) => <span className="text-sm text-white/60">{new Date(r.createdAt).toLocaleDateString()}</span> },
-      {
-        header: "Actions",
+        header: "Class (applied for)",
         render: (r: AdmissionRow) => (
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => router.push(`?tab=admission&view=add&editId=${r.id}`)}
-              className="p-2 rounded-lg bg-white/5 border border-white/10 text-white/70 hover:bg-white/10"
-              title="Edit application"
-            >
-              <Pencil size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={() => setDeleteRow(r)}
-              className="p-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 hover:bg-red-500/20"
-              title="Delete application"
-            >
-              <Trash2 size={14} />
-            </button>
+          <span className="text-sm text-white/70">{classLabel(r)}</span>
+        ),
+      },
+      {
+        header: "Grade sought",
+        render: (r: AdmissionRow) => (
+          <span className="text-sm text-white/70">{formatGradeLabel(r.gradeSought)}</span>
+        ),
+      },
+      {
+        header: "Boarding",
+        render: (r: AdmissionRow) => (
+          <span className="text-sm text-white/70">{formatBoardingLabel(r.boardingType)}</span>
+        ),
+      },
+      {
+        header: "Residency",
+        render: (r: AdmissionRow) => (
+          <span className="text-sm text-white/70">{normalizeResidencyType(r.residencyType)}</span>
+        ),
+      },
+      {
+        header: "Parent",
+        render: (r: AdmissionRow) => (
+          <div className="text-sm text-white/70">
+            <div className="text-white/80">{r.parentName}</div>
+            <div className="text-xs text-white/50">{r.parentPhone}</div>
           </div>
         ),
       },
+      {
+        header: "Aadhar",
+        render: (r: AdmissionRow) => (
+          <span className="text-xs font-mono text-white/60">{r.aadharNo || "—"}</span>
+        ),
+      },
+      {
+        header: "Fees (record)",
+        render: (r: AdmissionRow) => (
+          <div className="text-xs text-white/65 leading-relaxed">
+            <div>App: {formatInrCell(r.applicationFee)}</div>
+            <div>Adm: {formatInrCell(r.admissionFee)}</div>
+          </div>
+        ),
+      },
+      {
+        header: "Application status",
+        render: (r: AdmissionRow) => {
+          if (r.studentId) {
+            return (
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                <CheckCircle size={12} />
+                Enrolled
+              </span>
+            );
+          }
+          const wf = r.workflowStatus ?? "PENDING";
+          if (wf === "UPCOMING") {
+            return (
+              <span className="px-2 py-1 rounded-full text-[10px] font-semibold bg-sky-500/20 text-sky-200 border border-sky-500/30">
+                Upcoming
+              </span>
+            );
+          }
+          return (
+            <span className="px-2 py-1 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-200 border border-amber-500/25">
+              Pending
+            </span>
+          );
+        },
+      },
+      { header: "Applied on", render: (r: AdmissionRow) => <span className="text-sm text-white/60">{new Date(r.createdAt).toLocaleDateString()}</span> },
+      {
+        header: "Actions",
+        render: (r: AdmissionRow) => {
+          const busy = workflowBusyId === r.id;
+          const enrolled = Boolean(r.studentId);
+          const wf = r.workflowStatus ?? "PENDING";
+          const openPay = (feeType: FeeType) => {
+            setPaymentForm({ paymentMode: "OFFLINE", paymentMethod: "CASH", referenceNo: "", remarks: "" });
+            setPaymentDialog({ row: r, feeType });
+          };
+          return (
+            <div className="flex flex-col gap-2 items-start min-w-[220px]">
+              <div className="flex flex-wrap items-center gap-1">
+                {Number(r.applicationFee ?? 0) > 0 &&
+                  (r.applicationFeePaid ? (
+                    <button
+                      type="button"
+                      onClick={() => printFeeReceipt(r, "APPLICATION")}
+                      className="inline-flex items-center justify-center rounded-md border border-lime-400/25 bg-lime-400/10 p-1.5 text-lime-300 hover:bg-lime-400/20"
+                      title="Print application fee receipt"
+                    >
+                      <Printer size={13} />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => openPay("APPLICATION")}
+                      className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-amber-200 hover:bg-amber-500/20"
+                      title="Pay application fee"
+                    >
+                      Pay app
+                    </button>
+                  ))}
+                {Number(r.admissionFee ?? 0) > 0 &&
+                  (r.admissionFeePaid ? (
+                    <button
+                      type="button"
+                      onClick={() => printFeeReceipt(r, "ADMISSION")}
+                      className="inline-flex items-center justify-center rounded-md border border-lime-400/25 bg-lime-400/10 p-1.5 text-lime-300 hover:bg-lime-400/20"
+                      title="Print admission fee receipt"
+                    >
+                      <Printer size={13} />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => openPay("ADMISSION")}
+                      className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-amber-200 hover:bg-amber-500/20"
+                      title="Pay admission fee"
+                    >
+                      Pay adm
+                    </button>
+                  ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {!enrolled && (
+                  <>
+                    {wf === "PENDING" ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => patchWorkflow(r, "UPCOMING")}
+                        className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-sky-500/15 border border-sky-500/30 text-sky-200 hover:bg-sky-500/25 disabled:opacity-50"
+                      >
+                        Upcoming
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => patchWorkflow(r, "PENDING")}
+                        className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-white/5 border border-white/15 text-white/70 hover:bg-white/10 disabled:opacity-50"
+                      >
+                        Pending
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => enrollFromRow(r)}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold bg-lime-400/20 border border-lime-400/35 text-lime-200 hover:bg-lime-400/30 disabled:opacity-50"
+                      title="Creates the student in your school roster (same as admin student create)"
+                    >
+                      <UserPlus size={12} />
+                      Approve
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => router.push(`?tab=admission&view=add&editId=${r.id}`)}
+                  className="p-2 rounded-lg bg-white/5 border border-white/10 text-white/70 hover:bg-white/10"
+                  title={enrolled ? "View / edit application" : "Edit application"}
+                >
+                  <Pencil size={14} />
+                </button>
+                {!enrolled && (
+                  <button
+                    type="button"
+                    onClick={() => setDeleteRow(r)}
+                    className="p-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 hover:bg-red-500/20"
+                    title="Delete application"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        },
+      },
     ],
-    [router, schoolName, schoolAddress, printFeeReceipt]
+    [router, schoolName, schoolAddress, printFeeReceipt, patchWorkflow, enrollFromRow, workflowBusyId]
   );
 
   useEffect(() => {
@@ -588,7 +723,7 @@ export default function TeacherAdmissionTab() {
     const params = new URLSearchParams();
     params.set("page", String(page));
     params.set("pageSize", "10");
-    params.set("unconvertedOnly", "1");
+    if (listPhase !== "all") params.set("phase", listPhase);
     if (search.trim()) params.set("search", search.trim());
     if (filters.gradeSought) params.set("gradeSought", filters.gradeSought);
     if (filters.boardingType) params.set("boardingType", filters.boardingType);
@@ -615,7 +750,7 @@ export default function TeacherAdmissionTab() {
         setMessage(e instanceof Error ? e.message : "Failed to load admissions");
       })
       .finally(() => setLoading(false));
-  }, [view, page, search, filters.gradeSought, filters.boardingType, filters.classId, filters.from, filters.to, reloadKey]);
+  }, [view, page, search, filters.gradeSought, filters.boardingType, filters.classId, filters.from, filters.to, listPhase, reloadKey]);
 
   useEffect(() => {
     if (view !== "add" || !editId) return;
@@ -769,37 +904,15 @@ export default function TeacherAdmissionTab() {
     }
   };
 
-  const exportExcel = async () => {
-    const params = new URLSearchParams();
-    params.set("unconvertedOnly", "1");
-    if (search.trim()) params.set("search", search.trim());
-    if (filters.gradeSought) params.set("gradeSought", filters.gradeSought);
-    if (filters.boardingType) params.set("boardingType", filters.boardingType);
-    if (filters.classId) params.set("classId", filters.classId);
-    if (filters.from) params.set("from", filters.from);
-    if (filters.to) params.set("to", filters.to);
-
-    const res = await fetch(`/api/admissions/export?${params.toString()}`);
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error((d as any)?.message || "Export failed");
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `admissions-${Date.now()}.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  };
-
   return (
     <>
       <PageHeader
         title="Admission"
-        subtitle="Create student admission applications, filter, and export to Excel."
+        subtitle={
+          view === "all"
+            ? "This list is admission applications only. The enrolled student roster is under the Students tab."
+            : "Track applications as Pending → Upcoming, then approve to create the school student automatically."
+        }
         rightSlot={
           <PageTabs
             tabs={[
@@ -811,7 +924,7 @@ export default function TeacherAdmissionTab() {
         }
       />
 
-      <div className="space-y-6">
+      <div className="w-full min-w-0 max-w-full space-y-6">
         {view === "add" && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
             <div className="bg-white/5 backdrop-blur-xl rounded-2xl p-6 border border-white/10 space-y-6">
@@ -1032,7 +1145,22 @@ export default function TeacherAdmissionTab() {
         )}
 
         {view === "all" && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="w-full min-w-0 max-w-full space-y-4"
+          >
+            {message && (
+              <div
+                className={`rounded-xl border p-4 ${
+                  messageTone === "success"
+                    ? "bg-lime-400/10 border-lime-400/20 text-lime-300"
+                    : "bg-red-500/10 border-red-500/20 text-red-300"
+                }`}
+              >
+                {message}
+              </div>
+            )}
             <div className="bg-white/5 backdrop-blur-xl rounded-2xl p-4 border border-white/10 space-y-4">
               <div className="flex flex-col md:flex-row gap-3 md:items-center">
                 <div className="flex-1">
@@ -1062,7 +1190,7 @@ export default function TeacherAdmissionTab() {
                 </div>
                 <div className="w-full md:w-[240px]">
                   <Select
-                    label="Class"
+                    label="Class applied for"
                     value={filters.classId || ""}
                     onChange={(v) => setFilters((p) => ({ ...p, classId: v }))}
                     options={[
@@ -1074,23 +1202,33 @@ export default function TeacherAdmissionTab() {
                     ]}
                   />
                 </div>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      await exportExcel();
-                    } catch (e) {
-                      setMessageTone("error");
-                      setMessage(e instanceof Error ? e.message : "Export failed");
-                    }
-                  }}
-                  className="h-[44px] mt-[22px] md:mt-0 px-4 py-2 rounded-xl bg-lime-400/20 border border-lime-400/30 text-lime-300 font-semibold hover:bg-lime-400/30 flex items-center gap-2"
-                  title="Export filtered results to Excel"
-                >
-                  <Download size={16} />
-                  Export
-                </button>
+              </div>
 
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    { id: "all" as const, label: "All" },
+                    { id: "pending" as const, label: "Pending" },
+                    { id: "upcoming" as const, label: "Upcoming" },
+                    { id: "approved" as const, label: "Enrolled" },
+                  ] as const
+                ).map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => {
+                      setListPhase(tab.id);
+                      setPage(1);
+                    }}
+                    className={`px-4 py-2 rounded-xl text-sm font-semibold border transition-colors ${
+                      listPhase === tab.id
+                        ? "bg-lime-400/25 border-lime-400/40 text-lime-200"
+                        : "bg-white/5 border-white/10 text-white/70 hover:bg-white/10"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1109,14 +1247,25 @@ export default function TeacherAdmissionTab() {
               </div>
             </div>
 
-            <div className="hidden md:block">
-              <DataTable
-                columns={tableColumns}
-                data={rows}
-                loading={loading}
-                showMobile={false}
-                pagination={{ page, totalPages, onChange: setPage }}
-              />
+            <div className="hidden w-full min-w-0 max-w-full md:block isolate">
+              <div className="max-w-full min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04]">
+                <DataTable
+                  columns={tableColumns}
+                  data={rows}
+                  loading={loading}
+                  showMobile={false}
+                  container={false}
+                  rounded={false}
+                  scrollableWide
+                  caption="Admission applications for this school"
+                  tableTitle="Applications"
+                  tableSubtitle="Admission applications only — not the Students tab. Scroll sideways if needed."
+                  containerClassName="max-w-full"
+                  emptyText="No admission applications match your filters."
+                  paginationInline
+                  pagination={{ page, totalPages, onChange: setPage }}
+                />
+              </div>
             </div>
 
             <div className="md:hidden space-y-3">
@@ -1127,12 +1276,67 @@ export default function TeacherAdmissionTab() {
               ) : (
                 rows.map((r) => (
                   <div key={r.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                    <div className="text-white font-semibold">{`${r.firstName} ${r.lastName}`}</div>
-                    <div className="text-white/50 text-xs mt-1">{`${r.gradeSought} • ${r.boardingType}`}</div>
-                    <div className="text-white/50 text-xs mt-1">{`Phone: ${r.parentPhone}`}</div>
+                    <div className="text-white/45 text-[10px] font-semibold uppercase tracking-wide">App #{r.applicationNo}</div>
+                    <div className="text-white font-semibold mt-0.5">{`${r.firstName} ${r.lastName}`}</div>
                     <div className="text-white/50 text-xs mt-1">
-                      App fee: {formatInrCell(r.applicationFee)} · Adm fee: {formatInrCell(r.admissionFee)}
+                      {classLabel(r)} · {formatGradeLabel(r.gradeSought)} · {formatBoardingLabel(r.boardingType)}
                     </div>
+                    <div className="text-white/50 text-xs mt-0.5">{normalizeResidencyType(r.residencyType)}</div>
+                    <div className="text-white/50 text-xs mt-1">
+                      {r.parentName} · {r.parentPhone}
+                    </div>
+                    <div className="text-white/50 text-xs mt-1">Aadhaar: {r.aadharNo}</div>
+                    <div className="text-white/50 text-xs mt-1">
+                      App: {formatInrCell(r.applicationFee)} · Adm: {formatInrCell(r.admissionFee)}
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {r.studentId ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                          <CheckCircle size={12} />
+                          Enrolled
+                        </span>
+                      ) : (r.workflowStatus ?? "PENDING") === "UPCOMING" ? (
+                        <span className="px-2 py-1 rounded-full text-[10px] font-semibold bg-sky-500/20 text-sky-200 border border-sky-500/30">
+                          Upcoming
+                        </span>
+                      ) : (
+                        <span className="px-2 py-1 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-200 border border-amber-500/25">
+                          Pending
+                        </span>
+                      )}
+                    </div>
+                    {!r.studentId && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {(r.workflowStatus ?? "PENDING") === "PENDING" ? (
+                          <button
+                            type="button"
+                            disabled={workflowBusyId === r.id}
+                            onClick={() => patchWorkflow(r, "UPCOMING")}
+                            className="flex-1 min-w-[120px] px-3 py-2 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-200 text-xs font-semibold disabled:opacity-50"
+                          >
+                            Mark upcoming
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={workflowBusyId === r.id}
+                            onClick={() => patchWorkflow(r, "PENDING")}
+                            className="flex-1 min-w-[120px] px-3 py-2 rounded-xl bg-white/5 border border-white/15 text-white/70 text-xs font-semibold disabled:opacity-50"
+                          >
+                            Back to pending
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={workflowBusyId === r.id}
+                          onClick={() => enrollFromRow(r)}
+                          className="flex-1 min-w-[120px] px-3 py-2 rounded-xl bg-lime-400/20 border border-lime-400/35 text-lime-200 text-xs font-semibold disabled:opacity-50 inline-flex items-center justify-center gap-1"
+                        >
+                          <UserPlus size={14} />
+                          Approve & enroll
+                        </button>
+                      </div>
+                    )}
                     <div className="mt-3 flex flex-col gap-2">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {Number(r.applicationFee ?? 0) > 0 && !r.applicationFeePaid && (
@@ -1186,7 +1390,7 @@ export default function TeacherAdmissionTab() {
                       )}
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className={`grid gap-2 ${r.studentId ? "grid-cols-1" : "grid-cols-2"}`}>
                       <button
                         type="button"
                         onClick={() => router.push(`?tab=admission&view=add&editId=${r.id}`)}
@@ -1194,13 +1398,15 @@ export default function TeacherAdmissionTab() {
                       >
                         Edit
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setDeleteRow(r)}
-                        className="w-full px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-xs"
-                      >
-                        Delete
-                      </button>
+                      {!r.studentId && (
+                        <button
+                          type="button"
+                          onClick={() => setDeleteRow(r)}
+                          className="w-full px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-xs"
+                        >
+                          Delete
+                        </button>
+                      )}
                       </div>
                     </div>
                   </div>

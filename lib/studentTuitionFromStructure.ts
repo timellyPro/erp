@@ -47,7 +47,7 @@ export async function sumClassBaseTuition(db: TuitionDb, classId: string | null)
  * Tuition total (before discount) from global class fee structure plus applicable extra fees.
  * Matches the rules used when saving a class fee structure in `/api/fees/structure`.
  */
-export async function computeStudentTuitionTotalFee(
+export async function computeStudentTuitionParts(
   db: TuitionDb,
   args: {
     schoolId: string;
@@ -55,7 +55,7 @@ export async function computeStudentTuitionTotalFee(
     section: string | null;
     studentId: string | null;
   }
-): Promise<number> {
+): Promise<{ base: number; extrasTotal: number; totalFee: number }> {
   const base = await sumClassBaseTuition(db, args.classId);
   const extraFees = await db.extraFee.findMany({
     where: { schoolId: args.schoolId },
@@ -67,12 +67,43 @@ export async function computeStudentTuitionTotalFee(
       targetStudentId: true,
     },
   });
-  return base + sumExtraFeesForStudent(extraFees, args);
+  const extrasTotal = sumExtraFeesForStudent(extraFees, args);
+  return { base, extrasTotal, totalFee: base + extrasTotal };
 }
 
+export async function computeStudentTuitionTotalFee(
+  db: TuitionDb,
+  args: {
+    schoolId: string;
+    classId: string | null;
+    section: string | null;
+    studentId: string | null;
+  }
+): Promise<number> {
+  const p = await computeStudentTuitionParts(db, args);
+  return p.totalFee;
+}
+
+/** Multiplier applied to class fee structure only (student discount %). */
+export function structureMultiplierAfterDiscount(discountPercent: number): number {
+  return 1 - Math.min(100, Math.max(0, discountPercent || 0)) / 100;
+}
+
+/**
+ * Amount the student must pay: discounted class structure + extra fees at full face value
+ * (extras are not reduced by the student discount %).
+ */
+export function finalFeeFromStructureAndExtras(
+  structurePreDiscountTotal: number,
+  extraFeesTotal: number,
+  discountPercent: number
+): number {
+  return structurePreDiscountTotal * structureMultiplierAfterDiscount(discountPercent) + extraFeesTotal;
+}
+
+/** @deprecated Prefer {@link finalFeeFromStructureAndExtras} when extras exist; kept for all-or-nothing discount on one lump. */
 export function finalFeeFromTotalAndDiscount(totalFee: number, discountPercent: number): number {
-  const d = Math.min(100, Math.max(0, discountPercent || 0)) / 100;
-  return Math.round(totalFee * (1 - d) * 100) / 100;
+  return finalFeeFromStructureAndExtras(totalFee, 0, discountPercent);
 }
 
 type FeeWriteDb = Pick<typeof prisma, "classFeeStructure" | "extraFee" | "studentFee">;
@@ -88,13 +119,14 @@ export async function upsertStudentFeeFromStructure(
     amountPaid: number;
   }
 ) {
-  const totalFee = await computeStudentTuitionTotalFee(db, {
+  const parts = await computeStudentTuitionParts(db, {
     schoolId: params.schoolId,
     classId: params.classId,
     section: params.section,
     studentId: params.studentId,
   });
-  const finalFee = finalFeeFromTotalAndDiscount(totalFee, params.discountPercent);
+  const totalFee = parts.totalFee;
+  const finalFee = finalFeeFromStructureAndExtras(parts.base, parts.extrasTotal, params.discountPercent);
   const remainingFee = Math.max(0, finalFee - params.amountPaid);
 
   await db.studentFee.upsert({

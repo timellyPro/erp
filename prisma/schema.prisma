@@ -1194,6 +1194,9 @@ model StudentApplication {
   emergencyMotherNo   String
   emergencyGuardianNo String
 
+  /// PENDING / UPCOMING = not yet a school student; APPROVED = enrolled (studentId set)
+  workflowStatus AdmissionWorkflowStatus @default(PENDING)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1203,11 +1206,18 @@ model StudentApplication {
   @@index([gradeSought])
   @@index([boardingType])
   @@index([residencyType])
+  @@index([workflowStatus])
   @@index([createdAt])
   @@unique([schoolId, aadharNo])
 }
 
 // ENUMS
+enum AdmissionWorkflowStatus {
+  PENDING
+  UPCOMING
+  APPROVED
+}
+
 enum Gender {
   MALE
   FEMALE
