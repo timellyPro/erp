@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
-import { CheckCircle, Pencil, PlusCircle, Printer, Save, Search, Trash2, UserPlus } from "lucide-react";
+import { CheckCircle, Pencil, PlusCircle, Printer, Save, Search, Trash2, UserPlus, Loader2 } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
 import PageTabs from "../../schooladmin/schooladmincomponents/PageHeaderTabs";
 import InputField from "../../schooladmin/schooladmincomponents/InputField";
@@ -284,6 +284,7 @@ export default function TeacherAdmissionTab() {
     feeType: FeeType;
   } | null>(null);
   const [paying, setPaying] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
   const [paymentForm, setPaymentForm] = useState<{
     paymentMode: string;
     paymentMethod: string;
@@ -333,21 +334,30 @@ export default function TeacherAdmissionTab() {
     };
 
     setReceiptData(data);
+    
+    // Open window synchronously to avoid popup blockers on mobile devices
+    const printWindow = window.open("", "_blank", "noopener,noreferrer,width=900,height=700");
+    if (printWindow) {
+      printWindow.document.write(`<html><head><title>Loading Receipt...</title></head><body style="background: white; color: black; font-family: sans-serif; padding: 2rem; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0;"><h2>Generating Receipt...</h2></body></html>`);
+    }
+
     setTimeout(() => {
-      const html = receiptRef.current?.innerHTML;
-      if (!html) return;
-      const printWindow = window.open("", "_blank", "noopener,noreferrer,width=900,height=700");
       if (!printWindow) return;
-      printWindow.document.write(`<html><head><title>Fee Receipt</title></head><body>${html}</body></html>`);
+      const html = receiptRef.current?.innerHTML;
+      if (!html) {
+        printWindow.close();
+        return;
+      }
+      printWindow.document.open();
+      // Overwrite the document with the actual built receipt and trigger print
+      printWindow.document.write(`<html><head><title>Fee Receipt</title></head><body>${html}</body><script>setTimeout(() => { window.print(); window.close(); }, 500);</script></html>`);
       printWindow.document.close();
-      printWindow.focus();
-      printWindow.print();
-      printWindow.close();
     }, 200);
   };
 
   const markFeePaid = async (row: AdmissionRow, feeType: FeeType) => {
     setPaying(true);
+    setPaymentError(null);
     try {
       if ((paymentForm.paymentMethod === "UPI" || paymentForm.paymentMethod === "BANK_TRANSFER") && !paymentForm.referenceNo.trim()) {
         throw new Error("Reference number / UTR is required for UPI and Bank Transfer");
@@ -419,8 +429,7 @@ export default function TeacherAdmissionTab() {
       setPaymentDialog(null);
       setPaymentForm({ paymentMode: "OFFLINE", paymentMethod: "CASH", referenceNo: "", remarks: "" });
     } catch (e) {
-      setMessageTone("error");
-      setMessage(e instanceof Error ? e.message : "Failed to mark fee as paid");
+      setPaymentError(e instanceof Error ? e.message : "Failed to mark fee as paid");
     } finally {
       setPaying(false);
     }
@@ -659,37 +668,16 @@ export default function TeacherAdmissionTab() {
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {!enrolled && (
-                  <>
-                    {wf === "PENDING" ? (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => patchWorkflow(r, "UPCOMING")}
-                        className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-sky-500/15 border border-sky-500/30 text-sky-200 hover:bg-sky-500/25 disabled:opacity-50"
-                      >
-                        Upcoming
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => patchWorkflow(r, "PENDING")}
-                        className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-white/5 border border-white/15 text-white/70 hover:bg-white/10 disabled:opacity-50"
-                      >
-                        Pending
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => enrollFromRow(r)}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold bg-lime-400/20 border border-lime-400/35 text-lime-200 hover:bg-lime-400/30 disabled:opacity-50"
-                      title="Creates the student in your school roster (same as admin student create)"
-                    >
-                      <UserPlus size={12} />
-                      Approve
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => enrollFromRow(r)}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold bg-lime-400/20 border border-lime-400/35 text-lime-200 hover:bg-lime-400/30 disabled:opacity-50"
+                    title="Approve to create the student"
+                  >
+                    {busy ? <Loader2 size={12} className="animate-spin" /> : <UserPlus size={12} />}
+                    {busy ? "Approving..." : "Approve"}
+                  </button>
                 )}
                 <button
                   type="button"
@@ -956,7 +944,7 @@ export default function TeacherAdmissionTab() {
                     disabled={submitting}
                     className="px-4 py-2 rounded-xl bg-lime-400 text-black font-semibold hover:bg-lime-500 disabled:opacity-60 flex items-center gap-2"
                   >
-                    <Save size={16} />
+                    {submitting ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                     {submitting ? "Saving..." : editId ? "Update" : "Save"}
                   </button>
                 </div>
@@ -1209,7 +1197,6 @@ export default function TeacherAdmissionTab() {
                   [
                     { id: "all" as const, label: "All" },
                     { id: "pending" as const, label: "Pending" },
-                    { id: "upcoming" as const, label: "Upcoming" },
                     { id: "approved" as const, label: "Enrolled" },
                   ] as const
                 ).map((tab) => (
@@ -1307,33 +1294,14 @@ export default function TeacherAdmissionTab() {
                     </div>
                     {!r.studentId && (
                       <div className="mt-2 flex flex-wrap gap-2">
-                        {(r.workflowStatus ?? "PENDING") === "PENDING" ? (
-                          <button
-                            type="button"
-                            disabled={workflowBusyId === r.id}
-                            onClick={() => patchWorkflow(r, "UPCOMING")}
-                            className="flex-1 min-w-[120px] px-3 py-2 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-200 text-xs font-semibold disabled:opacity-50"
-                          >
-                            Mark upcoming
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            disabled={workflowBusyId === r.id}
-                            onClick={() => patchWorkflow(r, "PENDING")}
-                            className="flex-1 min-w-[120px] px-3 py-2 rounded-xl bg-white/5 border border-white/15 text-white/70 text-xs font-semibold disabled:opacity-50"
-                          >
-                            Back to pending
-                          </button>
-                        )}
                         <button
                           type="button"
                           disabled={workflowBusyId === r.id}
                           onClick={() => enrollFromRow(r)}
                           className="flex-1 min-w-[120px] px-3 py-2 rounded-xl bg-lime-400/20 border border-lime-400/35 text-lime-200 text-xs font-semibold disabled:opacity-50 inline-flex items-center justify-center gap-1"
                         >
-                          <UserPlus size={14} />
-                          Approve & enroll
+                          {workflowBusyId === r.id ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />}
+                          {workflowBusyId === r.id ? "Approving..." : "Approve & enroll"}
                         </button>
                       </div>
                     )}
@@ -1447,6 +1415,11 @@ export default function TeacherAdmissionTab() {
             <p className="text-sm text-white/70">
               {`${paymentDialog.row.firstName} ${paymentDialog.row.lastName}`}
             </p>
+            {paymentError && (
+              <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
+                {paymentError}
+              </div>
+            )}
             <div className="rounded-xl border border-white/10 bg-white/5 p-3 space-y-1">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Select
@@ -1498,8 +1471,9 @@ export default function TeacherAdmissionTab() {
                 type="button"
                 onClick={() => markFeePaid(paymentDialog.row, paymentDialog.feeType)}
                 disabled={paying}
-                className="px-4 py-2 rounded-xl bg-lime-400 text-black font-semibold disabled:opacity-60"
+                className="px-4 py-2 rounded-xl bg-lime-400 text-black font-semibold disabled:opacity-60 flex items-center justify-center gap-2"
               >
+                {paying && <Loader2 size={16} className="animate-spin" />}
                 {paying ? "Processing..." : "Pay Now"}
               </button>
             </div>
@@ -1526,8 +1500,9 @@ export default function TeacherAdmissionTab() {
                 type="button"
                 onClick={confirmDelete}
                 disabled={deleting}
-                className="px-4 py-2 rounded-xl bg-red-500/80 text-white font-semibold disabled:opacity-60"
+                className="px-4 py-2 rounded-xl bg-red-500/80 text-white font-semibold disabled:opacity-60 flex items-center justify-center gap-2"
               >
+                {deleting && <Loader2 size={16} className="animate-spin" />}
                 {deleting ? "Deleting..." : "Delete"}
               </button>
             </div>
