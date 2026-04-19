@@ -45,9 +45,12 @@ export async function GET(request: NextRequest) {
         const searchParams = request.nextUrl.searchParams;
         const paymentId = searchParams.get("paymentId");
         const studentId = searchParams.get("studentId");
-        const studentName = searchParams.get("studentName") || "Student";
+        const _studentName = searchParams.get("studentName") || "Student";
         const admissionNumber = searchParams.get("admissionNumber") || "";
-        const copyType = (searchParams.get("copyType") || "admin") as "admin" | "parent";
+        const copyParam = (searchParams.get("copyType") || "admin").toLowerCase();
+        const copyType = (
+            copyParam === "parent" ? "parent" : copyParam === "both" ? "both" : "admin"
+        ) as "admin" | "parent" | "both";
 
         if (!paymentId || !studentId) {
             return NextResponse.json(
@@ -197,10 +200,12 @@ export async function GET(request: NextRequest) {
             displayAdmissionNumber,
         });
 
+        const copySuffix =
+            copyType === "both" ? "Admin_and_Parent" : copyType === "parent" ? "Parent" : "Admin";
         return new NextResponse(pdfBytes, {
             headers: {
                 "Content-Type": "application/pdf",
-                "Content-Disposition": `attachment; filename="Receipt_${admissionNumber}_${copyType}_${new Date(payment.createdAt).toISOString().split("T")[0]}.pdf"`,
+                "Content-Disposition": `attachment; filename="Receipt_${admissionNumber}_${copySuffix}_${new Date(payment.createdAt).toISOString().split("T")[0]}.pdf"`,
                 "Cache-Control": "no-store",
             },
         });

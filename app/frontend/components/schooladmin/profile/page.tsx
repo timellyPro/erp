@@ -33,6 +33,7 @@ type StudentDetail = {
     fatherOccupation?: string;
     motherOccupation?: string;
     fatherPhone?: string;
+    residencyType?: string;
     class: { id: string; name: string; section: string | null; displayName: string } | null;
     applicationFee: number | null;
     admissionFee: number | null;
@@ -365,6 +366,14 @@ function StudentDetailsPageContent() {
               studentName={detail.student.name}
               studentId={detail.student.id}
               admissionNumber={detail.student.admissionNumber}
+              classDisplayName={detail.student.class?.displayName ?? "-"}
+              residencyType={detail.student.residencyType ?? "Day Scholar"}
+              parentName={detail.student.fatherName?.trim() || "-"}
+              parentPhone={
+                detail.student.fatherPhone?.trim() ||
+                detail.student.phone?.trim() ||
+                "-"
+              }
               onPaymentsChanged={() => setReloadKey((k) => k + 1)}
             />
 
