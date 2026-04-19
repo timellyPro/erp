@@ -28,6 +28,13 @@ export async function GET() {
 
   const school = await prisma.school.findUnique({
     where: { id: schoolId },
+    include: {
+      admins: {
+        where: { role: "SCHOOLADMIN", photoUrl: { not: null } },
+        select: { photoUrl: true },
+        take: 1,
+      }
+    }
   });
 
   return NextResponse.json({ school }, { status: 200 });
