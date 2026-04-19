@@ -1,5 +1,9 @@
 import { Receipt, Download, Pencil, Trash2, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import FeePaymentReceiptTemplate, {
+  type FeePaymentReceiptData,
+} from "../../../pdf/FeePaymentReceiptTemplate";
+import { generatePDF } from "@/lib/pdfUtils";
 
 type PaymentRow = {
   id: string;
@@ -25,6 +29,10 @@ type Props = {
   applicationFee?: number | null;
   admissionFee?: number | null;
   studentCreatedAt?: string;
+  classDisplayName?: string;
+  residencyType?: string;
+  parentName?: string;
+  parentPhone?: string;
   /** Refetch student detail after payment edit/delete */
   onPaymentsChanged?: () => void;
 };
@@ -47,8 +55,20 @@ export const FeeTransactions = ({
   applicationFee,
   admissionFee,
   studentCreatedAt,
+  classDisplayName = "-",
+  residencyType = "Day Scholar",
+  parentName = "-",
+  parentPhone = "-",
   onPaymentsChanged,
 }: Props) => {
+  const receiptRef = useRef<HTMLDivElement>(null);
+  const [receiptData, setReceiptData] = useState<FeePaymentReceiptData | null>(null);
+  const [schoolBrand, setSchoolBrand] = useState<{
+    name: string;
+    address: string;
+    logo: string | null;
+  }>({ name: "", address: "", logo: null });
+
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [editing, setEditing] = useState<PaymentRow | null>(null);
   const [editAmount, setEditAmount] = useState("");
@@ -57,6 +77,95 @@ export const FeeTransactions = ({
   const [editDate, setEditDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/school/mine", { credentials: "include", cache: "no-store" });
+        const d = await res.json();
+        if (!res.ok || cancelled) return;
+
+        const name = typeof d?.school?.name === "string" ? d.school.name : "";
+        const address = [d?.school?.address, d?.school?.location]
+          .filter((v: unknown) => typeof v === "string" && String(v).trim())
+          .join(", ");
+
+        let rawLogo: string | null =
+          typeof d?.school?.logoUrl === "string" && d.school.logoUrl.trim()
+            ? d.school.logoUrl.trim()
+            : null;
+        if (!rawLogo && Array.isArray(d?.school?.admins) && d.school.admins[0]?.photoUrl) {
+          rawLogo = String(d.school.admins[0].photoUrl).trim();
+        }
+        if (!rawLogo) {
+          try {
+            const ur = await fetch("/api/user/me", { credentials: "include", cache: "no-store" });
+            const ud = await ur.json();
+            if (typeof ud?.user?.photoUrl === "string" && ud.user.photoUrl.trim()) {
+              rawLogo = ud.user.photoUrl.trim();
+            }
+          } catch {
+            /* noop */
+          }
+        }
+
+        let logoData: string | null = null;
+        if (rawLogo) {
+          let parsed = rawLogo;
+          if (parsed.includes("/storage/v1/object/")) {
+            parsed = `/api/media?url=${encodeURIComponent(parsed)}`;
+          }
+          if (parsed.startsWith("/")) {
+            parsed = `${window.location.origin}${parsed}`;
+          }
+          try {
+            const imgRes = await fetch(parsed);
+            if (imgRes.ok) {
+              const blob = await imgRes.blob();
+              logoData = await new Promise<string | null>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve((reader.result as string) || null);
+                reader.onerror = () => resolve(null);
+                reader.readAsDataURL(blob);
+              });
+            }
+          } catch {
+            logoData = null;
+          }
+        }
+
+        if (!logoData && name) {
+          const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&size=128&background=4ade80&color=fff`;
+          try {
+            const fr = await fetch(fallback);
+            if (fr.ok) {
+              const blob = await fr.blob();
+              logoData = await new Promise<string | null>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve((reader.result as string) || null);
+                reader.onerror = () => resolve(null);
+                reader.readAsDataURL(blob);
+              });
+            }
+          } catch {
+            /* noop */
+          }
+        }
+
+        if (!cancelled) {
+          setSchoolBrand({ name: name || "School", address: address || "-", logo: logoData });
+        }
+      } catch {
+        if (!cancelled) {
+          setSchoolBrand({ name: "School", address: "-", logo: null });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const resolveDisplayAmount = (payment: { amount: number; feeTypeAmount?: number }) => {
     const typeAmount = payment.feeTypeAmount;
@@ -255,49 +364,56 @@ export const FeeTransactions = ({
   const total = hasFee ? fee!.amountPaid + fee!.remainingFee : 0;
   const hasAny = hasFee || activePayments.length > 0;
 
-  const handleDownloadReceipt = async (payment: (typeof activePayments)[0], copyType: "admin" | "parent") => {
+  const buildReceiptDescription = (p: (typeof activePayments)[0]) => {
+    const label = p.feeTypeName?.trim() || "Fee payment";
+    const methodPart = p.method?.trim() ? `Method: ${p.method.trim()}` : null;
+    const ref = p.transactionId?.trim();
+    const refPart =
+      ref && ref.toUpperCase() !== "N/A" ? `Reference / UTR: ${ref}` : null;
+    return [label, methodPart, refPart].filter(Boolean).join(" • ");
+  };
+
+  const handleDownloadReceipt = (payment: (typeof activePayments)[0]) => {
     if (!studentId.trim()) {
       alert("Missing student. Reload the page and try again.");
       return;
     }
-    try {
-      setDownloadingId(`${payment.id}-${copyType}`);
-      const response = await fetch(
-        `/api/student/receipt?paymentId=${encodeURIComponent(payment.id)}&studentId=${encodeURIComponent(studentId)}&studentName=${encodeURIComponent(studentName)}&admissionNumber=${encodeURIComponent(admissionNumber)}&copyType=${encodeURIComponent(copyType)}`,
-        { credentials: "include" }
-      );
+    const amount = resolveDisplayAmount(payment);
+    const receiptTitle =
+      payment.id === "admission-fee" || payment.id === "application-fee"
+        ? "Admission Receipt"
+        : "Fee Receipt";
+    const data: FeePaymentReceiptData = {
+      schoolName: schoolBrand.name || "School",
+      schoolLogo: schoolBrand.logo,
+      schoolAddress: schoolBrand.address || "-",
+      studentName: studentName || "Student",
+      className: classDisplayName || "-",
+      residencyType: residencyType || "Day Scholar",
+      parentName: parentName || "-",
+      parentPhone: parentPhone || "-",
+      createdAt: payment.createdAt,
+      lines: [{ description: buildReceiptDescription(payment), amount }],
+      total: amount,
+      receiptTitle,
+    };
 
-      if (!response.ok) {
-        const ct = response.headers.get("content-type") || "";
-        let msg = "Failed to download receipt";
-        if (ct.includes("application/json")) {
-          try {
-            const j = (await response.json()) as { error?: string; message?: string };
-            msg = j.error || j.message || msg;
-          } catch {
-            /* ignore */
-          }
-        }
-        alert(msg);
-        return;
+    setDownloadingId(payment.id);
+    setReceiptData(data);
+
+    setTimeout(async () => {
+      try {
+        const day = new Date(payment.createdAt).toISOString().split("T")[0];
+        const safeAdm = (admissionNumber || "student").replace(/[^\w\-/]+/g, "_");
+        await generatePDF(receiptRef, `Fee_Receipt_${safeAdm}_${day}.pdf`);
+      } catch (error) {
+        console.error("Error generating receipt PDF:", error);
+        alert("Failed to generate receipt. Please try again.");
+      } finally {
+        setDownloadingId(null);
+        setReceiptData(null);
       }
-
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const copyLabel = copyType === "admin" ? "Admin" : "Parent";
-      a.download = `Receipt_${admissionNumber}_${copyLabel}_${new Date(payment.createdAt).toISOString().split("T")[0]}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (error) {
-      console.error("Error downloading receipt:", error);
-      alert("Failed to download receipt. Please try again.");
-    } finally {
-      setDownloadingId(null);
-    }
+    }, 500);
   };
 
   return (
@@ -361,28 +477,16 @@ export const FeeTransactions = ({
                       ₹{resolveDisplayAmount(p).toLocaleString("en-IN")}
                     </td>
                     <td className="py-4 sm:py-5 text-center">
-                      <div className="flex gap-2 justify-center items-center flex-wrap">
-                        <button
-                          type="button"
-                          onClick={() => handleDownloadReceipt(p, "admin")}
-                          disabled={downloadingId === `${p.id}-admin`}
-                          className="flex items-center gap-1 px-2 py-1 bg-blue-500/20 hover:bg-blue-500/30 disabled:bg-gray-600 disabled:cursor-not-allowed text-blue-400 disabled:text-gray-500 rounded text-xs font-semibold transition-colors"
-                          title="Download Admin Copy"
-                        >
-                          <Download className="w-3 h-3" />
-                          <span className="hidden sm:inline">Admin</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDownloadReceipt(p, "parent")}
-                          disabled={downloadingId === `${p.id}-parent`}
-                          className="flex items-center gap-1 px-2 py-1 bg-green-500/20 hover:bg-green-500/30 disabled:bg-gray-600 disabled:cursor-not-allowed text-green-400 disabled:text-gray-500 rounded text-xs font-semibold transition-colors"
-                          title="Download Parent Copy"
-                        >
-                          <Download className="w-3 h-3" />
-                          <span className="hidden sm:inline">Parent</span>
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadReceipt(p)}
+                        disabled={downloadingId === p.id}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-lime-500/20 hover:bg-lime-500/30 disabled:bg-gray-600 disabled:cursor-not-allowed text-lime-300 disabled:text-gray-500 rounded-lg text-xs font-semibold transition-colors"
+                        title="Download PDF — same layout as admission receipt (two copies on one page)"
+                      >
+                        <Download className="w-3.5 h-3.5 shrink-0" />
+                        <span>Download</span>
+                      </button>
                     </td>
                     <td className="py-4 sm:py-5 w-36 min-w-[9.5rem] text-right align-middle">
                       <div className="flex justify-end gap-2 flex-nowrap shrink-0">
@@ -425,6 +529,8 @@ export const FeeTransactions = ({
           </table>
         </div>
       )}
+
+      <FeePaymentReceiptTemplate ref={receiptRef} data={receiptData} />
 
       {editing ? (
         <div
