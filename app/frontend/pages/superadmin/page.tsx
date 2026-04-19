@@ -16,6 +16,7 @@ const SUPERADMIN_TAB_TITLES: Record<string, string> = {
   dashboard: "Dashboard",
   addschool: "Add School",
   schools: "Schools",
+  removeschools: "Remove schools",
   subscriptions: "Subscriptions",
   transactions: "Transactions",
 };
@@ -91,6 +92,8 @@ function SuperAdminContent() {
         return <AddSchool />;
       case "schools":
         return <Schools />;
+      case "removeschools":
+        return <Schools variant="remove" />;
       case "subscriptions":
         return <Subscriptions />;
       case "transactions":

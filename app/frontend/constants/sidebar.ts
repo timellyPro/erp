@@ -31,6 +31,7 @@ import {
     MessageSquare,
     House,
     CalendarClock,
+    Trash2,
 } from "lucide-react";
 import { SidebarItem } from "../types/sidebar";
 import { Permission } from "../enums/permissions";
@@ -466,6 +467,14 @@ export const SUPERADMIN_SIDEBAR_ITEMS: SidebarItem[] = [
         href: "/frontend/pages/superadmin?tab=schools",
         tab: "schools",
         icon: Users,
+        permission: Permission.SCHOOLS,
+    },
+    {
+        label: "Remove schools",
+        mobileLabel: "Remove",
+        href: "/frontend/pages/superadmin?tab=removeschools",
+        tab: "removeschools",
+        icon: Trash2,
         permission: Permission.SCHOOLS,
     },
     {
