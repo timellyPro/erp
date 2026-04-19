@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { useRef, useState } from "react";
+import * as XLSX from "xlsx";
+import { Plus, Pencil, Trash2, Upload } from "lucide-react";
 import SelectInput from "../../common/SelectInput";
 import PrimaryButton from "../../common/PrimaryButton";
 import type { Class, FeeStructure } from "./types";
@@ -23,6 +24,89 @@ export default function FeeStructureConfig({
   const [components, setComponents] = useState<Array<{ name: string; amount: number }>>([]);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{
+    updatedClasses: number;
+    updated: Array<{ label: string; components: number }>;
+    failed: Array<{ row: number; message: string }>;
+  } | null>(null);
+  const bulkInputRef = useRef<HTMLInputElement>(null);
+
+  const downloadBulkTemplate = () => {
+    const rows: Record<string, string | number>[] = [];
+    if (classes.length === 0) {
+      rows.push({
+        ClassName: "10",
+        Section: "A",
+        ComponentName: "Tuition Fee",
+        Amount: 45000,
+      });
+      rows.push({
+        ClassName: "10",
+        Section: "A",
+        ComponentName: "Lab Fee",
+        Amount: 5000,
+      });
+    } else {
+      for (const c of classes) {
+        rows.push({
+          ClassName: c.name,
+          Section: c.section ?? "",
+          ComponentName: "Tuition Fee",
+          Amount: 40000,
+        });
+        rows.push({
+          ClassName: c.name,
+          Section: c.section ?? "",
+          ComponentName: "Development Fee",
+          Amount: 2500,
+        });
+      }
+    }
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, "Structures");
+    XLSX.writeFile(wb, `fee-structure-bulk-template-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
+
+  const handleBulkUpload = async () => {
+    if (!bulkFile) {
+      alert("Please choose an Excel file (.xlsx or .xls)");
+      return;
+    }
+    setBulkUploading(true);
+    setBulkResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", bulkFile);
+      const res = await fetch("/api/fees/structure/bulk", {
+        method: "POST",
+        credentials: "include",
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.message || "Upload failed");
+        return;
+      }
+      setBulkResult({
+        updatedClasses: data.updatedClasses ?? 0,
+        updated: data.updated ?? [],
+        failed: data.failed ?? [],
+      });
+      setBulkFile(null);
+      if (bulkInputRef.current) bulkInputRef.current.value = "";
+      onSuccess();
+    } catch (e) {
+      console.error(e);
+      alert("Upload failed");
+    } finally {
+      setBulkUploading(false);
+    }
+  };
 
   const startEdit = (s: FeeStructure) => {
     setEditingId(s.id);
@@ -108,13 +192,97 @@ export default function FeeStructureConfig({
 
   return (
     <section className="rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur sm:p-6">
-      <h3 className="text-lg font-semibold mb-4">Global Fee Breakdown Configuration</h3>
-      <p className="text-sm text-gray-400 mb-4">
-        Set the fee heads and amounts for each class. Student totals use{" "}
-        <span className="text-gray-300">only the sum of these components</span>, plus any{" "}
-        <span className="text-gray-300">extra fees</span> you configure below. Nothing is added on top
-        automatically. Saving updates all students already in that class.
-      </p>
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-lg font-semibold mb-1">Global Fee Breakdown Configuration</h3>
+          <p className="text-sm text-gray-400">
+            Set the fee heads and amounts for each class. Student totals use{" "}
+            <span className="text-gray-300">only the sum of these components</span>, plus any{" "}
+            <span className="text-gray-300">extra fees</span> you configure below. Nothing is added on top
+            automatically. Saving updates all students already in that class.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setBulkOpen((v) => !v);
+            if (bulkOpen) setBulkResult(null);
+          }}
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm hover:bg-white/10 sm:w-auto w-full"
+        >
+          <Upload size={16} />
+          {bulkOpen ? "Close bulk upload" : "Bulk upload (Excel)"}
+        </button>
+      </div>
+
+      {bulkOpen ? (
+        <div className="mb-4 space-y-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+          <p className="text-sm text-gray-300">
+            One row per fee head. Use columns{" "}
+            <span className="font-medium text-white">ClassName</span>,{" "}
+            <span className="font-medium text-white">Section</span> (blank if your class has no section),{" "}
+            <span className="font-medium text-white">ComponentName</span>,{" "}
+            <span className="font-medium text-white">Amount</span>. Class names must match your school
+            classes exactly.
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+            <button
+              type="button"
+              onClick={downloadBulkTemplate}
+              className="text-left text-sm text-emerald-400 hover:text-emerald-300 hover:underline"
+            >
+              Download Excel template
+            </button>
+            <span className="hidden text-gray-600 sm:inline">·</span>
+            <input
+              ref={bulkInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={(e) => setBulkFile(e.target.files?.[0] ?? null)}
+              className="w-full max-w-md text-sm text-gray-300 file:mr-3 file:rounded-lg file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-sm file:text-white"
+            />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <PrimaryButton
+              title={bulkUploading ? "Uploading..." : "Upload & apply"}
+              loading={bulkUploading}
+              onClick={handleBulkUpload}
+            />
+            {bulkFile ? (
+              <span className="self-center text-xs text-gray-500">Selected: {bulkFile.name}</span>
+            ) : null}
+          </div>
+          {bulkResult ? (
+            <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
+              <p className="font-medium text-white">
+                Updated {bulkResult.updatedClasses} class{bulkResult.updatedClasses === 1 ? "" : "es"}.
+              </p>
+              {bulkResult.updated.length > 0 ? (
+                <ul className="mt-2 list-inside list-disc text-gray-300">
+                  {bulkResult.updated.map((u) => (
+                    <li key={u.label}>
+                      {u.label} — {u.components} head{u.components === 1 ? "" : "s"}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {bulkResult.failed.length > 0 ? (
+                <div className="mt-3 border-t border-white/10 pt-2">
+                  <p className="font-medium text-amber-300">Issues ({bulkResult.failed.length})</p>
+                  <ul className="mt-1 max-h-40 list-inside list-disc overflow-y-auto text-gray-400">
+                    {bulkResult.failed.map((f, i) => (
+                      <li key={i}>
+                        {f.row > 0 ? `Row ${f.row}: ` : ""}
+                        {f.message}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {structures.map((s) => (
           <div

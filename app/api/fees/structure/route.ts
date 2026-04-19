@@ -3,10 +3,8 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
-import {
-  computeStudentTuitionParts,
-  finalFeeFromStructureAndExtras,
-} from "@/lib/studentTuitionFromStructure";
+import { saveClassFeeStructureAndSyncStudents } from "@/lib/classFeeStructureApply";
+import { finalFeeFromStructureAndExtras } from "@/lib/studentTuitionFromStructure";
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -84,73 +82,20 @@ export async function PUT(req: Request) {
       );
     }
 
-    const normalizedComponents = components
-      .map((c: any) => {
-        const name = typeof c?.name === "string" ? c.name.trim() : "";
-        const rawAmount = c?.amount;
-        const amount =
-          typeof rawAmount === "number" ? rawAmount : rawAmount != null ? Number(rawAmount) : NaN;
-        return { name, amount };
-      })
-      .filter((c: { name: string; amount: number }) => c.name.length > 0 && Number.isFinite(c.amount));
-
-    if (normalizedComponents.length === 0) {
-      return NextResponse.json(
-        { message: "Each component must have name and a valid numeric amount" },
-        { status: 400 }
-      );
+    try {
+      const { structure } = await saveClassFeeStructureAndSyncStudents({
+        schoolId,
+        classId,
+        components,
+      });
+      return NextResponse.json({ structure });
+    } catch (applyErr: any) {
+      const msg = String(applyErr?.message || "");
+      if (msg.includes("Each component must have name")) {
+        return NextResponse.json({ message: msg }, { status: 400 });
+      }
+      throw applyErr;
     }
-
-    // IMPORTANT: avoid one huge long transaction (can timeout on some DB setups).
-    // We still update studentFee records, but without a single global $transaction wrapper.
-    const structure = await prisma.classFeeStructure.upsert({
-      where: { classId },
-      create: { schoolId, classId, components: normalizedComponents as object[] },
-      update: { components: normalizedComponents as object[] },
-      include: { class: { select: { id: true, name: true, section: true } } },
-    });
-
-    const students = await prisma.student.findMany({
-      where: { classId, schoolId },
-      include: {
-        class: { select: { section: true } },
-        fee: true,
-      },
-    });
-
-    // Update in small parallel batches for speed.
-    // Avoids the single huge transaction + reduces wall time significantly.
-    const chunkSize = 8;
-    for (let i = 0; i < students.length; i += chunkSize) {
-      const chunk = students.slice(i, i + chunkSize);
-      await Promise.all(
-        chunk.map(async (student) => {
-          const fee = student.fee;
-          if (!fee) return;
-
-          const parts = await computeStudentTuitionParts(prisma, {
-            schoolId,
-            classId,
-            section: student.class?.section ?? null,
-            studentId: student.id,
-          });
-          const newTotalFee = parts.totalFee;
-          const newFinalFee = finalFeeFromStructureAndExtras(parts.base, parts.extrasTotal, fee.discountPercent);
-          const newRemainingFee = Math.max(0, newFinalFee - fee.amountPaid);
-
-          await prisma.studentFee.update({
-            where: { studentId: student.id },
-            data: {
-              totalFee: newTotalFee,
-              finalFee: newFinalFee,
-              remainingFee: newRemainingFee,
-            },
-          });
-        })
-      );
-    }
-
-    return NextResponse.json({ structure });
   } catch (error: any) {
     console.error("Fee structure PUT error:", error);
     return NextResponse.json(
