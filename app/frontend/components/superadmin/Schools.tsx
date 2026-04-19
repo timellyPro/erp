@@ -1,7 +1,8 @@
 "use client";
 
-import { Search, Users, GraduationCap, Building2, TrendingUp } from "lucide-react";
+import { Search, Users, GraduationCap, Building2, TrendingUp, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import PageHeader from "../common/PageHeader";
 import { formatAmount as fmtAmount } from "../../utils/format";
 import Spinner from "../common/Spinner";
@@ -84,7 +85,13 @@ function SchoolAvatar({ school }: { school: SchoolRow }) {
   );
 }
 
-export default function Schools() {
+type SchoolsProps = {
+  /** "remove" tab: same list, copy emphasizes permanent school deletion. */
+  variant?: "default" | "remove";
+};
+
+export default function Schools({ variant = "default" }: SchoolsProps) {
+  const router = useRouter();
   const PAGE_SIZE = 10;
   const [schools, setSchools] = useState<SchoolRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -92,24 +99,35 @@ export default function Schools() {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 400);
   const [page, setPage] = useState(1);
+  const [modalSchool, setModalSchool] = useState<SchoolRow | null>(null);
+  const [confirmName, setConfirmName] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  const fetchSchools = useCallback(async (searchTerm: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams();
-      if (searchTerm.trim()) params.set("search", searchTerm.trim());
-      const res = await fetch(`/api/superadmin/schools?${params.toString()}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Failed to load schools");
-      setSchools(data.schools ?? []);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Error loading schools");
-      setSchools([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const fetchSchools = useCallback(
+    async (searchTerm: string, opts?: { silent?: boolean; cacheBust?: boolean }) => {
+      const silent = Boolean(opts?.silent);
+      if (!silent) setLoading(true);
+      setError(null);
+      try {
+        const params = new URLSearchParams();
+        if (searchTerm.trim()) params.set("search", searchTerm.trim());
+        if (opts?.cacheBust) params.set("_t", String(Date.now()));
+        const res = await fetch(`/api/superadmin/schools?${params.toString()}`, {
+          cache: "no-store",
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || "Failed to load schools");
+        setSchools(data.schools ?? []);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Error loading schools");
+        if (!silent) setSchools([]);
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     setPage(1);
@@ -125,6 +143,32 @@ export default function Schools() {
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
+
+  const handleConfirmDeleteSchool = async () => {
+    if (!modalSchool) return;
+    const deletedId = modalSchool.id;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/superadmin/schools/${modalSchool.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ schoolName: confirmName }),
+        cache: "no-store",
+      });
+      const data = (await res.json()) as { message?: string };
+      if (!res.ok) throw new Error(data.message || "Delete failed");
+      setModalSchool(null);
+      setConfirmName("");
+      setSchools((prev) => prev.filter((s) => s.id !== deletedId));
+      await fetchSchools(debouncedSearch, { silent: true, cacheBust: true });
+      router.refresh();
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
 
   const columns = useMemo<Column<SchoolRow>[]>(
     () => [
@@ -193,16 +237,40 @@ export default function Schools() {
           </span>
         ),
       },
+      {
+        header: "",
+        align: "right",
+        render: (s) => (
+          <button
+            type="button"
+            onClick={() => {
+              setDeleteError(null);
+              setConfirmName("");
+              setModalSchool(s);
+            }}
+            className="inline-flex items-center justify-center rounded-lg border border-red-500/40 bg-red-500/10 p-2 text-red-300 hover:bg-red-500/20 transition disabled:opacity-50"
+            title="Delete school and all related data"
+            aria-label={`Delete ${s.name}`}
+            disabled={deleteBusy}
+          >
+            <Trash2 className="w-4 h-4" aria-hidden />
+          </button>
+        ),
+      },
     ],
-    []
+    [deleteBusy]
   );
 
   return (
     <main className="flex-1 min-w-0 w-full max-w-[1600px] mx-auto flex flex-col">
       <div className="w-full min-h-0 space-y-4 sm:space-y-6">
         <PageHeader
-          title="Schools"
-          subtitle="Schools, admins, students, and turnover"
+          title={variant === "remove" ? "Remove schools" : "Schools"}
+          subtitle={
+            variant === "remove"
+              ? "Delete a school only after you export anything you need. Staff and student logins for that school only are removed."
+              : "Schools, admins, students, and turnover"
+          }
           className="rounded-2xl sm:rounded-3xl"
           rightSlot={
             <div className="w-full md:max-w-sm lg:max-w-md">
@@ -329,6 +397,20 @@ export default function Schools() {
                           </div>
                         </div>
                       </dl>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeleteError(null);
+                          setConfirmName("");
+                          setModalSchool(s);
+                        }}
+                        disabled={deleteBusy}
+                        className="mt-4 w-full inline-flex items-center justify-center gap-2 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2.5 text-sm font-semibold text-red-200 hover:bg-red-500/20 transition disabled:opacity-50"
+                      >
+                        <Trash2 className="w-4 h-4 shrink-0" aria-hidden />
+                        Delete school
+                      </button>
                     </article>
                   );
                 })
@@ -355,6 +437,71 @@ export default function Schools() {
           </>
         )}
       </div>
+
+      {modalSchool && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-school-title"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-zinc-900/95 p-5 shadow-2xl shadow-black/50">
+            <h2 id="delete-school-title" className="text-lg font-semibold text-white">
+              Delete school
+            </h2>
+            <p className="mt-2 text-sm text-white/70 leading-relaxed">
+              This removes{" "}
+              <span className="font-medium text-white">{modalSchool.name}</span> and related records:
+              students, classes, fees, payments, news, homework, exams, admissions, and staff accounts that
+              exist only for this school. This cannot be undone.
+            </p>
+            <label htmlFor="confirm-school-name" className="mt-4 block text-xs font-medium text-white/50">
+              Type the school name to confirm
+            </label>
+            <input
+              id="confirm-school-name"
+              type="text"
+              value={confirmName}
+              onChange={(e) => setConfirmName(e.target.value)}
+              autoComplete="off"
+              className="mt-1.5 w-full rounded-xl border border-white/15 bg-black/30 px-3 py-2.5 text-sm text-white placeholder:text-white/35 focus:outline-none focus:ring-2 focus:ring-red-500/40"
+              placeholder={modalSchool.name}
+              disabled={deleteBusy}
+            />
+            {deleteError && (
+              <p className="mt-2 text-sm text-red-400" role="alert">
+                {deleteError}
+              </p>
+            )}
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!deleteBusy) {
+                    setModalSchool(null);
+                    setConfirmName("");
+                    setDeleteError(null);
+                  }
+                }}
+                disabled={deleteBusy}
+                className="rounded-xl border border-white/15 px-4 py-2.5 text-sm font-semibold text-white/80 hover:bg-white/5 transition disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmDeleteSchool()}
+                disabled={
+                  deleteBusy || confirmName.trim() !== modalSchool.name.trim()
+                }
+                className="rounded-xl border border-red-500/50 bg-red-600/90 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {deleteBusy ? "Deleting…" : "Delete permanently"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
