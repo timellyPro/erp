@@ -3,6 +3,8 @@ import * as XLSX from "xlsx";
 /** Admission-style columns with Timelly ID first (matches bulk student upload API). */
 const HEADERS = [
   "Timelly ID",
+  "PEN Number",
+  "APAAR ID",
   "Fedena No",
   "Grade Sought",
   "Boarding Type",
@@ -41,6 +43,8 @@ const HEADERS = [
 const ROW1 = [
   "101",
   "",
+  "",
+  "",
   "Grade 1",
   "Semi Residential",
   "Class 1",
@@ -77,6 +81,8 @@ const ROW1 = [
 
 const ROW2 = [
   "ADM/2026/102",
+  "",
+  "",
   "",
   "Grade 1",
   "Semi Residential",

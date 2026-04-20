@@ -18,6 +18,8 @@ export const getAge = (dob?: string | null) => {
 export const toStudentForm = (student: StudentRow): StudentFormState => ({
   name: student.user?.name || student.name || "",
   rollNo: student.rollNo || "",
+  penNumber: (student as { penNumber?: string }).penNumber || "",
+  apaarId: (student as { apaarId?: string }).apaarId || "",
   gender: student.gender || "",
   residencyType: student.residencyType || "Day Scholar",
   dob: student.dob || "",
@@ -82,6 +84,8 @@ export function mergeStudentAfterEdit(
     ...prev,
     name,
     rollNo: form.rollNo.trim() || prev.rollNo,
+    penNumber: form.penNumber.trim() || (prev as { penNumber?: string }).penNumber,
+    apaarId: form.apaarId.trim() || (prev as { apaarId?: string }).apaarId,
     fatherName: form.fatherName.trim() || prev.fatherName,
     motherName: form.motherName.trim() || prev.motherName,
     occupation: form.occupation.trim() || prev.occupation,

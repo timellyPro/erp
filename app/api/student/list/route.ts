@@ -65,6 +65,8 @@ export async function GET(req: Request) {
         motherName: true,
         occupation: true,
         rollNo: true,
+        penNumber: true,
+        apaarId: true,
         phoneNo: true,
         dob: true,
         gender: true,

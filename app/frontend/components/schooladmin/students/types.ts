@@ -14,6 +14,8 @@ export type SelectOption = {
 export type StudentFormState = {
   name: string;
   rollNo: string;
+  penNumber: string;
+  apaarId: string;
   gender: string;
   residencyType: string;
   dob: string;

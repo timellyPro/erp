@@ -128,6 +128,14 @@ function extractTimellyId(row: Record<string, unknown>) {
   return rawId;
 }
 
+function extractPenNumber(row: Record<string, unknown>) {
+  return toStr(row["PEN Number"] ?? row.penNumber ?? row["Pen Number"] ?? row.PEN);
+}
+
+function extractApaarId(row: Record<string, unknown>) {
+  return toStr(row["APAAR ID"] ?? row.apaarId ?? row["Apaar ID"]);
+}
+
 function normalizeStudentName(value: unknown) {
   return toStr(value).toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -255,6 +263,8 @@ export async function POST(req: Request) {
         }
         const dobDate = parseDob(rawDob);
         const timellyId = extractTimellyId(row);
+        const penNumber = extractPenNumber(row) || null;
+        const apaarId = extractApaarId(row) || null;
         const normalizedName = normalizeStudentName(name);
 
         const existingStudent = await prisma.student.findFirst({
@@ -351,6 +361,8 @@ export async function POST(req: Request) {
                 where: { id: existingStudent.id },
                 data: {
                   rollNo: timellyId || undefined,
+                  penNumber,
+                  apaarId,
                   dob: dobDate,
                   address,
                   fatherName,
@@ -510,6 +522,8 @@ export async function POST(req: Request) {
                 schoolId,
                 admissionNumber,
                 rollNo: finalRollNo,
+                penNumber,
+                apaarId,
                 dob: dobDate,
                 address,
                 fatherName,

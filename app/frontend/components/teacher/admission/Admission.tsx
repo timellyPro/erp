@@ -74,6 +74,8 @@ type FeeType = "APPLICATION" | "ADMISSION";
 type FormState = {
   applicationNo: string;
   fedenaNo: string;
+  penNumber: string;
+  apaarId: string;
   admissionNo: string;
   classId: string;
   gradeSought: Grade;
@@ -141,6 +143,8 @@ const GENDERS: { label: string; value: Gender }[] = [
 const defaultForm = (): FormState => ({
   applicationNo: "",
   fedenaNo: "",
+  penNumber: "",
+  apaarId: "",
   admissionNo: "",
   classId: "",
   gradeSought: "GRADE_1",
@@ -858,6 +862,8 @@ export default function TeacherAdmissionTab() {
         setForm({
           applicationNo: a.applicationNo ?? "",
           fedenaNo: a.fedenaNo ?? "",
+          penNumber: (a as any).penNumber ?? "",
+          apaarId: (a as any).apaarId ?? "",
           admissionNo: a.admissionNo ?? "",
           classId: a.classId ?? "",
           gradeSought: a.gradeSought,
@@ -953,6 +959,8 @@ export default function TeacherAdmissionTab() {
         applicationFee: form.applicationFee.trim() ? Number(form.applicationFee) : null,
         admissionFee: form.admissionFee.trim() ? Number(form.admissionFee) : null,
         fedenaNo: form.fedenaNo || null,
+        penNumber: form.penNumber?.trim() || null,
+        apaarId: form.apaarId?.trim() || null,
         admissionNo: editId ? form.admissionNo?.trim() || null : null,
         caste: form.caste || null,
         religion: form.religion || null,
@@ -1060,6 +1068,16 @@ export default function TeacherAdmissionTab() {
                   label="Timelly No (optional)"
                   value={form.fedenaNo}
                   onChange={(v) => setForm((p) => ({ ...p, fedenaNo: v }))}
+                />
+                <InputField
+                  label="PEN Number (optional)"
+                  value={form.penNumber}
+                  onChange={(v) => setForm((p) => ({ ...p, penNumber: v }))}
+                />
+                <InputField
+                  label="APAAR ID (optional)"
+                  value={form.apaarId}
+                  onChange={(v) => setForm((p) => ({ ...p, apaarId: v }))}
                 />
               </div>
 

@@ -126,6 +126,8 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
         section: classMeta?.section ?? null,
         applicationNo: applicationNoForUpdate,
         fedenaNo: optionalString(body.fedenaNo),
+        penNumber: optionalString(body.penNumber),
+        apaarId: optionalString(body.apaarId),
         admissionNo: optionalString(body.admissionNo),
         gradeSought: body.gradeSought,
         boardingType: body.boardingType,
