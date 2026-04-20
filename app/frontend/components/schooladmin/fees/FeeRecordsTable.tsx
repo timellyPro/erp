@@ -13,10 +13,22 @@ interface FeeRecordsTableProps {
   classes: Class[];
 }
 
+type ReportPeriod = "DAY_WISE" | "MONTH_WISE" | "YEAR_WISE" | "ACADEMIC_YEAR_WISE";
+type PaymentColumn = "Cash" | "OTHERS" | "ONLINE PAYMENT" | "Cheque" | "DD";
+
 export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps) {
   const router = useRouter();
   const [searchName, setSearchName] = useState("");
   const [selectedClass, setSelectedClass] = useState("");
+  const [reportPeriod, setReportPeriod] = useState<ReportPeriod>("DAY_WISE");
+  const [reportDate, setReportDate] = useState(new Date().toISOString().slice(0, 10));
+  const [reportMonth, setReportMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [reportYear, setReportYear] = useState(String(new Date().getFullYear()));
+  const [academicYear, setAcademicYear] = useState(() => {
+    const now = new Date();
+    const start = now.getMonth() >= 5 ? now.getFullYear() : now.getFullYear() - 1;
+    return `${start}-${start + 1}`;
+  });
 
   const filteredFees = fees.filter((f) => {
     const name = (f.student.user?.name || "").toLowerCase();
@@ -61,6 +73,186 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     XLSX.writeFile(workbook, filename);
   };
 
+  const getReportPeriodLabel = (value: ReportPeriod) => {
+    if (value === "DAY_WISE") return "Day Wise";
+    if (value === "MONTH_WISE") return "Month Wise";
+    if (value === "YEAR_WISE") return "Year Wise";
+    return "Academic Year Wise";
+  };
+
+  const getReportPeriodValue = () => {
+    if (reportPeriod === "DAY_WISE") return reportDate || "-";
+    if (reportPeriod === "MONTH_WISE") return reportMonth || "-";
+    if (reportPeriod === "YEAR_WISE") return reportYear || "-";
+    return academicYear || "-";
+  };
+
+  const toDateOnly = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+  const inSelectedPeriod = (createdAt: string) => {
+    const d = new Date(createdAt);
+    if (Number.isNaN(d.getTime())) return false;
+    if (reportPeriod === "DAY_WISE") {
+      return toDateOnly(d).getTime() === toDateOnly(new Date(reportDate)).getTime();
+    }
+    if (reportPeriod === "MONTH_WISE") {
+      const [y, m] = reportMonth.split("-").map((v) => Number(v));
+      if (!y || !m) return false;
+      return d.getFullYear() === y && d.getMonth() + 1 === m;
+    }
+    if (reportPeriod === "YEAR_WISE") {
+      return d.getFullYear() === Number(reportYear);
+    }
+    const [start, end] = academicYear.split("-").map((v) => Number(v));
+    if (!start || !end) return false;
+    const startDate = new Date(start, 3, 1); // 1 Apr
+    const endDate = new Date(end, 2, 31, 23, 59, 59, 999); // 31 Mar
+    return d >= startDate && d <= endDate;
+  };
+
+  const normalizeAccount = (feeTypeName?: string) => {
+    const label = (feeTypeName || "").trim().replace(/\s+/g, " ");
+    return label || "Default";
+  };
+
+  const accountKey = (label: string) => label.trim().replace(/\s+/g, " ").toUpperCase();
+
+  const sortReportAccounts = (a: string, b: string) => {
+    if (a === "Default") return -1;
+    if (b === "Default") return 1;
+    return a.localeCompare(b);
+  };
+
+  const normalizePaymentColumn = (gateway?: string): PaymentColumn => {
+    const g = (gateway || "").toUpperCase();
+    if (g === "CASH" || g === "OFFLINE") return "Cash";
+    if (g === "CHEQUE") return "Cheque";
+    if (g === "DD") return "DD";
+    if (
+      g === "HYPERPG" ||
+      g === "ONLINE" ||
+      g === "UPI" ||
+      g === "BANK_TRANSFER" ||
+      g === "BANK" ||
+      g === "CARD"
+    ) {
+      return "ONLINE PAYMENT";
+    }
+    return "OTHERS";
+  };
+
+  const exportFinalTemplate = async () => {
+    const workbook = XLSX.utils.book_new();
+
+    const summaryRows: Array<Record<string, string | number>> = [
+      { Field: "Report Type", Value: getReportPeriodLabel(reportPeriod) },
+      { Field: "Report Parameter", Value: getReportPeriodValue() },
+      { Field: "Class Filter", Value: selectedClass ? classLabelById.get(selectedClass) || "-" : "All Classes" },
+      { Field: "Generated On", Value: new Date().toLocaleString("en-IN") },
+    ];
+    const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
+    XLSX.utils.book_append_sheet(workbook, summarySheet, "Report Summary");
+    const txRes = await fetch("/api/fees/transactions?limit=5000", { credentials: "include" });
+    const txData = await txRes.json().catch(() => ({}));
+    const transactions: Array<{
+      amount: number;
+      gateway?: string;
+      createdAt: string;
+      feeTypeName?: string;
+      feeAllocations?: Array<{ name: string; amount: number }>;
+      student?: { class?: { id?: string | null } | null } | null;
+    }> = Array.isArray(txData?.transactions) ? txData.transactions : [];
+
+    const filteredTx = transactions.filter((t) => {
+      const classId = t.student?.class?.id || "";
+      if (selectedClass && classId !== selectedClass) return false;
+      return inSelectedPeriod(t.createdAt);
+    });
+    if (filteredTx.length === 0) {
+      alert("No fee transactions found for the selected report period.");
+      return;
+    }
+
+    const matrix = new Map<string, Record<PaymentColumn, number>>();
+    const accountLabelByKey = new Map<string, string>();
+    const initRow = (): Record<PaymentColumn, number> => ({
+      Cash: 0,
+      OTHERS: 0,
+      "ONLINE PAYMENT": 0,
+      Cheque: 0,
+      DD: 0,
+    });
+    for (const tx of filteredTx) {
+      const col = normalizePaymentColumn(tx.gateway);
+      const allocations =
+        Array.isArray(tx.feeAllocations) && tx.feeAllocations.length > 0
+          ? tx.feeAllocations
+          : [{ name: normalizeAccount(tx.feeTypeName), amount: Number(tx.amount || 0) }];
+      for (const allocation of allocations) {
+        const account = normalizeAccount(allocation.name);
+        const key = accountKey(account);
+        if (!accountLabelByKey.has(key)) accountLabelByKey.set(key, account);
+        const row = matrix.get(key) ?? initRow();
+        row[col] += Number(allocation.amount || 0);
+        matrix.set(key, row);
+      }
+    }
+
+    const reportRows: Array<{
+      Accounts: string;
+      Cash: number;
+      OTHERS: number;
+      "ONLINE PAYMENT": number;
+      Cheque: number;
+      DD: number;
+      Total: number;
+    }> = Array.from(accountLabelByKey.entries())
+      .map(([key, label]) => ({ key, label }))
+      .sort((a, b) => sortReportAccounts(a.label, b.label))
+      .map(({ key, label }) => {
+      const row = matrix.get(key) ?? initRow();
+      const total = row.Cash + row.OTHERS + row["ONLINE PAYMENT"] + row.Cheque + row.DD;
+      return {
+        Accounts: label,
+        Cash: Number(row.Cash.toFixed(2)),
+        OTHERS: Number(row.OTHERS.toFixed(2)),
+        "ONLINE PAYMENT": Number(row["ONLINE PAYMENT"].toFixed(2)),
+        Cheque: Number(row.Cheque.toFixed(2)),
+        DD: Number(row.DD.toFixed(2)),
+        Total: Number(total.toFixed(2)),
+      };
+    });
+    const grand = reportRows.reduce(
+      (acc, r) => ({
+        Cash: acc.Cash + r.Cash,
+        OTHERS: acc.OTHERS + r.OTHERS,
+        "ONLINE PAYMENT": acc["ONLINE PAYMENT"] + r["ONLINE PAYMENT"],
+        Cheque: acc.Cheque + r.Cheque,
+        DD: acc.DD + r.DD,
+        Total: acc.Total + r.Total,
+      }),
+      { Cash: 0, OTHERS: 0, "ONLINE PAYMENT": 0, Cheque: 0, DD: 0, Total: 0 }
+    );
+    reportRows.push({
+      Accounts: "Total",
+      Cash: Number(grand.Cash.toFixed(2)),
+      OTHERS: Number(grand.OTHERS.toFixed(2)),
+      "ONLINE PAYMENT": Number(grand["ONLINE PAYMENT"].toFixed(2)),
+      Cheque: Number(grand.Cheque.toFixed(2)),
+      DD: Number(grand.DD.toFixed(2)),
+      Total: Number(grand.Total.toFixed(2)),
+    });
+    const reportSheet = XLSX.utils.json_to_sheet(reportRows);
+    XLSX.utils.book_append_sheet(workbook, reportSheet, "Fee Report");
+
+    const recordsSheet = XLSX.utils.json_to_sheet(toSheetRows(filteredFees));
+    XLSX.utils.book_append_sheet(workbook, recordsSheet, "Fee Records");
+
+    const fileDate = new Date().toISOString().slice(0, 10);
+    const safePeriod = reportPeriod.toLowerCase();
+    XLSX.writeFile(workbook, `fee-report-${safePeriod}-${fileDate}.xlsx`);
+  };
+
   const exportAllClasses = () => {
     if (fees.length === 0) {
       alert("No fee records available to export.");
@@ -90,6 +282,64 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
   return (
     <section className="rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur sm:p-6">
       <h3 className="text-lg font-semibold mb-4">Fee Records ({filteredFees.length})</h3>
+      <div className="mb-4 rounded-xl border border-white/10 bg-black/10 p-3">
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+          <SelectInput
+            value={reportPeriod}
+            onChange={(value) => setReportPeriod(value as ReportPeriod)}
+            options={[
+              { label: "Day Wise", value: "DAY_WISE" },
+              { label: "Month Wise", value: "MONTH_WISE" },
+              { label: "Year Wise", value: "YEAR_WISE" },
+              { label: "Academic Year Wise", value: "ACADEMIC_YEAR_WISE" },
+            ]}
+          />
+          {reportPeriod === "DAY_WISE" && (
+            <input
+              type="date"
+              value={reportDate}
+              onChange={(e) => setReportDate(e.target.value)}
+              className="w-full rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-white"
+            />
+          )}
+          {reportPeriod === "MONTH_WISE" && (
+            <input
+              type="month"
+              value={reportMonth}
+              onChange={(e) => setReportMonth(e.target.value)}
+              className="w-full rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-white"
+            />
+          )}
+          {reportPeriod === "YEAR_WISE" && (
+            <input
+              type="number"
+              min={2000}
+              max={2100}
+              value={reportYear}
+              onChange={(e) => setReportYear(e.target.value)}
+              className="w-full rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-white"
+              placeholder="e.g. 2026"
+            />
+          )}
+          {reportPeriod === "ACADEMIC_YEAR_WISE" && (
+            <input
+              type="text"
+              value={academicYear}
+              onChange={(e) => setAcademicYear(e.target.value)}
+              className="w-full rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-white"
+              placeholder="e.g. 2025-2026"
+            />
+          )}
+          <button
+            type="button"
+          onClick={() => void exportFinalTemplate()}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300 hover:bg-amber-500/20"
+          >
+            <Download size={16} />
+            Export Fee Report
+          </button>
+        </div>
+      </div>
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
         <div className="relative min-w-0 flex-1 sm:min-w-[180px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
