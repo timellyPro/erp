@@ -62,6 +62,8 @@ export async function enrollStudentFromAdmissionApplication(params: {
       gender: string;
       previousSchoolName: string;
       rollNo: string | null;
+      penNumber: string | null;
+      apaarId: string | null;
       fedenaNo: string | null;
       houseNo: string;
       street: string;
@@ -76,7 +78,7 @@ export async function enrollStudentFromAdmissionApplication(params: {
       parentOccupation: string;
     }>
   >(
-    Prisma.sql`SELECT "studentId", "classId", "firstName", "middleName", "lastName", "parentPhone", "aadharNo", "parentName", "dateOfBirth", "gender", "previousSchoolName", "rollNo", "fedenaNo", "houseNo", "street", "town", "city", "state", "pinCode", "parentEmail", "residencyType", "applicationFee", "admissionFee", "parentOccupation" FROM "StudentApplication" WHERE "id" = ${applicationId} AND "schoolId" = ${schoolId} LIMIT 1`
+    Prisma.sql`SELECT "studentId", "classId", "firstName", "middleName", "lastName", "parentPhone", "aadharNo", "parentName", "dateOfBirth", "gender", "previousSchoolName", "rollNo", "penNumber", "apaarId", "fedenaNo", "houseNo", "street", "town", "city", "state", "pinCode", "parentEmail", "residencyType", "applicationFee", "admissionFee", "parentOccupation" FROM "StudentApplication" WHERE "id" = ${applicationId} AND "schoolId" = ${schoolId} LIMIT 1`
   );
   const app = appRows[0];
 
@@ -286,6 +288,8 @@ export async function enrollStudentFromAdmissionApplication(params: {
           aadhaarNo: aadhaarCleaned,
           phoneNo,
           rollNo: finalRollNo,
+          penNumber: app.penNumber?.trim() || null,
+          apaarId: app.apaarId?.trim() || null,
           residencyType: app.residencyType || "Day Scholar",
           applicationFee: app.applicationFee ?? null,
           admissionFee: app.admissionFee ?? null,

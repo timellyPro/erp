@@ -80,6 +80,26 @@ export default function AddStudentForm({
         </div>
         <div>
           <InputField
+            label="PEN Number"
+            value={form.penNumber}
+            onChange={(value) => onFieldChange("penNumber", value.slice(0, 40))}
+            placeholder="Optional"
+            bgColor="white"
+            error={errors.penNumber}
+          />
+        </div>
+        <div>
+          <InputField
+            label="APAAR ID"
+            value={form.apaarId}
+            onChange={(value) => onFieldChange("apaarId", value.slice(0, 40))}
+            placeholder="Optional"
+            bgColor="white"
+            error={errors.apaarId}
+          />
+        </div>
+        <div>
+          <InputField
             label="Aadhaar Number*"
             value={form.aadhaarNo}
             onChange={(value) => onFieldChange("aadhaarNo", digitsCap(12)(value))}

@@ -45,6 +45,8 @@ export const updateStudent = (studentId: string, payload: {
   occupation?: string;
   classId?: string;
   rollNo?: string;
+  penNumber?: string;
+  apaarId?: string;
   phoneNo?: string;
   email?: string;
   address?: string;

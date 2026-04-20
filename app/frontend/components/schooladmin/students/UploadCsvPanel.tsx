@@ -113,8 +113,8 @@ export default function UploadCsvPanel({
 
           <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 space-y-2">
             <p className="text-xs text-blue-300">
-              <strong className="text-[#8fd3ff]">Note:</strong> Same layout as admission bulk export: required fields include First Name, Last Name, Parent Name, Parent Phone, Aadhar No, and Date of Birth. Optional leading column{" "}
-              <strong className="text-white/90">Timelly ID</strong> (roll number, or e.g.{" "}
+              <strong className="text-[#8fd3ff]">Note:</strong> Same layout as admission bulk export: required fields include First Name, Last Name, Parent Name, Parent Phone, Aadhar No, and Date of Birth. Optional leading columns{" "}
+              <strong className="text-white/90">Timelly ID</strong>, <strong className="text-white/90">PEN Number</strong>, and <strong className="text-white/90">APAAR ID</strong> (roll number, or e.g.{" "}
               <code className="text-lime-300/90">ADM/2026/123</code> → <code className="text-lime-300/90">123</code>).
             </p>
             <button

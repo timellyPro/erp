@@ -82,6 +82,8 @@ void preloadClasses();
 const DEFAULT_FORM: StudentFormState = {
   name: "",
   rollNo: "",
+  penNumber: "",
+  apaarId: "",
   gender: "",
   residencyType: "Day Scholar",
   dob: "",
@@ -484,6 +486,8 @@ export default function useStudentPage({ classes, reload }: Props) {
         classId: classIdPayload,
         address: form.address?.trim() || undefined,
         rollNo: form.rollNo?.trim() || undefined,
+        penNumber: form.penNumber?.trim() || undefined,
+        apaarId: form.apaarId?.trim() || undefined,
         gender: form.gender?.trim() || undefined,
         residencyType: form.residencyType?.trim() || "Day Scholar",
       });
@@ -642,6 +646,8 @@ export default function useStudentPage({ classes, reload }: Props) {
         occupation: editForm.occupation.trim() || undefined,
         classId: editForm.classId || undefined,
         rollNo: editForm.rollNo.trim() || undefined,
+        penNumber: editForm.penNumber.trim() || undefined,
+        apaarId: editForm.apaarId.trim() || undefined,
         phoneNo: editForm.phoneNo.trim() || undefined,
         address: editForm.address.trim() || undefined,
         gender: editForm.gender.trim() || undefined,

@@ -87,6 +87,8 @@ export async function POST(req: Request) {
       classId: classIdInput,
       address: addressInput,
       rollNo,
+      penNumber,
+      apaarId,
       gender: genderInput,
       previousSchool: previousSchoolInput,
       // Optional admission fields to store alongside the student
@@ -134,6 +136,10 @@ export async function POST(req: Request) {
     let effectiveAddressInput = addressInput;
     let effectiveRollNo = rollNo;
     let effectiveGenderInput = genderInput;
+    let effectivePenNumber =
+      typeof penNumber === "string" && penNumber.trim() ? penNumber.trim() : null;
+    let effectiveApaarId =
+      typeof apaarId === "string" && apaarId.trim() ? apaarId.trim() : null;
     let effectiveResidencyType = normalizeResidencyType(residencyTypeInput);
     let effectivePreviousSchoolInput = previousSchoolInput;
 
@@ -169,6 +175,8 @@ export async function POST(req: Request) {
         effectiveAdmissionFee = app.admissionFee;
       }
       effectiveGenderInput = app.gender === "MALE" ? "Male" : "Female";
+      effectivePenNumber = (app as { penNumber?: string | null }).penNumber?.trim() || null;
+      effectiveApaarId = (app as { apaarId?: string | null }).apaarId?.trim() || null;
       effectiveResidencyType = normalizeResidencyType(app.residencyType);
       effectivePreviousSchoolInput = app.previousSchoolName;
       applicationToLink = { id: app.id };
@@ -475,6 +483,8 @@ export async function POST(req: Request) {
               typeof effectiveRollNo === "string" && effectiveRollNo.trim()
                 ? effectiveRollNo.trim()
                 : finalRollNo,
+            penNumber: effectivePenNumber,
+            apaarId: effectiveApaarId,
             applicationFee: effectiveApplicationFee,
             admissionFee: effectiveAdmissionFee,
           },
@@ -544,6 +554,8 @@ export async function POST(req: Request) {
               applicationFee: effectiveApplicationFee,
               admissionFee: effectiveAdmissionFee,
               rollNo: typeof effectiveRollNo === "string" && effectiveRollNo.trim() ? effectiveRollNo.trim() : null,
+              penNumber: effectivePenNumber,
+              apaarId: effectiveApaarId,
               firstName: String(effectiveName).split(" ")[0] || "Student",
               middleName: null,
               lastName: String(effectiveName).split(" ").slice(1).join(" ") || "Student",

@@ -242,6 +242,8 @@ export async function GET(_req: Request, context: RouteParams) {
         email: student.user?.email ?? "",
         photoUrl: student.user?.photoUrl ?? null,
         rollNo: student.rollNo ?? "",
+        penNumber: (student as { penNumber?: string | null }).penNumber ?? "",
+        apaarId: (student as { apaarId?: string | null }).apaarId ?? "",
         dob: student.dob?.toISOString().slice(0, 10) ?? "",
         age,
         address: student.address ?? "",
@@ -358,6 +360,10 @@ export async function PUT(req: Request, context: RouteParams) {
     const occupation = typeof body.occupation === "string" ? body.occupation.trim() || null : undefined;
     const classId = typeof body.classId === "string" ? (body.classId || null) : undefined;
     const rollNo = typeof body.rollNo === "string" ? body.rollNo.trim() || null : undefined;
+    const penNumber =
+      typeof body.penNumber === "string" ? body.penNumber.trim() || null : undefined;
+    const apaarId =
+      typeof body.apaarId === "string" ? body.apaarId.trim() || null : undefined;
     const phoneNo = typeof body.phoneNo === "string" ? body.phoneNo.trim() : undefined;
     const email = typeof body.email === "string" ? body.email.trim() : undefined;
     const address = typeof body.address === "string" ? body.address.trim() || null : undefined;
@@ -396,6 +402,8 @@ export async function PUT(req: Request, context: RouteParams) {
     if (occupation !== undefined) studentUpdate.occupation = occupation;
     if (classId !== undefined) studentUpdate.classId = classId;
     if (rollNo !== undefined) studentUpdate.rollNo = rollNo;
+    if (penNumber !== undefined) studentUpdate.penNumber = penNumber;
+    if (apaarId !== undefined) studentUpdate.apaarId = apaarId;
     if (phoneNo !== undefined) studentUpdate.phoneNo = phoneNo;
     if (address !== undefined) studentUpdate.address = address;
     if (gender !== undefined) studentUpdate.gender = gender;

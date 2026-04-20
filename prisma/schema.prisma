@@ -441,6 +441,8 @@ model Student {
   aadhaarNo       String
   phoneNo         String
   rollNo          String? // modifiable by admin
+  penNumber       String?
+  apaarId         String?
   dob             DateTime
   address         String?
   gender          String?
@@ -1152,6 +1154,8 @@ model StudentApplication {
 
   // Optional identifiers (for bulk upload compatibility)
   rollNo String?
+  penNumber String?
+  apaarId   String?
 
   // Personal Info
   firstName     String

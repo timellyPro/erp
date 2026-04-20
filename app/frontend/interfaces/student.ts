@@ -19,6 +19,8 @@ export interface IStudent {
   name: string;
   email: string;
   rollNo: string;
+  penNumber?: string;
+  apaarId?: string;
   phoneNo: string;
   applicationFee?: number | null;
   admissionFee?: number | null;

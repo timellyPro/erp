@@ -50,6 +50,8 @@ export async function POST(req: Request) {
     const allowedFields = new Set([
       "applicationNo",
       "fedenaNo",
+      "penNumber",
+      "apaarId",
       "admissionNo",
       "classId",
       "gradeSought",
@@ -128,6 +130,8 @@ export async function POST(req: Request) {
         section,
         applicationNo,
         fedenaNo: optionalString(body.fedenaNo),
+        penNumber: optionalString(body.penNumber),
+        apaarId: optionalString(body.apaarId),
         admissionNo: optionalString(body.admissionNo),
         gradeSought: body.gradeSought,
         boardingType: body.boardingType,
