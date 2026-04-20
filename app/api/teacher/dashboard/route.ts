@@ -42,7 +42,14 @@ export async function GET() {
         }),
         prisma.appointment.findMany({
           where: { teacherId: userId },
-          include: { student: { include: { user: true } } },
+          include: {
+            student: {
+              select: {
+                fatherName: true,
+                user: { select: { name: true } },
+              },
+            },
+          },
           orderBy: { createdAt: "desc" },
           take: 4,
         }),

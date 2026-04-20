@@ -31,11 +31,11 @@ export async function GET(req: Request) {
 
     const where: {
       student: { schoolId: string; id?: string };
-      status: string;
+      status: { in: string[] };
       eventRegistrationId: null;
     } = {
       student: { schoolId },
-      status: "SUCCESS",
+      status: { in: ["SUCCESS", "COMPLETED"] },
       eventRegistrationId: null,
     };
     if (studentId) {
@@ -59,6 +59,66 @@ export async function GET(req: Request) {
     });
 
     const paymentIds = payments.map((p) => p.id);
+    const paymentAllocations =
+      paymentIds.length > 0
+        ? await prisma.paymentFeeAllocation.findMany({
+            where: {
+              paymentId: { in: paymentIds },
+              allocationType: "PAYMENT",
+            },
+            select: {
+              paymentId: true,
+              headType: true,
+              componentIndex: true,
+              componentName: true,
+              extraFeeId: true,
+              allocatedAmount: true,
+            },
+          })
+        : [];
+    const extraFeeIds = Array.from(
+      new Set(
+        paymentAllocations
+          .filter((a) => a.headType === "EXTRA_FEE" && !!a.extraFeeId)
+          .map((a) => a.extraFeeId as string)
+      )
+    );
+    const extraFees =
+      extraFeeIds.length > 0
+        ? await prisma.extraFee.findMany({
+            where: { id: { in: extraFeeIds } },
+            select: { id: true, name: true },
+          })
+        : [];
+    const extraFeeNameById = new Map(extraFees.map((ef) => [ef.id, ef.name]));
+
+    const allocationLabelAmountByPayment = new Map<string, Map<string, number>>();
+    for (const a of paymentAllocations) {
+      if (a.allocatedAmount <= 0.00001) continue;
+      let label = "Default";
+      if (a.headType === "BASE_COMPONENT") {
+        label = a.componentName || (typeof a.componentIndex === "number" ? `Component ${a.componentIndex + 1}` : "School Fees");
+      } else if (a.headType === "EXTRA_FEE") {
+        label = a.extraFeeId ? extraFeeNameById.get(a.extraFeeId) ?? "Extra Fee" : "Extra Fee";
+      }
+      const perPayment = allocationLabelAmountByPayment.get(a.paymentId) ?? new Map<string, number>();
+      allocationLabelAmountByPayment.set(a.paymentId, perPayment);
+      perPayment.set(label, (perPayment.get(label) ?? 0) + a.allocatedAmount);
+    }
+
+    const dominantFeeTypeByPayment = new Map<string, { name: string; amount: number }>();
+    for (const [paymentId, labelMap] of allocationLabelAmountByPayment.entries()) {
+      let bestName = "Default";
+      let bestAmount = 0;
+      for (const [name, amt] of labelMap.entries()) {
+        if (amt > bestAmount) {
+          bestAmount = amt;
+          bestName = name;
+        }
+      }
+      dominantFeeTypeByPayment.set(paymentId, { name: bestName, amount: bestAmount });
+    }
+
     let refundSums: { paymentId: string; total: number }[] = [];
     if (paymentIds.length > 0) {
       const placeholders = paymentIds.map((_, i) => `$${i + 1}`).join(", ");
@@ -73,6 +133,13 @@ export async function GET(req: Request) {
     const transactions = payments.map((p) => {
       const refunded = refundByPayment.get(p.id) ?? 0;
       const refundable = Math.max(p.amount - refunded, 0);
+      const perHead = allocationLabelAmountByPayment.get(p.id);
+      const feeAllocations = perHead
+        ? Array.from(perHead.entries()).map(([name, amount]) => ({
+            name,
+            amount,
+          }))
+        : [];
       return {
         id: p.id,
         amount: p.amount,
@@ -85,6 +152,9 @@ export async function GET(req: Request) {
         hyperpgAmountRefunded: typeof p.hyperpgAmountRefunded === "number" ? p.hyperpgAmountRefunded : null,
         transactionId: p.transactionId,
         createdAt: p.createdAt,
+        feeTypeName: dominantFeeTypeByPayment.get(p.id)?.name ?? "Default",
+        feeTypeAmount: dominantFeeTypeByPayment.get(p.id)?.amount ?? p.amount,
+        feeAllocations,
         student: p.student,
         refunded,
         refundable,
