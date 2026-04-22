@@ -135,60 +135,61 @@ export async function POST(req: Request) {
       });
     });
 
-    await prisma.$transaction(async (tx) => {
-      for (const row of normalizedRows) {
-        const candidates = tokenToIds.get(row.token);
-        if (!candidates || candidates.size === 0) {
-          errors.push({
-            index: row.index,
-            timellyId: row.token,
-            message: "No student found for this Timelly ID",
-          });
-          continue;
-        }
-        if (candidates.size > 1) {
-          errors.push({
-            index: row.index,
-            timellyId: row.token,
-            message: "Multiple students match this ID; use a unique roll / admission value",
-          });
-          continue;
-        }
-        const studentId = [...candidates][0]!;
-        const st = studentById.get(studentId);
-        if (!st?.fee) {
-          errors.push({
-            index: row.index,
-            timellyId: row.token,
-            message: "Student has no fee record",
-          });
-          continue;
-        }
+    for (const row of normalizedRows) {
+      const candidates = tokenToIds.get(row.token);
+      if (!candidates || candidates.size === 0) {
+        errors.push({
+          index: row.index,
+          timellyId: row.token,
+          message: "No student found for this Timelly ID",
+        });
+        continue;
+      }
+      if (candidates.size > 1) {
+        errors.push({
+          index: row.index,
+          timellyId: row.token,
+          message: "Multiple students match this ID; use a unique roll / admission value",
+        });
+        continue;
+      }
+      const studentId = [...candidates][0]!;
+      const st = studentById.get(studentId);
+      if (!st?.fee) {
+        errors.push({
+          index: row.index,
+          timellyId: row.token,
+          message: "Student has no fee record",
+        });
+        continue;
+      }
 
-        if (row.expectedName) {
-          const want = normKey(row.expectedName);
-          if (want) {
-            const actual = normKey(st.user.name || "");
-            if (!actual) {
-              errors.push({
-                index: row.index,
-                timellyId: row.token,
-                message: "Student name missing on file; cannot verify sheet name",
-              });
-              continue;
-            }
-            if (!actual.includes(want) && !want.includes(actual)) {
-              errors.push({
-                index: row.index,
-                timellyId: row.token,
-                message: `Name mismatch (sheet: "${row.expectedName}", student: "${st.user.name}")`,
-              });
-              continue;
-            }
+      if (row.expectedName) {
+        const want = normKey(row.expectedName);
+        if (want) {
+          const actual = normKey(st.user.name || "");
+          if (!actual) {
+            errors.push({
+              index: row.index,
+              timellyId: row.token,
+              message: "Student name missing on file; cannot verify sheet name",
+            });
+            continue;
+          }
+          if (!actual.includes(want) && !want.includes(actual)) {
+            errors.push({
+              index: row.index,
+              timellyId: row.token,
+              message: `Name mismatch (sheet: "${row.expectedName}", student: "${st.user.name}")`,
+            });
+            continue;
           }
         }
+      }
 
-        await tx.extraFee.create({
+      // Keep each row atomic, but avoid one huge long-running interactive transaction.
+      await prisma.$transaction([
+        prisma.extraFee.create({
           data: {
             schoolId,
             name: row.feeName,
@@ -198,19 +199,18 @@ export async function POST(req: Request) {
             targetClassId: null,
             targetSection: null,
           },
-        });
-
-        await tx.studentFee.update({
+        }),
+        prisma.studentFee.update({
           where: { studentId },
           data: {
             totalFee: { increment: row.amount },
             finalFee: { increment: row.amount },
             remainingFee: { increment: row.amount },
           },
-        });
-        created += 1;
-      }
-    });
+        }),
+      ]);
+      created += 1;
+    }
 
     return NextResponse.json(
       {
