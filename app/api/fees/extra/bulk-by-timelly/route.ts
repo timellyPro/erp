@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { Prisma } from "@prisma/client";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
@@ -28,52 +29,65 @@ type IncomingRow = {
   studentName?: unknown;
 };
 
-async function cleanupStudentExtraFeeDuplicates(schoolId: string) {
-  const existing = await prisma.extraFee.findMany({
-    where: { schoolId, targetType: "STUDENT", targetStudentId: { not: null } },
-    select: { id: true, targetStudentId: true, name: true, amount: true, createdAt: true },
-    orderBy: { createdAt: "asc" },
-  });
+async function cleanupStudentExtraFeeDuplicates(
+  schoolId: string,
+  onlyNameKeys?: Set<string>
+) {
+  const nameFilterSql =
+    onlyNameKeys && onlyNameKeys.size > 0
+      ? Prisma.sql`AND lower(regexp_replace(trim(e.name), '\s+', ' ', 'g')) IN (${Prisma.join(
+          [...onlyNameKeys]
+        )})`
+      : Prisma.empty;
 
-  const toDeleteIds: string[] = [];
-  const decrementByStudent = new Map<string, number>();
-  const seen = new Set<string>();
-
-  for (const fee of existing) {
-    const studentId = fee.targetStudentId;
-    if (!studentId) continue;
-    const key = `${studentId}::${normKey(fee.name)}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      continue;
-    }
-    toDeleteIds.push(fee.id);
-    decrementByStudent.set(studentId, (decrementByStudent.get(studentId) ?? 0) + fee.amount);
-  }
-
-  if (toDeleteIds.length === 0) return 0;
-
-  for (let i = 0; i < toDeleteIds.length; i += WRITE_BATCH_SIZE) {
-    const idsChunk = toDeleteIds.slice(i, i + WRITE_BATCH_SIZE);
-    await prisma.extraFee.deleteMany({ where: { id: { in: idsChunk } } });
-  }
-
-  const updates = [...decrementByStudent.entries()].map(([studentId, amount]) =>
-    prisma.studentFee.update({
-      where: { studentId },
-      data: {
-        totalFee: { decrement: amount },
-        finalFee: { decrement: amount },
-        remainingFee: { decrement: amount },
-      },
-    })
+  const rows = await prisma.$transaction(async (tx) =>
+    tx.$queryRaw<Array<{ deletedCount: number }>>(Prisma.sql`
+      WITH ranked AS (
+        SELECT
+          e.id,
+          e."targetStudentId" AS student_id,
+          e.amount,
+          ROW_NUMBER() OVER (
+            PARTITION BY e."targetStudentId", lower(regexp_replace(trim(e.name), '\s+', ' ', 'g'))
+            ORDER BY e."createdAt" ASC, e.id ASC
+          ) AS rn
+        FROM "ExtraFee" e
+        WHERE e."schoolId" = ${schoolId}
+          AND e."targetType" = 'STUDENT'
+          AND e."targetStudentId" IS NOT NULL
+          ${nameFilterSql}
+      ),
+      deleted AS (
+        DELETE FROM "ExtraFee" e
+        USING ranked r
+        WHERE e.id = r.id
+          AND r.rn > 1
+        RETURNING e."targetStudentId" AS student_id, e.amount
+      ),
+      agg AS (
+        SELECT
+          student_id,
+          SUM(amount)::double precision AS total_amount,
+          COUNT(*)::int AS deleted_count
+        FROM deleted
+        GROUP BY student_id
+      ),
+      updated AS (
+        UPDATE "StudentFee" sf
+        SET
+          "totalFee" = sf."totalFee" - agg.total_amount,
+          "finalFee" = sf."finalFee" - agg.total_amount,
+          "remainingFee" = sf."remainingFee" - agg.total_amount
+        FROM agg
+        WHERE sf."studentId" = agg.student_id
+        RETURNING agg.deleted_count
+      )
+      SELECT COALESCE(SUM(updated.deleted_count), 0)::int AS "deletedCount"
+      FROM updated
+    `)
   );
 
-  for (let i = 0; i < updates.length; i += WRITE_BATCH_SIZE) {
-    await prisma.$transaction(updates.slice(i, i + WRITE_BATCH_SIZE));
-  }
-
-  return toDeleteIds.length;
+  return rows[0]?.deletedCount ?? 0;
 }
 
 export async function POST(req: Request) {
@@ -97,8 +111,16 @@ export async function POST(req: Request) {
 
     const body = await req.json().catch(() => ({}));
     const cleanupDuplicates = Boolean(body.cleanupDuplicates);
+    const cleanupFeeNamesRaw: unknown[] = Array.isArray(body.cleanupFeeNames)
+      ? body.cleanupFeeNames
+      : [];
+    const cleanupFeeNames = cleanupFeeNamesRaw
+      .map((n) => String(n ?? "").trim())
+      .filter((n: string) => n.length > 0);
+    const cleanupNameKeys =
+      cleanupFeeNames.length > 0 ? new Set(cleanupFeeNames.map((n) => normKey(n))) : undefined;
     const rowsIn = Array.isArray(body.rows) ? body.rows : [];
-    if (rowsIn.length === 0 && !cleanupDuplicates) {
+    if (rowsIn.length === 0 && !cleanupDuplicates && !cleanupNameKeys) {
       return NextResponse.json({ message: "rows array is required" }, { status: 400 });
     }
     if (rowsIn.length > MAX_ROWS) {
@@ -106,6 +128,22 @@ export async function POST(req: Request) {
         { message: `At most ${MAX_ROWS} rows per import` },
         { status: 400 }
       );
+    }
+
+    let cleanedDuplicates = 0;
+    if (cleanupDuplicates || cleanupNameKeys) {
+      cleanedDuplicates = await cleanupStudentExtraFeeDuplicates(schoolId, cleanupNameKeys);
+      if (rowsIn.length === 0) {
+        return NextResponse.json(
+          {
+            created: 0,
+            failed: 0,
+            errors: [],
+            cleanedDuplicates,
+          },
+          { status: 200 }
+        );
+      }
     }
 
     const students = await prisma.student.findMany({
@@ -143,7 +181,6 @@ export async function POST(req: Request) {
     type RowErr = { index: number; timellyId: string; message: string };
     const errors: RowErr[] = [];
     let created = 0;
-    let cleanedDuplicates = 0;
 
     const normalizedRows: Array<{
       index: number;
@@ -185,21 +222,6 @@ export async function POST(req: Request) {
         expectedName: studentName,
       });
     });
-
-    if (cleanupDuplicates) {
-      cleanedDuplicates = await cleanupStudentExtraFeeDuplicates(schoolId);
-      if (rowsIn.length === 0) {
-        return NextResponse.json(
-          {
-            created: 0,
-            failed: 0,
-            errors: [],
-            cleanedDuplicates,
-          },
-          { status: 200 }
-        );
-      }
-    }
 
     const acceptedRows: Array<{
       index: number;

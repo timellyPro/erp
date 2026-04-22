@@ -110,7 +110,9 @@ function parseRowsFromSheet(workbook: XLSX.WorkBook): { rows: Array<{ timellyId:
 export default function BulkExtraFeeByTimellyModal({ open, onClose, onApplied }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [cleanupMessage, setCleanupMessage] = useState<string | null>(null);
   const [result, setResult] = useState<{
     created: number;
     failed: number;
@@ -131,6 +133,7 @@ export default function BulkExtraFeeByTimellyModal({ open, onClose, onApplied }:
 
   const handleSubmit = async () => {
     setLocalError(null);
+    setCleanupMessage(null);
     setResult(null);
     if (!file) {
       setLocalError("Choose an Excel file first.");
@@ -172,9 +175,36 @@ export default function BulkExtraFeeByTimellyModal({ open, onClose, onApplied }:
     }
   };
 
+  const handleCleanupDuplicates = async () => {
+    setLocalError(null);
+    setCleanupMessage(null);
+    setResult(null);
+    setCleaning(true);
+    try {
+      const res = await fetch("/api/fees/extra/bulk-by-timelly", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ cleanupDuplicates: true }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setLocalError(data.message || "Cleanup failed");
+        return;
+      }
+      setCleanupMessage(`Removed duplicate entries: ${data.cleanedDuplicates ?? 0}`);
+      onApplied();
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : "Failed to cleanup duplicates");
+    } finally {
+      setCleaning(false);
+    }
+  };
+
   const handleClose = () => {
     setFile(null);
     setLocalError(null);
+    setCleanupMessage(null);
     setResult(null);
     onClose();
   };
@@ -215,6 +245,14 @@ export default function BulkExtraFeeByTimellyModal({ open, onClose, onApplied }:
             >
               Download template
             </button>
+            <button
+              type="button"
+              onClick={() => void handleCleanupDuplicates()}
+              disabled={submitting || cleaning}
+              className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs font-semibold text-amber-200 hover:bg-amber-400/20 disabled:opacity-50"
+            >
+              {cleaning ? "Cleaning duplicates..." : "Cleanup duplicate extra fees"}
+            </button>
           </div>
 
           <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-white/20 bg-black/20 px-4 py-8 text-center hover:bg-white/[0.04]">
@@ -232,6 +270,11 @@ export default function BulkExtraFeeByTimellyModal({ open, onClose, onApplied }:
           {localError && (
             <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
               {localError}
+            </div>
+          )}
+          {cleanupMessage && (
+            <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+              {cleanupMessage}
             </div>
           )}
 
