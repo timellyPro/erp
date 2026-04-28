@@ -38,7 +38,7 @@ type Props = {
 };
 
 function isSyntheticPaymentId(id: string) {
-  return id === "admission-fee" || id === "application-fee";
+  return id === "admission-fee" || id === "application-fee" || id === "legacy-paid-adjustment";
 }
 
 function isSuccessStatus(status: string) {
@@ -205,6 +205,26 @@ export const FeeTransactions = ({
       transactionId: "N/A",
       feeTypeName: "Application Fee",
       feeTypeAmount: applicationFee,
+    });
+  }
+
+  const successfulPaymentTotal = basePayments.reduce((sum, p) => {
+    if (!isSuccessStatus(p.status)) return sum;
+    return sum + resolveDisplayAmount(p);
+  }, 0);
+  const feePaidTotal = fee?.amountPaid ?? 0;
+  const legacyGapAmount = Math.max(Math.round((feePaidTotal - successfulPaymentTotal) * 100) / 100, 0);
+
+  if (legacyGapAmount > 0.01) {
+    basePayments.push({
+      id: "legacy-paid-adjustment",
+      amount: legacyGapAmount,
+      status: "SUCCESS",
+      method: "SYSTEM",
+      createdAt: studentCreatedAt || new Date().toISOString(),
+      transactionId: "AUTO-ADJUSTMENT",
+      feeTypeName: "Previous Payment Adjustment",
+      feeTypeAmount: legacyGapAmount,
     });
   }
 
@@ -465,7 +485,9 @@ export const FeeTransactions = ({
                     <td className="py-4 sm:py-5 text-gray-400 whitespace-nowrap">
                       {new Date(p.createdAt).toISOString().slice(0, 10)}
                     </td>
-                    <td className="py-4 sm:py-5 font-bold text-gray-100">Fee payment</td>
+                    <td className="py-4 sm:py-5 font-bold text-gray-100">
+                      {p.id === "legacy-paid-adjustment" ? "Opening balance adjustment" : "Fee payment"}
+                    </td>
                     <td className="py-4 sm:py-5 text-gray-400">{p.feeTypeName || "-"}</td>
                     <td className="py-4 sm:py-5 text-gray-400">{p.method || "-"}</td>
                     <td className="py-4 sm:py-5">
