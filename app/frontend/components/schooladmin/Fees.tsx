@@ -10,6 +10,7 @@ import ExtraFeesList from "./fees/ExtraFeesList";
 import FeeStructureConfig from "./fees/FeeStructureConfig";
 import FeeRecordsTable from "./fees/FeeRecordsTable";
 import FeeTransactionsList from "./fees/FeeTransactionsList";
+import FeesSectionNav from "./fees/FeesSectionNav";
 import type { Class, Student, FeeSummary, FeeRecord, FeeStructure, ExtraFee } from "./fees/types";
 import Spinner from "../common/Spinner";
 
@@ -87,35 +88,51 @@ export default function FeesTab() {
           subtitle="Track and manage student fee payments with detailed breakdowns"
         />
 
-        <FeeStatCards stats={stats} />
+        <FeesSectionNav />
+
+        <div id="fees-section-overview" className="scroll-mt-28">
+          <FeeStatCards stats={stats} />
+        </div>
 
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 xl:gap-6">
-          <OfflinePaymentForm
+          <div id="fees-section-offline-payment" className="scroll-mt-28 min-w-0">
+            <OfflinePaymentForm
+              classes={classes}
+              structures={structures}
+              extraFees={extraFees}
+              students={students}
+              onSuccess={reloadAfterMutation}
+            />
+          </div>
+          <div id="fees-section-add-extra-fees" className="scroll-mt-28 min-w-0">
+            <AddExtraFeeForm classes={classes} students={students} onSuccess={reloadAfterMutation} />
+          </div>
+        </div>
+
+        <div id="fees-section-fee-structure" className="scroll-mt-28">
+          <FeeStructureConfig
             classes={classes}
             structures={structures}
+            onSuccess={reloadAfterMutation}
+          />
+        </div>
+
+        <div id="fees-section-extra-fees-catalog" className="scroll-mt-28">
+          <ExtraFeesList
             extraFees={extraFees}
+            classes={classes}
             students={students}
             onSuccess={reloadAfterMutation}
           />
-          <AddExtraFeeForm classes={classes} students={students} onSuccess={reloadAfterMutation} />
         </div>
 
-        <FeeStructureConfig
-          classes={classes}
-          structures={structures}
-          onSuccess={reloadAfterMutation}
-        />
+        <div id="fees-section-transactions" className="scroll-mt-28">
+          <FeeTransactionsList students={students} onSuccess={reloadAfterMutation} />
+        </div>
 
-        <ExtraFeesList
-          extraFees={extraFees}
-          classes={classes}
-          students={students}
-          onSuccess={reloadAfterMutation}
-        />
-
-        <FeeTransactionsList students={students} onSuccess={reloadAfterMutation} />
-
-        <FeeRecordsTable fees={fees} classes={classes} />
+        <div id="fees-section-student-fee-records" className="scroll-mt-28">
+          <FeeRecordsTable fees={fees} classes={classes} />
+        </div>
       </div>
     </div>
   );

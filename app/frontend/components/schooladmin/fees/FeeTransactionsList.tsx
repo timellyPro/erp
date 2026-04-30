@@ -8,6 +8,9 @@ import SearchInput from "../../common/SearchInput";
 import RefundModal, { type TransactionItem } from "./RefundModal";
 import type { Student } from "./types";
 import { schoolAdminStudentDetailsFeesUrl } from "./studentDetailsNav";
+import InlinePagination from "../schooladmincomponents/InlinePagination";
+
+const PAGE_SIZE = 20;
 
 interface FeeTransactionsListProps {
   students: Student[];
@@ -40,6 +43,7 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
   const [studentSearch, setStudentSearch] = useState("");
   const [classStudents, setClassStudents] = useState<ClassDetailStudent[]>([]);
   const [refundTarget, setRefundTarget] = useState<TransactionItem | null>(null);
+  const [page, setPage] = useState(1);
 
   const fetchTransactions = async () => {
     setLoading(true);
@@ -167,11 +171,31 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
     });
   }, [transactions, selectedClass, selectedSection, selectedYear, studentSearch]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [selectedClassId, selectedSection, selectedYear, studentSearch]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / PAGE_SIZE));
+  const paginatedTransactions = useMemo(
+    () => filteredTransactions.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [filteredTransactions, page]
+  );
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
   return (
     <section className="w-full rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur sm:p-6">
-      <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-        <RotateCcw className="w-5 h-5 text-amber-400" />
-        Fee Transactions & Refunds
+      <h3 className="text-lg font-semibold mb-4 flex flex-wrap items-center gap-2">
+        <RotateCcw className="w-5 h-5 shrink-0 text-amber-400" />
+        <span>
+          {`Fee Transactions & Refunds (${filteredTransactions.length}${
+            filteredTransactions.length > PAGE_SIZE
+              ? ` · rows ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, filteredTransactions.length)}`
+              : ""
+          })`}
+        </span>
       </h3>
       <p className="text-sm text-gray-400 mb-4">
         View successful payments and process refunds when needed.
@@ -234,7 +258,7 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
       ) : (
         <>
           <div className="space-y-3 sm:hidden">
-            {filteredTransactions.map((t) => (
+            {paginatedTransactions.map((t) => (
               <div key={t.id} className="rounded-xl border border-white/10 bg-black/10 p-4">
                 <button
                   type="button"
@@ -326,7 +350,7 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
               </tr>
             </thead>
             <tbody>
-              {filteredTransactions.map((t) => (
+              {paginatedTransactions.map((t) => (
                 <tr
                   key={t.id}
                   className="border-b border-white/5 last:border-0 hover:bg-white/[0.02]"
@@ -391,6 +415,9 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
               ))}
             </tbody>
           </table>
+          </div>
+          <div className="mt-4">
+            <InlinePagination page={page} totalPages={totalPages} onChange={setPage} />
           </div>
         </>
       )}

@@ -1,10 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, Trash2 } from "lucide-react";
 import type { ExtraFee } from "./types";
 import { schoolAdminStudentDetailsFeesUrl } from "./studentDetailsNav";
+import InlinePagination from "../schooladmincomponents/InlinePagination";
+
+const PAGE_SIZE = 15;
 
 interface ExtraFeesListProps {
   extraFees: ExtraFee[];
@@ -41,6 +44,7 @@ export default function ExtraFeesList({
   onSuccess,
 }: ExtraFeesListProps) {
   const router = useRouter();
+  const [page, setPage] = useState(1);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editAmount, setEditAmount] = useState("");
@@ -96,13 +100,33 @@ export default function ExtraFeesList({
     }
   };
 
+  const totalPages = Math.max(1, Math.ceil(extraFees.length / PAGE_SIZE));
+  const pageRows = useMemo(
+    () => extraFees.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [extraFees, page]
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [extraFees.length]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
   if (extraFees.length === 0) return null;
 
   return (
     <section className="rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur sm:p-6">
-      <h3 className="text-lg font-semibold mb-4">All Extra Fees</h3>
+      <h3 className="text-lg font-semibold mb-4">
+        {`All Extra Fees (${extraFees.length}${
+          extraFees.length > PAGE_SIZE
+            ? ` · rows ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, extraFees.length)}`
+            : ""
+        })`}
+      </h3>
       <div className="space-y-3 sm:hidden">
-        {extraFees.map((ef) => (
+        {pageRows.map((ef) => (
           <div key={ef.id} className="rounded-xl border border-white/10 bg-black/10 p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -202,7 +226,7 @@ export default function ExtraFeesList({
             </tr>
           </thead>
           <tbody>
-            {extraFees.map((ef) => (
+            {pageRows.map((ef) => (
               <tr key={ef.id} className="border-b border-white/5">
                 <td className="py-3">
                   {editingId === ef.id ? (
@@ -295,6 +319,9 @@ export default function ExtraFeesList({
             ))}
           </tbody>
         </table>
+      </div>
+      <div className="mt-4">
+        <InlinePagination page={page} totalPages={totalPages} onChange={setPage} />
       </div>
     </section>
   );
