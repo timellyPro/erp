@@ -97,7 +97,7 @@ type EnrollmentByClassSectionRow = {
   total: number;
 };
 
-type ExportFormat = "PDF" | "XLSX" | "CSV" | "JSON";
+type GenderViewMode = "CLASS_WISE" | "SECTION_WISE";
 
 type AnalysisResponse = {
   availableYears: number[];
@@ -136,10 +136,9 @@ export default function AnalysisDashboard() {
   const [classId, setClassId] = useState("");
   const [enrollmentPage, setEnrollmentPage] = useState(1);
   const [feePage, setFeePage] = useState(1);
-  const [enrollmentExportFormat, setEnrollmentExportFormat] = useState<ExportFormat>("XLSX");
-  const [feeExportFormat, setFeeExportFormat] = useState<ExportFormat>("XLSX");
+  const [genderViewMode, setGenderViewMode] = useState<GenderViewMode>("CLASS_WISE");
   const [enrollmentSearch, setEnrollmentSearch] = useState("");
-  const [enrollmentSectionFilter, setEnrollmentSectionFilter] = useState("");
+  const [enrollmentGroupFilter, setEnrollmentGroupFilter] = useState("");
   const [feeSearch, setFeeSearch] = useState("");
   const [feeClassSectionFilter, setFeeClassSectionFilter] = useState("");
 
@@ -178,7 +177,7 @@ export default function AnalysisDashboard() {
   useEffect(() => {
     setEnrollmentPage(1);
     setFeePage(1);
-  }, [year, classId, enrollmentSearch, enrollmentSectionFilter, feeSearch, feeClassSectionFilter]);
+  }, [year, classId, enrollmentSearch, enrollmentGroupFilter, feeSearch, feeClassSectionFilter, genderViewMode]);
 
   useEffect(() => {
     if (!data) return;
@@ -294,13 +293,6 @@ export default function AnalysisDashboard() {
 
   const formatInr = (n: number) =>
     `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}`;
-  const exportFormatOptions = [
-    { label: "Excel (.xlsx)", value: "XLSX" },
-    { label: "CSV (.csv)", value: "CSV" },
-    { label: "PDF (.pdf)", value: "PDF" },
-    { label: "JSON (.json)", value: "JSON" },
-  ];
-
   const getAcademicYearLabel = () => {
     const y = year !== 0 ? year : data.selectedYear;
     return `${y}-${y + 1}`;
@@ -309,23 +301,10 @@ export default function AnalysisDashboard() {
   const makeSafeFileName = (base: string, ext: string) =>
     `${base.replace(/[^\w-]+/g, "_").toLowerCase()}.${ext}`;
 
-  const downloadJson = (filename: string, payload: unknown) => {
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  };
-
   const exportWithXlsx = async (
     rows: Array<Record<string, string | number>>,
     sheetName: string,
-    filenameBase: string,
-    format: ExportFormat
+    filenameBase: string
   ) => {
     if (rows.length === 0) {
       alert("No data available to export.");
@@ -336,119 +315,47 @@ export default function AnalysisDashboard() {
     const worksheet = XLSX.utils.json_to_sheet(rows);
     XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
 
-    if (format === "CSV") {
-      XLSX.writeFile(workbook, makeSafeFileName(filenameBase, "csv"), { bookType: "csv" });
-      return;
-    }
     XLSX.writeFile(workbook, makeSafeFileName(filenameBase, "xlsx"));
   };
+  const enrollmentClassWiseRows = Array.from(
+    enrollmentRows.reduce((acc, row) => {
+      const key = row.className || "Unassigned";
+      const item = acc.get(key) ?? { groupLabel: key, male: 0, female: 0, total: 0 };
+      item.male += row.male;
+      item.female += row.female;
+      item.total += row.total;
+      acc.set(key, item);
+      return acc;
+    }, new Map<string, { groupLabel: string; male: number; female: number; total: number }>())
+  ).map(([, value]) => value).sort((a, b) => a.groupLabel.localeCompare(b.groupLabel));
 
-  const exportAsPdfTable = async (
-    schoolName: string,
-    title: string,
-    rows: Array<Record<string, string | number>>,
-    filenameBase: string
-  ) => {
-    if (rows.length === 0) {
-      alert("No data available to export.");
-      return;
-    }
+  const enrollmentSectionWiseRows = Array.from(
+    enrollmentRows.reduce((acc, row) => {
+      const key = row.section && row.section.trim() !== "" ? row.section.trim() : "Unassigned";
+      const item = acc.get(key) ?? { groupLabel: key, male: 0, female: 0, total: 0 };
+      item.male += row.male;
+      item.female += row.female;
+      item.total += row.total;
+      acc.set(key, item);
+      return acc;
+    }, new Map<string, { groupLabel: string; male: number; female: number; total: number }>())
+  ).map(([, value]) => value).sort((a, b) => a.groupLabel.localeCompare(b.groupLabel));
 
-    const { jsPDF } = await import("jspdf");
-    const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
-    const keys = Object.keys(rows[0]);
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const pageHeight = doc.internal.pageSize.getHeight();
-    const marginX = 28;
-    const tableTop = 130;
-    const tableBottomMargin = 34;
-    const rowHeight = 20;
-    const colGap = 6;
-    const availableWidth = pageWidth - marginX * 2;
-    const columnWidth = (availableWidth - colGap * (keys.length - 1)) / keys.length;
-    const maxCellChars = Math.max(8, Math.floor(columnWidth / 4.8));
-
-    const drawHeader = () => {
-      doc.setFillColor(163, 230, 53);
-      doc.rect(0, 0, pageWidth, 82, "F");
-      doc.setFillColor(248, 250, 252);
-      doc.roundedRect(marginX, 16, pageWidth - marginX * 2, 82, 12, 12, "F");
-
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(22, 25, 30);
-      doc.setFontSize(17);
-      doc.text((schoolName || "Timely School").toUpperCase(), marginX + 14, 43);
-      doc.setFontSize(12);
-      doc.text(title, marginX + 14, 63);
-
-      doc.setFont("helvetica", "normal");
-      doc.setTextColor(70, 75, 82);
-      doc.setFontSize(9);
-      doc.text(`Academic Year: ${getAcademicYearLabel()}`, marginX + 14, 79);
-      doc.text(`Generated: ${new Date().toLocaleString("en-IN")}`, pageWidth - marginX - 170, 79);
-
-      doc.setFillColor(39, 44, 52);
-      doc.roundedRect(marginX, tableTop - 24, availableWidth, 22, 8, 8, "F");
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(241, 245, 249);
-      doc.setFontSize(8);
-      keys.forEach((key, idx) => {
-        const x = marginX + idx * (columnWidth + colGap) + 4;
-        doc.text(key, x, tableTop - 10, { maxWidth: columnWidth - 8 });
-      });
-    };
-
-    const drawRow = (row: Record<string, string | number>, y: number, zebra: boolean) => {
-      doc.setFillColor(zebra ? 250 : 244, zebra ? 252 : 247, zebra ? 255 : 250);
-      doc.roundedRect(marginX, y - 13, availableWidth, 16, 4, 4, "F");
-      doc.setFont("helvetica", "normal");
-      doc.setTextColor(30, 35, 44);
-      doc.setFontSize(8);
-      keys.forEach((key, idx) => {
-        const x = marginX + idx * (columnWidth + colGap) + 4;
-        const raw = String(row[key] ?? "");
-        const value = raw.length > maxCellChars ? `${raw.slice(0, maxCellChars - 1)}…` : raw;
-        doc.text(value, x, y - 2, { maxWidth: columnWidth - 8 });
-      });
-    };
-
-    let y = tableTop;
-    drawHeader();
-
-    rows.forEach((row, index) => {
-      if (y + rowHeight > pageHeight - tableBottomMargin) {
-        doc.addPage();
-        y = tableTop;
-        drawHeader();
-      }
-      drawRow(row, y, index % 2 === 0);
-      y += rowHeight;
-    });
-
-    doc.save(makeSafeFileName(filenameBase, "pdf"));
-  };
-  const schoolName = "Timely School";
-  const enrollmentSectionOptions = Array.from(
-    new Set(
-      enrollmentRows
-        .map((row) => (row.section && row.section.trim() !== "" ? row.section.trim() : ""))
-        .filter(Boolean)
-    )
-  ).sort((a, b) => a.localeCompare(b));
+  const enrollmentRowsBase =
+    genderViewMode === "CLASS_WISE" ? enrollmentClassWiseRows : enrollmentSectionWiseRows;
+  const enrollmentGroupOptions = enrollmentRowsBase.map((row) => row.groupLabel);
 
   const feeClassSectionOptions = Array.from(new Set(feeRows.map((row) => row.label))).sort((a, b) =>
     a.localeCompare(b)
   );
 
-  const enrollmentRowsFiltered = enrollmentRows.filter((row) => {
-    const sectionLabel = row.section && row.section.trim() !== "" ? row.section.trim() : "";
+  const enrollmentRowsFiltered = enrollmentRowsBase.filter((row) => {
     const search = enrollmentSearch.trim().toLowerCase();
     const matchesSearch =
       !search ||
-      row.className.toLowerCase().includes(search) ||
-      sectionLabel.toLowerCase().includes(search);
-    const matchesSection = !enrollmentSectionFilter || sectionLabel === enrollmentSectionFilter;
-    return matchesSearch && matchesSection;
+      row.groupLabel.toLowerCase().includes(search);
+    const matchesGroup = !enrollmentGroupFilter || row.groupLabel === enrollmentGroupFilter;
+    return matchesSearch && matchesGroup;
   });
 
   const feeRowsFiltered = feeRows.filter((row) => {
@@ -504,52 +411,26 @@ export default function AnalysisDashboard() {
       : 0;
 
   const enrollmentExportRows = enrollmentRowsFiltered.map((row) => ({
-    Class: row.className,
-    Section: row.section && row.section.trim() !== "" ? row.section : "-",
+    [genderViewMode === "CLASS_WISE" ? "Class" : "Section"]: row.groupLabel,
     Male: row.male,
     Female: row.female,
     Total: row.total,
   }));
 
-  const feeExportRows = feeRowsFiltered.map((row) => ({
-    "Class / Section": row.label,
-    "Total Fees": Number(row.totalFees.toFixed(2)),
-    "Avg Discount %": Number(row.avgDiscountPercent.toFixed(2)),
-    "Final Fees": Number(row.finalFees.toFixed(2)),
-    Paid: Number(row.paidFee.toFixed(2)),
-    Pending: Number(row.pendingFee.toFixed(2)),
-    "Collection %": Number(row.collectionPercent.toFixed(2)),
-    "Due %": Number(row.duePercent.toFixed(2)),
-  }));
-
-  const exportEnrollment = async () => {
-    const filenameBase = `students_by_class_section_gender_${getAcademicYearLabel()}`;
-    const payload = {
-      academicYear: getAcademicYearLabel(),
-      classFilter: classId || "ALL",
-      rows: enrollmentExportRows,
-      totals: enrollmentFilteredTotals,
-    };
-
+  const exportGenderExcel = async (mode: GenderViewMode) => {
+    const rows = mode === "CLASS_WISE" ? enrollmentClassWiseRows : enrollmentSectionWiseRows;
+    const exportRows = rows.map((row) => ({
+      [mode === "CLASS_WISE" ? "Class" : "Section"]: row.groupLabel,
+      Male: row.male,
+      Female: row.female,
+      Total: row.total,
+    }));
+    const fileSuffix = mode === "CLASS_WISE" ? "class_wise" : "section_wise";
     try {
-      if (enrollmentExportFormat === "JSON") {
-        downloadJson(makeSafeFileName(filenameBase, "json"), payload);
-        return;
-      }
-      if (enrollmentExportFormat === "PDF") {
-        await exportAsPdfTable(
-          schoolName,
-          `Students by class & section (gender) · ${getAcademicYearLabel()}`,
-          enrollmentExportRows,
-          filenameBase
-        );
-        return;
-      }
       await exportWithXlsx(
-        enrollmentExportRows,
-        "Students by Gender",
-        filenameBase,
-        enrollmentExportFormat
+        exportRows,
+        mode === "CLASS_WISE" ? "Gender Class-wise" : "Gender Section-wise",
+        `gender_distribution_${fileSuffix}_${getAcademicYearLabel()}`
       );
     } catch (e) {
       console.error(e);
@@ -557,41 +438,105 @@ export default function AnalysisDashboard() {
     }
   };
 
-  const exportFeeCollection = async () => {
-    const filenameBase = `fee_collection_class_section_${getAcademicYearLabel()}`;
-    const payload = {
-      academicYear: getAcademicYearLabel(),
-      classFilter: classId || "ALL",
-      rows: feeExportRows,
-      totals: feeFilteredTotals
-        ? {
-            ...feeFilteredTotals,
-            avgDiscountPercent: feeFilteredAvgDiscountPercent,
-            collectionPercent: feeFilteredCollectionPercent,
-            duePercent: feeFilteredDuePercent,
-          }
-        : null,
-    };
-
+  const exportPaymentDetailsExcel = async () => {
     try {
-      if (feeExportFormat === "JSON") {
-        downloadJson(makeSafeFileName(filenameBase, "json"), payload);
+      const [txRes, summaryRes] = await Promise.all([
+        fetch("/api/fees/transactions?limit=200", { credentials: "include", cache: "no-store" }),
+        fetch("/api/fees/summary", { credentials: "include", cache: "no-store" }),
+      ]);
+      const txData = await txRes.json().catch(() => ({}));
+      const summaryData = await summaryRes.json().catch(() => ({}));
+      if (!txRes.ok) {
+        alert(txData?.message || "Failed to fetch payment transactions.");
         return;
       }
-      if (feeExportFormat === "PDF") {
-        await exportAsPdfTable(
-          schoolName,
-          `Fee collection (class & section) · ${getAcademicYearLabel()}`,
-          feeExportRows,
-          filenameBase
-        );
-        return;
-      }
+
+      const transactions: Array<{
+        amount: number;
+        createdAt: string;
+        transactionId?: string | null;
+        feeAllocations?: Array<{ name: string; amount: number }>;
+        student: {
+          id: string;
+          admissionNumber?: string | null;
+          user?: { name?: string | null };
+          class?: { name?: string | null; section?: string | null } | null;
+        };
+      }> = Array.isArray(txData?.transactions) ? txData.transactions : [];
+
+      const summaryFees: Array<{
+        student: { id: string };
+        totalFee: number;
+        finalFee: number;
+        amountPaid: number;
+        remainingFee: number;
+      }> = Array.isArray(summaryData?.fees) ? summaryData.fees : [];
+
+      const studentTotals = summaryFees.reduce((acc, fee) => {
+        const id = fee.student?.id;
+        if (!id) return acc;
+        const curr = acc.get(id) ?? { totalAmount: 0, discount: 0, paidAmount: 0, pendingAmount: 0 };
+        curr.totalAmount += Number(fee.totalFee || 0);
+        curr.discount += Math.max(Number(fee.totalFee || 0) - Number(fee.finalFee || 0), 0);
+        curr.paidAmount += Number(fee.amountPaid || 0);
+        curr.pendingAmount += Number(fee.remainingFee || 0);
+        acc.set(id, curr);
+        return acc;
+      }, new Map<string, { totalAmount: number; discount: number; paidAmount: number; pendingAmount: number }>());
+
+      const yearStart = year !== 0 ? year : data.selectedYear;
+      const from = new Date(yearStart, 3, 1);
+      const to = new Date(yearStart + 1, 2, 31, 23, 59, 59, 999);
+
+      const filteredTx = transactions.filter((tx) => {
+        const created = new Date(tx.createdAt);
+        if (Number.isNaN(created.getTime()) || created < from || created > to) return false;
+        const className = tx.student.class?.name || "";
+        const section = tx.student.class?.section || "";
+        const label = `${className}${section ? `-${section}` : ""}`;
+        if (classId && className !== ((data.classes ?? []).find((c) => c.id === classId)?.name ?? "")) return false;
+        if (feeClassSectionFilter && feeClassSectionFilter !== label) return false;
+        const search = feeSearch.trim().toLowerCase();
+        if (search) {
+          const studentName = (tx.student.user?.name || "").toLowerCase();
+          const admission = (tx.student.admissionNumber || "").toLowerCase();
+          if (!studentName.includes(search) && !admission.includes(search) && !label.toLowerCase().includes(search)) {
+            return false;
+          }
+        }
+        return true;
+      });
+
+      const rows = filteredTx.map((tx) => {
+        const totals = studentTotals.get(tx.student.id) ?? {
+          totalAmount: tx.amount,
+          discount: 0,
+          paidAmount: tx.amount,
+          pendingAmount: 0,
+        };
+        const feeHeadBreakdown =
+          Array.isArray(tx.feeAllocations) && tx.feeAllocations.length > 0
+            ? tx.feeAllocations.map((f) => `${f.name}: ₹${Number(f.amount || 0).toLocaleString("en-IN")}`).join(" | ")
+            : "Default";
+        return {
+          "Date of Payment": new Date(tx.createdAt).toLocaleDateString("en-IN"),
+          "Student Name": tx.student.user?.name || "-",
+          "Admission No": tx.student.admissionNumber || "-",
+          Class: tx.student.class?.name || "-",
+          Section: tx.student.class?.section || "-",
+          "Fee Head Breakdown": feeHeadBreakdown,
+          "Total Amount": Number(totals.totalAmount.toFixed(2)),
+          Discount: Number(totals.discount.toFixed(2)),
+          "Paid Amount": Number(totals.paidAmount.toFixed(2)),
+          "Pending Amount": Number(totals.pendingAmount.toFixed(2)),
+          "Transaction Ref": tx.transactionId || "-",
+        };
+      });
+
       await exportWithXlsx(
-        feeExportRows,
-        "Fee Collection",
-        filenameBase,
-        feeExportFormat
+        rows,
+        "Payment Details",
+        `payment_details_student_wise_${getAcademicYearLabel()}`
       );
     } catch (e) {
       console.error(e);
@@ -927,33 +872,47 @@ export default function AnalysisDashboard() {
               type="text"
               value={enrollmentSearch}
               onChange={(e) => setEnrollmentSearch(e.target.value)}
-              placeholder="Search class / section"
+              placeholder={genderViewMode === "CLASS_WISE" ? "Search class" : "Search section"}
               className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs text-white placeholder:text-white/40 focus:outline-none focus:ring-1 focus:ring-lime-400/40 sm:w-[180px] sm:text-sm"
             />
             <div className="w-full sm:w-[165px]">
               <SelectInput
-                value={enrollmentSectionFilter}
-                onChange={setEnrollmentSectionFilter}
+                value={genderViewMode}
+                onChange={(value) => {
+                  setGenderViewMode(value as GenderViewMode);
+                  setEnrollmentGroupFilter("");
+                }}
                 options={[
-                  { label: "All Sections", value: "" },
-                  ...enrollmentSectionOptions.map((s) => ({ label: s, value: s })),
+                  { label: "Class-wise Table", value: "CLASS_WISE" },
+                  { label: "Section-wise Table", value: "SECTION_WISE" },
                 ]}
               />
             </div>
-            <div className="w-full sm:w-[170px]">
+            <div className="w-full sm:w-[165px]">
               <SelectInput
-                value={enrollmentExportFormat}
-                onChange={(value) => setEnrollmentExportFormat(value as ExportFormat)}
-                options={exportFormatOptions}
+                value={enrollmentGroupFilter}
+                onChange={setEnrollmentGroupFilter}
+                options={[
+                  { label: genderViewMode === "CLASS_WISE" ? "All Classes" : "All Sections", value: "" },
+                  ...enrollmentGroupOptions.map((value) => ({ label: value, value })),
+                ]}
               />
             </div>
             <button
               type="button"
-              onClick={() => void exportEnrollment()}
+              onClick={() => void exportGenderExcel("CLASS_WISE")}
               className="inline-flex items-center justify-center gap-2 rounded-xl border border-lime-500/40 bg-lime-500/15 px-3 py-2 text-xs sm:text-sm font-semibold text-lime-200 hover:bg-lime-500/25 transition-colors"
             >
               <Download className="h-4 w-4" />
-              Export
+              Export Class-wise Excel
+            </button>
+            <button
+              type="button"
+              onClick={() => void exportGenderExcel("SECTION_WISE")}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-lime-500/40 bg-lime-500/15 px-3 py-2 text-xs sm:text-sm font-semibold text-lime-200 hover:bg-lime-500/25 transition-colors"
+            >
+              <Download className="h-4 w-4" />
+              Export Section-wise Excel
             </button>
           </div>
         </div>
@@ -962,8 +921,7 @@ export default function AnalysisDashboard() {
           <table className="w-full min-w-[520px] text-left text-sm">
             <thead>
               <tr className="border-b border-white/10 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-gray-400">
-                <th className="py-3 pr-3 font-medium">Class</th>
-                <th className="py-3 px-2 font-medium">Section</th>
+                <th className="py-3 pr-3 font-medium">{genderViewMode === "CLASS_WISE" ? "Class" : "Section"}</th>
                 <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Male</th>
                 <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Female</th>
                 <th className="py-3 pl-2 text-right font-medium whitespace-nowrap">Total</th>
@@ -972,20 +930,17 @@ export default function AnalysisDashboard() {
             <tbody className="text-white/90">
               {enrollmentRowsFiltered.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-white/40">
+                  <td colSpan={4} className="py-8 text-center text-white/40">
                     No matching class / section found.
                   </td>
                 </tr>
               ) : (
                 enrollmentPaged.map((row) => (
                   <tr
-                    key={row.classId}
+                    key={row.groupLabel}
                     className="border-b border-white/5 last:border-0 hover:bg-white/[0.03]"
                   >
-                    <td className="py-3 pr-3 font-semibold text-white">{row.className}</td>
-                    <td className="py-3 px-2 text-gray-300">
-                      {row.section && row.section.trim() !== "" ? row.section : "—"}
-                    </td>
+                    <td className="py-3 pr-3 font-semibold text-white">{row.groupLabel}</td>
                     <td className="py-3 px-2 text-right tabular-nums text-sky-300">
                       {row.male.toLocaleString("en-IN")}
                     </td>
@@ -1000,7 +955,7 @@ export default function AnalysisDashboard() {
               )}
               {enrollmentFilteredTotals && enrollmentRowsFiltered.length > 0 ? (
                 <tr className="border-t border-white/20 bg-white/[0.06] font-semibold">
-                  <td className="py-3 pr-3 text-white" colSpan={2}>
+                  <td className="py-3 pr-3 text-white">
                     Filtered total
                   </td>
                   <td className="py-3 px-2 text-right tabular-nums text-sky-300">
@@ -1057,20 +1012,13 @@ export default function AnalysisDashboard() {
                 ]}
               />
             </div>
-            <div className="w-full sm:w-[170px]">
-              <SelectInput
-                value={feeExportFormat}
-                onChange={(value) => setFeeExportFormat(value as ExportFormat)}
-                options={exportFormatOptions}
-              />
-            </div>
             <button
               type="button"
-              onClick={() => void exportFeeCollection()}
+              onClick={() => void exportPaymentDetailsExcel()}
               className="inline-flex items-center justify-center gap-2 rounded-xl border border-lime-500/40 bg-lime-500/15 px-3 py-2 text-xs sm:text-sm font-semibold text-lime-200 hover:bg-lime-500/25 transition-colors"
             >
               <Download className="h-4 w-4" />
-              Export
+              Export to Excel
             </button>
           </div>
         </div>

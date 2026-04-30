@@ -4,6 +4,14 @@ import { useEffect, useState } from "react";
 import { Users, Mail, Phone, MapPin, Bookmark, Pencil, X } from "lucide-react";
 import SelectInput from "../../../common/SelectInput";
 
+const getResidencyLabel = (value?: string) => {
+  const normalized = (value || "").trim().toLowerCase();
+  if (!normalized) return "Day Scholar";
+  if (normalized.includes("host")) return "Hosteller";
+  if (normalized.includes("day")) return "Day Scholar";
+  return value || "Day Scholar";
+};
+
 interface StudentProfileProps {
   name: string;
   id: string;
@@ -187,6 +195,14 @@ export const ProfileSidebar = ({
         <p className="text-[#b4f44d] text-xs sm:text-sm font-mono tracking-widest mb-6 sm:mb-8 uppercase opacity-80 break-all px-1">
           {student.id}
         </p>
+
+        <div className="mb-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left">
+          <p className="text-[9px] sm:text-[10px] text-gray-400 font-bold uppercase tracking-tighter inline-flex items-center gap-1.5">
+            <Bookmark size={12} className="text-[#b4f44d]" />
+            Type
+          </p>
+          <p className="text-xs sm:text-sm font-bold text-white">{getResidencyLabel(residencyType)}</p>
+        </div>
 
         <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-6 sm:mb-8">
           <div className="bg-white/5 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl border border-white/5 min-w-0 px-1">

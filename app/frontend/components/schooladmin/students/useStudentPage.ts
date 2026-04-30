@@ -490,6 +490,7 @@ export default function useStudentPage({ classes, reload }: Props) {
         apaarId: form.apaarId?.trim() || undefined,
         gender: form.gender?.trim() || undefined,
         residencyType: form.residencyType?.trim() || "Day Scholar",
+        status: form.status || "Active",
       });
 
       const data = await res.json();
@@ -621,6 +622,61 @@ export default function useStudentPage({ classes, reload }: Props) {
     setEditStudent(student);
     setEditForm(toStudentForm(student));
     setEditErrors({});
+    void (async () => {
+      try {
+        const res = await fetch(`/api/student/${encodeURIComponent(student.id)}`, {
+          credentials: "include",
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.student) return;
+        setEditForm((prev) => ({
+          ...prev,
+          name: data.student.name || prev.name,
+          rollNo: data.student.rollNo || prev.rollNo,
+          penNumber: data.student.penNumber || prev.penNumber,
+          apaarId: data.student.apaarId || prev.apaarId,
+          gender: data.student.gender || prev.gender,
+          residencyType: data.student.residencyType || prev.residencyType,
+          dob: data.student.dob || prev.dob,
+          classId: data.student.class?.id || prev.classId,
+          section: data.student.class?.section || prev.section,
+          fatherName: data.student.fatherName || prev.fatherName,
+          motherName: data.student.motherName || prev.motherName,
+          occupation: data.student.fatherOccupation || prev.occupation,
+          officeAddress: data.student.officeAddress || prev.officeAddress,
+          phoneNo: data.student.phone || prev.phoneNo,
+          email: data.student.parentEmail || data.student.email || prev.email,
+          address: data.student.address || prev.address,
+          aadhaarNo: data.student.aadhaarNo || prev.aadhaarNo,
+          parentAadharNo: data.student.parentAadharNo || prev.parentAadharNo,
+          parentWhatsapp: data.student.parentWhatsapp || prev.parentWhatsapp,
+          bankAccountNo: data.student.bankAccountNo || prev.bankAccountNo,
+          applicationFee:
+            data.student.applicationFee != null
+              ? String(data.student.applicationFee)
+              : prev.applicationFee,
+          admissionFee:
+            data.student.admissionFee != null ? String(data.student.admissionFee) : prev.admissionFee,
+          previousSchool: data.student.previousSchool || prev.previousSchool,
+          houseNo: data.student.houseNo || prev.houseNo,
+          street: data.student.street || prev.street,
+          city: data.student.city || prev.city,
+          town: data.student.town || prev.town,
+          state: data.student.state || prev.state,
+          pinCode: data.student.pinCode || prev.pinCode,
+          nationality: data.student.nationality || prev.nationality,
+          languagesAtHome: data.student.languagesAtHome || prev.languagesAtHome,
+          caste: data.student.caste || prev.caste,
+          religion: data.student.religion || prev.religion,
+          emergencyFatherNo: data.student.emergencyFatherNo || prev.emergencyFatherNo,
+          emergencyMotherNo: data.student.emergencyMotherNo || prev.emergencyMotherNo,
+          emergencyGuardianNo: data.student.emergencyGuardianNo || prev.emergencyGuardianNo,
+        }));
+      } catch {
+        // keep defaults from list row
+      }
+    })();
   };
 
   const openDelete = (student: StudentRow) => setDeleteStudent(student);
@@ -645,13 +701,33 @@ export default function useStudentPage({ classes, reload }: Props) {
         motherName: editForm.motherName.trim() || undefined,
         occupation: editForm.occupation.trim() || undefined,
         classId: editForm.classId || undefined,
+        dob: editForm.dob || undefined,
+        aadhaarNo: editForm.aadhaarNo.trim() || undefined,
         rollNo: editForm.rollNo.trim() || undefined,
         penNumber: editForm.penNumber.trim() || undefined,
         apaarId: editForm.apaarId.trim() || undefined,
         phoneNo: editForm.phoneNo.trim() || undefined,
+        email: editForm.email.trim() || undefined,
         address: editForm.address.trim() || undefined,
         gender: editForm.gender.trim() || undefined,
         residencyType: editForm.residencyType?.trim() || "Day Scholar",
+        parentAadharNo: editForm.parentAadharNo.trim() || undefined,
+        parentWhatsapp: editForm.parentWhatsapp.trim() || undefined,
+        bankAccountNo: editForm.bankAccountNo.trim() || undefined,
+        officeAddress: editForm.officeAddress.trim() || undefined,
+        houseNo: editForm.houseNo.trim() || undefined,
+        street: editForm.street.trim() || undefined,
+        city: editForm.city.trim() || undefined,
+        town: editForm.town.trim() || undefined,
+        state: editForm.state.trim() || undefined,
+        pinCode: editForm.pinCode.trim() || undefined,
+        nationality: editForm.nationality.trim() || undefined,
+        languagesAtHome: editForm.languagesAtHome.trim() || undefined,
+        caste: editForm.caste.trim() || undefined,
+        religion: editForm.religion.trim() || undefined,
+        emergencyFatherNo: editForm.emergencyFatherNo.trim() || undefined,
+        emergencyMotherNo: editForm.emergencyMotherNo.trim() || undefined,
+        emergencyGuardianNo: editForm.emergencyGuardianNo.trim() || undefined,
         applicationFee: editForm.applicationFee.trim()
           ? Number(editForm.applicationFee)
           : null,
@@ -756,6 +832,7 @@ export default function useStudentPage({ classes, reload }: Props) {
     editStudent,
     deleteStudent,
     editForm,
+    setEditForm,
     editErrors,
     editSaving,
     handleEditChange,

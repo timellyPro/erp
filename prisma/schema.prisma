@@ -448,6 +448,7 @@ model Student {
   gender          String?
   previousSchool  String?  @db.Text
   residencyType   String?  @default("Day Scholar")
+  status          String   @default("Active")
 
   applicationFee Float? // record-only fee amounts (no payment integration here)
   admissionFee   Float?

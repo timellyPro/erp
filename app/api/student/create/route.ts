@@ -115,6 +115,7 @@ export async function POST(req: Request) {
       applicationFee: applicationFeeInput,
       admissionFee: admissionFeeInput,
       residencyType: residencyTypeInput,
+      status: statusInput,
     } = body;
 
     const parseOptFee = (v: unknown): number | null => {
@@ -141,6 +142,10 @@ export async function POST(req: Request) {
     let effectiveApaarId =
       typeof apaarId === "string" && apaarId.trim() ? apaarId.trim() : null;
     let effectiveResidencyType = normalizeResidencyType(residencyTypeInput);
+    let effectiveStatus =
+      typeof statusInput === "string" && statusInput.trim().toLowerCase() === "inactive"
+        ? "Inactive"
+        : "Active";
     let effectivePreviousSchoolInput = previousSchoolInput;
 
     let effectiveApplicationFee = parseOptFee(applicationFeeInput);
@@ -479,6 +484,7 @@ export async function POST(req: Request) {
             aadhaarNo: aadhaarCleaned,
             phoneNo: String(effectivePhoneNo).trim(),
             residencyType: effectiveResidencyType,
+            status: effectiveStatus,
             rollNo:
               typeof effectiveRollNo === "string" && effectiveRollNo.trim()
                 ? effectiveRollNo.trim()

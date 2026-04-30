@@ -70,6 +70,7 @@ export async function GET(req: Request) {
         gender: true,
         address: true,
         residencyType: true,
+        status: true,
         aadhaarNo: true,
         applicationFee: true,
         admissionFee: true,

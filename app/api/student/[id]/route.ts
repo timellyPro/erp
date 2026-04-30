@@ -60,6 +60,28 @@ export async function GET(_req: Request, context: RouteParams) {
         class: { select: { id: true, name: true, section: true } },
         school: { select: { name: true } },
         fee: true,
+        application: {
+          select: {
+            parentEmail: true,
+            officeAddress: true,
+            parentAadharNo: true,
+            parentWhatsapp: true,
+            bankAccountNo: true,
+            houseNo: true,
+            street: true,
+            city: true,
+            town: true,
+            state: true,
+            pinCode: true,
+            nationality: true,
+            languagesAtHome: true,
+            caste: true,
+            religion: true,
+            emergencyFatherNo: true,
+            emergencyMotherNo: true,
+            emergencyGuardianNo: true,
+          },
+        },
       },
     });
 
@@ -255,12 +277,30 @@ export async function GET(_req: Request, context: RouteParams) {
         motherOccupation: student.occupation ?? "",
         fatherPhone: student.phoneNo ?? "",
         previousSchool: student.previousSchool ?? "",
+        aadhaarNo: student.aadhaarNo ?? "",
+        officeAddress: student.application?.officeAddress ?? "",
+        parentAadharNo: student.application?.parentAadharNo ?? "",
+        parentWhatsapp: student.application?.parentWhatsapp ?? "",
+        bankAccountNo: student.application?.bankAccountNo ?? "",
+        houseNo: student.application?.houseNo ?? "",
+        street: student.application?.street ?? "",
+        city: student.application?.city ?? "",
+        town: student.application?.town ?? "",
+        state: student.application?.state ?? "",
+        pinCode: student.application?.pinCode ?? "",
+        nationality: student.application?.nationality ?? "Indian",
+        languagesAtHome: student.application?.languagesAtHome ?? "",
+        caste: student.application?.caste ?? "",
+        religion: student.application?.religion ?? "",
+        emergencyFatherNo: student.application?.emergencyFatherNo ?? "",
+        emergencyMotherNo: student.application?.emergencyMotherNo ?? "",
+        emergencyGuardianNo: student.application?.emergencyGuardianNo ?? "",
+        parentEmail: student.application?.parentEmail ?? "",
         residencyType: student.residencyType ?? "Day Scholar",
         applicationFee: student.applicationFee ?? null,
         admissionFee: student.admissionFee ?? null,
         createdAt: student.createdAt?.toISOString() ?? "",
-        // status isn’t stored on the model yet; show Active by default
-        status: "Active",
+        status: student.status ?? "Active",
         class: student.class
           ? {
               id: student.class.id,
@@ -362,6 +402,9 @@ export async function PUT(req: Request, context: RouteParams) {
     const motherName = typeof body.motherName === "string" ? body.motherName.trim() || null : undefined;
     const occupation = typeof body.occupation === "string" ? body.occupation.trim() || null : undefined;
     const classId = typeof body.classId === "string" ? (body.classId || null) : undefined;
+    const aadhaarNo =
+      typeof body.aadhaarNo === "string" ? body.aadhaarNo.replace(/\D/g, "") || null : undefined;
+    const dobRaw = typeof body.dob === "string" ? body.dob.trim() : undefined;
     const rollNo = typeof body.rollNo === "string" ? body.rollNo.trim() || null : undefined;
     const penNumber =
       typeof body.penNumber === "string" ? body.penNumber.trim() || null : undefined;
@@ -373,6 +416,35 @@ export async function PUT(req: Request, context: RouteParams) {
     const gender = typeof body.gender === "string" ? body.gender.trim() || null : undefined;
     const residencyType = normalizeResidencyType(body.residencyType);
     const previousSchool = typeof body.previousSchool === "string" ? body.previousSchool.trim() || null : undefined;
+    const status =
+      typeof body.status === "string"
+        ? body.status.trim().toLowerCase() === "inactive"
+          ? "Inactive"
+          : "Active"
+        : undefined;
+    const officeAddress = typeof body.officeAddress === "string" ? body.officeAddress.trim() || null : undefined;
+    const parentAadharNo = typeof body.parentAadharNo === "string" ? body.parentAadharNo.trim() || null : undefined;
+    const parentWhatsapp = typeof body.parentWhatsapp === "string" ? body.parentWhatsapp.trim() || null : undefined;
+    const bankAccountNo = typeof body.bankAccountNo === "string" ? body.bankAccountNo.trim() || null : undefined;
+    const houseNo = typeof body.houseNo === "string" ? body.houseNo.trim() || null : undefined;
+    const street = typeof body.street === "string" ? body.street.trim() || null : undefined;
+    const city = typeof body.city === "string" ? body.city.trim() || null : undefined;
+    const town = typeof body.town === "string" ? body.town.trim() || null : undefined;
+    const state = typeof body.state === "string" ? body.state.trim() || null : undefined;
+    const pinCode = typeof body.pinCode === "string" ? body.pinCode.trim() || null : undefined;
+    const nationality = typeof body.nationality === "string" ? body.nationality.trim() || null : undefined;
+    const languagesAtHome = typeof body.languagesAtHome === "string" ? body.languagesAtHome.trim() || null : undefined;
+    const caste = typeof body.caste === "string" ? body.caste.trim() || null : undefined;
+    const religion = typeof body.religion === "string" ? body.religion.trim() || null : undefined;
+    const emergencyFatherNo = typeof body.emergencyFatherNo === "string" ? body.emergencyFatherNo.trim() || null : undefined;
+    const emergencyMotherNo = typeof body.emergencyMotherNo === "string" ? body.emergencyMotherNo.trim() || null : undefined;
+    const emergencyGuardianNo = typeof body.emergencyGuardianNo === "string" ? body.emergencyGuardianNo.trim() || null : undefined;
+    const dob = dobRaw
+      ? (() => {
+          const parsed = new Date(dobRaw);
+          return Number.isNaN(parsed.getTime()) ? null : parsed;
+        })()
+      : undefined;
     const parseOptFee = (v: unknown): number | null | undefined => {
       if (v === undefined) return undefined;
       if (v === null || v === "") return null;
@@ -395,6 +467,32 @@ export async function PUT(req: Request, context: RouteParams) {
       }
     }
 
+    if (aadhaarNo !== undefined && aadhaarNo !== null && aadhaarNo.length !== 12) {
+      return NextResponse.json({ message: "Aadhaar number must be exactly 12 digits" }, { status: 400 });
+    }
+
+    if (dobRaw !== undefined && dob === null) {
+      return NextResponse.json({ message: "Invalid date of birth" }, { status: 400 });
+    }
+
+    if (dob && dob >= new Date()) {
+      return NextResponse.json({ message: "Date of birth must be in the past" }, { status: 400 });
+    }
+
+    if (aadhaarNo !== undefined && aadhaarNo !== null) {
+      const existing = await prisma.student.findFirst({
+        where: {
+          schoolId,
+          aadhaarNo,
+          NOT: { id },
+        },
+        select: { id: true },
+      });
+      if (existing) {
+        return NextResponse.json({ message: "Aadhaar number already exists in this school" }, { status: 400 });
+      }
+    }
+
     const userUpdate: { name?: string; email?: string } = {};
     if (name !== undefined) userUpdate.name = name;
     if (email !== undefined) userUpdate.email = email;
@@ -407,10 +505,13 @@ export async function PUT(req: Request, context: RouteParams) {
     if (rollNo !== undefined) studentUpdate.rollNo = rollNo;
     if (penNumber !== undefined) studentUpdate.penNumber = penNumber;
     if (apaarId !== undefined) studentUpdate.apaarId = apaarId;
+    if (aadhaarNo !== undefined) studentUpdate.aadhaarNo = aadhaarNo;
+    if (dob !== undefined) studentUpdate.dob = dob;
     if (phoneNo !== undefined) studentUpdate.phoneNo = phoneNo;
     if (address !== undefined) studentUpdate.address = address;
     if (gender !== undefined) studentUpdate.gender = gender;
     if (residencyType !== undefined) studentUpdate.residencyType = residencyType;
+    if (status !== undefined) studentUpdate.status = status;
     if (previousSchool !== undefined) studentUpdate.previousSchool = previousSchool;
     if (applicationFee !== undefined) studentUpdate.applicationFee = applicationFee;
     if (admissionFee !== undefined) studentUpdate.admissionFee = admissionFee;
@@ -426,6 +527,35 @@ export async function PUT(req: Request, context: RouteParams) {
       await prisma.student.update({
         where: { id },
         data: studentUpdate as Record<string, never>,
+      });
+    }
+
+    const applicationUpdate: Record<string, unknown> = {};
+    if (fatherName !== undefined) applicationUpdate.parentName = fatherName || null;
+    if (occupation !== undefined) applicationUpdate.parentOccupation = occupation;
+    if (email !== undefined) applicationUpdate.parentEmail = email || null;
+    if (previousSchool !== undefined) applicationUpdate.previousSchoolName = previousSchool;
+    if (officeAddress !== undefined) applicationUpdate.officeAddress = officeAddress;
+    if (parentAadharNo !== undefined) applicationUpdate.parentAadharNo = parentAadharNo;
+    if (parentWhatsapp !== undefined) applicationUpdate.parentWhatsapp = parentWhatsapp;
+    if (bankAccountNo !== undefined) applicationUpdate.bankAccountNo = bankAccountNo;
+    if (houseNo !== undefined) applicationUpdate.houseNo = houseNo;
+    if (street !== undefined) applicationUpdate.street = street;
+    if (city !== undefined) applicationUpdate.city = city;
+    if (town !== undefined) applicationUpdate.town = town;
+    if (state !== undefined) applicationUpdate.state = state;
+    if (pinCode !== undefined) applicationUpdate.pinCode = pinCode;
+    if (nationality !== undefined) applicationUpdate.nationality = nationality;
+    if (languagesAtHome !== undefined) applicationUpdate.languagesAtHome = languagesAtHome;
+    if (caste !== undefined) applicationUpdate.caste = caste;
+    if (religion !== undefined) applicationUpdate.religion = religion;
+    if (emergencyFatherNo !== undefined) applicationUpdate.emergencyFatherNo = emergencyFatherNo;
+    if (emergencyMotherNo !== undefined) applicationUpdate.emergencyMotherNo = emergencyMotherNo;
+    if (emergencyGuardianNo !== undefined) applicationUpdate.emergencyGuardianNo = emergencyGuardianNo;
+    if (Object.keys(applicationUpdate).length > 0) {
+      await prisma.studentApplication.updateMany({
+        where: { studentId: id, schoolId },
+        data: applicationUpdate as Record<string, never>,
       });
     }
 

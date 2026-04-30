@@ -6,6 +6,14 @@ import { AVATAR_URL } from "../../../constants/images";
 import { StudentRow } from "./types";
 import { getAge } from "./utils";
 
+const getResidencyLabel = (value?: string) => {
+  const normalized = (value || "").trim().toLowerCase();
+  if (!normalized) return "-";
+  if (normalized.includes("host")) return "Hosteller";
+  if (normalized.includes("day")) return "Day Scholar";
+  return value || "-";
+};
+
 type Actions = {
   onView: (student: StudentRow) => void;
   onEdit: (student: StudentRow) => void;
@@ -65,6 +73,13 @@ export const buildStudentColumns = ({
         {row.class?.section ? `-${row.class.section}` : ""}
       </span>
     ),
+  },
+  {
+    header: "Type",
+    render: (row) => (
+      <span className="text-sm text-gray-300">{getResidencyLabel(row.residencyType)}</span>
+    ),
+    hideOnMobile: true,
   },
   {
     header: "Status",
