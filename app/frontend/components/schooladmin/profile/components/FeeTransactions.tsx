@@ -1,9 +1,9 @@
-import { Receipt, Download, Pencil, Trash2, X } from "lucide-react";
+import { Receipt, Printer, Pencil, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import FeePaymentReceiptTemplate, {
   type FeePaymentReceiptData,
 } from "../../../pdf/FeePaymentReceiptTemplate";
-import { generatePDF } from "@/lib/pdfUtils";
+import { printFromElement } from "@/lib/pdfUtils";
 
 type PaymentRow = {
   id: string;
@@ -69,7 +69,7 @@ export const FeeTransactions = ({
     logo: string | null;
   }>({ name: "", address: "", logo: null });
 
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [printingId, setPrintingId] = useState<string | null>(null);
   const [editing, setEditing] = useState<PaymentRow | null>(null);
   const [editAmount, setEditAmount] = useState("");
   const [editRef, setEditRef] = useState("");
@@ -393,7 +393,7 @@ export const FeeTransactions = ({
     return [label, methodPart, refPart].filter(Boolean).join(" • ");
   };
 
-  const handleDownloadReceipt = (payment: (typeof activePayments)[0]) => {
+  const handlePrintReceipt = (payment: (typeof activePayments)[0]) => {
     if (!studentId.trim()) {
       alert("Missing student. Reload the page and try again.");
       return;
@@ -418,19 +418,17 @@ export const FeeTransactions = ({
       receiptTitle,
     };
 
-    setDownloadingId(payment.id);
+    setPrintingId(payment.id);
     setReceiptData(data);
 
     setTimeout(async () => {
       try {
-        const day = new Date(payment.createdAt).toISOString().split("T")[0];
-        const safeAdm = (admissionNumber || "student").replace(/[^\w\-/]+/g, "_");
-        await generatePDF(receiptRef, `Fee_Receipt_${safeAdm}_${day}.pdf`);
+        await printFromElement(receiptRef);
       } catch (error) {
-        console.error("Error generating receipt PDF:", error);
-        alert("Failed to generate receipt. Please try again.");
+        console.error("Error printing receipt:", error);
+        alert(error instanceof Error ? error.message : "Failed to print receipt. Please try again.");
       } finally {
-        setDownloadingId(null);
+        setPrintingId(null);
         setReceiptData(null);
       }
     }, 500);
@@ -501,13 +499,13 @@ export const FeeTransactions = ({
                     <td className="py-4 sm:py-5 text-center">
                       <button
                         type="button"
-                        onClick={() => handleDownloadReceipt(p)}
-                        disabled={downloadingId === p.id}
+                        onClick={() => handlePrintReceipt(p)}
+                        disabled={printingId === p.id}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-lime-500/20 hover:bg-lime-500/30 disabled:bg-gray-600 disabled:cursor-not-allowed text-lime-300 disabled:text-gray-500 rounded-lg text-xs font-semibold transition-colors"
-                        title="Download PDF — same layout as admission receipt (two copies on one page)"
+                        title="Print receipt — same layout as admission receipt (two copies on one page)"
                       >
-                        <Download className="w-3.5 h-3.5 shrink-0" />
-                        <span>Download</span>
+                        <Printer className="w-3.5 h-3.5 shrink-0" />
+                        <span>Print</span>
                       </button>
                     </td>
                     <td className="py-4 sm:py-5 w-36 min-w-[9.5rem] text-right align-middle">
