@@ -34,6 +34,7 @@ type StudentDetail = {
     motherOccupation?: string;
     fatherPhone?: string;
     residencyType?: string;
+    gender?: string;
     class: { id: string; name: string; section: string | null; displayName: string } | null;
     applicationFee: number | null;
     admissionFee: number | null;
@@ -279,6 +280,7 @@ function StudentDetailsPageContent() {
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 sm:gap-6 md:gap-8 min-w-0">
           <div className="lg:col-span-1 min-w-0">
             <ProfileSidebar
+              studentId={detail.student.id}
               student={{
                 name: detail.student.name,
                 id: detail.student.admissionNumber,
@@ -294,7 +296,14 @@ function StudentDetailsPageContent() {
               fatherOccupation={detail.student.fatherOccupation}
               fatherPhone={detail.student.fatherPhone}
               motherName={detail.student.motherName}
-              motherOccupation={detail.student.motherOccupation}
+              classId={detail.student.class?.id ?? null}
+              classes={classes.map((c) => ({
+                id: c.id,
+                label: `${c.name}${c.section ? ` - ${c.section}` : ""}`,
+              }))}
+              gender={detail.student.gender ?? ""}
+              residencyType={detail.student.residencyType ?? "Day Scholar"}
+              onSaved={() => setReloadKey((k) => k + 1)}
             />
           </div>
 
