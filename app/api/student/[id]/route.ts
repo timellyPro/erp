@@ -282,6 +282,9 @@ export async function GET(_req: Request, context: RouteParams) {
                 ? tuitionPaidFromAllocations
                 : student.fee.amountPaid,
             moneyForStudent: (student.fee as { moneyForStudent?: number }).moneyForStudent ?? null,
+            discountFeeHeadKey: (student.fee as { discountFeeHeadKey?: string | null }).discountFeeHeadKey ?? null,
+            discountFeeHeadLabel: (student.fee as { discountFeeHeadLabel?: string | null }).discountFeeHeadLabel ?? null,
+            discountRemarks: (student.fee as { discountRemarks?: string | null }).discountRemarks ?? null,
           }
         : null,
       payments: payments.map((p) => ({

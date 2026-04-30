@@ -48,6 +48,9 @@ type StudentDetail = {
     remainingFee: number;
     tuitionPaid?: number;
     moneyForStudent: number | null;
+    discountFeeHeadKey?: string | null;
+    discountFeeHeadLabel?: string | null;
+    discountRemarks?: string | null;
   } | null;
   payments: Array<{
     id: string;
@@ -400,6 +403,9 @@ function StudentDetailsPageContent() {
                   admissionNumber={detail.student.admissionNumber}
                   classDisplayName={detail.student.class?.displayName ?? "-"}
                   schoolName={detail.student.schoolName}
+                  discountFeeHeadKey={detail.fee.discountFeeHeadKey}
+                  discountFeeHeadLabel={detail.fee.discountFeeHeadLabel}
+                  discountRemarks={detail.fee.discountRemarks}
                   onFeeModified={() => setReloadKey(prev => prev + 1)}
                 />
                 <OfflinePayments

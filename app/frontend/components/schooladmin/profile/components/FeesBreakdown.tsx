@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, Zap, Settings, PlusCircle, Trash2, Pencil } from "lucide-react";
 import { generatePDF } from "@/lib/pdfUtils";
-import { ModifyFeeModal } from "./ModifyFeeModal";
+import { ModifyFeeModal, DISCOUNT_HEAD_OVERALL_KEY, type FeeHeadOption } from "./ModifyFeeModal";
 import { AddExtraFeeModal } from "./AddExtraFeeModal";
 import { EditExtraFeeModal } from "./EditExtraFeeModal";
 
@@ -27,6 +27,9 @@ type Props = {
     feeTypeAmount?: number;
     createdAt: string;
   }>;
+  discountFeeHeadKey?: string | null;
+  discountFeeHeadLabel?: string | null;
+  discountRemarks?: string | null;
   onFeeModified?: () => void;
 };
 
@@ -42,6 +45,9 @@ export const FeesBreakdown = ({
   classDisplayName,
   schoolName,
   payments = [],
+  discountFeeHeadKey,
+  discountFeeHeadLabel,
+  discountRemarks,
   onFeeModified,
 }: Props) => {
   const receiptRef = useRef<HTMLDivElement>(null);
@@ -213,6 +219,31 @@ export const FeesBreakdown = ({
           <p className="text-xs text-amber-300 mt-1 font-semibold">
             Discount: ₹{discountAmount.toLocaleString("en-IN")}
           </p>
+          {(discountFeeHeadLabel?.trim() ||
+            discountRemarks?.trim() ||
+            discountFeeHeadKey?.trim()) ? (
+            <div className="mt-2 rounded-lg border border-amber-500/25 bg-black/20 px-2.5 py-2 text-left space-y-1">
+              {discountFeeHeadLabel?.trim() ? (
+                <p className="text-[11px] text-amber-200/90">
+                  <span className="font-bold text-amber-300/80">Discount head: </span>
+                  {discountFeeHeadLabel}
+                </p>
+              ) : discountFeeHeadKey?.trim() ? (
+                <p className="text-[11px] text-amber-200/90">
+                  <span className="font-bold text-amber-300/80">Discount head: </span>
+                  {discountFeeHeadKey.trim() === DISCOUNT_HEAD_OVERALL_KEY
+                    ? "Overall / consolidated"
+                    : discountFeeHeadKey}
+                </p>
+              ) : null}
+              {discountRemarks?.trim() ? (
+                <p className="text-[11px] text-amber-200/80 leading-snug">
+                  <span className="font-bold text-amber-300/80">Remarks: </span>
+                  {discountRemarks}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="bg-lime-400/10 border border-lime-400/20 rounded-xl p-4">
@@ -553,6 +584,15 @@ export const FeesBreakdown = ({
           studentId={studentId}
           currentTotalFee={baseTotalFee}
           currentDiscountPercent={discountPercent}
+          feeHeadOptions={headCards.map(
+            (h): FeeHeadOption => ({
+              key: h.key,
+              label: h.label,
+            })
+          )}
+          initialDiscountFeeHeadKey={discountFeeHeadKey ?? null}
+          initialDiscountFeeHeadLabel={discountFeeHeadLabel ?? null}
+          initialDiscountRemarks={discountRemarks ?? null}
           onClose={() => setShowModifyFee(false)}
           onSuccess={() => {
             setShowModifyFee(false);

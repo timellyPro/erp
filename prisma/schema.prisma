@@ -936,6 +936,12 @@ model StudentFee {
   discountPercent Float @default(0)
   finalFee        Float // totalFee after applying discount
 
+  /** Fee head key (e.g. BASE:0, EXTRA:<id>) the discount is documented against; see admin breakdown. */
+  discountFeeHeadKey   String?
+  discountFeeHeadLabel String?
+  /** Approval authority / notes for the discount. */
+  discountRemarks String? @db.Text
+
   amountPaid   Float @default(0)
   remainingFee Float
 

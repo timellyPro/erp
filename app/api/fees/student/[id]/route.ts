@@ -73,7 +73,7 @@ export async function PATCH(req: Request, context: RouteParams) {
     }
 
     const body = await req.json();
-    const { totalFee, discountPercent } = body;
+    const { totalFee, discountPercent, discountFeeHeadKey, discountFeeHeadLabel, discountRemarks } = body;
 
     let newTotalFee = typeof totalFee === "number" ? totalFee : existing.totalFee;
     let newDiscount =
@@ -93,6 +93,37 @@ export async function PATCH(req: Request, context: RouteParams) {
       );
     }
 
+    const hasDiscount = newDiscount > 0;
+    let headKey: string | null =
+      typeof discountFeeHeadKey === "string" && discountFeeHeadKey.trim()
+        ? discountFeeHeadKey.trim()
+        : null;
+    let headLabel: string | null =
+      typeof discountFeeHeadLabel === "string" && discountFeeHeadLabel.trim()
+        ? discountFeeHeadLabel.trim()
+        : null;
+    let remarksVal: string | null =
+      typeof discountRemarks === "string" && discountRemarks.trim() ? discountRemarks.trim() : null;
+
+    if (hasDiscount) {
+      if (!headKey) {
+        return NextResponse.json(
+          { message: "Select the fee head this discount applies to." },
+          { status: 400 }
+        );
+      }
+      if (!remarksVal || remarksVal.length < 3) {
+        return NextResponse.json(
+          { message: "Enter discount remarks / approval authority (at least 3 characters)." },
+          { status: 400 }
+        );
+      }
+    } else {
+      headKey = null;
+      headLabel = null;
+      remarksVal = null;
+    }
+
     const finalFee = newTotalFee * (1 - newDiscount / 100);
     const remainingFee = Math.max(finalFee - existing.amountPaid, 0);
 
@@ -103,7 +134,10 @@ export async function PATCH(req: Request, context: RouteParams) {
         discountPercent: newDiscount,
         finalFee,
         remainingFee,
-      },
+        discountFeeHeadKey: headKey,
+        discountFeeHeadLabel: headLabel,
+        discountRemarks: remarksVal,
+      } as Parameters<(typeof prisma.studentFee)["update"]>[0]["data"],
     });
 
     return NextResponse.json({ fee: updated });
