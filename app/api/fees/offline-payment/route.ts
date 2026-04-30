@@ -326,6 +326,11 @@ export async function POST(req: Request) {
     const newAmountPaid = fee.amountPaid + amount;
     const newRemaining = Math.max(totalSnapshotDue - newAmountPaid, 0);
 
+    const normalizedMode =
+      typeof paymentMode === "string" && paymentMode.trim()
+        ? paymentMode.trim().toUpperCase()
+        : "CASH";
+    const offlineGateway = `OFFLINE_${normalizedMode}`;
     const txId = transactionId || refNo || `OFF-${Date.now()}`;
 
     const paymentAndAllocations = await prisma.$transaction(async (tx) => {
@@ -333,7 +338,7 @@ export async function POST(req: Request) {
         data: {
           studentId,
           amount,
-          gateway: "OFFLINE",
+          gateway: offlineGateway,
           status: "SUCCESS",
           transactionId: txId,
         },

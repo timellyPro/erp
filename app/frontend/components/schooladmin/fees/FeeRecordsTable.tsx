@@ -143,16 +143,17 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
 
   const normalizePaymentColumn = (gateway?: string): PaymentColumn => {
     const g = (gateway || "").toUpperCase();
-    if (g === "CASH" || g === "OFFLINE") return "Cash";
-    if (g === "CHEQUE") return "Cheque";
-    if (g === "DD") return "DD";
+    const normalized = g.startsWith("OFFLINE_") ? g.slice("OFFLINE_".length) : g;
+    if (normalized === "CASH" || normalized === "OFFLINE") return "Cash";
+    if (normalized === "CHEQUE") return "Cheque";
+    if (normalized === "DD") return "DD";
     if (
-      g === "HYPERPG" ||
-      g === "ONLINE" ||
-      g === "UPI" ||
-      g === "BANK_TRANSFER" ||
-      g === "BANK" ||
-      g === "CARD"
+      normalized === "HYPERPG" ||
+      normalized === "ONLINE" ||
+      normalized === "UPI" ||
+      normalized === "BANK_TRANSFER" ||
+      normalized === "BANK" ||
+      normalized === "CARD"
     ) {
       return "ONLINE PAYMENT";
     }

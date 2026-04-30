@@ -23,6 +23,7 @@ import SchoolAdminAnalysisTab from "../../components/schooladmin/Analysis";
 import SchoolAdminSettingsTab from "../../components/schooladmin/Settings";
 import SchoolAdminTeacherTab from "../../components/schooladmin/TeachersTab";
 import SchoolAdminCircularsTab from "../../components/schooladmin/circularTab";
+import AdmissionTab from "../../components/teacher/admission/Admission";
 
 function SchoolAdminContent() {
   const { data: session } = useSession();
@@ -75,6 +76,8 @@ function SchoolAdminContent() {
         return <SchoolAdminDashboard />;
       case "students":
         return <SchoolAdminStudentsTab />;
+      case "admission":
+        return <AdmissionTab />;
       case "add-user":
         return <AddUser />
       case "classes":

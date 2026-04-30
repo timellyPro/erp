@@ -182,6 +182,13 @@ export const SCHOOLADMIN_MENU_ITEMS: SidebarItem[] = [
         permission: Permission.STUDENTS,
     },
     {
+        label: "Admission",
+        tab: "admission",
+        href: "/frontend/pages/schooladmin?tab=admission",
+        icon: UserPlus,
+        permission: Permission.ADMISSION,
+    },
+    {
         label: "Add User",
         tab: "add-user",
         href: "/frontend/pages/schooladmin?tab=add-user",
@@ -280,6 +287,7 @@ export const SCHOOLADMIN_MENU_ITEMS: SidebarItem[] = [
 export const SCHOOLADMIN_TAB_TITLES: Record<string, string> = {
     dashboard: "Dashboard",
     students: "Students",
+    admission: "Admission",
     teachers: "Teachers",
     classes: "Classes",
     "teacher-leaves": "Teacher Leaves",

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Download, Zap, Settings, PlusCircle, Trash2, Pencil } from "lucide-react";
+import { Download, Zap, Settings, PlusCircle, Trash2, Pencil, X } from "lucide-react";
 import { generatePDF } from "@/lib/pdfUtils";
 import { ModifyFeeModal, DISCOUNT_HEAD_OVERALL_KEY, type FeeHeadOption } from "./ModifyFeeModal";
 import { AddExtraFeeModal } from "./AddExtraFeeModal";
@@ -70,6 +70,23 @@ export const FeesBreakdown = ({
   >([]);
   const [headsTotalAmount, setHeadsTotalAmount] = useState<number | null>(null);
   const [headsRemainingAmount, setHeadsRemainingAmount] = useState<number | null>(null);
+  const [payingHead, setPayingHead] = useState<{
+    key: string;
+    label: string;
+    due: number;
+    extraFeeId?: string;
+  } | null>(null);
+  const [paymentForm, setPaymentForm] = useState<{
+    amount: string;
+    mode: "CASH" | "ONLINE" | "CHEQUE" | "DD" | "OTHERS";
+    referenceNo: string;
+  }>({
+    amount: "",
+    mode: "CASH",
+    referenceNo: "",
+  });
+  const [paymentSaving, setPaymentSaving] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
 
   // Calculate breakdown by fee type from payments
   const feeBreakdown = new Map<string, { amount: number; paidAmount: number }>();
@@ -170,6 +187,95 @@ export const FeesBreakdown = ({
   const displayStudentName = studentName || "Student";
   const displayAdmission = admissionNumber || "—";
   const displayClass = classDisplayName || "—";
+
+  const openHeadPaymentModal = (head: { key: string; label: string; due: number; extraFeeId?: string }) => {
+    setPayingHead(head);
+    setPaymentError(null);
+    setPaymentForm({
+      amount: head.due > 0 ? head.due.toFixed(2) : "",
+      mode: "CASH",
+      referenceNo: "",
+    });
+  };
+
+  const selectedHeadFromCard = (head: { key: string; label: string; extraFeeId?: string }) => {
+    if (head.key.startsWith("BASE:")) {
+      const componentIndex = Number(head.key.slice("BASE:".length));
+      if (Number.isFinite(componentIndex)) {
+        return {
+          headType: "BASE_COMPONENT" as const,
+          componentIndex,
+          componentName: head.label,
+        };
+      }
+    }
+    if (head.extraFeeId) {
+      return {
+        headType: "EXTRA_FEE" as const,
+        extraFeeId: head.extraFeeId,
+      };
+    }
+    if (head.key.startsWith("EXTRA:")) {
+      return {
+        headType: "EXTRA_FEE" as const,
+        extraFeeId: head.key.slice("EXTRA:".length),
+      };
+    }
+    return null;
+  };
+
+  const submitHeadPayment = async () => {
+    if (!payingHead) return;
+    setPaymentError(null);
+
+    const amount = Number(paymentForm.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setPaymentError("Enter a valid payment amount.");
+      return;
+    }
+    if (amount > payingHead.due) {
+      setPaymentError(`Amount cannot exceed due amount ₹${payingHead.due.toLocaleString("en-IN")}.`);
+      return;
+    }
+    if (paymentForm.mode !== "CASH" && !paymentForm.referenceNo.trim()) {
+      setPaymentError("UTR / reference number is required for this payment mode.");
+      return;
+    }
+
+    const selectedHead = selectedHeadFromCard(payingHead);
+    if (!selectedHead) {
+      setPaymentError("Could not identify fee head. Please try again.");
+      return;
+    }
+
+    setPaymentSaving(true);
+    try {
+      const ref = paymentForm.referenceNo.trim();
+      const response = await fetch("/api/fees/offline-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          studentId,
+          amount,
+          paymentMode: paymentForm.mode,
+          refNo: ref || undefined,
+          transactionId: ref || undefined,
+          selectedHeads: [selectedHead],
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(typeof data.message === "string" ? data.message : "Failed to record payment");
+      }
+      setPayingHead(null);
+      onFeeModified?.();
+    } catch (error) {
+      setPaymentError(error instanceof Error ? error.message : "Failed to record payment");
+    } finally {
+      setPaymentSaving(false);
+    }
+  };
 
   return (
     <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl sm:rounded-[2rem] p-3 sm:p-6 min-w-0">
@@ -336,6 +442,24 @@ export const FeesBreakdown = ({
                 <p className="text-xs text-red-400">
                   Remaining: ₹{h.due.toLocaleString("en-IN")}
                 </p>
+                {h.due > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openHeadPaymentModal({
+                        key: h.key,
+                        label: h.label,
+                        due: h.due,
+                        extraFeeId: h.extraFeeId,
+                      })
+                    }
+                    className="mt-2 inline-flex items-center justify-center rounded-lg border border-blue-500/30 bg-blue-500/15 px-3 py-2 text-xs font-semibold text-blue-300 hover:bg-blue-500/25 transition-colors"
+                  >
+                    Record Payment
+                  </button>
+                ) : (
+                  <p className="mt-2 text-[11px] font-semibold text-lime-400">Fully paid</p>
+                )}
               </div>
             ))}
           </div>
@@ -624,6 +748,107 @@ export const FeesBreakdown = ({
           }}
         />
       )}
+
+      {payingHead ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0B1220] p-5 shadow-xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h4 className="text-lg font-semibold text-white">Record Payment</h4>
+                <p className="text-xs text-white/60 mt-1">
+                  {payingHead.label} • Due: ₹{payingHead.due.toLocaleString("en-IN")}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !paymentSaving && setPayingHead(null)}
+                className="rounded-lg p-1 text-white/60 hover:bg-white/10 hover:text-white"
+                aria-label="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-sm">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-white/60">Amount (₹)</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={paymentForm.amount}
+                  onChange={(e) =>
+                    setPaymentForm((prev) => ({
+                      ...prev,
+                      amount: e.target.value,
+                    }))
+                  }
+                  placeholder="Enter amount"
+                  className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-white/60">Payment mode</label>
+                <select
+                  value={paymentForm.mode}
+                  onChange={(e) =>
+                    setPaymentForm((prev) => ({
+                      ...prev,
+                      mode: e.target.value as "CASH" | "ONLINE" | "CHEQUE" | "DD" | "OTHERS",
+                    }))
+                  }
+                  className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-white"
+                >
+                  <option value="CASH">Cash</option>
+                  <option value="ONLINE">Online</option>
+                  <option value="CHEQUE">Cheque</option>
+                  <option value="DD">DD (Demand Draft)</option>
+                  <option value="OTHERS">Others</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-white/60">UTR / Reference number</label>
+                <input
+                  value={paymentForm.referenceNo}
+                  onChange={(e) =>
+                    setPaymentForm((prev) => ({
+                      ...prev,
+                      referenceNo: e.target.value,
+                    }))
+                  }
+                  placeholder="Optional for cash, required for non-cash"
+                  className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-white"
+                />
+              </div>
+            </div>
+
+            {paymentError ? (
+              <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                {paymentError}
+              </div>
+            ) : null}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => !paymentSaving && setPayingHead(null)}
+                disabled={paymentSaving}
+                className="rounded-xl border border-white/15 px-4 py-2 text-sm text-white/80 hover:bg-white/5 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitHeadPayment}
+                disabled={paymentSaving}
+                className="rounded-xl bg-blue-500/90 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
+              >
+                {paymentSaving ? "Recording..." : "Record Payment"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

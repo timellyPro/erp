@@ -46,6 +46,28 @@ function isSuccessStatus(status: string) {
   return u === "SUCCESS" || u === "COMPLETED";
 }
 
+function formatPaymentMethod(method?: string) {
+  const m = String(method || "").trim().toUpperCase();
+  if (!m) return "-";
+  if (m === "OFFLINE" || m === "CASH" || m === "OFFLINE_CASH") return "Cash";
+  if (m === "UPI" || m === "OFFLINE_UPI") return "UPI";
+  if (m === "CHEQUE" || m === "OFFLINE_CHEQUE") return "Cheque";
+  if (m === "DD" || m === "OFFLINE_DD") return "DD";
+  if (m === "ONLINE" || m === "OFFLINE_ONLINE") return "Online";
+  if (m === "BANK_TRANSFER" || m === "OFFLINE_BANK_TRANSFER") return "Bank Transfer";
+  if (m === "CARD" || m === "OFFLINE_CARD") return "Card";
+  if (m === "HYPERPG") return "Online";
+  if (m === "OFFLINE_OTHERS" || m === "OTHERS") return "Others";
+  if (m.startsWith("OFFLINE_")) {
+    return m
+      .slice("OFFLINE_".length)
+      .toLowerCase()
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+  return method || "-";
+}
+
 export const FeeTransactions = ({
   fee,
   payments,
@@ -458,13 +480,14 @@ export const FeeTransactions = ({
         <div className="py-8 text-center text-gray-500 text-sm">No fee records</div>
       ) : (
         <div className="overflow-x-auto overscroll-x-contain touch-pan-x -mx-1 px-1 sm:mx-0 sm:px-0 pb-1 rounded-lg">
-          <table className="w-full text-left min-w-[860px]">
+          <table className="w-full text-left min-w-[980px]">
             <thead>
               <tr className="text-[11px] text-gray-400 font-bold tracking-wider uppercase border-b border-white/5">
                 <th className="pb-4 font-medium">DATE</th>
                 <th className="pb-4 font-medium">DESCRIPTION</th>
                 <th className="pb-4 font-medium">FEE TYPE</th>
                 <th className="pb-4 font-medium">METHOD</th>
+                <th className="pb-4 font-medium">UTR / REF</th>
                 <th className="pb-4 font-medium">STATUS</th>
                 <th className="pb-4 font-medium text-right">AMOUNT</th>
                 <th className="pb-4 font-medium text-center">RECEIPT</th>
@@ -487,7 +510,12 @@ export const FeeTransactions = ({
                       {p.id === "legacy-paid-adjustment" ? "Opening balance adjustment" : "Fee payment"}
                     </td>
                     <td className="py-4 sm:py-5 text-gray-400">{p.feeTypeName || "-"}</td>
-                    <td className="py-4 sm:py-5 text-gray-400">{p.method || "-"}</td>
+                    <td className="py-4 sm:py-5 text-gray-300">{formatPaymentMethod(p.method)}</td>
+                    <td className="py-4 sm:py-5 text-gray-400">
+                      {p.transactionId && p.transactionId.trim() && p.transactionId !== "N/A"
+                        ? p.transactionId
+                        : "-"}
+                    </td>
                     <td className="py-4 sm:py-5">
                       <span className="bg-lime-400/20 text-lime-400 text-[10px] font-bold px-3 py-1 rounded-full uppercase">
                         {p.status || "Paid"}

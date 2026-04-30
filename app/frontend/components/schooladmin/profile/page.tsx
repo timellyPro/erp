@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation";
 import { AcademicPerformance } from "./components/AcademicPerformance";
 import { FeeTransactions } from "./components/FeeTransactions";
 import { FeesBreakdown } from "./components/FeesBreakdown";
-import { OfflinePayments } from "./components/OfflinePayments";
 import { ProfileSidebar } from "./components/ProfileSidebar";
 import { AttendanceTrends } from "./components/AttendanceTrends";
 import { Certificates } from "./components/Certificates";
@@ -407,12 +406,6 @@ function StudentDetailsPageContent() {
                   discountFeeHeadLabel={detail.fee.discountFeeHeadLabel}
                   discountRemarks={detail.fee.discountRemarks}
                   onFeeModified={() => setReloadKey(prev => prev + 1)}
-                />
-                <OfflinePayments
-                  studentId={detail.student.id}
-                  studentName={detail.student.name}
-                  remainingFee={detail.fee.remainingFee}
-                  onPaymentAdded={() => setReloadKey(prev => prev + 1)}
                 />
               </>
             )}
