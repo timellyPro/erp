@@ -448,6 +448,7 @@ model Student {
   gender          String?
   previousSchool  String?  @db.Text
   residencyType   String?  @default("Day Scholar")
+  status          String   @default("Active")
 
   applicationFee Float? // record-only fee amounts (no payment integration here)
   admissionFee   Float?
@@ -935,6 +936,12 @@ model StudentFee {
   totalFee        Float // Base fee before discount
   discountPercent Float @default(0)
   finalFee        Float // totalFee after applying discount
+
+  /** Fee head key (e.g. BASE:0, EXTRA:<id>) the discount is documented against; see admin breakdown. */
+  discountFeeHeadKey   String?
+  discountFeeHeadLabel String?
+  /** Approval authority / notes for the discount. */
+  discountRemarks String? @db.Text
 
   amountPaid   Float @default(0)
   remainingFee Float

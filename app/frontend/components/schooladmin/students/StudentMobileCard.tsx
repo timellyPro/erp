@@ -5,6 +5,14 @@ import { AVATAR_URL } from "../../../constants/images";
 import { StudentRow } from "./types";
 import { getAge } from "./utils";
 
+const getResidencyLabel = (value?: string) => {
+  const normalized = (value || "").trim().toLowerCase();
+  if (!normalized) return "-";
+  if (normalized.includes("host")) return "Hosteller";
+  if (normalized.includes("day")) return "Day Scholar";
+  return value || "-";
+};
+
 type Props = {
   student: StudentRow;
   index: number;
@@ -63,6 +71,12 @@ export default function StudentMobileCard({
           <div className="text-[11px] text-white/50">Age</div>
           <div className="text-sm font-semibold text-white">
             {getAge(student.dob)}
+          </div>
+        </div>
+        <div className="rounded-xl border border-white/10 bg-black/20 p-3 col-span-2">
+          <div className="text-[11px] text-white/50">Type</div>
+          <div className="text-sm font-semibold text-white">
+            {getResidencyLabel(student.residencyType)}
           </div>
         </div>
       </div>

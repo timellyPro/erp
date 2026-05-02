@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Plus } from "lucide-react";
 import InputField from "../schooladmincomponents/InputField";
 import SelectInput from "../../common/SelectInput";
@@ -16,6 +17,7 @@ type Props = {
   title?: string;
   subtitle?: string;
   submitLabel?: string;
+  editMode?: boolean;
   onFieldChange: (key: keyof StudentFormState, value: string) => void;
   onCancel: () => void;
   onReset: () => void;
@@ -44,16 +46,28 @@ export default function AddStudentForm({
   title = "Add New Student",
   subtitle = "Enter student details below",
   submitLabel = "Save Student",
+  editMode = false,
   onFieldChange,
   onCancel,
   onReset,
   onSave,
 }: Props) {
+  const [showParentSection, setShowParentSection] = useState(!editMode);
+  const [showAdmissionSection, setShowAdmissionSection] = useState(!editMode);
+
   return (
     <div className="bg-[#0F172A]/50 rounded-2xl p-6 border border-white/10">
       <div className="flex items-center justify-between gap-3 mb-4">
         <div>
-          <h3 className="text-lg font-bold text-gray-100 mb-4">{title}</h3>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <h3 className="text-lg font-bold text-gray-100">{title}</h3>
+            {editMode ? (
+              <span className="rounded-full border border-lime-500/40 bg-lime-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-lime-200">
+                Edit Mode
+              </span>
+            ) : null}
+          </div>
+          {subtitle ? <p className="text-xs text-white/55">{subtitle}</p> : null}
         </div>
       </div>
 
@@ -197,10 +211,15 @@ export default function AddStudentForm({
       </p>
 
       <div className="mt-6">
-        <h3 className="text-sm font-semibold text-white/80 mb-3">
-          Parent Information
-        </h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <button
+          type="button"
+          onClick={() => setShowParentSection((prev) => !prev)}
+          className="mb-3 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm font-semibold text-white/80 hover:bg-white/10"
+        >
+          {showParentSection ? "Hide" : "Show"} Parent Information
+        </button>
+        {showParentSection ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <InputField
               label="Parent Name*"
@@ -297,12 +316,20 @@ export default function AddStudentForm({
             />
             {renderError(errors, "address")}
           </div>
-        </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-6">
-        <h3 className="text-sm font-semibold text-white/80 mb-3">Admission Details (optional)</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <button
+          type="button"
+          onClick={() => setShowAdmissionSection((prev) => !prev)}
+          className="mb-3 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm font-semibold text-white/80 hover:bg-white/10"
+        >
+          {showAdmissionSection ? "Hide" : "Show"} Admission Details
+        </button>
+        {showAdmissionSection ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           <InputField label="House No" value={form.houseNo} onChange={(v) => onFieldChange("houseNo", v)} bgColor="white" />
           <InputField label="Street" value={form.street} onChange={(v) => onFieldChange("street", v)} bgColor="white" />
           <InputField label="City" value={form.city} onChange={(v) => onFieldChange("city", v)} bgColor="white" />
@@ -316,7 +343,8 @@ export default function AddStudentForm({
           <InputField label="Emergency Father No" value={form.emergencyFatherNo} onChange={(v) => onFieldChange("emergencyFatherNo", v)} bgColor="white" />
           <InputField label="Emergency Mother No" value={form.emergencyMotherNo} onChange={(v) => onFieldChange("emergencyMotherNo", v)} bgColor="white" />
           <InputField label="Emergency Guardian No" value={form.emergencyGuardianNo} onChange={(v) => onFieldChange("emergencyGuardianNo", v)} bgColor="white" />
-        </div>
+          </div>
+        ) : null}
       </div>
 
 

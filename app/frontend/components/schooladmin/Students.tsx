@@ -7,12 +7,11 @@ import StudentFilters from "./students/StudentFilters";
 import UploadCsvPanel from "./students/UploadCsvPanel";
 import AddStudentForm from "./students/AddStudentForm";
 import StudentDetailsModal from "./students/StudentDetailsModal";
-import StudentEditPanel from "./students/StudentEditPanel";
 import StudentMobileCard from "./students/StudentMobileCard";
 import DeleteConfirmation from "../common/DeleteConfirmation";
 import { buildStudentColumns } from "./students/studentColumns";
 import useStudentPage from "./students/useStudentPage";
-import { getAge } from "./students/utils";
+import { getAge, toStudentForm } from "./students/utils";
 import { ClassItem } from "./students/types";
 import SuccessPopups from "../common/SuccessPopUps";
 import Spinner from "../common/Spinner";
@@ -87,16 +86,21 @@ export default function StudentsManagementPage({ classes, reload }: Props) {
         )}
 
         {page.editStudent && (
-          <StudentEditPanel
+          <AddStudentForm
             form={page.editForm}
+            errors={page.editErrors}
             classOptions={page.formClassOptions}
             sectionOptions={page.formSectionOptions}
+            classesLoading={page.classesLoading}
+            ageLabel={getAge(page.editForm.dob)}
             saving={page.editSaving}
-            studentName={
-              page.editStudent.user?.name || page.editStudent.name || "Student"
-            }
+            title={`Edit Student: ${page.editStudent.user?.name || page.editStudent.name || "Student"}`}
+            subtitle="Update all available student fields"
+            submitLabel="Save Changes"
+            editMode
             onFieldChange={page.handleEditChange}
-            onClose={page.closeEdit}
+            onCancel={page.closeEdit}
+            onReset={() => page.setEditForm(toStudentForm(page.editStudent!))}
             onSave={page.handleEditSave}
           />
         )}

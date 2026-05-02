@@ -18,6 +18,7 @@ import {
   Users,
   Star,
   Award,
+  Download,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -96,6 +97,8 @@ type EnrollmentByClassSectionRow = {
   total: number;
 };
 
+type GenderViewMode = "CLASS_WISE" | "SECTION_WISE";
+
 type AnalysisResponse = {
   availableYears: number[];
   classes?: { id: string; name: string; section: string | null }[];
@@ -133,6 +136,11 @@ export default function AnalysisDashboard() {
   const [classId, setClassId] = useState("");
   const [enrollmentPage, setEnrollmentPage] = useState(1);
   const [feePage, setFeePage] = useState(1);
+  const [genderViewMode, setGenderViewMode] = useState<GenderViewMode>("CLASS_WISE");
+  const [enrollmentSearch, setEnrollmentSearch] = useState("");
+  const [enrollmentGroupFilter, setEnrollmentGroupFilter] = useState("");
+  const [feeSearch, setFeeSearch] = useState("");
+  const [feeClassSectionFilter, setFeeClassSectionFilter] = useState("");
 
   useEffect(() => {
     setLoading(true);
@@ -169,7 +177,7 @@ export default function AnalysisDashboard() {
   useEffect(() => {
     setEnrollmentPage(1);
     setFeePage(1);
-  }, [year, classId]);
+  }, [year, classId, enrollmentSearch, enrollmentGroupFilter, feeSearch, feeClassSectionFilter, genderViewMode]);
 
   useEffect(() => {
     if (!data) return;
@@ -285,16 +293,266 @@ export default function AnalysisDashboard() {
 
   const formatInr = (n: number) =>
     `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}`;
+  const getAcademicYearLabel = () => {
+    const y = year !== 0 ? year : data.selectedYear;
+    return `${y}-${y + 1}`;
+  };
 
-  const enrollmentTotalPages = Math.max(1, Math.ceil(enrollmentRows.length / TABLE_PAGE_SIZE));
-  const feeTotalPages = Math.max(1, Math.ceil(feeRows.length / TABLE_PAGE_SIZE));
+  const makeSafeFileName = (base: string, ext: string) =>
+    `${base.replace(/[^\w-]+/g, "_").toLowerCase()}.${ext}`;
+
+  const exportWithXlsx = async (
+    rows: Array<Record<string, string | number>>,
+    sheetName: string,
+    filenameBase: string
+  ) => {
+    if (rows.length === 0) {
+      alert("No data available to export.");
+      return;
+    }
+    const XLSX = await import("xlsx");
+    const workbook = XLSX.utils.book_new();
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+
+    XLSX.writeFile(workbook, makeSafeFileName(filenameBase, "xlsx"));
+  };
+  const enrollmentClassWiseRows = Array.from(
+    enrollmentRows.reduce((acc, row) => {
+      const key = row.className || "Unassigned";
+      const item = acc.get(key) ?? { groupLabel: key, male: 0, female: 0, total: 0 };
+      item.male += row.male;
+      item.female += row.female;
+      item.total += row.total;
+      acc.set(key, item);
+      return acc;
+    }, new Map<string, { groupLabel: string; male: number; female: number; total: number }>())
+  ).map(([, value]) => value).sort((a, b) => a.groupLabel.localeCompare(b.groupLabel));
+
+  const enrollmentSectionWiseRows = Array.from(
+    enrollmentRows.reduce((acc, row) => {
+      const key = row.section && row.section.trim() !== "" ? row.section.trim() : "Unassigned";
+      const item = acc.get(key) ?? { groupLabel: key, male: 0, female: 0, total: 0 };
+      item.male += row.male;
+      item.female += row.female;
+      item.total += row.total;
+      acc.set(key, item);
+      return acc;
+    }, new Map<string, { groupLabel: string; male: number; female: number; total: number }>())
+  ).map(([, value]) => value).sort((a, b) => a.groupLabel.localeCompare(b.groupLabel));
+
+  const enrollmentRowsBase =
+    genderViewMode === "CLASS_WISE" ? enrollmentClassWiseRows : enrollmentSectionWiseRows;
+  const enrollmentGroupOptions = enrollmentRowsBase.map((row) => row.groupLabel);
+
+  const feeClassSectionOptions = Array.from(new Set(feeRows.map((row) => row.label))).sort((a, b) =>
+    a.localeCompare(b)
+  );
+
+  const enrollmentRowsFiltered = enrollmentRowsBase.filter((row) => {
+    const search = enrollmentSearch.trim().toLowerCase();
+    const matchesSearch =
+      !search ||
+      row.groupLabel.toLowerCase().includes(search);
+    const matchesGroup = !enrollmentGroupFilter || row.groupLabel === enrollmentGroupFilter;
+    return matchesSearch && matchesGroup;
+  });
+
+  const feeRowsFiltered = feeRows.filter((row) => {
+    const search = feeSearch.trim().toLowerCase();
+    const matchesSearch = !search || row.label.toLowerCase().includes(search);
+    const matchesClassSection = !feeClassSectionFilter || row.label === feeClassSectionFilter;
+    return matchesSearch && matchesClassSection;
+  });
+
+  const enrollmentFilteredTotals =
+    enrollmentRowsFiltered.length > 0
+      ? enrollmentRowsFiltered.reduce(
+          (acc, row) => ({
+            male: acc.male + row.male,
+            female: acc.female + row.female,
+            total: acc.total + row.total,
+          }),
+          { male: 0, female: 0, total: 0 }
+        )
+      : null;
+
+  const feeFilteredTotals =
+    feeRowsFiltered.length > 0
+      ? feeRowsFiltered.reduce(
+          (acc, row) => ({
+            totalFees: acc.totalFees + row.totalFees,
+            finalFees: acc.finalFees + row.finalFees,
+            paidFee: acc.paidFee + row.paidFee,
+            pendingFee: acc.pendingFee + row.pendingFee,
+          }),
+          { totalFees: 0, finalFees: 0, paidFee: 0, pendingFee: 0 }
+        )
+      : null;
+
+  const feeFilteredAvgDiscountPercent =
+    feeRowsFiltered.length > 0
+      ? Number(
+          (
+            feeRowsFiltered.reduce((acc, row) => acc + row.avgDiscountPercent, 0) /
+            feeRowsFiltered.length
+          ).toFixed(2)
+        )
+      : 0;
+
+  const feeFilteredCollectionPercent =
+    feeFilteredTotals && feeFilteredTotals.finalFees > 0
+      ? Number(((feeFilteredTotals.paidFee / feeFilteredTotals.finalFees) * 100).toFixed(2))
+      : 0;
+
+  const feeFilteredDuePercent =
+    feeFilteredTotals && feeFilteredTotals.finalFees > 0
+      ? Number(((feeFilteredTotals.pendingFee / feeFilteredTotals.finalFees) * 100).toFixed(2))
+      : 0;
+
+  const enrollmentExportRows = enrollmentRowsFiltered.map((row) => ({
+    [genderViewMode === "CLASS_WISE" ? "Class" : "Section"]: row.groupLabel,
+    Male: row.male,
+    Female: row.female,
+    Total: row.total,
+  }));
+
+  const exportGenderExcel = async (mode: GenderViewMode) => {
+    const rows = mode === "CLASS_WISE" ? enrollmentClassWiseRows : enrollmentSectionWiseRows;
+    const exportRows = rows.map((row) => ({
+      [mode === "CLASS_WISE" ? "Class" : "Section"]: row.groupLabel,
+      Male: row.male,
+      Female: row.female,
+      Total: row.total,
+    }));
+    const fileSuffix = mode === "CLASS_WISE" ? "class_wise" : "section_wise";
+    try {
+      await exportWithXlsx(
+        exportRows,
+        mode === "CLASS_WISE" ? "Gender Class-wise" : "Gender Section-wise",
+        `gender_distribution_${fileSuffix}_${getAcademicYearLabel()}`
+      );
+    } catch (e) {
+      console.error(e);
+      alert("Export failed. Please try again.");
+    }
+  };
+
+  const exportPaymentDetailsExcel = async () => {
+    try {
+      const [txRes, summaryRes] = await Promise.all([
+        fetch("/api/fees/transactions?limit=200", { credentials: "include", cache: "no-store" }),
+        fetch("/api/fees/summary", { credentials: "include", cache: "no-store" }),
+      ]);
+      const txData = await txRes.json().catch(() => ({}));
+      const summaryData = await summaryRes.json().catch(() => ({}));
+      if (!txRes.ok) {
+        alert(txData?.message || "Failed to fetch payment transactions.");
+        return;
+      }
+
+      const transactions: Array<{
+        amount: number;
+        createdAt: string;
+        transactionId?: string | null;
+        feeAllocations?: Array<{ name: string; amount: number }>;
+        student: {
+          id: string;
+          admissionNumber?: string | null;
+          user?: { name?: string | null };
+          class?: { name?: string | null; section?: string | null } | null;
+        };
+      }> = Array.isArray(txData?.transactions) ? txData.transactions : [];
+
+      const summaryFees: Array<{
+        student: { id: string };
+        totalFee: number;
+        finalFee: number;
+        amountPaid: number;
+        remainingFee: number;
+      }> = Array.isArray(summaryData?.fees) ? summaryData.fees : [];
+
+      const studentTotals = summaryFees.reduce((acc, fee) => {
+        const id = fee.student?.id;
+        if (!id) return acc;
+        const curr = acc.get(id) ?? { totalAmount: 0, discount: 0, paidAmount: 0, pendingAmount: 0 };
+        curr.totalAmount += Number(fee.totalFee || 0);
+        curr.discount += Math.max(Number(fee.totalFee || 0) - Number(fee.finalFee || 0), 0);
+        curr.paidAmount += Number(fee.amountPaid || 0);
+        curr.pendingAmount += Number(fee.remainingFee || 0);
+        acc.set(id, curr);
+        return acc;
+      }, new Map<string, { totalAmount: number; discount: number; paidAmount: number; pendingAmount: number }>());
+
+      const yearStart = year !== 0 ? year : data.selectedYear;
+      const from = new Date(yearStart, 3, 1);
+      const to = new Date(yearStart + 1, 2, 31, 23, 59, 59, 999);
+
+      const filteredTx = transactions.filter((tx) => {
+        const created = new Date(tx.createdAt);
+        if (Number.isNaN(created.getTime()) || created < from || created > to) return false;
+        const className = tx.student.class?.name || "";
+        const section = tx.student.class?.section || "";
+        const label = `${className}${section ? `-${section}` : ""}`;
+        if (classId && className !== ((data.classes ?? []).find((c) => c.id === classId)?.name ?? "")) return false;
+        if (feeClassSectionFilter && feeClassSectionFilter !== label) return false;
+        const search = feeSearch.trim().toLowerCase();
+        if (search) {
+          const studentName = (tx.student.user?.name || "").toLowerCase();
+          const admission = (tx.student.admissionNumber || "").toLowerCase();
+          if (!studentName.includes(search) && !admission.includes(search) && !label.toLowerCase().includes(search)) {
+            return false;
+          }
+        }
+        return true;
+      });
+
+      const rows = filteredTx.map((tx) => {
+        const totals = studentTotals.get(tx.student.id) ?? {
+          totalAmount: tx.amount,
+          discount: 0,
+          paidAmount: tx.amount,
+          pendingAmount: 0,
+        };
+        const feeHeadBreakdown =
+          Array.isArray(tx.feeAllocations) && tx.feeAllocations.length > 0
+            ? tx.feeAllocations.map((f) => `${f.name}: ₹${Number(f.amount || 0).toLocaleString("en-IN")}`).join(" | ")
+            : "Default";
+        return {
+          "Date of Payment": new Date(tx.createdAt).toLocaleDateString("en-IN"),
+          "Student Name": tx.student.user?.name || "-",
+          "Admission No": tx.student.admissionNumber || "-",
+          Class: tx.student.class?.name || "-",
+          Section: tx.student.class?.section || "-",
+          "Fee Head Breakdown": feeHeadBreakdown,
+          "Total Amount": Number(totals.totalAmount.toFixed(2)),
+          Discount: Number(totals.discount.toFixed(2)),
+          "Paid Amount": Number(totals.paidAmount.toFixed(2)),
+          "Pending Amount": Number(totals.pendingAmount.toFixed(2)),
+          "Transaction Ref": tx.transactionId || "-",
+        };
+      });
+
+      await exportWithXlsx(
+        rows,
+        "Payment Details",
+        `payment_details_student_wise_${getAcademicYearLabel()}`
+      );
+    } catch (e) {
+      console.error(e);
+      alert("Export failed. Please try again.");
+    }
+  };
+
+  const enrollmentTotalPages = Math.max(1, Math.ceil(enrollmentRowsFiltered.length / TABLE_PAGE_SIZE));
+  const feeTotalPages = Math.max(1, Math.ceil(feeRowsFiltered.length / TABLE_PAGE_SIZE));
   const enrollmentPageEff = Math.min(Math.max(1, enrollmentPage), enrollmentTotalPages);
   const feePageEff = Math.min(Math.max(1, feePage), feeTotalPages);
-  const enrollmentPaged = enrollmentRows.slice(
+  const enrollmentPaged = enrollmentRowsFiltered.slice(
     (enrollmentPageEff - 1) * TABLE_PAGE_SIZE,
     enrollmentPageEff * TABLE_PAGE_SIZE
   );
-  const feePaged = feeRows.slice((feePageEff - 1) * TABLE_PAGE_SIZE, feePageEff * TABLE_PAGE_SIZE);
+  const feePaged = feeRowsFiltered.slice((feePageEff - 1) * TABLE_PAGE_SIZE, feePageEff * TABLE_PAGE_SIZE);
 
   /* ---------------- UI ---------------- */
 
@@ -596,47 +854,93 @@ export default function AnalysisDashboard() {
 
       {/* Enrollment by gender: class & section */}
       <div className="mt-4 sm:mt-6 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
-        <div className="mb-4">
-          <div className="flex items-center gap-2">
-            <Users className="w-4 h-4 sm:w-5 sm:h-5 text-sky-400 shrink-0" />
-            <h3 className="font-semibold text-white text-sm sm:text-base">
-              Students by class & section (gender)
-            </h3>
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 sm:w-5 sm:h-5 text-sky-400 shrink-0" />
+              <h3 className="font-semibold text-white text-sm sm:text-base">
+                Students by class & section (gender)
+              </h3>
+            </div>
+            <p className="text-xs sm:text-sm text-white/50 mt-1 pl-0 sm:pl-7">
+              Male / female counts follow the gender saved on each student; other or blank genders
+              are included in total only.
+            </p>
           </div>
-          <p className="text-xs sm:text-sm text-white/50 mt-1 pl-0 sm:pl-7">
-            Male / female counts follow the gender saved on each student; other or blank genders
-            are included in total only.
-          </p>
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+            <input
+              type="text"
+              value={enrollmentSearch}
+              onChange={(e) => setEnrollmentSearch(e.target.value)}
+              placeholder={genderViewMode === "CLASS_WISE" ? "Search class" : "Search section"}
+              className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs text-white placeholder:text-white/40 focus:outline-none focus:ring-1 focus:ring-lime-400/40 sm:w-[180px] sm:text-sm"
+            />
+            <div className="w-full sm:w-[165px]">
+              <SelectInput
+                value={genderViewMode}
+                onChange={(value) => {
+                  setGenderViewMode(value as GenderViewMode);
+                  setEnrollmentGroupFilter("");
+                }}
+                options={[
+                  { label: "Class-wise Table", value: "CLASS_WISE" },
+                  { label: "Section-wise Table", value: "SECTION_WISE" },
+                ]}
+              />
+            </div>
+            <div className="w-full sm:w-[165px]">
+              <SelectInput
+                value={enrollmentGroupFilter}
+                onChange={setEnrollmentGroupFilter}
+                options={[
+                  { label: genderViewMode === "CLASS_WISE" ? "All Classes" : "All Sections", value: "" },
+                  ...enrollmentGroupOptions.map((value) => ({ label: value, value })),
+                ]}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void exportGenderExcel("CLASS_WISE")}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-lime-500/40 bg-lime-500/15 px-3 py-2 text-xs sm:text-sm font-semibold text-lime-200 hover:bg-lime-500/25 transition-colors"
+            >
+              <Download className="h-4 w-4" />
+              Export Class-wise Excel
+            </button>
+            <button
+              type="button"
+              onClick={() => void exportGenderExcel("SECTION_WISE")}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-lime-500/40 bg-lime-500/15 px-3 py-2 text-xs sm:text-sm font-semibold text-lime-200 hover:bg-lime-500/25 transition-colors"
+            >
+              <Download className="h-4 w-4" />
+              Export Section-wise Excel
+            </button>
+          </div>
         </div>
 
         <div className="-mx-1 overflow-x-auto overscroll-x-contain touch-pan-x pb-1 sm:mx-0">
           <table className="w-full min-w-[520px] text-left text-sm">
             <thead>
               <tr className="border-b border-white/10 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-gray-400">
-                <th className="py-3 pr-3 font-medium">Class</th>
-                <th className="py-3 px-2 font-medium">Section</th>
+                <th className="py-3 pr-3 font-medium">{genderViewMode === "CLASS_WISE" ? "Class" : "Section"}</th>
                 <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Male</th>
                 <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Female</th>
                 <th className="py-3 pl-2 text-right font-medium whitespace-nowrap">Total</th>
               </tr>
             </thead>
             <tbody className="text-white/90">
-              {enrollmentRows.length === 0 ? (
+              {enrollmentRowsFiltered.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-white/40">
-                    No class sections found for this school.
+                  <td colSpan={4} className="py-8 text-center text-white/40">
+                    No matching class / section found.
                   </td>
                 </tr>
               ) : (
                 enrollmentPaged.map((row) => (
                   <tr
-                    key={row.classId}
+                    key={row.groupLabel}
                     className="border-b border-white/5 last:border-0 hover:bg-white/[0.03]"
                   >
-                    <td className="py-3 pr-3 font-semibold text-white">{row.className}</td>
-                    <td className="py-3 px-2 text-gray-300">
-                      {row.section && row.section.trim() !== "" ? row.section : "—"}
-                    </td>
+                    <td className="py-3 pr-3 font-semibold text-white">{row.groupLabel}</td>
                     <td className="py-3 px-2 text-right tabular-nums text-sky-300">
                       {row.male.toLocaleString("en-IN")}
                     </td>
@@ -649,19 +953,19 @@ export default function AnalysisDashboard() {
                   </tr>
                 ))
               )}
-              {enrollmentTotals && enrollmentRows.length > 0 ? (
+              {enrollmentFilteredTotals && enrollmentRowsFiltered.length > 0 ? (
                 <tr className="border-t border-white/20 bg-white/[0.06] font-semibold">
-                  <td className="py-3 pr-3 text-white" colSpan={2}>
-                    {classId ? "Selected class total" : "School total"}
+                  <td className="py-3 pr-3 text-white">
+                    Filtered total
                   </td>
                   <td className="py-3 px-2 text-right tabular-nums text-sky-300">
-                    {enrollmentTotals.male.toLocaleString("en-IN")}
+                    {enrollmentFilteredTotals.male.toLocaleString("en-IN")}
                   </td>
                   <td className="py-3 px-2 text-right tabular-nums text-fuchsia-300">
-                    {enrollmentTotals.female.toLocaleString("en-IN")}
+                    {enrollmentFilteredTotals.female.toLocaleString("en-IN")}
                   </td>
                   <td className="py-3 pl-2 text-right tabular-nums text-white">
-                    {enrollmentTotals.total.toLocaleString("en-IN")}
+                    {enrollmentFilteredTotals.total.toLocaleString("en-IN")}
                   </td>
                 </tr>
               ) : null}
@@ -671,7 +975,7 @@ export default function AnalysisDashboard() {
         <TablePagination
           page={enrollmentPageEff}
           totalPages={enrollmentTotalPages}
-          totalRows={enrollmentRows.length}
+          totalRows={enrollmentRowsFiltered.length}
           onPageChange={setEnrollmentPage}
         />
       </div>
@@ -690,6 +994,33 @@ export default function AnalysisDashboard() {
               From student fee records for each class / section.
             </p>
           </div>
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+            <input
+              type="text"
+              value={feeSearch}
+              onChange={(e) => setFeeSearch(e.target.value)}
+              placeholder="Search class / section"
+              className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs text-white placeholder:text-white/40 focus:outline-none focus:ring-1 focus:ring-lime-400/40 sm:w-[180px] sm:text-sm"
+            />
+            <div className="w-full sm:w-[180px]">
+              <SelectInput
+                value={feeClassSectionFilter}
+                onChange={setFeeClassSectionFilter}
+                options={[
+                  { label: "All class / section", value: "" },
+                  ...feeClassSectionOptions.map((label) => ({ label, value: label })),
+                ]}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void exportPaymentDetailsExcel()}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-lime-500/40 bg-lime-500/15 px-3 py-2 text-xs sm:text-sm font-semibold text-lime-200 hover:bg-lime-500/25 transition-colors"
+            >
+              <Download className="h-4 w-4" />
+              Export to Excel
+            </button>
+          </div>
         </div>
 
         <div className="-mx-1 overflow-x-auto overscroll-x-contain touch-pan-x pb-1 sm:mx-0">
@@ -707,10 +1038,10 @@ export default function AnalysisDashboard() {
               </tr>
             </thead>
             <tbody className="text-white/90">
-              {feeRows.length === 0 ? (
+              {feeRowsFiltered.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="py-8 text-center text-white/40">
-                    No class sections found for this school.
+                    No matching class / section found.
                   </td>
                 </tr>
               ) : (
@@ -744,25 +1075,25 @@ export default function AnalysisDashboard() {
                   </tr>
                 ))
               )}
-              {feeTotals && feeRows.length > 0 ? (
+              {feeFilteredTotals && feeRowsFiltered.length > 0 ? (
                 <tr className="border-t border-white/20 bg-white/[0.06] font-semibold">
-                  <td className="py-3 pr-3 text-white">{feeTotals.label}</td>
-                  <td className="py-3 px-2 text-right tabular-nums">{formatInr(feeTotals.totalFees)}</td>
+                  <td className="py-3 pr-3 text-white">Filtered total</td>
+                  <td className="py-3 px-2 text-right tabular-nums">{formatInr(feeFilteredTotals.totalFees)}</td>
                   <td className="py-3 px-2 text-right tabular-nums text-cyan-300">
-                    {feeTotals.avgDiscountPercent.toLocaleString("en-IN")}%
+                    {feeFilteredAvgDiscountPercent.toLocaleString("en-IN")}%
                   </td>
-                  <td className="py-3 px-2 text-right tabular-nums">{formatInr(feeTotals.finalFees)}</td>
+                  <td className="py-3 px-2 text-right tabular-nums">{formatInr(feeFilteredTotals.finalFees)}</td>
                   <td className="py-3 px-2 text-right tabular-nums text-lime-400">
-                    {formatInr(feeTotals.paidFee)}
+                    {formatInr(feeFilteredTotals.paidFee)}
                   </td>
                   <td className="py-3 px-2 text-right tabular-nums text-rose-300">
-                    {formatInr(feeTotals.pendingFee)}
+                    {formatInr(feeFilteredTotals.pendingFee)}
                   </td>
                   <td className="py-3 px-2 text-right tabular-nums text-lime-300">
-                    {feeTotals.collectionPercent.toLocaleString("en-IN")}%
+                    {feeFilteredCollectionPercent.toLocaleString("en-IN")}%
                   </td>
                   <td className="py-3 pl-2 text-right tabular-nums text-amber-300">
-                    {feeTotals.duePercent.toLocaleString("en-IN")}%
+                    {feeFilteredDuePercent.toLocaleString("en-IN")}%
                   </td>
                 </tr>
               ) : null}
@@ -772,7 +1103,7 @@ export default function AnalysisDashboard() {
         <TablePagination
           page={feePageEff}
           totalPages={feeTotalPages}
-          totalRows={feeRows.length}
+          totalRows={feeRowsFiltered.length}
           onPageChange={setFeePage}
         />
       </div>

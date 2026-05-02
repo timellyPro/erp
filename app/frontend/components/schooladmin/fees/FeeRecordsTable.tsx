@@ -1,12 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Download, Search } from "lucide-react";
 import * as XLSX from "xlsx";
 import SelectInput from "../../common/SelectInput";
 import type { Class, FeeRecord } from "./types";
 import { schoolAdminStudentDetailsFeesUrl } from "./studentDetailsNav";
+import InlinePagination from "../schooladmincomponents/InlinePagination";
+
+const PAGE_SIZE = 20;
 
 interface FeeRecordsTableProps {
   fees: FeeRecord[];
@@ -29,6 +32,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     const start = now.getMonth() >= 5 ? now.getFullYear() : now.getFullYear() - 1;
     return `${start}-${start + 1}`;
   });
+  const [page, setPage] = useState(1);
 
   const filteredFees = fees.filter((f) => {
     const name = (f.student.user?.name || "").toLowerCase();
@@ -37,6 +41,20 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     if (selectedClass && f.student.class?.id !== selectedClass) return false;
     return true;
   });
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchName, selectedClass]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredFees.length / PAGE_SIZE));
+  const paginatedFees = useMemo(
+    () => filteredFees.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [filteredFees, page]
+  );
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   const classLabelById = new Map(
     classes.map((c) => [c.id, `${c.name}${c.section ? `-${c.section}` : ""}`])
@@ -125,16 +143,17 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
 
   const normalizePaymentColumn = (gateway?: string): PaymentColumn => {
     const g = (gateway || "").toUpperCase();
-    if (g === "CASH" || g === "OFFLINE") return "Cash";
-    if (g === "CHEQUE") return "Cheque";
-    if (g === "DD") return "DD";
+    const normalized = g.startsWith("OFFLINE_") ? g.slice("OFFLINE_".length) : g;
+    if (normalized === "CASH" || normalized === "OFFLINE") return "Cash";
+    if (normalized === "CHEQUE") return "Cheque";
+    if (normalized === "DD") return "DD";
     if (
-      g === "HYPERPG" ||
-      g === "ONLINE" ||
-      g === "UPI" ||
-      g === "BANK_TRANSFER" ||
-      g === "BANK" ||
-      g === "CARD"
+      normalized === "HYPERPG" ||
+      normalized === "ONLINE" ||
+      normalized === "UPI" ||
+      normalized === "BANK_TRANSFER" ||
+      normalized === "BANK" ||
+      normalized === "CARD"
     ) {
       return "ONLINE PAYMENT";
     }
@@ -281,7 +300,13 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
 
   return (
     <section className="rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur sm:p-6">
-      <h3 className="text-lg font-semibold mb-4">Fee Records ({filteredFees.length})</h3>
+      <h3 className="text-lg font-semibold mb-4">
+        {`Fee Records (${filteredFees.length}${
+          filteredFees.length > PAGE_SIZE
+            ? ` · rows ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, filteredFees.length)}`
+            : ""
+        })`}
+      </h3>
       <div className="mb-4 rounded-xl border border-white/10 bg-black/10 p-3">
         <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
           <SelectInput
@@ -387,7 +412,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
             No fee records found.
           </div>
         ) : (
-          filteredFees.map((f) => (
+          paginatedFees.map((f) => (
             <div key={f.id} className="rounded-xl border border-white/10 bg-black/10 p-4">
               <button
                 type="button"
@@ -463,7 +488,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
             </tr>
           </thead>
           <tbody>
-            {filteredFees.map((f) => (
+            {paginatedFees.map((f) => (
               <tr key={f.id} className="border-b border-white/5">
                 <td
                   className="py-3 cursor-pointer select-none underline-offset-2 hover:underline text-white/95"
@@ -504,6 +529,9 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
             ))}
           </tbody>
         </table>
+      </div>
+      <div className="mt-4">
+        <InlinePagination page={page} totalPages={totalPages} onChange={setPage} />
       </div>
     </section>
   );
