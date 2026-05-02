@@ -3,8 +3,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { createNotification } from "@/lib/notificationService";
+import { resolveHyperpgBaseUrl } from "@/lib/hyperpgConfig";
+import { hyperpgBasicAuthBase64 } from "@/lib/hyperpgAuth";
+import { getSchoolHyperpgBaseUrlRaw } from "@/lib/schoolHyperpgBaseUrlRaw";
 
-const hyperpgBaseUrl = process.env.HYPERPG_BASE_URL || "https://sandbox.hyperpg.in";
 const globalHyperpgMerchantId = process.env.HYPERPG_MERCHANT_ID;
 const globalHyperpgApiKey = process.env.HYPERPG_API_KEY;
 const hyperpgAuthStyle = process.env.HYPERPG_AUTH_STYLE || "api_key";
@@ -118,7 +120,18 @@ export async function POST(req: Request) {
         ? null
         : await prisma.schoolSettings.findUnique({
             where: { schoolId: payment.student.schoolId },
+            select: {
+              hyperpgMerchantId: true,
+              hyperpgApiKey: true,
+            },
           });
+      const schoolBaseUrl = useGlobalOnly
+        ? null
+        : await getSchoolHyperpgBaseUrlRaw(payment.student.schoolId);
+      const hyperpgBaseUrl = resolveHyperpgBaseUrl({
+        useGlobalOnly,
+        schoolHyperpgBaseUrl: schoolBaseUrl,
+      });
       const merchantId = useGlobalOnly
         ? (globalHyperpgMerchantId?.trim() ?? "")
         : (settings?.hyperpgMerchantId?.trim() || globalHyperpgMerchantId?.trim());
@@ -135,10 +148,11 @@ export async function POST(req: Request) {
 
       const apiKeyClean = apiKey.replace(/^["']|["']$/g, "").trim();
       const merchantIdClean = (merchantId || "").trim().replace(/^["']|["']$/g, "");
-      const auth =
-        hyperpgAuthStyle === "merchant_key" && merchantIdClean
-          ? Buffer.from(`${merchantIdClean}:${apiKeyClean}`).toString("base64")
-          : Buffer.from(`${apiKeyClean}:`, "utf8").toString("base64");
+      const auth = hyperpgBasicAuthBase64({
+        apiKeyClean,
+        merchantIdClean,
+        authStyle: hyperpgAuthStyle,
+      });
 
       const uniqueRequestId = `ref_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`.slice(0, 20);
       const body = new URLSearchParams({
@@ -147,9 +161,11 @@ export async function POST(req: Request) {
       });
       const headers: Record<string, string> = {
         "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
         Authorization: `Basic ${auth}`,
+        "User-Agent": "Timelly-ERP/1.0 (HyperPG refund)",
         "x-routing-id": payment.studentId.slice(0, 128),
-        ...(merchantIdClean && { "x-merchantid": merchantIdClean }),
+        ...(merchantIdClean ? { "x-merchantid": merchantIdClean } : {}),
       };
 
       const refundRes = await fetch(

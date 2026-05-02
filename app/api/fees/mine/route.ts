@@ -27,7 +27,15 @@ export async function GET() {
       where: { studentId },
       include: {
         student: {
-          select: { classId: true, schoolId: true, class: { select: { id: true, name: true, section: true } } },
+          select: {
+            classId: true,
+            schoolId: true,
+            address: true,
+            admissionNumber: true,
+            user: { select: { name: true } },
+            school: { select: { name: true, address: true, location: true, logoUrl: true } },
+            class: { select: { id: true, name: true, section: true } },
+          },
         },
       },
     });
@@ -75,6 +83,60 @@ export async function GET() {
     });
 
     const paymentIds = payments.map((p) => p.id);
+
+    const paymentLineAllocations =
+      paymentIds.length > 0
+        ? await prisma.paymentFeeAllocation.findMany({
+            where: { paymentId: { in: paymentIds }, allocationType: "PAYMENT" },
+            select: {
+              paymentId: true,
+              headType: true,
+              componentIndex: true,
+              componentName: true,
+              extraFeeId: true,
+              allocatedAmount: true,
+            },
+          })
+        : [];
+
+    const allocExtraFeeIds = Array.from(
+      new Set(
+        paymentLineAllocations
+          .filter((a) => a.headType === "EXTRA_FEE" && a.extraFeeId)
+          .map((a) => a.extraFeeId as string)
+      )
+    );
+    const allocExtraFees =
+      allocExtraFeeIds.length > 0
+        ? await prisma.extraFee.findMany({
+            where: { id: { in: allocExtraFeeIds } },
+            select: { id: true, name: true },
+          })
+        : [];
+    const allocExtraFeeNameById = new Map(allocExtraFees.map((e) => [e.id, e.name]));
+
+    const feeHeadLinesByPaymentId = new Map<string, { label: string; amount: number }[]>();
+    for (const a of paymentLineAllocations) {
+      if (a.allocatedAmount <= 0.00001) continue;
+      let label: string | null = null;
+      if (a.headType === "BASE_COMPONENT") {
+        if (a.componentName) label = a.componentName;
+        else if (typeof a.componentIndex === "number") {
+          label = a.componentIndex === -1 ? "Tuition Fee" : `Component ${a.componentIndex + 1}`;
+        } else label = "Base component";
+      } else if (a.headType === "EXTRA_FEE") {
+        label = a.extraFeeId ? allocExtraFeeNameById.get(a.extraFeeId) ?? "Extra fee" : "Extra fee";
+      }
+      if (!label) continue;
+      const list = feeHeadLinesByPaymentId.get(a.paymentId) ?? [];
+      list.push({ label, amount: a.allocatedAmount });
+      feeHeadLinesByPaymentId.set(a.paymentId, list);
+    }
+
+    const paymentsForClient = payments.map((p) => ({
+      ...p,
+      feeHeadLines: feeHeadLinesByPaymentId.get(p.id) ?? [],
+    }));
     let refunds: { id: string; paymentId: string; amount: number; status: string; createdAt: Date }[] = [];
     if (paymentIds.length > 0) {
       const placeholders = paymentIds.map((_, i) => `$${i + 1}`).join(", ");
@@ -172,7 +234,7 @@ export async function GET() {
         ...fee,
         components: (components?.components as Array<{ name: string; amount: number }>) || [],
         extraFees,
-        payments,
+        payments: paymentsForClient,
         refunds,
         dueHeads,
       },

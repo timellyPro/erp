@@ -60,6 +60,13 @@ type StudentDetail = {
     transactionId: string | null;
     feeTypeName?: string;
     feeTypeAmount?: number;
+    hyperpgOrderId?: string | null;
+    hyperpgTxnId?: string | null;
+    hyperpgStatus?: string | null;
+    hyperpgStatusId?: number | null;
+    hyperpgEffectiveAmount?: number | null;
+    hyperpgRefunded?: boolean | null;
+    hyperpgAmountRefunded?: number | null;
   }>;
   attendanceTrends: Array<{ month: string; present: number; total: number; pct: number }>;
   academicPerformance: Array<{ subject: string; score: number }>;

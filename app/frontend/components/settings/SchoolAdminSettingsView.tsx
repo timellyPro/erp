@@ -285,6 +285,7 @@ function SchoolAdminAccountCard({
 }
 
 function SchoolHyperPGCredentialsCard() {
+  const [hyperpgBaseUrl, setHyperpgBaseUrl] = useState("");
   const [hyperpgMerchantId, setHyperpgMerchantId] = useState("");
   const [hyperpgApiKey, setHyperpgApiKey] = useState("");
   const [loading, setLoading] = useState(true);
@@ -298,6 +299,7 @@ function SchoolHyperPGCredentialsCard() {
         const res = await fetch("/api/school/settings", { credentials: "include" });
         const data = await res.json();
         if (!cancelled && res.ok && data.settings) {
+          setHyperpgBaseUrl(data.settings.hyperpgBaseUrl ?? "");
           setHyperpgMerchantId(data.settings.hyperpgMerchantId ?? "");
           setHyperpgApiKey(data.settings.hyperpgApiKey ?? "");
         }
@@ -318,6 +320,7 @@ function SchoolHyperPGCredentialsCard() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          hyperpgBaseUrl: hyperpgBaseUrl.trim() || null,
           hyperpgMerchantId: hyperpgMerchantId.trim() || null,
           hyperpgApiKey: hyperpgApiKey.trim() || null,
         }),
@@ -339,7 +342,7 @@ function SchoolHyperPGCredentialsCard() {
   return (
     <div className={CARD_CLASS}>
       <div className={CARD_HEADER_CLASS}>
-        <CardTitle icon={<CreditCard className="text-lime-300" size={22} />} title="Payment (HyperPG)" subtitle="Each school has unique Merchant ID and API Key from the payments team" />
+        <CardTitle icon={<CreditCard className="text-lime-300" size={22} />} title="Payment (HyperPG)" subtitle="API URL, Merchant ID, and API Key from HyperPG — one set per school for fees, refunds, and orders" />
       </div>
       <div className={CARD_BODY_CLASS}>
         {loading ? (
@@ -349,7 +352,18 @@ function SchoolHyperPGCredentialsCard() {
           </div>
         ) : (
           <>
-            <Field label="HyperPG Merchant ID">
+            <Field label="HyperPG API base URL (optional)">
+              <SearchInput
+                value={hyperpgBaseUrl}
+                onChange={setHyperpgBaseUrl}
+                icon={CreditCard}
+                variant="glass"
+                className="mt-2"
+                placeholder="https://api.hyperpg.in or https://sandbox.hyperpg.in"
+              />
+              <p className="mt-1.5 text-xs text-white/45">Leave blank to use the server default (same as HYPERPG_BASE_URL in deployment).</p>
+            </Field>
+            <Field label="HyperPG Merchant ID" className="mt-4">
               <SearchInput value={hyperpgMerchantId} onChange={setHyperpgMerchantId} icon={CreditCard} variant="glass" className="mt-2" placeholder="e.g. timellytestmid" />
             </Field>
             <Field label="HyperPG API Key" className="mt-4">

@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CreditCard, Pencil, Search, ToggleLeft, ToggleRight } from "lucide-react";
+import { AlertCircle, CheckCircle2, CreditCard, Loader2, Pencil, Search, ToggleLeft, ToggleRight } from "lucide-react";
 import PageHeader from "../common/PageHeader";
 import SearchInput from "../common/SearchInput";
 import TableLayout from "../common/TableLayout";
@@ -64,6 +64,16 @@ export default function Subscriptions() {
   const debouncedSearch = useDebounce(search, 400);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [editing, setEditing] = useState<SubscriptionRow | null>(null);
+  const [paymentGw, setPaymentGw] = useState({
+    hyperpgBaseUrl: "",
+    hyperpgMerchantId: "",
+    hyperpgApiKey: "",
+    loading: false,
+    /** Only true after a successful GET — omit gateway fields from PATCH if false so we never wipe keys on load failure */
+    fetchOk: false,
+  });
+  /** Inline status inside the edit dialog */
+  const [modalFeedback, setModalFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const fetchSchools = useCallback(async (searchTerm: string) => {
     setLoading(true);
@@ -103,6 +113,59 @@ export default function Subscriptions() {
     void fetchSchools(debouncedSearch);
   }, [debouncedSearch, fetchSchools]);
 
+  useEffect(() => {
+    if (!editing) {
+      setPaymentGw({
+        hyperpgBaseUrl: "",
+        hyperpgMerchantId: "",
+        hyperpgApiKey: "",
+        loading: false,
+        fetchOk: false,
+      });
+      return;
+    }
+    let cancelled = false;
+    setPaymentGw((p) => ({ ...p, loading: true, fetchOk: false }));
+    void fetch(`/api/superadmin/schools/${editing.id}/settings`, {
+      credentials: "include",
+      cache: "no-store",
+    })
+      .then(async (res) => {
+        const data = (await res.json().catch(() => ({}))) as {
+          settings?: {
+            hyperpgBaseUrl?: string | null;
+            hyperpgMerchantId?: string | null;
+            hyperpgApiKey?: string | null;
+          };
+        };
+        if (cancelled) return;
+        if (!res.ok) {
+          setPaymentGw((p) => ({ ...p, loading: false, fetchOk: false }));
+          return;
+        }
+        const s = data.settings;
+        /** Coerce API values — JSON null / odd shapes must not blank out existing DB strings */
+        const asStr = (v: unknown) => (v == null ? "" : typeof v === "string" ? v : String(v));
+        setPaymentGw({
+          hyperpgBaseUrl: asStr(s?.hyperpgBaseUrl),
+          hyperpgMerchantId: asStr(s?.hyperpgMerchantId),
+          hyperpgApiKey: asStr(s?.hyperpgApiKey),
+          loading: false,
+          fetchOk: true,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setPaymentGw((p) => ({ ...p, loading: false, fetchOk: false }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [editing?.id]);
+
+  useEffect(() => {
+    setModalFeedback(null);
+  }, [editing?.id]);
+
   const handleSave = async (
     id: string,
     patch: Partial<
@@ -110,8 +173,12 @@ export default function Subscriptions() {
         SubscriptionRow,
         "name" | "billingMode" | "parentSubscriptionAmount" | "parentSubscriptionTrialDays" | "isActive"
       >
-    >
-  ) => {
+    > & {
+      hyperpgBaseUrl?: string | null;
+      hyperpgMerchantId?: string | null;
+      hyperpgApiKey?: string | null;
+    }
+  ): Promise<{ ok: boolean; message?: string }> => {
     setSavingId(id);
     setError(null);
     try {
@@ -121,18 +188,30 @@ export default function Subscriptions() {
         credentials: "include",
         body: JSON.stringify(patch),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.message || "Failed to update subscription");
+      let data: { message?: string; school?: Record<string, unknown> } = {};
+      try {
+        data = (await res.json()) as typeof data;
+      } catch {
+        data = {};
       }
-      const u = data.school;
+      if (!res.ok) {
+        const msg =
+          typeof data.message === "string" && data.message.trim()
+            ? data.message
+            : res.status === 503
+              ? "Server busy or database timed out. Try again in a few seconds."
+              : "Failed to update subscription";
+        setError(msg);
+        return { ok: false, message: msg };
+      }
+      const u = data.school ?? {};
       setRows((prev) =>
         prev.map((r) =>
           r.id === id
             ? {
                 ...r,
-                name: u.name ?? r.name,
-                billingMode: (u.billingMode ?? "PARENT_SUBSCRIPTION") as BillingMode,
+                name: (typeof u.name === "string" ? u.name : r.name) as string,
+                billingMode: (u.billingMode ?? r.billingMode ?? "PARENT_SUBSCRIPTION") as BillingMode,
                 parentSubscriptionAmount:
                   typeof u.parentSubscriptionAmount === "number" ? u.parentSubscriptionAmount : null,
                 parentSubscriptionTrialDays:
@@ -148,8 +227,11 @@ export default function Subscriptions() {
       } catch {
         /* noop */
       }
+      return { ok: true };
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Error updating subscription");
+      const msg = e instanceof Error ? e.message : "Error updating subscription";
+      setError(msg);
+      return { ok: false, message: msg };
     } finally {
       setSavingId(null);
     }
@@ -236,16 +318,37 @@ export default function Subscriptions() {
   );
 
   const handleModalSave = async () => {
-    if (!editing) return;
-    await handleSave(editing.id, {
+    if (!editing || savingId === editing.id) return;
+    setModalFeedback(null);
+    const result = await handleSave(editing.id, {
       name: editing.name,
       billingMode: editing.billingMode,
       parentSubscriptionAmount: editing.parentSubscriptionAmount ?? null,
       parentSubscriptionTrialDays: editing.parentSubscriptionTrialDays ?? 0,
       isActive: editing.isActive,
+      ...(paymentGw.fetchOk
+        ? {
+            hyperpgBaseUrl: paymentGw.hyperpgBaseUrl.trim() || null,
+            hyperpgMerchantId: paymentGw.hyperpgMerchantId.trim() || null,
+            hyperpgApiKey: paymentGw.hyperpgApiKey.trim() || null,
+          }
+        : {}),
     });
-    setEditing(null);
+    if (result.ok) {
+      setModalFeedback({ type: "success", text: "Saved successfully." });
+      window.setTimeout(() => {
+        setEditing(null);
+        setModalFeedback(null);
+      }, 900);
+    } else {
+      setModalFeedback({
+        type: "error",
+        text: result.message ?? "Save failed. Check your connection and try again.",
+      });
+    }
   };
+
+  const modalSaving = Boolean(editing && savingId === editing.id);
 
   return (
     <main className="flex-1 min-w-0 w-full max-w-[1600px] mx-auto flex flex-col">
@@ -383,15 +486,16 @@ export default function Subscriptions() {
           aria-modal="true"
           aria-labelledby="subscription-edit-title"
         >
-          <div className="w-full sm:max-w-lg max-h-[min(92dvh,720px)] overflow-y-auto overscroll-contain rounded-t-3xl sm:rounded-2xl bg-[#020617] border border-white/10 border-b-0 sm:border-b p-5 sm:p-6 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:pb-6 space-y-4 shadow-2xl">
+          <div className="w-full sm:max-w-lg max-h-[min(92dvh,880px)] overflow-y-auto overscroll-contain rounded-t-3xl sm:rounded-2xl bg-[#020617] border border-white/10 border-b-0 sm:border-b p-5 sm:p-6 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:pb-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between gap-3 sticky top-0 bg-[#020617] pt-0 pb-2 -mt-1 z-1">
               <h2 id="subscription-edit-title" className="text-lg font-semibold text-white">
                 Edit subscription
               </h2>
               <button
                 type="button"
-                className="text-white/60 hover:text-white text-sm shrink-0 py-1 px-2 -mr-2"
-                onClick={() => setEditing(null)}
+                disabled={modalSaving}
+                className="text-white/60 hover:text-white text-sm shrink-0 py-1 px-2 -mr-2 disabled:opacity-40 disabled:pointer-events-none"
+                onClick={() => !modalSaving && setEditing(null)}
               >
                 Close
               </button>
@@ -481,6 +585,63 @@ export default function Subscriptions() {
                 </div>
               )}
 
+              <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 space-y-3">
+                <p className="text-xs font-semibold text-lime-300/90">HyperPG (school payments)</p>
+                <p className="text-[11px] text-white/50 leading-relaxed">
+                  One API key per school handles fee checkout, order status, and refunds. Sandbox:{" "}
+                  <span className="text-white/70">https://sandbox.hyperpg.in</span> · Production:{" "}
+                  <span className="text-white/70">https://api.hyperpg.in</span>
+                </p>
+                {paymentGw.loading ? (
+                  <p className="text-xs text-white/45 py-2">Loading payment settings…</p>
+                ) : (
+                  <>
+                    <div>
+                      <p className="text-xs text-white/60 mb-1">API base URL (optional)</p>
+                      <input
+                        type="url"
+                        value={paymentGw.hyperpgBaseUrl}
+                        onChange={(e) =>
+                          setPaymentGw((p) => ({ ...p, hyperpgBaseUrl: e.target.value }))
+                        }
+                        className="w-full min-h-11 rounded-xl bg-black/40 border border-white/15 px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-lime-400/40"
+                        placeholder="https://api.hyperpg.in"
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div>
+                      <p className="text-xs text-white/60 mb-1">Merchant ID</p>
+                      <input
+                        type="text"
+                        value={paymentGw.hyperpgMerchantId}
+                        onChange={(e) =>
+                          setPaymentGw((p) => ({ ...p, hyperpgMerchantId: e.target.value }))
+                        }
+                        className="w-full min-h-11 rounded-xl bg-black/40 border border-white/15 px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-lime-400/40"
+                        placeholder="HyperPG merchant id"
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div>
+                      <p className="text-xs text-white/60 mb-1">API key</p>
+                      <input
+                        type="text"
+                        inputMode="text"
+                        value={paymentGw.hyperpgApiKey}
+                        onChange={(e) =>
+                          setPaymentGw((p) => ({ ...p, hyperpgApiKey: e.target.value }))
+                        }
+                        className="w-full min-h-11 rounded-xl bg-black/40 border border-white/15 px-3 py-2.5 text-sm text-white font-mono focus:outline-none focus:ring-2 focus:ring-lime-400/40"
+                        placeholder="Paste API key"
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      <p className="mt-1 text-[10px] text-white/40">Plain text so the saved key always displays (superadmin only).</p>
+                    </div>
+                  </>
+                )}
+              </div>
+
               <div>
                 <p className="text-xs text-white/60 mb-1">School status</p>
                 <button
@@ -501,21 +662,47 @@ export default function Subscriptions() {
               </div>
             </div>
 
+            {modalFeedback && (
+              <div
+                className={`flex items-start gap-2 rounded-xl px-3 py-2.5 text-sm ${
+                  modalFeedback.type === "success"
+                    ? "bg-emerald-500/15 border border-emerald-400/35 text-emerald-200"
+                    : "bg-red-500/15 border border-red-400/35 text-red-200"
+                }`}
+                role="status"
+              >
+                {modalFeedback.type === "success" ? (
+                  <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-300" aria-hidden />
+                ) : (
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-300" aria-hidden />
+                )}
+                <span className="leading-snug">{modalFeedback.text}</span>
+              </div>
+            )}
+
             <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 pt-2 border-t border-white/10">
               <button
                 type="button"
-                onClick={() => setEditing(null)}
-                className="w-full sm:w-auto px-4 py-3 sm:py-2 rounded-xl border border-white/15 text-sm text-white/80 hover:bg-white/5"
+                disabled={modalSaving}
+                onClick={() => !modalSaving && setEditing(null)}
+                className="w-full sm:w-auto px-4 py-3 sm:py-2 rounded-xl border border-white/15 text-sm text-white/80 hover:bg-white/5 disabled:opacity-40 disabled:pointer-events-none"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                disabled={savingId === editing.id}
-                onClick={handleModalSave}
-                className="w-full sm:w-auto px-4 py-3 sm:py-2 rounded-xl bg-lime-400 text-black text-sm font-semibold hover:bg-lime-300 disabled:opacity-60"
+                disabled={modalSaving}
+                onClick={() => void handleModalSave()}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-3 sm:py-2 rounded-xl bg-lime-400 text-black text-sm font-semibold hover:bg-lime-300 disabled:opacity-60 disabled:pointer-events-none min-h-[44px] sm:min-h-0"
               >
-                Save changes
+                {modalSaving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin shrink-0" aria-hidden />
+                    Saving…
+                  </>
+                ) : (
+                  "Save changes"
+                )}
               </button>
             </div>
           </div>

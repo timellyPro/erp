@@ -272,6 +272,7 @@ model SchoolSettings {
 
   hyperpgMerchantId  String?
   hyperpgApiKey      String?
+  // Optional per-school HyperPG host: column "hyperpgBaseUrl" may exist in DB (see migration); read/write via raw SQL in lib/schoolHyperpgBaseUrlRaw.ts only — not a Prisma field so older DBs without the column do not break Prisma queries.
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

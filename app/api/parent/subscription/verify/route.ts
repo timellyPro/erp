@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { resolveHyperpgBaseUrl } from "@/lib/hyperpgConfig";
+import { hyperpgBasicAuthBase64 } from "@/lib/hyperpgAuth";
+import { getSchoolHyperpgBaseUrlRaw } from "@/lib/schoolHyperpgBaseUrlRaw";
 
-const hyperpgBaseUrl = process.env.HYPERPG_BASE_URL || "https://sandbox.hyperpg.in";
 const globalHyperpgMerchantId = process.env.HYPERPG_MERCHANT_ID;
 const globalHyperpgApiKey = process.env.HYPERPG_API_KEY;
 const hyperpgAuthStyle = process.env.HYPERPG_AUTH_STYLE || "api_key";
@@ -28,25 +30,63 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Invalid amount" }, { status: 400 });
     }
 
-    const merchantId = globalHyperpgMerchantId?.trim() ?? "";
-    const apiKey = globalHyperpgApiKey?.trim() ?? "";
+    const studentId = session.user.studentId;
+    const student = await prisma.student.findUnique({
+      where: { id: studentId },
+      select: { schoolId: true },
+    });
+    if (!student) {
+      return NextResponse.json({ message: "Student not found" }, { status: 404 });
+    }
+
+    const useGlobalOnly =
+      process.env.HYPERPG_USE_GLOBAL_CREDENTIALS === "true" ||
+      process.env.HYPERPG_USE_GLOBAL_CREDENTIALS === "1";
+    const schoolSettings = useGlobalOnly
+      ? null
+      : await prisma.schoolSettings.findUnique({
+          where: { schoolId: student.schoolId },
+          select: {
+            hyperpgMerchantId: true,
+            hyperpgApiKey: true,
+          },
+        });
+
+    const schoolBaseUrl = useGlobalOnly ? null : await getSchoolHyperpgBaseUrlRaw(student.schoolId);
+
+    const hyperpgBaseUrl = resolveHyperpgBaseUrl({
+      useGlobalOnly,
+      schoolHyperpgBaseUrl: schoolBaseUrl,
+    });
+
+    const merchantId = useGlobalOnly
+      ? (globalHyperpgMerchantId?.trim() ?? "")
+      : (schoolSettings?.hyperpgMerchantId?.trim() || globalHyperpgMerchantId?.trim() || "");
+    const apiKey = useGlobalOnly
+      ? (globalHyperpgApiKey?.trim() ?? "")
+      : (schoolSettings?.hyperpgApiKey?.trim() || globalHyperpgApiKey?.trim() || "");
+
     if (!merchantId || !apiKey) {
       return NextResponse.json(
-        { message: "Superadmin payment gateway not configured" },
+        { message: "Payment gateway not configured for this school" },
         { status: 500 }
       );
     }
 
     const apiKeyClean = apiKey.replace(/^["']|["']$/g, "").trim();
-    const auth =
-      hyperpgAuthStyle === "merchant_key"
-        ? Buffer.from(`${merchantId}:${apiKeyClean}`).toString("base64")
-        : Buffer.from(`${apiKeyClean}:`, "utf8").toString("base64");
+    const merchantIdClean = merchantId.replace(/^["']|["']$/g, "").trim();
+    const auth = hyperpgBasicAuthBase64({
+      apiKeyClean,
+      merchantIdClean,
+      authStyle: hyperpgAuthStyle,
+    });
 
     const headers: Record<string, string> = {
       "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
       Authorization: `Basic ${auth}`,
-      ...(merchantId && { "x-merchantid": merchantId.trim() }),
+      "User-Agent": "Timelly-ERP/1.0 (HyperPG subscription status)",
+      ...(merchantIdClean ? { "x-merchantid": merchantIdClean } : {}),
     };
 
     const statusRes = await fetch(
@@ -85,8 +125,6 @@ export async function POST(req: Request) {
       );
     }
 
-    const studentId = session.user.studentId;
-
     // Find existing payment with this order id
     let payment = await prisma.payment.findFirst({
       where: {
@@ -118,17 +156,6 @@ export async function POST(req: Request) {
           transactionId: orderId,
         },
       });
-    }
-
-    const student = await prisma.student.findUnique({
-      where: { id: studentId },
-      select: { schoolId: true },
-    });
-    if (!student) {
-      return NextResponse.json(
-        { message: "Student not found" },
-        { status: 404 }
-      );
     }
 
     const now = new Date();

@@ -5,12 +5,23 @@ import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
 import type { Prisma } from "@prisma/client";
+import { resolveHyperpgBaseUrl } from "@/lib/hyperpgConfig";
+import {
+  hyperpgBasicAuthBase64,
+  hyperpgSessionJsonHeaders,
+  resolveHyperpgPaymentPageClientId,
+} from "@/lib/hyperpgAuth";
+import {
+  assertHyperpgSessionReturnUrl,
+  HYPERPG_SANDBOX_PLACEHOLDER_RETURN_URL,
+  hyperpgSandboxPlaceholderReturnEnabled,
+  resolveHyperpgAppBaseUrl,
+} from "@/lib/hyperpgReturnUrl";
+import { getSchoolHyperpgBaseUrlRaw } from "@/lib/schoolHyperpgBaseUrlRaw";
 
-const hyperpgBaseUrl = process.env.HYPERPG_BASE_URL || "https://sandbox.hyperpg.in";
 const globalHyperpgMerchantId = process.env.HYPERPG_MERCHANT_ID;
 const globalHyperpgApiKey = process.env.HYPERPG_API_KEY;
-const hyperpgClientId = process.env.HYPERPG_CLIENT_ID || "test";
-// JusPay/HyperPG Session API: Basic Base64(apiKey + ":") + mandatory x-merchantid header
+// JusPay/HyperPG Session API: see lib/hyperpgAuth.ts
 const hyperpgAuthStyle = process.env.HYPERPG_AUTH_STYLE || "api_key";
 
 /** HyperPG requires order_id: alphanumeric, max 20 chars */
@@ -327,8 +338,23 @@ export async function POST(req: Request) {
     }
 
     const useGlobalOnly = process.env.HYPERPG_USE_GLOBAL_CREDENTIALS === "true" || process.env.HYPERPG_USE_GLOBAL_CREDENTIALS === "1";
-    const settings = useGlobalOnly ? null : await prisma.schoolSettings.findUnique({
-      where: { schoolId: student.schoolId },
+    const settings = useGlobalOnly
+      ? null
+      : await prisma.schoolSettings.findUnique({
+          where: { schoolId: student.schoolId },
+          select: {
+            hyperpgMerchantId: true,
+            hyperpgApiKey: true,
+          },
+        });
+
+    const schoolBaseUrl = useGlobalOnly
+      ? null
+      : await getSchoolHyperpgBaseUrlRaw(student.schoolId);
+
+    const hyperpgBaseUrl = resolveHyperpgBaseUrl({
+      useGlobalOnly,
+      schoolHyperpgBaseUrl: schoolBaseUrl,
     });
 
     const merchantId = useGlobalOnly
@@ -347,14 +373,35 @@ export async function POST(req: Request) {
         { status: 500 }
       );
     }
+
+    const merchantIdCleanPre = (merchantId || "").trim().replace(/^["']|["']$/g, "");
+    if (!merchantIdCleanPre) {
+      return NextResponse.json(
+        {
+          error:
+            "HyperPG Merchant ID is required for payments. Set it in School Settings / Superadmin Subscriptions, or set HYPERPG_MERCHANT_ID in .env. The Session API expects x-merchantid to match your HyperPG account.",
+        },
+        { status: 500 }
+      );
+    }
     const orderId = generateOrderId();
-    const baseUrl =
-      process.env.HYPERPG_RETURN_URL ||
-      process.env.NEXTAUTH_URL ||
-      "http://localhost:3000";
+    const baseUrl = resolveHyperpgAppBaseUrl();
     const path = returnPath.startsWith("/") ? returnPath : `/${returnPath}`;
     const pathOnly = path.split("?")[0].replace(/\/$/, "") || "/payments";
-    const returnUrl = `${baseUrl.replace(/\/$/, "")}${pathOnly}`;
+    let returnUrl = `${baseUrl.replace(/\/$/, "")}${pathOnly}`;
+    const returnCheck = assertHyperpgSessionReturnUrl(returnUrl);
+    const sandboxApi = hyperpgBaseUrl.includes("sandbox.hyperpg.in");
+    const useSandboxPlaceholder =
+      !returnCheck.ok && sandboxApi && hyperpgSandboxPlaceholderReturnEnabled();
+    if (!returnCheck.ok && !useSandboxPlaceholder) {
+      return NextResponse.json({ error: returnCheck.message }, { status: 400 });
+    }
+    if (useSandboxPlaceholder) {
+      returnUrl = HYPERPG_SANDBOX_PLACEHOLDER_RETURN_URL;
+      console.warn(
+        "[HyperPG] HYPERPG_USE_SANDBOX_PLACEHOLDER_RETURN: session return_url set to sandbox.hyperpg.in (post-payment redirect will not return to your dev server)."
+      );
+    }
 
     const nameParts = (student.user?.name || student.fatherName || "Student")
       .trim()
@@ -370,10 +417,11 @@ export async function POST(req: Request) {
     const email = (session.user.email || student.user?.email || "student@timelly.in").slice(0, 300);
     const customerId = String(session.user.studentId).slice(0, 128);
 
+    const paymentPageClientId = resolveHyperpgPaymentPageClientId(merchantIdCleanPre);
     const sessionPayload: Record<string, unknown> = {
       mobile_country_code: "+91",
-      payment_page_client_id: hyperpgClientId,
-      amount: Number(amountNumber.toFixed(2)),
+      payment_page_client_id: paymentPageClientId,
+      amount: amountNumber.toFixed(2),
       currency: "INR",
       action: "paymentPage",
       customer_email: email,
@@ -391,19 +439,14 @@ export async function POST(req: Request) {
     const expiryMins = process.env.HYPERPG_LINK_EXPIRY_MINS;
     if (expiryMins) sessionPayload["metadata.expiryInMins"] = String(expiryMins);
     const apiKeyClean = apiKey.replace(/^["']|["']$/g, "").trim();
-    const merchantIdClean = (merchantId || "").trim().replace(/^["']|["']$/g, "");
-    
-    const auth =
-      hyperpgAuthStyle === "merchant_key" && merchantIdClean
-        ? Buffer.from(`${merchantIdClean}:${apiKeyClean}`).toString("base64")
-        : Buffer.from(apiKeyClean, "utf8").toString("base64");
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      Authorization: `Basic ${auth}`,
-    };
-    if (merchantIdClean && hyperpgAuthStyle === "merchant_key") {
-      headers["x-merchantid"] = merchantIdClean;
-    }
+    const merchantIdClean = merchantIdCleanPre;
+
+    const auth = hyperpgBasicAuthBase64({
+      apiKeyClean,
+      merchantIdClean,
+      authStyle: hyperpgAuthStyle,
+    });
+    const headers = hyperpgSessionJsonHeaders(auth, merchantIdClean, customerId);
     const res = await fetch(`${hyperpgBaseUrl}/session`, {
       method: "POST",
       headers,
@@ -423,10 +466,15 @@ export async function POST(req: Request) {
         else if (j && typeof j.error_code === "string") details = j.error_code;
         else if (j && typeof j.message === "string") details = j.message;
       } catch (_) {}
+      const html403 =
+        res.status === 403 &&
+        (errText.includes("<title>403 Forbidden</title>") || errText.includes("403 Forbidden"));
       const hint =
-        res.status === 403 || res.status === 401
-          ? " Confirm with HyperPG: (1) This Merchant ID and API Key are for the correct account (e.g. school linked to your email). (2) HYPERPG_MERCHANT_ID and HYPERPG_API_KEY in .env match the credentials that work in Postman. (3) If they use whitelisting, your server IP or domain may need to be whitelisted."
-          : "";
+        html403
+          ? " HyperPG often returns HTML 403 when return_url uses localhost, 127.0.0.1, or a private LAN IP. Set HYPERPG_RETURN_URL to a public https URL (ngrok / Cloudflare Tunnel) for local dev."
+          : res.status === 403 || res.status === 401
+            ? " Confirm with HyperPG: (1) Merchant ID and API key match the environment (sandbox vs production URL). (2) HYPERPG_MERCHANT_ID and HYPERPG_API_KEY in .env match Postman. (3) IP/domain allowlisting if applicable."
+            : "";
       return NextResponse.json(
         {
           error: "Payment gateway error",

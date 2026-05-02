@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { getSchoolHyperpgBaseUrlRaw, setSchoolHyperpgBaseUrlRaw } from "@/lib/schoolHyperpgBaseUrlRaw";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -31,9 +32,11 @@ export async function GET() {
       const created = await prisma.schoolSettings.create({
         data: { schoolId, admissionPrefix: "ADM", rollNoPrefix: "", admissionCounter: 0 },
       });
-      return NextResponse.json({ settings: created }, { status: 200 });
+      const hyperpgBaseUrl = await getSchoolHyperpgBaseUrlRaw(schoolId);
+      return NextResponse.json({ settings: { ...created, hyperpgBaseUrl } }, { status: 200 });
     }
-    return NextResponse.json({ settings }, { status: 200 });
+    const hyperpgBaseUrl = await getSchoolHyperpgBaseUrlRaw(schoolId);
+    return NextResponse.json({ settings: { ...settings, hyperpgBaseUrl } }, { status: 200 });
   } catch (e: unknown) {
     console.error("School settings GET:", e);
     return NextResponse.json(
@@ -59,6 +62,7 @@ export async function PUT(req: Request) {
 
       hyperpgMerchantId,
       hyperpgApiKey,
+      hyperpgBaseUrl,
     } = body;
 
     const data: {
@@ -75,6 +79,12 @@ export async function PUT(req: Request) {
     if (hyperpgMerchantId !== undefined) data.hyperpgMerchantId = hyperpgMerchantId === "" ? null : String(hyperpgMerchantId);
     if (hyperpgApiKey !== undefined) data.hyperpgApiKey = hyperpgApiKey === "" ? null : String(hyperpgApiKey);
 
+    let hyperpgBaseUrlVal: string | null | undefined;
+    if (hyperpgBaseUrl !== undefined) {
+      const u = String(hyperpgBaseUrl).trim();
+      hyperpgBaseUrlVal = u === "" ? null : u.replace(/\/$/, "");
+    }
+
     const createData = {
       schoolId,
       admissionPrefix: "ADM",
@@ -88,7 +98,12 @@ export async function PUT(req: Request) {
       update: data,
     });
 
-    return NextResponse.json({ settings }, { status: 200 });
+    if (hyperpgBaseUrlVal !== undefined) {
+      await setSchoolHyperpgBaseUrlRaw(schoolId, hyperpgBaseUrlVal);
+    }
+
+    const mergedBase = await getSchoolHyperpgBaseUrlRaw(schoolId);
+    return NextResponse.json({ settings: { ...settings, hyperpgBaseUrl: mergedBase } }, { status: 200 });
   } catch (e: unknown) {
     console.error("School settings PUT:", e);
     return NextResponse.json(

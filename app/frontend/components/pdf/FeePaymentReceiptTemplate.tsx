@@ -10,12 +10,15 @@ export interface FeePaymentReceiptData {
   residencyType: string;
   parentName: string;
   parentPhone: string;
+  admissionNumber?: string;
   createdAt: string | Date;
   /** Table rows (description + amount); total should match sum shown in footer. */
   lines: Array<{ description: string; amount: number }>;
   total: number;
   /** Defaults to "Fee Receipt"; use "Admission Receipt" for application/admission fee lines to match the admission tab. */
   receiptTitle?: string;
+  /** HyperPG / online gateway rows shown on the receipt (order id, txn id, status, etc.). */
+  onlinePaymentDetails?: Array<{ label: string; value: string }>;
 }
 
 type Props = {
@@ -33,7 +36,7 @@ const SingleReceipt = ({ data }: { data: FeePaymentReceiptData }) => {
       className="p-8 font-sans flex flex-col"
       style={{
         width: "800px",
-        height: "510px",
+        minHeight: "520px",
         backgroundColor: "#ffffff",
         color: "#000000",
         position: "relative",
@@ -96,6 +99,12 @@ const SingleReceipt = ({ data }: { data: FeePaymentReceiptData }) => {
               <span style={{ color: "#64748b" }}>Name:</span>{" "}
               <span className="font-semibold">{data.studentName}</span>
             </div>
+            {data.admissionNumber?.trim() ? (
+              <div>
+                <span style={{ color: "#64748b" }}>Admission no.:</span>{" "}
+                <span className="font-semibold">{data.admissionNumber.trim()}</span>
+              </div>
+            ) : null}
             <div>
               <span style={{ color: "#64748b" }}>Class:</span>{" "}
               <span className="font-semibold">{data.className}</span>
@@ -159,8 +168,31 @@ const SingleReceipt = ({ data }: { data: FeePaymentReceiptData }) => {
         </table>
       </div>
 
+      {data.onlinePaymentDetails && data.onlinePaymentDetails.length > 0 ? (
+        <div
+          className="mb-2 rounded-xl border p-3 flex-shrink-0 text-left"
+          style={{ borderColor: "#cbd5e1", backgroundColor: "#f8fafc" }}
+        >
+          <p className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: "#334155" }}>
+            Online payment (HyperPG)
+          </p>
+          <div className="space-y-1.5 text-[11px]">
+            {data.onlinePaymentDetails.map((row, i) => (
+              <div key={`${row.label}-${i}`} className="flex justify-between gap-3 border-b border-slate-200/80 pb-1 last:border-0 last:pb-0">
+                <span className="flex-shrink-0" style={{ color: "#64748b" }}>
+                  {row.label}
+                </span>
+                <span className="font-mono font-medium text-right break-all" style={{ color: "#0f172a" }}>
+                  {row.value}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <div
-        className="absolute bottom-3 left-0 right-0 text-center text-[10px] font-semibold pt-2 border-t flex flex-col gap-0.5 mx-8"
+        className="mt-auto text-center text-[10px] font-semibold pt-2 border-t flex flex-col gap-0.5 mx-0"
         style={{ color: "#94a3b8", borderColor: "#f1f5f9" }}
       >
         <p>This is a computer-generated receipt and does not require a physical signature.</p>

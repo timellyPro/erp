@@ -3,8 +3,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { createNotification } from "@/lib/notificationService";
+import { resolveHyperpgBaseUrl } from "@/lib/hyperpgConfig";
+import { hyperpgBasicAuthBase64 } from "@/lib/hyperpgAuth";
+import { getSchoolHyperpgBaseUrlRaw } from "@/lib/schoolHyperpgBaseUrlRaw";
 
-const hyperpgBaseUrl = process.env.HYPERPG_BASE_URL || "https://sandbox.hyperpg.in";
 const globalHyperpgMerchantId = process.env.HYPERPG_MERCHANT_ID;
 const globalHyperpgApiKey = process.env.HYPERPG_API_KEY;
 const hyperpgAuthStyle = process.env.HYPERPG_AUTH_STYLE || "api_key";
@@ -66,13 +68,30 @@ export async function POST(req: Request) {
       );
     }
 
-    const settings = await prisma.schoolSettings.findUnique({
-      where: { schoolId: student.schoolId },
+    const useGlobalOnly =
+      process.env.HYPERPG_USE_GLOBAL_CREDENTIALS === "true" ||
+      process.env.HYPERPG_USE_GLOBAL_CREDENTIALS === "1";
+    const settings = useGlobalOnly
+      ? null
+      : await prisma.schoolSettings.findUnique({
+          where: { schoolId: student.schoolId },
+          select: {
+            hyperpgMerchantId: true,
+            hyperpgApiKey: true,
+          },
+        });
+    const schoolBaseUrl = useGlobalOnly ? null : await getSchoolHyperpgBaseUrlRaw(student.schoolId);
+    const merchantId = useGlobalOnly
+      ? (globalHyperpgMerchantId?.trim() ?? "")
+      : (settings?.hyperpgMerchantId?.trim() || globalHyperpgMerchantId?.trim());
+    const apiKey = useGlobalOnly
+      ? (globalHyperpgApiKey?.trim() ?? "")
+      : (settings?.hyperpgApiKey?.trim() || globalHyperpgApiKey?.trim());
+
+    const hyperpgBaseUrl = resolveHyperpgBaseUrl({
+      useGlobalOnly,
+      schoolHyperpgBaseUrl: schoolBaseUrl,
     });
-    const merchantId =
-      settings?.hyperpgMerchantId?.trim() || globalHyperpgMerchantId?.trim();
-    const apiKey =
-      settings?.hyperpgApiKey?.trim() || globalHyperpgApiKey?.trim();
 
     if (!merchantId || !apiKey) {
       return NextResponse.json(
@@ -82,14 +101,18 @@ export async function POST(req: Request) {
     }
 
     const apiKeyClean = apiKey.replace(/^["']|["']$/g, "").trim();
-    const auth =
-      hyperpgAuthStyle === "merchant_key"
-        ? Buffer.from(`${merchantId}:${apiKeyClean}`).toString("base64")
-        : Buffer.from(`${apiKeyClean}:`, "utf8").toString("base64");
+    const merchantIdClean = (merchantId || "").trim().replace(/^["']|["']$/g, "");
+    const auth = hyperpgBasicAuthBase64({
+      apiKeyClean,
+      merchantIdClean,
+      authStyle: hyperpgAuthStyle,
+    });
     const headers: Record<string, string> = {
       "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
       Authorization: `Basic ${auth}`,
-      ...(merchantId && { "x-merchantid": merchantId.trim() }),
+      "User-Agent": "Timelly-ERP/1.0 (HyperPG order status)",
+      ...(merchantIdClean ? { "x-merchantid": merchantIdClean } : {}),
     };
     const statusRes = await fetch(
       `${hyperpgBaseUrl}/orders/${encodeURIComponent(orderId)}`,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import {
@@ -24,11 +25,14 @@ interface PaymentItem {
   createdAt: string;
   transactionId?: string;
   gateway?: string;
+  hyperpgOrderId?: string | null;
   hyperpgStatus?: string | null;
   hyperpgStatusId?: number | null;
   hyperpgTxnId?: string | null;
+  hyperpgEffectiveAmount?: number | null;
   hyperpgRefunded?: boolean | null;
   hyperpgAmountRefunded?: number | null;
+  feeHeadLines?: Array<{ label: string; amount: number }>;
 }
 
 interface RefundItem {
@@ -45,6 +49,56 @@ interface ExtraFeeItem {
   amount: number;
 }
 
+function buildParentOnlineReceiptDetails(t: PaymentItem): { label: string; value: string }[] | undefined {
+  const gw = String(t.gateway || "").trim().toUpperCase();
+  const hasHyperpgMeta =
+    gw === "HYPERPG" ||
+    Boolean(t.hyperpgOrderId?.trim()) ||
+    Boolean(t.hyperpgTxnId?.trim()) ||
+    Boolean(t.hyperpgStatus?.trim());
+  if (!hasHyperpgMeta) return undefined;
+  const channel = gw === "HYPERPG" ? "Online (HyperPG)" : gw || "Online";
+  const rows: { label: string; value: string }[] = [];
+  rows.push({ label: "Payment channel", value: channel });
+  const ref = t.transactionId?.trim();
+  if (ref) rows.push({ label: "Merchant order / reference", value: ref });
+  if (t.hyperpgOrderId?.trim()) rows.push({ label: "HyperPG order ID", value: t.hyperpgOrderId.trim() });
+  if (t.hyperpgTxnId?.trim()) rows.push({ label: "HyperPG transaction ID", value: t.hyperpgTxnId.trim() });
+  if (t.hyperpgStatus?.trim()) rows.push({ label: "Gateway status", value: t.hyperpgStatus.trim() });
+  if (typeof t.hyperpgStatusId === "number" && Number.isFinite(t.hyperpgStatusId)) {
+    rows.push({ label: "Gateway status code", value: String(t.hyperpgStatusId) });
+  }
+  if (typeof t.hyperpgEffectiveAmount === "number" && Number.isFinite(t.hyperpgEffectiveAmount)) {
+    rows.push({
+      label: "Effective amount (gateway)",
+      value: `₹${t.hyperpgEffectiveAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+    });
+  }
+  if (t.hyperpgRefunded) {
+    rows.push({ label: "Refunded", value: "Yes" });
+    if (typeof t.hyperpgAmountRefunded === "number" && t.hyperpgAmountRefunded > 0) {
+      rows.push({
+        label: "Amount refunded",
+        value: `₹${t.hyperpgAmountRefunded.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      });
+    }
+  }
+  return rows;
+}
+
+type FeeStudentContext = {
+  address?: string | null;
+  admissionNumber?: string;
+  user?: { name?: string | null };
+  school?: {
+    name?: string;
+    address?: string;
+    location?: string;
+    logoUrl?: string | null;
+  } | null;
+  class?: { name?: string; section?: string | null } | null;
+};
+
 interface FeeData {
   id: string;
   totalFee: number;
@@ -52,6 +106,7 @@ interface FeeData {
   finalFee: number;
   amountPaid: number;
   remainingFee: number;
+  student?: FeeStudentContext;
   dueHeads?: Array<{
     key: string;
     headType: "BASE_COMPONENT" | "EXTRA_FEE";
@@ -72,7 +127,6 @@ export default function ParentFeesTab() {
   const [selectedComponents, setSelectedComponents] = useState<Set<number>>(new Set());
   const [selectedExtraIds, setSelectedExtraIds] = useState<Set<string>>(new Set());
   const [customAmount, setCustomAmount] = useState<string>("");
-  const [studentInfo, setStudentInfo] = useState<{name: string, class: string} | null>(null);
   const [generatingPdfId, setGeneratingPdfId] = useState<string | null>(null);
   const [invoiceData, setInvoiceData] = useState<InvoiceData | null>(null);
   const invoiceRef = useRef<HTMLDivElement>(null);
@@ -89,29 +143,6 @@ export default function ParentFeesTab() {
         setFee(null);
       } else {
         setFee(data.fee);
-      }
-
-      // Fetch student info for invoice
-      try {
-        const userRes = await fetch("/api/user/me");
-        if (userRes.ok) {
-          const userData = await userRes.json();
-          if (userData.user?.studentId) {
-            const studentRes = await fetch(`/api/student/${userData.user.studentId}`);
-            if (studentRes.ok) {
-              const studentData = await studentRes.json();
-              const student = studentData.student;
-              if (student) {
-                setStudentInfo({
-                  name: student.user?.name || student.name || "Student",
-                  class: student.class?.name || "N/A"
-                });
-              }
-            }
-          }
-        }
-      } catch (e) {
-        console.error("Failed to fetch student info for invoice", e);
       }
     } catch {
       setError("Something went wrong");
@@ -179,32 +210,55 @@ export default function ParentFeesTab() {
     if (generatingPdfId) return;
     try {
       setGeneratingPdfId(transaction.id);
-      
+
+      const st = fee?.student;
+      const school = st?.school;
+      const schoolAddr = [school?.address, school?.location].filter((x) => typeof x === "string" && String(x).trim()).join(", ");
+      let schoolLogoUrl: string | null = school?.logoUrl?.trim() || null;
+      if (schoolLogoUrl && typeof window !== "undefined") {
+        if (schoolLogoUrl.includes("/storage/v1/object/")) {
+          schoolLogoUrl = `${window.location.origin}/api/media?url=${encodeURIComponent(schoolLogoUrl)}`;
+        } else if (schoolLogoUrl.startsWith("/")) {
+          schoolLogoUrl = `${window.location.origin}${schoolLogoUrl}`;
+        }
+      }
+
+      const classDisplay =
+        st?.class?.name != null
+          ? `${st.class.name}${st.class.section ? `-${st.class.section}` : ""}`
+          : "N/A";
+
+      const headLines =
+        Array.isArray(transaction.feeHeadLines) && transaction.feeHeadLines.length > 0
+          ? transaction.feeHeadLines
+          : [{ label: "Fee payment", amount: transaction.amount }];
+
       const payload: InvoiceData = {
-        studentName: studentInfo?.name || "Student",
-        studentClass: studentInfo?.class || "N/A",
+        schoolName: school?.name?.trim() || "School",
+        schoolAddress: schoolAddr || undefined,
+        schoolLogoUrl,
+        studentName: st?.user?.name?.trim() || "Student",
+        studentClass: classDisplay,
+        studentAddress: st?.address?.trim() || undefined,
+        admissionNumber: st?.admissionNumber?.trim() || undefined,
         receiptNo: `REC-${transaction.id.substring(0, 8).toUpperCase()}`,
         transactionId: transaction.transactionId || transaction.id,
         date: transaction.createdAt,
         amount: transaction.amount,
         status: transaction.status,
+        paymentMethod: transaction.gateway || undefined,
+        feeHeadLines: headLines,
+        onlinePaymentDetails: buildParentOnlineReceiptDetails(transaction),
       };
-      
-      setInvoiceData(payload);
-      
-      // Wait for React to render the template
-      setTimeout(async () => {
-        try {
-          await generatePDF(invoiceRef, `Invoice_${payload.receiptNo}.pdf`);
-        } catch (err) {
-          console.error(err);
-        } finally {
-          setGeneratingPdfId(null);
-        }
-      }, 500);
-      
+
+      flushSync(() => {
+        setInvoiceData(payload);
+      });
+      await generatePDF(invoiceRef, `Invoice_${payload.receiptNo}.pdf`);
     } catch (err) {
-      console.error("Failed to prepare invoice", err);
+      console.error(err);
+      alert(err instanceof Error ? err.message : "Failed to download PDF. Please try again.");
+    } finally {
       setGeneratingPdfId(null);
     }
   };
@@ -555,10 +609,8 @@ export default function ParentFeesTab() {
         </motion.div>
       </div>
 
-      {/* Hidden Invoice Template for PDF Generation */}
-      <div className="pointer-events-none opacity-0 fixed -top-[10000px] -left-[10000px]">
-        <InvoiceTemplate ref={invoiceRef} invoiceData={invoiceData} />
-      </div>
+      {/* Off-screen invoice; html2canvas uses a clone (see lib/pdfUtils) */}
+      <InvoiceTemplate ref={invoiceRef} invoiceData={invoiceData} />
     </div>
   );
 }

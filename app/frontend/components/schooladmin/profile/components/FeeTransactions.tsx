@@ -14,6 +14,13 @@ type PaymentRow = {
   transactionId: string | null;
   feeTypeName?: string;
   feeTypeAmount?: number;
+  hyperpgOrderId?: string | null;
+  hyperpgTxnId?: string | null;
+  hyperpgStatus?: string | null;
+  hyperpgStatusId?: number | null;
+  hyperpgEffectiveAmount?: number | null;
+  hyperpgRefunded?: boolean | null;
+  hyperpgAmountRefunded?: number | null;
 };
 
 type Props = {
@@ -408,11 +415,56 @@ export const FeeTransactions = ({
 
   const buildReceiptDescription = (p: (typeof activePayments)[0]) => {
     const label = p.feeTypeName?.trim() || "Fee payment";
-    const methodPart = p.method?.trim() ? `Method: ${p.method.trim()}` : null;
+    const methodPart = p.method?.trim() ? `Method: ${formatPaymentMethod(p.method)}` : null;
     const ref = p.transactionId?.trim();
     const refPart =
       ref && ref.toUpperCase() !== "N/A" ? `Reference / UTR: ${ref}` : null;
     return [label, methodPart, refPart].filter(Boolean).join(" • ");
+  };
+
+  /** HyperPG / online fields for the printed receipt (same style as parent invoice online block). */
+  const buildOnlinePaymentDetails = (p: (typeof activePayments)[0]) => {
+    const gw = String(p.method || "").trim().toUpperCase();
+    const hasHyperpgMeta =
+      gw === "HYPERPG" ||
+      Boolean(p.hyperpgOrderId?.trim()) ||
+      Boolean(p.hyperpgTxnId?.trim()) ||
+      Boolean(p.hyperpgStatus?.trim());
+    if (!hasHyperpgMeta) return undefined;
+    const rows: { label: string; value: string }[] = [];
+    rows.push({ label: "Payment channel", value: formatPaymentMethod(p.method) });
+    const ref = p.transactionId?.trim();
+    if (ref && ref.toUpperCase() !== "N/A") {
+      rows.push({ label: "Merchant order / reference", value: ref });
+    }
+    if (p.hyperpgOrderId?.trim()) {
+      rows.push({ label: "HyperPG order ID", value: p.hyperpgOrderId.trim() });
+    }
+    if (p.hyperpgTxnId?.trim()) {
+      rows.push({ label: "HyperPG transaction ID", value: p.hyperpgTxnId.trim() });
+    }
+    if (p.hyperpgStatus?.trim()) {
+      rows.push({ label: "Gateway status", value: p.hyperpgStatus.trim() });
+    }
+    if (typeof p.hyperpgStatusId === "number" && Number.isFinite(p.hyperpgStatusId)) {
+      rows.push({ label: "Gateway status code", value: String(p.hyperpgStatusId) });
+    }
+    if (typeof p.hyperpgEffectiveAmount === "number" && Number.isFinite(p.hyperpgEffectiveAmount)) {
+      rows.push({
+        label: "Effective amount (gateway)",
+        value: `₹${p.hyperpgEffectiveAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      });
+    }
+    if (p.hyperpgRefunded) {
+      rows.push({ label: "Refunded", value: "Yes" });
+      if (typeof p.hyperpgAmountRefunded === "number" && p.hyperpgAmountRefunded > 0) {
+        rows.push({
+          label: "Amount refunded",
+          value: `₹${p.hyperpgAmountRefunded.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        });
+      }
+    }
+    return rows.length > 0 ? rows : undefined;
   };
 
   const handlePrintReceipt = (payment: (typeof activePayments)[0]) => {
@@ -434,10 +486,12 @@ export const FeeTransactions = ({
       residencyType: residencyType || "Day Scholar",
       parentName: parentName || "-",
       parentPhone: parentPhone || "-",
+      admissionNumber: admissionNumber?.trim() || undefined,
       createdAt: payment.createdAt,
       lines: [{ description: buildReceiptDescription(payment), amount }],
       total: amount,
       receiptTitle,
+      onlinePaymentDetails: buildOnlinePaymentDetails(payment),
     };
 
     setPrintingId(payment.id);
