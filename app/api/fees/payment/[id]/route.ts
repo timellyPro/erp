@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import { canonicalizeGatewayForStorage } from "@/lib/feePaymentGateway";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -65,7 +66,11 @@ export async function PATCH(req: Request, context: RouteParams) {
     const rawAmount = body.amount;
     const transactionId =
       body.transactionId === undefined ? undefined : body.transactionId === null ? null : String(body.transactionId).trim() || null;
-    const gateway = typeof body.gateway === "string" ? body.gateway.trim() : undefined;
+    const gatewayRaw = typeof body.gateway === "string" ? body.gateway.trim() : undefined;
+    const gateway =
+      gatewayRaw !== undefined && gatewayRaw.length > 0
+        ? canonicalizeGatewayForStorage(gatewayRaw)
+        : undefined;
     const createdAtRaw = typeof body.createdAt === "string" ? body.createdAt.trim() : undefined;
 
     const hasAmount = rawAmount !== undefined && rawAmount !== null && rawAmount !== "";

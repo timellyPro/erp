@@ -27,7 +27,10 @@ export async function GET(req: Request) {
 
     const { searchParams } = new URL(req.url);
     const studentId = searchParams.get("studentId")?.trim() || undefined;
-    const limit = Math.min(Number(searchParams.get("limit")) || 100, 200);
+    const rawLimit = Number(searchParams.get("limit")) || 100;
+    const forFeeReport = searchParams.get("forFeeReport") === "1";
+    /** Fee-report exports need a high cap; default list views stay small. */
+    const limit = Math.min(Math.max(rawLimit, 1), forFeeReport ? 25000 : 200);
 
     const where: {
       student: { schoolId: string; id?: string };
@@ -50,7 +53,7 @@ export async function GET(req: Request) {
             id: true,
             admissionNumber: true,
             user: { select: { name: true, email: true } },
-            class: { select: { name: true, section: true } },
+            class: { select: { id: true, name: true, section: true } },
           },
         },
       },

@@ -5,6 +5,7 @@ import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
+import { canonicalizeGatewayForStorage } from "@/lib/feePaymentGateway";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -326,11 +327,13 @@ export async function POST(req: Request) {
     const newAmountPaid = fee.amountPaid + amount;
     const newRemaining = Math.max(totalSnapshotDue - newAmountPaid, 0);
 
-    const normalizedMode =
+    const token =
       typeof paymentMode === "string" && paymentMode.trim()
         ? paymentMode.trim().toUpperCase()
         : "CASH";
-    const offlineGateway = `OFFLINE_${normalizedMode}`;
+    const offlineGateway = token.startsWith("OFFLINE_")
+      ? canonicalizeGatewayForStorage(token)
+      : canonicalizeGatewayForStorage(`OFFLINE_${token}`);
     const txId = transactionId || refNo || `OFF-${Date.now()}`;
 
     const paymentAndAllocations = await prisma.$transaction(async (tx) => {
