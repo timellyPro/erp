@@ -46,6 +46,17 @@ function isSuccessStatus(status: string) {
   return u === "SUCCESS" || u === "COMPLETED";
 }
 
+const EDIT_GATEWAY_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "OFFLINE_CASH", label: "Cash" },
+  { value: "OFFLINE_ONLINE", label: "Online (UPI / QR / net banking)" },
+  { value: "OFFLINE_UPI", label: "UPI" },
+  { value: "OFFLINE_BANK_TRANSFER", label: "Bank transfer / NEFT / RTGS" },
+  { value: "OFFLINE_CHEQUE", label: "Cheque" },
+  { value: "OFFLINE_DD", label: "Demand draft (DD)" },
+  { value: "OFFLINE_OTHERS", label: "Others" },
+  { value: "HYPERPG", label: "Online — payment gateway (HyperPG)" },
+];
+
 function formatPaymentMethod(method?: string) {
   const m = String(method || "").trim().toUpperCase();
   if (!m) return "-";
@@ -258,7 +269,7 @@ export const FeeTransactions = ({
     setEditing(p);
     setEditAmount(String(p.amount));
     setEditRef(p.transactionId ?? "");
-    setEditGateway(p.method || "OFFLINE");
+    setEditGateway((p.method || "OFFLINE_CASH").trim());
     setEditDate(new Date(p.createdAt).toISOString().slice(0, 10));
   };
 
@@ -305,7 +316,7 @@ export const FeeTransactions = ({
 
       const body: Record<string, unknown> = {
         transactionId: editRef.trim() || null,
-        gateway: editGateway.trim() || "OFFLINE",
+        gateway: editGateway.trim() || "OFFLINE_CASH",
         createdAt: new Date(editDate + "T12:00:00").toISOString(),
       };
       if (isSuccessStatus(editing.status)) {
@@ -641,14 +652,33 @@ export const FeeTransactions = ({
                     />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-white/50">Method (gateway)</label>
-                    <input
-                      type="text"
+                    <label className="mb-1 block text-xs font-medium text-white/50">
+                      Payment method (fee report column)
+                    </label>
+                    <select
                       value={editGateway}
                       onChange={(e) => setEditGateway(e.target.value)}
                       className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-white"
-                      placeholder="e.g. OFFLINE, HYPERPG, CASH"
-                    />
+                    >
+                      {!EDIT_GATEWAY_OPTIONS.some((o) => o.value === editGateway) ? (
+                        <option value={editGateway}>
+                          Legacy / other: {editGateway || "—"} (choose a standard code below after this option)
+                        </option>
+                      ) : null}
+                      {EDIT_GATEWAY_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    {!EDIT_GATEWAY_OPTIONS.some((o) => o.value === (editing?.method || "").trim()) ? (
+                      <p className="mt-1 text-[11px] text-amber-200/90">
+                        This row uses a non-standard gateway code. Select{' '}
+                        <span className="font-semibold">Online (UPI / QR)</span> or{' '}
+                        <span className="font-semibold">UPI</span> for digital collections, then save — the fee Excel
+                        report uses this field for the Cash vs Online columns.
+                      </p>
+                    ) : null}
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-medium text-white/50">Date recorded</label>

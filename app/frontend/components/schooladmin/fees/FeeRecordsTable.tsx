@@ -8,6 +8,7 @@ import SelectInput from "../../common/SelectInput";
 import type { Class, FeeRecord } from "./types";
 import { schoolAdminStudentDetailsFeesUrl } from "./studentDetailsNav";
 import InlinePagination from "../schooladmincomponents/InlinePagination";
+import { appendDayReportSheet, formatDdMmYyyyFromYmdInput } from "@/lib/feeDayReportExcel";
 
 const PAGE_SIZE = 20;
 
@@ -17,7 +18,6 @@ interface FeeRecordsTableProps {
 }
 
 type ReportPeriod = "DAY_WISE" | "MONTH_WISE" | "YEAR_WISE" | "ACADEMIC_YEAR_WISE";
-type PaymentColumn = "Cash" | "OTHERS" | "ONLINE PAYMENT" | "Cheque" | "DD";
 
 export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps) {
   const router = useRouter();
@@ -107,11 +107,23 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
 
   const toDateOnly = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 
+  /** Parse `YYYY-MM-DD` as a local calendar date (avoids UTC off-by-one with `new Date("yyyy-mm-dd")`). */
+  const parseYmdLocal = (ymd: string) => {
+    const parts = ymd.split("-").map((v) => Number(v));
+    const y = parts[0];
+    const m = parts[1];
+    const day = parts[2];
+    if (!y || !m || !day) return new Date(NaN);
+    return new Date(y, m - 1, day);
+  };
+
   const inSelectedPeriod = (createdAt: string) => {
     const d = new Date(createdAt);
     if (Number.isNaN(d.getTime())) return false;
     if (reportPeriod === "DAY_WISE") {
-      return toDateOnly(d).getTime() === toDateOnly(new Date(reportDate)).getTime();
+      const picked = parseYmdLocal(reportDate);
+      if (Number.isNaN(picked.getTime())) return false;
+      return toDateOnly(d).getTime() === toDateOnly(picked).getTime();
     }
     if (reportPeriod === "MONTH_WISE") {
       const [y, m] = reportMonth.split("-").map((v) => Number(v));
@@ -128,58 +140,32 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     return d >= startDate && d <= endDate;
   };
 
-  const normalizeAccount = (feeTypeName?: string) => {
-    const label = (feeTypeName || "").trim().replace(/\s+/g, " ");
-    return label || "Default";
-  };
-
-  const accountKey = (label: string) => label.trim().replace(/\s+/g, " ").toUpperCase();
-
-  const sortReportAccounts = (a: string, b: string) => {
-    if (a === "Default") return -1;
-    if (b === "Default") return 1;
-    return a.localeCompare(b);
-  };
-
-  const normalizePaymentColumn = (gateway?: string): PaymentColumn => {
-    const g = (gateway || "").toUpperCase();
-    const normalized = g.startsWith("OFFLINE_") ? g.slice("OFFLINE_".length) : g;
-    if (normalized === "CASH" || normalized === "OFFLINE") return "Cash";
-    if (normalized === "CHEQUE") return "Cheque";
-    if (normalized === "DD") return "DD";
-    if (
-      normalized === "HYPERPG" ||
-      normalized === "ONLINE" ||
-      normalized === "UPI" ||
-      normalized === "BANK_TRANSFER" ||
-      normalized === "BANK" ||
-      normalized === "CARD"
-    ) {
-      return "ONLINE PAYMENT";
-    }
-    return "OTHERS";
-  };
-
   const exportFinalTemplate = async () => {
-    const workbook = XLSX.utils.book_new();
-
-    const summaryRows: Array<Record<string, string | number>> = [
-      { Field: "Report Type", Value: getReportPeriodLabel(reportPeriod) },
-      { Field: "Report Parameter", Value: getReportPeriodValue() },
-      { Field: "Class Filter", Value: selectedClass ? classLabelById.get(selectedClass) || "-" : "All Classes" },
-      { Field: "Generated On", Value: new Date().toLocaleString("en-IN") },
-    ];
-    const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
-    XLSX.utils.book_append_sheet(workbook, summarySheet, "Report Summary");
-    const txRes = await fetch("/api/fees/transactions?limit=5000", { credentials: "include" });
+    const [txRes, schoolRes] = await Promise.all([
+      fetch("/api/fees/transactions?limit=10000&forFeeReport=1", { credentials: "include" }),
+      fetch("/api/school/mine", { credentials: "include", cache: "no-store" }),
+    ]);
     const txData = await txRes.json().catch(() => ({}));
+    const schoolPayload = await schoolRes.json().catch(() => ({}));
+    const school = schoolPayload?.school as
+      | { name?: string; address?: string; location?: string; affiliationLine?: string }
+      | null
+      | undefined;
+
     const transactions: Array<{
+      id: string;
       amount: number;
       gateway?: string;
       createdAt: string;
       feeTypeName?: string;
+      transactionId?: string | null;
+      hyperpgTxnId?: string | null;
       feeAllocations?: Array<{ name: string; amount: number }>;
-      student?: { class?: { id?: string | null } | null } | null;
+      student?: {
+        admissionNumber?: string | null;
+        user?: { name?: string | null; email?: string | null } | null;
+        class?: { id?: string | null; name?: string | null; section?: string | null } | null;
+      } | null;
     }> = Array.isArray(txData?.transactions) ? txData.transactions : [];
 
     const filteredTx = transactions.filter((t) => {
@@ -192,80 +178,14 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
       return;
     }
 
-    const matrix = new Map<string, Record<PaymentColumn, number>>();
-    const accountLabelByKey = new Map<string, string>();
-    const initRow = (): Record<PaymentColumn, number> => ({
-      Cash: 0,
-      OTHERS: 0,
-      "ONLINE PAYMENT": 0,
-      Cheque: 0,
-      DD: 0,
-    });
-    for (const tx of filteredTx) {
-      const col = normalizePaymentColumn(tx.gateway);
-      const allocations =
-        Array.isArray(tx.feeAllocations) && tx.feeAllocations.length > 0
-          ? tx.feeAllocations
-          : [{ name: normalizeAccount(tx.feeTypeName), amount: Number(tx.amount || 0) }];
-      for (const allocation of allocations) {
-        const account = normalizeAccount(allocation.name);
-        const key = accountKey(account);
-        if (!accountLabelByKey.has(key)) accountLabelByKey.set(key, account);
-        const row = matrix.get(key) ?? initRow();
-        row[col] += Number(allocation.amount || 0);
-        matrix.set(key, row);
-      }
-    }
+    const workbook = XLSX.utils.book_new();
 
-    const reportRows: Array<{
-      Accounts: string;
-      Cash: number;
-      OTHERS: number;
-      "ONLINE PAYMENT": number;
-      Cheque: number;
-      DD: number;
-      Total: number;
-    }> = Array.from(accountLabelByKey.entries())
-      .map(([key, label]) => ({ key, label }))
-      .sort((a, b) => sortReportAccounts(a.label, b.label))
-      .map(({ key, label }) => {
-      const row = matrix.get(key) ?? initRow();
-      const total = row.Cash + row.OTHERS + row["ONLINE PAYMENT"] + row.Cheque + row.DD;
-      return {
-        Accounts: label,
-        Cash: Number(row.Cash.toFixed(2)),
-        OTHERS: Number(row.OTHERS.toFixed(2)),
-        "ONLINE PAYMENT": Number(row["ONLINE PAYMENT"].toFixed(2)),
-        Cheque: Number(row.Cheque.toFixed(2)),
-        DD: Number(row.DD.toFixed(2)),
-        Total: Number(total.toFixed(2)),
-      };
-    });
-    const grand = reportRows.reduce(
-      (acc, r) => ({
-        Cash: acc.Cash + r.Cash,
-        OTHERS: acc.OTHERS + r.OTHERS,
-        "ONLINE PAYMENT": acc["ONLINE PAYMENT"] + r["ONLINE PAYMENT"],
-        Cheque: acc.Cheque + r.Cheque,
-        DD: acc.DD + r.DD,
-        Total: acc.Total + r.Total,
-      }),
-      { Cash: 0, OTHERS: 0, "ONLINE PAYMENT": 0, Cheque: 0, DD: 0, Total: 0 }
-    );
-    reportRows.push({
-      Accounts: "Total",
-      Cash: Number(grand.Cash.toFixed(2)),
-      OTHERS: Number(grand.OTHERS.toFixed(2)),
-      "ONLINE PAYMENT": Number(grand["ONLINE PAYMENT"].toFixed(2)),
-      Cheque: Number(grand.Cheque.toFixed(2)),
-      DD: Number(grand.DD.toFixed(2)),
-      Total: Number(grand.Total.toFixed(2)),
-    });
-    const reportSheet = XLSX.utils.json_to_sheet(reportRows);
-    XLSX.utils.book_append_sheet(workbook, reportSheet, "Fee Report");
+    const headerDateLabel =
+      reportPeriod === "DAY_WISE" ? formatDdMmYyyyFromYmdInput(reportDate) : getReportPeriodValue();
+    const dayReportTitle =
+      reportPeriod === "DAY_WISE" ? "Day Report" : `${getReportPeriodLabel(reportPeriod)} — collections`;
 
-    const recordsSheet = XLSX.utils.json_to_sheet(toSheetRows(filteredFees));
-    XLSX.utils.book_append_sheet(workbook, recordsSheet, "Fee Records");
+    appendDayReportSheet(workbook, "Day Report", school, dayReportTitle, headerDateLabel, filteredTx);
 
     const fileDate = new Date().toISOString().slice(0, 10);
     const safePeriod = reportPeriod.toLowerCase();
