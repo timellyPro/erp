@@ -252,7 +252,7 @@ export const SCHOOLADMIN_MENU_ITEMS: SidebarItem[] = [
     {
         label: "Fees",
         tab: "fees",
-        href: "/frontend/pages/schooladmin?tab=fees",
+        href: "/frontend/pages/schooladmin/fees",
         icon: DollarSign,
         permission: Permission.FEES,
     },

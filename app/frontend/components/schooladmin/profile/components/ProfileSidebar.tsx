@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Users, Mail, Phone, MapPin, Bookmark, Pencil, X } from "lucide-react";
+import { Users, Mail, Phone, MapPin, Bookmark, Pencil, X, CircleDollarSign } from "lucide-react";
 import SelectInput from "../../../common/SelectInput";
 
 const getResidencyLabel = (value?: string) => {
@@ -28,29 +28,42 @@ type Props = {
   studentId: string;
   student: StudentProfileProps;
   fatherName?: string;
-  fatherOccupation?: string;
   fatherPhone?: string;
   motherName?: string;
+  motherPhone?: string;
   classId?: string | null;
   classes?: { id: string; label: string }[];
   gender?: string;
   residencyType?: string;
   onSaved?: () => void;
+  onOpenFees?: () => void;
 };
 
 export const ProfileSidebar = ({
   studentId,
   student,
   fatherName = "",
-  fatherOccupation = "",
   fatherPhone = "",
   motherName = "",
+  motherPhone = "",
   classId = null,
   classes = [],
   gender = "",
   residencyType = "Day Scholar",
   onSaved,
+  onOpenFees,
 }: Props) => {
+  const normalizedAddress = (() => {
+    const raw = (student.address || "").trim();
+    if (!raw) return "—";
+    const parts = raw
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    const uniqueOrdered = parts.filter((p, idx) => parts.findIndex((x) => x.toLowerCase() === p.toLowerCase()) === idx);
+    return uniqueOrdered.length > 0 ? uniqueOrdered.join(", ") : raw;
+  })();
+
   const [studentModalOpen, setStudentModalOpen] = useState(false);
   const [parentModalOpen, setParentModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -66,8 +79,8 @@ export const ProfileSidebar = ({
 
   const [pFatherName, setPFatherName] = useState(fatherName);
   const [pFatherPhone, setPFatherPhone] = useState(fatherPhone || student.phone || "");
-  const [pOccupation, setPOccupation] = useState(fatherOccupation);
   const [pMotherName, setPMotherName] = useState(motherName);
+  const [pMotherPhone, setPMotherPhone] = useState(motherPhone || "");
 
   useEffect(() => {
     if (studentModalOpen) return;
@@ -85,9 +98,9 @@ export const ProfileSidebar = ({
     if (parentModalOpen) return;
     setPFatherName(fatherName);
     setPFatherPhone(fatherPhone || student.phone || "");
-    setPOccupation(fatherOccupation);
     setPMotherName(motherName);
-  }, [fatherName, fatherPhone, fatherOccupation, motherName, student.phone, parentModalOpen]);
+    setPMotherPhone(motherPhone || "");
+  }, [fatherName, fatherPhone, motherName, motherPhone, student.phone, parentModalOpen]);
 
   const canEdit = Boolean(studentId.trim());
 
@@ -145,8 +158,8 @@ export const ProfileSidebar = ({
         body: JSON.stringify({
           fatherName: pFatherName.trim(),
           motherName: pMotherName.trim() || null,
-          occupation: pOccupation.trim() || null,
           phoneNo: pFatherPhone.trim(),
+          emergencyMotherNo: pMotherPhone.trim() || null,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -169,16 +182,27 @@ export const ProfileSidebar = ({
       <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl sm:rounded-[2rem] p-4 sm:p-5 text-center shadow-xl">
         <div className="flex items-center justify-between gap-2 mb-3 text-left">
           <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">Student</span>
-          <button
-            type="button"
-            onClick={() => setStudentModalOpen(true)}
-            disabled={!canEdit}
-            className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-lime-500/40 bg-lime-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-lime-300 hover:bg-lime-500/25 disabled:cursor-not-allowed disabled:opacity-40"
-            title="Edit student details"
-          >
-            <Pencil className="h-3.5 w-3.5" strokeWidth={2.25} />
-            Edit
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onOpenFees}
+              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-blue-500/40 bg-blue-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-blue-300 hover:bg-blue-500/25"
+              title="Open fees sheet"
+            >
+              <CircleDollarSign className="h-3.5 w-3.5" strokeWidth={2.25} />
+              Fees
+            </button>
+            <button
+              type="button"
+              onClick={() => setStudentModalOpen(true)}
+              disabled={!canEdit}
+              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-lime-500/40 bg-lime-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-lime-300 hover:bg-lime-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+              title="Edit student details"
+            >
+              <Pencil className="h-3.5 w-3.5" strokeWidth={2.25} />
+              Edit
+            </button>
+          </div>
         </div>
         <div className="relative w-24 h-24 sm:w-32 sm:h-32 mx-auto mb-4 sm:mb-6">
           <img
@@ -241,7 +265,7 @@ export const ProfileSidebar = ({
             <div className="rounded-lg flex-shrink-0 mt-0.5">
               <MapPin size={16} className="text-[#b4f44d]" />
             </div>
-            <span className="text-xs sm:text-sm leading-snug break-words">{student.address}</span>
+            <span className="text-xs sm:text-sm leading-snug break-words">{normalizedAddress}</span>
           </div>
         </div>
       </div>
@@ -273,17 +297,23 @@ export const ProfileSidebar = ({
                 <p className="text-xs font-bold text-white">{fatherName || "Not Provided"}</p>
               </div>
               <div className="bg-white/5 py-2 px-2 rounded-2xl border border-white/5">
-                <p className="text-[10px] text-gray-500 font-bold uppercase">Occupation</p>
-                <p className="text-xs font-bold text-white">{fatherOccupation || "-"}</p>
+                <p className="text-[10px] text-gray-500 font-bold uppercase">Mobile</p>
+                <p className="text-xs font-bold text-white">{fatherPhone || "-"}</p>
               </div>
             </div>
           </div>
 
           <div className="space-y-3">
             <label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest ml-1">Mother</label>
-            <div className="bg-white/5 py-2 px-2 rounded-2xl border border-white/5">
-              <p className="text-[10px] text-gray-500 font-bold uppercase">Name</p>
-              <p className="text-xs font-bold text-white">{motherName || "Not Provided"}</p>
+            <div className="grid grid-cols-1 gap-2">
+              <div className="bg-white/5 py-2 px-2 rounded-2xl border border-white/5">
+                <p className="text-[10px] text-gray-500 font-bold uppercase">Name</p>
+                <p className="text-xs font-bold text-white">{motherName || "Not Provided"}</p>
+              </div>
+              <div className="bg-white/5 py-2 px-2 rounded-2xl border border-white/5">
+                <p className="text-[10px] text-gray-500 font-bold uppercase">Mobile</p>
+                <p className="text-xs font-bold text-white">{motherPhone || "-"}</p>
+              </div>
             </div>
           </div>
         </div>
@@ -428,7 +458,7 @@ export const ProfileSidebar = ({
               </button>
             </div>
             <p className="mb-3 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/60">
-              Guardian phone updates the student contact number on record. Occupation is stored as a single field on the student profile.
+              Update only parent names and mobile numbers here.
             </p>
             <div className="space-y-3 text-sm">
               <div>
@@ -448,18 +478,18 @@ export const ProfileSidebar = ({
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-medium text-white/50">Occupation</label>
-                <input
-                  value={pOccupation}
-                  onChange={(e) => setPOccupation(e.target.value)}
-                  className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-white"
-                />
-              </div>
-              <div>
                 <label className="mb-1 block text-xs font-medium text-white/50">Mother name</label>
                 <input
                   value={pMotherName}
                   onChange={(e) => setPMotherName(e.target.value)}
+                  className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-white/50">Mother phone</label>
+                <input
+                  value={pMotherPhone}
+                  onChange={(e) => setPMotherPhone(e.target.value)}
                   className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-white"
                 />
               </div>

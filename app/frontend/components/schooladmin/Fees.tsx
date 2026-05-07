@@ -11,10 +11,28 @@ import FeeStructureConfig from "./fees/FeeStructureConfig";
 import FeeRecordsTable from "./fees/FeeRecordsTable";
 import FeeTransactionsList from "./fees/FeeTransactionsList";
 import FeesSectionNav from "./fees/FeesSectionNav";
+import PettyCashSection from "./fees/PettyCashSection";
+import VoucherSection from "./fees/VoucherSection";
 import type { Class, Student, FeeSummary, FeeRecord, FeeStructure, ExtraFee } from "./fees/types";
 import Spinner from "../common/Spinner";
 
-export default function FeesTab() {
+type FeesSection =
+  | "overview"
+  | "offline-payment"
+  | "add-extra-fees"
+  | "fee-structure"
+  | "extra-fees-catalog"
+  | "transactions"
+  | "fees-records"
+  | "petty-cash"
+  | "voucher"
+  | "student-fee-records";
+
+type FeesTabProps = {
+  section?: FeesSection;
+};
+
+export default function FeesTab({ section }: FeesTabProps) {
   const router = useRouter();
   const [fees, setFees] = useState<FeeRecord[]>([]);
   const [stats, setStats] = useState<FeeSummary | null>(null);
@@ -90,49 +108,92 @@ export default function FeesTab() {
 
         <FeesSectionNav />
 
-        <div id="fees-section-overview" className="scroll-mt-28">
-          <FeeStatCards stats={stats} />
-        </div>
+        {(section === undefined || section === "overview") && (
+          <div id="fees-section-overview" className="scroll-mt-28">
+            <FeeStatCards stats={stats} />
+          </div>
+        )}
 
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 xl:gap-6">
-          <div id="fees-section-offline-payment" className="scroll-mt-28 min-w-0">
-            <OfflinePaymentForm
+        {(section === undefined || section === "offline-payment" || section === "add-extra-fees") && (
+          <div
+            className={
+              section === undefined
+                ? "grid grid-cols-1 gap-4 xl:grid-cols-2 xl:gap-6"
+                : "mx-auto w-full max-w-3xl"
+            }
+          >
+            {(section === undefined || section === "offline-payment") && (
+              <div id="fees-section-offline-payment" className="scroll-mt-28 min-w-0">
+                <OfflinePaymentForm
+                  classes={classes}
+                  structures={structures}
+                  extraFees={extraFees}
+                  students={students}
+                  onSuccess={reloadAfterMutation}
+                />
+              </div>
+            )}
+            {(section === undefined || section === "add-extra-fees") && (
+              <div
+                id="fees-section-add-extra-fees"
+                className={`scroll-mt-28 min-w-0 ${section === undefined ? "" : "mt-4"}`}
+              >
+                <AddExtraFeeForm classes={classes} students={students} onSuccess={reloadAfterMutation} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {(section === undefined || section === "fee-structure") && (
+          <div id="fees-section-fee-structure" className="scroll-mt-28">
+            <FeeStructureConfig
               classes={classes}
               structures={structures}
+              onSuccess={reloadAfterMutation}
+            />
+          </div>
+        )}
+
+        {(section === undefined || section === "extra-fees-catalog") && (
+          <div id="fees-section-extra-fees-catalog" className="scroll-mt-28">
+            <ExtraFeesList
               extraFees={extraFees}
+              classes={classes}
               students={students}
               onSuccess={reloadAfterMutation}
             />
           </div>
-          <div id="fees-section-add-extra-fees" className="scroll-mt-28 min-w-0">
-            <AddExtraFeeForm classes={classes} students={students} onSuccess={reloadAfterMutation} />
+        )}
+
+        {(section === undefined || section === "transactions") && (
+          <div id="fees-section-transactions" className="scroll-mt-28">
+            <FeeTransactionsList students={students} onSuccess={reloadAfterMutation} />
           </div>
-        </div>
+        )}
 
-        <div id="fees-section-fee-structure" className="scroll-mt-28">
-          <FeeStructureConfig
-            classes={classes}
-            structures={structures}
-            onSuccess={reloadAfterMutation}
-          />
-        </div>
+        {(section === undefined || section === "student-fee-records" || section === "fees-records") && (
+          <div id="fees-section-student-fee-records" className="scroll-mt-28">
+            <FeeRecordsTable fees={fees} classes={classes} />
+          </div>
+        )}
 
-        <div id="fees-section-extra-fees-catalog" className="scroll-mt-28">
-          <ExtraFeesList
-            extraFees={extraFees}
-            classes={classes}
-            students={students}
-            onSuccess={reloadAfterMutation}
-          />
-        </div>
+        {(section === undefined || section === "petty-cash") && (
+          <div
+            id="fees-section-petty-cash"
+            className={`scroll-mt-28 ${section === undefined ? "" : "mx-auto w-full max-w-4xl"}`}
+          >
+            <PettyCashSection />
+          </div>
+        )}
 
-        <div id="fees-section-transactions" className="scroll-mt-28">
-          <FeeTransactionsList students={students} onSuccess={reloadAfterMutation} />
-        </div>
-
-        <div id="fees-section-student-fee-records" className="scroll-mt-28">
-          <FeeRecordsTable fees={fees} classes={classes} />
-        </div>
+        {(section === undefined || section === "voucher") && (
+          <div
+            id="fees-section-voucher"
+            className={`scroll-mt-28 ${section === undefined ? "" : "mx-auto w-full max-w-7xl"}`}
+          >
+            <VoucherSection classes={classes} students={students} onSuccess={reloadAfterMutation} />
+          </div>
+        )}
       </div>
     </div>
   );

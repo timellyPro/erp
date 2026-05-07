@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import AppLayout from "../../AppLayout";
 import { SCHOOLADMIN_MENU_ITEMS, SCHOOLADMIN_TAB_TITLES } from "../../constants/sidebar";
@@ -27,6 +27,7 @@ import AdmissionTab from "../../components/teacher/admission/Admission";
 
 function SchoolAdminContent() {
   const { data: session } = useSession();
+  const router = useRouter();
   const tab = useSearchParams().get("tab") ?? "dashboard";
   const title = SCHOOLADMIN_TAB_TITLES[tab] ?? tab.toUpperCase();
   const [profile, setProfile] = useState<{
@@ -69,6 +70,20 @@ function SchoolAdminContent() {
       cancelled = true;
     };
   }, [session?.user?.name]);
+
+  useEffect(() => {
+    if (tab === "fees") {
+      router.replace("/frontend/pages/schooladmin/fees");
+    }
+  }, [router, tab]);
+
+  if (tab === "fees") {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center text-white/70">
+        Redirecting to Fees...
+      </div>
+    );
+  }
 
   const renderComponent = () => {
     switch (tab) {

@@ -53,7 +53,16 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json();
-    const { studentId, amount: rawAmount, paymentMode, refNo, transactionId, selectedHeads: rawSelectedHeads } = body;
+    const {
+      studentId,
+      amount: rawAmount,
+      paymentMode,
+      refNo,
+      transactionId,
+      paymentDate,
+      selectedHeads: rawSelectedHeads,
+      explicitAllocations: rawExplicitAllocations,
+    } = body;
 
     const amount = typeof rawAmount === "string" ? parseFloat(rawAmount) : rawAmount;
     if (!studentId || typeof amount !== "number" || isNaN(amount) || amount <= 0) {
@@ -96,6 +105,17 @@ export async function POST(req: Request) {
             return null;
           })
           .filter((x): x is SelectedHead => x !== null)
+      : [];
+
+    const normalizedExplicitAllocations: Array<{ key: string; amount: number }> = Array.isArray(rawExplicitAllocations)
+      ? rawExplicitAllocations
+          .map((a: any) => {
+            const key = typeof a?.key === "string" ? a.key.trim() : "";
+            const allocAmount = Number(a?.amount);
+            if (!key || !Number.isFinite(allocAmount) || allocAmount <= 0) return null;
+            return { key, amount: allocAmount };
+          })
+          .filter((a): a is { key: string; amount: number } => a !== null)
       : [];
 
     const classFeeStructure = student.class?.id
@@ -244,51 +264,85 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Nothing due for this student" }, { status: 400 });
     }
 
-    const allocateSelected = Math.min(amount, selectedDueSum);
-    const spill = amount - allocateSelected;
-
-    const proportionalAlloc = (
-      amountToAllocate: number,
-      heads: Array<{ key: string; dueBefore: number }>
-    ): Map<string, number> => {
-      const sum = heads.reduce((s, h) => s + h.dueBefore, 0);
-      const out = new Map<string, number>();
-      if (amountToAllocate <= 0 || sum <= 0) return out;
-      let remaining = amountToAllocate;
-      const eligible = heads.filter((h) => h.dueBefore > 0);
-      if (eligible.length === 0) return out;
-      for (let i = 0; i < eligible.length; i++) {
-        const h = eligible[i];
-        const value =
-          i === eligible.length - 1
-            ? Math.min(remaining, h.dueBefore)
-            : (amountToAllocate * h.dueBefore) / sum;
-        out.set(h.key, (out.get(h.key) ?? 0) + value);
-        remaining -= value;
-      }
-      return out;
-    };
-
     const allocationsByKey = new Map<string, number>();
-    const selectedAlloc = proportionalAlloc(
-      allocateSelected,
-      selectedHeads.map((h) => ({ key: h.key, dueBefore: h.dueBefore }))
-    );
-    for (const [k, v] of selectedAlloc) allocationsByKey.set(k, v);
-
-    if (spill > 0.00001) {
-      if (unselectedDueSum <= 0) {
-        // Should not happen if amount <= fee.remainingFee, but guard anyway.
+    if (normalizedExplicitAllocations.length > 0) {
+      const dueByKey = new Map(headsWithDueBefore.map((h) => [h.key, h.dueBefore]));
+      const selectedHeadKeysSet = new Set(selectedHeads.map((h) => h.key));
+      let explicitTotal = 0;
+      for (const a of normalizedExplicitAllocations) {
+        const due = dueByKey.get(a.key);
+        if (due === undefined) {
+          return NextResponse.json({ message: `Invalid fee head key: ${a.key}` }, { status: 400 });
+        }
+        if (!selectedHeadKeysSet.has(a.key)) {
+          return NextResponse.json(
+            { message: `Head ${a.key} must be present in selectedHeads` },
+            { status: 400 }
+          );
+        }
+        if (a.amount > due + 0.01) {
+          return NextResponse.json(
+            { message: `Amount for ${a.key} exceeds due (₹${due.toFixed(2)})` },
+            { status: 400 }
+          );
+        }
+        allocationsByKey.set(a.key, a.amount);
+        explicitTotal += a.amount;
+      }
+      if (Math.abs(explicitTotal - amount) > 0.01) {
         return NextResponse.json(
-          { message: "Selected heads due is full; no other heads to allocate spill amount" },
+          {
+            message: `Sum of head-wise amounts (₹${explicitTotal.toFixed(2)}) must equal payment amount (₹${amount.toFixed(2)})`,
+          },
           { status: 400 }
         );
       }
-      const spillAlloc = proportionalAlloc(
-        spill,
-        unselectedHeads.map((h) => ({ key: h.key, dueBefore: h.dueBefore }))
+    } else {
+      const allocateSelected = Math.min(amount, selectedDueSum);
+      const spill = amount - allocateSelected;
+
+      const proportionalAlloc = (
+        amountToAllocate: number,
+        heads: Array<{ key: string; dueBefore: number }>
+      ): Map<string, number> => {
+        const sum = heads.reduce((s, h) => s + h.dueBefore, 0);
+        const out = new Map<string, number>();
+        if (amountToAllocate <= 0 || sum <= 0) return out;
+        let remaining = amountToAllocate;
+        const eligible = heads.filter((h) => h.dueBefore > 0);
+        if (eligible.length === 0) return out;
+        for (let i = 0; i < eligible.length; i++) {
+          const h = eligible[i];
+          const value =
+            i === eligible.length - 1
+              ? Math.min(remaining, h.dueBefore)
+              : (amountToAllocate * h.dueBefore) / sum;
+          out.set(h.key, (out.get(h.key) ?? 0) + value);
+          remaining -= value;
+        }
+        return out;
+      };
+
+      const selectedAlloc = proportionalAlloc(
+        allocateSelected,
+        selectedHeads.map((h) => ({ key: h.key, dueBefore: h.dueBefore }))
       );
-      for (const [k, v] of spillAlloc) allocationsByKey.set(k, (allocationsByKey.get(k) ?? 0) + v);
+      for (const [k, v] of selectedAlloc) allocationsByKey.set(k, v);
+
+      if (spill > 0.00001) {
+        if (unselectedDueSum <= 0) {
+          // Should not happen if amount <= fee.remainingFee, but guard anyway.
+          return NextResponse.json(
+            { message: "Selected heads due is full; no other heads to allocate spill amount" },
+            { status: 400 }
+          );
+        }
+        const spillAlloc = proportionalAlloc(
+          spill,
+          unselectedHeads.map((h) => ({ key: h.key, dueBefore: h.dueBefore }))
+        );
+        for (const [k, v] of spillAlloc) allocationsByKey.set(k, (allocationsByKey.get(k) ?? 0) + v);
+      }
     }
 
     const paymentAllocationsData = Array.from(allocationsByKey.entries())
@@ -334,7 +388,16 @@ export async function POST(req: Request) {
     const offlineGateway = token.startsWith("OFFLINE_")
       ? canonicalizeGatewayForStorage(token)
       : canonicalizeGatewayForStorage(`OFFLINE_${token}`);
-    const txId = transactionId || refNo || `OFF-${Date.now()}`;
+    const normalizedRef = typeof refNo === "string" ? refNo.trim() : "";
+    const normalizedTxn = typeof transactionId === "string" ? transactionId.trim() : "";
+    const txId = normalizedTxn || normalizedRef || null;
+    const selectedPaymentDate =
+      typeof paymentDate === "string" && paymentDate.trim()
+        ? new Date(`${paymentDate.trim()}T12:00:00.000Z`)
+        : null;
+    if (selectedPaymentDate && Number.isNaN(selectedPaymentDate.getTime())) {
+      return NextResponse.json({ message: "Invalid paymentDate" }, { status: 400 });
+    }
 
     const paymentAndAllocations = await prisma.$transaction(async (tx) => {
       const payment = await tx.payment.create({
@@ -344,6 +407,7 @@ export async function POST(req: Request) {
           gateway: offlineGateway,
           status: "SUCCESS",
           transactionId: txId,
+          ...(selectedPaymentDate ? { createdAt: selectedPaymentDate } : {}),
         },
       });
 

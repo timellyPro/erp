@@ -276,6 +276,7 @@ export async function GET(_req: Request, context: RouteParams) {
         fatherOccupation: student.occupation ?? "",
         motherOccupation: student.occupation ?? "",
         fatherPhone: student.phoneNo ?? "",
+        motherPhone: student.application?.emergencyMotherNo ?? "",
         previousSchool: student.previousSchool ?? "",
         aadhaarNo: student.aadhaarNo ?? "",
         officeAddress: student.application?.officeAddress ?? "",
