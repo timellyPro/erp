@@ -36,12 +36,16 @@ export async function PATCH(
 
     const body = await req.json();
     const itemName = body?.itemName !== undefined ? String(body.itemName).trim() : undefined;
+    const headOfAccount = body?.headOfAccount !== undefined ? String(body.headOfAccount).trim() : undefined;
+    const paymentTypeRaw = body?.paymentType !== undefined ? String(body.paymentType).trim().toUpperCase() : undefined;
     const amount = body?.amount !== undefined ? Number(body.amount) : undefined;
     const expenseDateRaw = body?.expenseDate !== undefined ? String(body.expenseDate).trim() : undefined;
     const description = body?.description !== undefined ? String(body.description).trim() : undefined;
 
     const updates: {
       itemName?: string;
+      headOfAccount?: string;
+      paymentType?: string;
       amount?: number;
       expenseDate?: Date;
       description?: string | null;
@@ -52,6 +56,21 @@ export async function PATCH(
         return NextResponse.json({ message: "Item name is required" }, { status: 400 });
       }
       updates.itemName = itemName;
+    }
+    if (headOfAccount !== undefined) {
+      if (!headOfAccount) {
+        return NextResponse.json({ message: "Head of account is required" }, { status: 400 });
+      }
+      updates.headOfAccount = headOfAccount;
+      if (itemName === undefined) {
+        updates.itemName = existing.itemName || headOfAccount;
+      }
+    }
+    if (paymentTypeRaw !== undefined) {
+      if (paymentTypeRaw !== "CASH" && paymentTypeRaw !== "ONLINE") {
+        return NextResponse.json({ message: "Payment type must be Cash or Online" }, { status: 400 });
+      }
+      updates.paymentType = paymentTypeRaw;
     }
     if (amount !== undefined) {
       if (!Number.isFinite(amount) || amount <= 0) {
@@ -70,6 +89,9 @@ export async function PATCH(
       updates.expenseDate = parsedDate;
     }
     if (description !== undefined) {
+      if (description.length > 500) {
+        return NextResponse.json({ message: "Description must be 500 characters or less" }, { status: 400 });
+      }
       updates.description = description || null;
     }
 

@@ -997,10 +997,12 @@ model PettyCashExpense {
   // Auto-incremented per school (1,2,3...)
   voucherNo Int
 
-  itemName     String
-  amount       Float
-  expenseDate  DateTime @db.Date
-  description  String?  @db.Text
+  itemName       String
+  headOfAccount  String?
+  paymentType    String? // CASH | ONLINE
+  amount         Float
+  expenseDate    DateTime @db.Date
+  description    String?  @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

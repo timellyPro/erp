@@ -6,33 +6,43 @@ import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 
 async function createPettyCashExpenseWithAutoVoucher(
   schoolId: string,
-  payload: { itemName: string; amount: number; expenseDate: Date; description: string | null }
+  payload: {
+    itemName: string;
+    headOfAccount: string;
+    paymentType: "CASH" | "ONLINE";
+    amount: number;
+    expenseDate: Date;
+    description: string | null;
+  }
 ) {
   const maxRetries = 4;
   for (let attempt = 0; attempt < maxRetries; attempt += 1) {
     try {
-      return await prisma.$transaction(async (tx) => {
-        const last = await tx.pettyCashExpense.findFirst({
-          where: { schoolId },
-          orderBy: { voucherNo: "desc" },
-          select: { voucherNo: true },
-        });
-        const nextVoucherNo = (last?.voucherNo ?? 0) + 1;
-        return tx.pettyCashExpense.create({
-          data: {
-            schoolId,
-            voucherNo: nextVoucherNo,
-            itemName: payload.itemName,
-            amount: payload.amount,
-            expenseDate: payload.expenseDate,
-            description: payload.description,
-          },
-        });
+      const last = await prisma.pettyCashExpense.findFirst({
+        where: { schoolId },
+        orderBy: { voucherNo: "desc" },
+        select: { voucherNo: true },
+      });
+      const nextVoucherNo = (last?.voucherNo ?? 0) + 1;
+      return await prisma.pettyCashExpense.create({
+        data: {
+          schoolId,
+          voucherNo: nextVoucherNo,
+          itemName: payload.itemName,
+          headOfAccount: payload.headOfAccount,
+          paymentType: payload.paymentType,
+          amount: payload.amount,
+          expenseDate: payload.expenseDate,
+          description: payload.description,
+        },
       });
     } catch (error: unknown) {
       // Retry if voucher number was taken by another concurrent request.
       const maybePrismaError = error as { code?: string };
       if (maybePrismaError?.code === "P2002" && attempt < maxRetries - 1) {
+        continue;
+      }
+      if (maybePrismaError?.code === "P2028" && attempt < maxRetries - 1) {
         continue;
       }
       throw error;
@@ -96,12 +106,18 @@ export async function POST(req: Request) {
 
     const body = await req.json();
     const itemName = String(body?.itemName ?? "").trim();
+    const headOfAccount = String(body?.headOfAccount ?? "").trim();
+    const paymentTypeRaw = String(body?.paymentType ?? "").trim().toUpperCase();
     const amount = Number(body?.amount);
     const expenseDateRaw = String(body?.expenseDate ?? "").trim();
     const descriptionRaw = String(body?.description ?? "").trim();
 
-    if (!itemName) {
-      return NextResponse.json({ message: "Item name is required" }, { status: 400 });
+    if (!headOfAccount) {
+      return NextResponse.json({ message: "Head of account is required" }, { status: 400 });
+    }
+    const paymentType = paymentTypeRaw === "ONLINE" ? "ONLINE" : paymentTypeRaw === "CASH" ? "CASH" : null;
+    if (!paymentType) {
+      return NextResponse.json({ message: "Payment type must be Cash or Online" }, { status: 400 });
     }
     if (!Number.isFinite(amount) || amount <= 0) {
       return NextResponse.json({ message: "Amount must be a positive number" }, { status: 400 });
@@ -114,9 +130,14 @@ export async function POST(req: Request) {
     if (Number.isNaN(expenseDate.getTime())) {
       return NextResponse.json({ message: "Invalid expense date" }, { status: 400 });
     }
+    if (descriptionRaw.length > 1000) {
+      return NextResponse.json({ message: "Description must be 500 characters or less" }, { status: 400 });
+    }
 
     const expense = await createPettyCashExpenseWithAutoVoucher(schoolId, {
-      itemName,
+      itemName: itemName || headOfAccount,
+      headOfAccount,
+      paymentType,
       amount,
       expenseDate,
       description: descriptionRaw || null,

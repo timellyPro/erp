@@ -11,6 +11,8 @@ type PettyCashExpense = {
   id: string;
   voucherNo: number;
   itemName: string;
+  headOfAccount?: string | null;
+  paymentType?: string | null;
   amount: number;
   expenseDate: string;
   description: string | null;
@@ -18,7 +20,8 @@ type PettyCashExpense = {
 };
 
 type FormState = {
-  itemName: string;
+  headOfAccount: string;
+  paymentType: "CASH" | "ONLINE";
   amount: string;
   expenseDate: string;
   description: string;
@@ -33,11 +36,28 @@ type FilterType = "ALL" | "DAY" | "WEEK" | "MONTH" | "RANGE";
 const PAGE_SIZE = 10;
 
 const emptyForm: FormState = {
-  itemName: "",
+  headOfAccount: "",
+  paymentType: "CASH",
   amount: "",
   expenseDate: "",
   description: "",
 };
+
+const HEAD_OF_ACCOUNT_OPTIONS = [
+  "Voucher",
+  "Bill Cash",
+  "Salary",
+  "Transportation Charges",
+  "Vehicle Maintenance",
+  "Advances",
+  "Stationary Expenses",
+  "Refreshments",
+  "Function Expenses",
+  "Annual Maintenance Charges",
+  "Fast Tag Recharge",
+  "School Mobile Recharges",
+  "Cheque Transfer",
+];
 
 export default function PettyCashSection() {
   const [expenses, setExpenses] = useState<PettyCashExpense[]>([]);
@@ -158,8 +178,8 @@ export default function PettyCashSection() {
   };
 
   const submit = async () => {
-    if (!form.itemName.trim()) {
-      alert("Item name is required");
+    if (!form.headOfAccount.trim()) {
+      alert("Head of account is required");
       return;
     }
     const amount = Number(form.amount);
@@ -171,6 +191,10 @@ export default function PettyCashSection() {
       alert("Expense date is required");
       return;
     }
+    if (form.description.trim().length > 500) {
+      alert("Description must be 500 characters or less");
+      return;
+    }
 
     setSaving(true);
     try {
@@ -180,7 +204,9 @@ export default function PettyCashSection() {
           method: editingId ? "PATCH" : "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            itemName: form.itemName.trim(),
+            itemName: form.headOfAccount.trim(),
+            headOfAccount: form.headOfAccount.trim(),
+            paymentType: form.paymentType,
             amount,
             expenseDate: form.expenseDate,
             description: form.description.trim(),
@@ -206,7 +232,8 @@ export default function PettyCashSection() {
   const onEdit = (row: PettyCashExpense) => {
     setEditingId(row.id);
     setForm({
-      itemName: row.itemName,
+      headOfAccount: row.headOfAccount || row.itemName,
+      paymentType: (row.paymentType || "CASH") as "CASH" | "ONLINE",
       amount: String(row.amount),
       expenseDate: row.expenseDate?.slice(0, 10) ?? "",
       description: row.description ?? "",
@@ -231,10 +258,11 @@ export default function PettyCashSection() {
 
   const toRows = (rows: PettyCashExpense[]) =>
     rows.map((row) => ({
-      "Voucher ID": `VCH-${row.voucherNo}`,
+      "Voucher No": `VCH-${row.voucherNo}`,
       Date: new Date(row.expenseDate).toLocaleDateString("en-IN"),
-      Item: row.itemName,
-      Amount: Number(row.amount),
+      "Head of Account": row.headOfAccount || row.itemName,
+      "Type of Voucher": row.paymentType || "CASH",
+      "Amount (INR)": Number(row.amount),
       Description: row.description || "",
     }));
 
@@ -344,8 +372,8 @@ export default function PettyCashSection() {
     doc.text(`Entries: ${filteredExpenses.length}`, pageWidth - margin, 26, { align: "right" });
 
     let y = 44;
-    const headers = ["Voucher", "Date", "Item", "Amount", "Description"];
-    const colWidths = [24, 28, 48, 28, 58];
+    const headers = ["Date", "Head of Account", "Description", "Voucher No", "Type", "Amount (INR)"];
+    const colWidths = [24, 46, 52, 24, 18, 22];
     const rowHeight = 7;
 
     const drawHeader = () => {
@@ -382,11 +410,12 @@ export default function PettyCashSection() {
       doc.setTextColor(30, 30, 30);
       let x = margin + 1.5;
       const values = [
-        `VCH-${row.voucherNo}`,
         new Date(row.expenseDate).toLocaleDateString("en-IN"),
-        row.itemName,
-        `INR ${Number(row.amount).toLocaleString()}`,
+        row.headOfAccount || row.itemName,
         row.description || "-",
+        String(row.voucherNo),
+        row.paymentType || "CASH",
+        `INR ${Number(row.amount).toLocaleString()}`,
       ];
       values.forEach((v, idx) => {
         const maxWidth = colWidths[idx] - 2;
@@ -411,19 +440,24 @@ export default function PettyCashSection() {
     <section className="rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur sm:p-6">
       <h3 className="text-lg font-semibold">Petty Cash</h3>
       <p className="mt-1 text-sm text-gray-400">
-        Store school expense records (stationery, transport, maintenance, etc.) with auto voucher IDs.
+        Store school expense records with Date, Head of Account, Description, Voucher No, and Cash/Online type.
       </p>
 
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
         <div>
-          <label className="mb-1 block text-xs text-white/70">Item / Expense</label>
-          <input
-            type="text"
-            value={form.itemName}
-            onChange={(e) => setForm((prev) => ({ ...prev, itemName: e.target.value }))}
+          <label className="mb-1 block text-xs text-white/70">Head of Account</label>
+          <select
+            value={form.headOfAccount}
+            onChange={(e) => setForm((prev) => ({ ...prev, headOfAccount: e.target.value }))}
             className="w-full rounded-xl border border-white/10 bg-black/20 px-4 py-2.5 text-white"
-            placeholder="e.g. Stationery Purchase"
-          />
+          >
+            <option value="">Select head</option>
+            {HEAD_OF_ACCOUNT_OPTIONS.map((head) => (
+              <option key={head} value={head}>
+                {head}
+              </option>
+            ))}
+          </select>
         </div>
         <div>
           <label className="mb-1 block text-xs text-white/70">Amount (INR)</label>
@@ -445,14 +479,27 @@ export default function PettyCashSection() {
           />
         </div>
         <div>
+          <label className="mb-1 block text-xs text-white/70">Type of Voucher</label>
+          <select
+            value={form.paymentType}
+            onChange={(e) => setForm((prev) => ({ ...prev, paymentType: e.target.value as "CASH" | "ONLINE" }))}
+            className="w-full rounded-xl border border-white/10 bg-black/20 px-4 py-2.5 text-white"
+          >
+            <option value="CASH">Cash</option>
+            <option value="ONLINE">Online</option>
+          </select>
+        </div>
+        <div className="md:col-span-2">
           <label className="mb-1 block text-xs text-white/70">Description (optional)</label>
-          <input
-            type="text"
+          <textarea
             value={form.description}
             onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
-            className="w-full rounded-xl border border-white/10 bg-black/20 px-4 py-2.5 text-white"
+            className="w-full min-h-[160px] rounded-xl border border-white/10 bg-black/20 px-4 py-2.5 text-white"
             placeholder="Notes / vendor / purpose"
+            maxLength={1000}
+            rows={6}
           />
+          <p className="mt-1 text-[11px] text-white/45">{form.description.length}/1000</p>
         </div>
       </div>
 
@@ -581,29 +628,31 @@ export default function PettyCashSection() {
         <p className="mt-4 text-sm text-gray-400">No expenses recorded yet.</p>
       ) : (
         <div className="-mx-4 mt-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
-          <table className="min-w-[760px] w-full text-sm">
+          <table className="min-w-[980px] w-full text-sm">
             <thead>
               <tr className="border-b border-white/10 text-left text-gray-400">
-                <th className="py-3">Voucher ID</th>
                 <th className="py-3">Date</th>
-                <th className="py-3">Item</th>
-                <th className="py-3">Amount</th>
+                <th className="py-3">Head of Account</th>
                 <th className="py-3">Description</th>
+                <th className="py-3">Voucher No</th>
+                <th className="py-3">Type</th>
+                <th className="py-3">Amount (INR)</th>
                 <th className="w-24 py-3">Actions</th>
               </tr>
             </thead>
             <tbody>
               {paginatedExpenses.map((row) => (
                 <tr key={row.id} className="border-b border-white/5">
-                  <td className="py-3 font-medium text-lime-300">VCH-{row.voucherNo}</td>
                   <td className="py-3 text-white/85">
                     {new Date(row.expenseDate).toLocaleDateString("en-IN")}
                   </td>
-                  <td className="py-3 text-white">{row.itemName}</td>
-                  <td className="py-3 text-white">INR {Number(row.amount).toLocaleString()}</td>
-                  <td className="max-w-[260px] py-3 text-white/70">
-                    <span className="line-clamp-2">{row.description || "-"}</span>
+                  <td className="py-3 text-white">{row.headOfAccount || row.itemName}</td>
+                  <td className="max-w-[460px] py-3 text-white/70 align-top whitespace-pre-wrap break-words">
+                    {row.description || "-"}
                   </td>
+                  <td className="py-3 font-medium text-lime-300">{`VCR-${row.voucherNo}`}</td>
+                  <td className="py-3 text-white/85">{row.paymentType || "CASH"}</td>
+                  <td className="py-3 text-white">₹{Number(row.amount).toLocaleString()}</td>
                   <td className="py-3">
                     <div className="flex gap-1">
                       <button
