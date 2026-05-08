@@ -254,6 +254,7 @@ model School {
   settings           SchoolSettings?
   classFeeStructures ClassFeeStructure[]
   extraFees          ExtraFee[]
+  pettyCashExpenses  PettyCashExpense[]
   studentApplications StudentApplication[]
 }
 
@@ -985,6 +986,30 @@ model ExtraFee {
   @@index([schoolId])
   @@index([targetStudentId])
   @@index([targetClassId])
+}
+
+model PettyCashExpense {
+  id String @id @default(cuid())
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  // Auto-incremented per school (1,2,3...)
+  voucherNo Int
+
+  itemName       String
+  headOfAccount  String?
+  paymentType    String? // CASH | ONLINE
+  amount         Float
+  expenseDate    DateTime @db.Date
+  description    String?  @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([schoolId])
+  @@index([expenseDate])
+  @@unique([schoolId, voucherNo])
 }
 
 model Payment {

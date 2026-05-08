@@ -33,6 +33,7 @@ type Props = {
   residencyType?: string;
   parentName?: string;
   parentPhone?: string;
+  motherName?: string;
   /** Refetch student detail after payment edit/delete */
   onPaymentsChanged?: () => void;
 };
@@ -92,6 +93,7 @@ export const FeeTransactions = ({
   residencyType = "Day Scholar",
   parentName = "-",
   parentPhone = "-",
+  motherName = "-",
   onPaymentsChanged,
 }: Props) => {
   const receiptRef = useRef<HTMLDivElement>(null);
@@ -110,6 +112,7 @@ export const FeeTransactions = ({
   const [editDate, setEditDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [selectedReceiptIds, setSelectedReceiptIds] = useState<string[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -120,8 +123,11 @@ export const FeeTransactions = ({
         if (!res.ok || cancelled) return;
 
         const name = typeof d?.school?.name === "string" ? d.school.name : "";
-        const address = [d?.school?.address, d?.school?.location]
+        const addressParts = [d?.school?.address, d?.school?.location]
           .filter((v: unknown) => typeof v === "string" && String(v).trim())
+          .map((v: unknown) => String(v).trim());
+        const address = addressParts
+          .filter((part, idx) => addressParts.findIndex((x) => x.toLowerCase() === part.toLowerCase()) === idx)
           .join(", ");
 
         let rawLogo: string | null =
@@ -417,13 +423,74 @@ export const FeeTransactions = ({
   const total = hasFee ? fee!.amountPaid + fee!.remainingFee : 0;
   const hasAny = hasFee || activePayments.length > 0;
 
-  const buildReceiptDescription = (p: (typeof activePayments)[0]) => {
-    const label = p.feeTypeName?.trim() || "Fee payment";
-    const methodPart = p.method?.trim() ? `Method: ${p.method.trim()}` : null;
-    const ref = p.transactionId?.trim();
-    const refPart =
-      ref && ref.toUpperCase() !== "N/A" ? `Reference / UTR: ${ref}` : null;
-    return [label, methodPart, refPart].filter(Boolean).join(" • ");
+  const simplifyFeeHeadName = (value?: string) => {
+    const raw = String(value || "").trim();
+    if (!raw) return "Fee";
+    const lower = raw.toLowerCase();
+    if (lower.includes("tuition")) return "Tuition Fee";
+    if (lower.includes("mess")) return "Mess Fee";
+    if (lower.includes("transport")) return "Transportation Fee";
+    const cleaned = raw
+      .replace(/\b\d+(st|nd|rd|th)\s*installment\b/gi, "")
+      .replace(/\binstallment\b/gi, "")
+      .replace(/\s*-\s*[\w\s]+$/g, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+    return cleaned || raw;
+  };
+
+  const buildReceiptDataFromPayments = (selectedPayments: (typeof activePayments), createdAt: string) => {
+    const groupedLines = Array.from(
+      selectedPayments.reduce((map, p) => {
+        const key = simplifyFeeHeadName(p.feeTypeName || "Fee payment");
+        const existing = map.get(key);
+        const amount = resolveDisplayAmount(p);
+        const currentRef = p.transactionId?.trim() && p.transactionId !== "N/A" ? p.transactionId.trim() : "-";
+        if (existing) {
+          existing.amount += amount;
+          if (existing.paymentMethod !== formatPaymentMethod(p.method)) {
+            existing.paymentMethod = "MIXED";
+          }
+          if (existing.utrNo !== currentRef) {
+            existing.utrNo = existing.utrNo === "-" ? currentRef : "MULTIPLE";
+          }
+        } else {
+          map.set(key, {
+            description: key,
+            amount,
+            paymentMethod: formatPaymentMethod(p.method),
+            utrNo: currentRef,
+          });
+        }
+        return map;
+      }, new Map<string, { description: string; amount: number; paymentMethod: string; utrNo: string }>())
+    ).map(([, v]) => v);
+    const finalTotal = groupedLines.reduce((s, l) => s + l.amount, 0);
+    const now = new Date();
+    const startYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    const receiptTitle =
+      selectedPayments.length === 1 &&
+      (selectedPayments[0].id === "admission-fee" || selectedPayments[0].id === "application-fee")
+        ? "Admission Receipt"
+        : "Fee Receipt";
+    return {
+      schoolName: schoolBrand.name || "School",
+      schoolLogo: schoolBrand.logo,
+      schoolAddress: schoolBrand.address || "-",
+      studentName: studentName || "Student",
+      admissionNumber,
+      className: classDisplayName || "-",
+      academicYear: `${startYear}-${String(startYear + 1).slice(-2)}`,
+      fatherName: parentName || "-",
+      motherName: motherName || "-",
+      residencyType: residencyType || "Day Scholar",
+      parentName: parentName || "-",
+      parentPhone: parentPhone || "-",
+      createdAt,
+      lines: groupedLines,
+      total: finalTotal,
+      receiptTitle,
+    } satisfies FeePaymentReceiptData;
   };
 
   const handlePrintReceipt = (payment: (typeof activePayments)[0]) => {
@@ -431,29 +498,39 @@ export const FeeTransactions = ({
       alert("Missing student. Reload the page and try again.");
       return;
     }
-    const amount = resolveDisplayAmount(payment);
-    const receiptTitle =
-      payment.id === "admission-fee" || payment.id === "application-fee"
-        ? "Admission Receipt"
-        : "Fee Receipt";
-    const data: FeePaymentReceiptData = {
-      schoolName: schoolBrand.name || "School",
-      schoolLogo: schoolBrand.logo,
-      schoolAddress: schoolBrand.address || "-",
-      studentName: studentName || "Student",
-      className: classDisplayName || "-",
-      residencyType: residencyType || "Day Scholar",
-      parentName: parentName || "-",
-      parentPhone: parentPhone || "-",
-      createdAt: payment.createdAt,
-      lines: [{ description: buildReceiptDescription(payment), amount }],
-      total: amount,
-      receiptTitle,
-    };
+    const data = buildReceiptDataFromPayments([payment], payment.createdAt);
 
     setPrintingId(payment.id);
     setReceiptData(data);
 
+    setTimeout(async () => {
+      try {
+        await printFromElement(receiptRef);
+      } catch (error) {
+        console.error("Error printing receipt:", error);
+        alert(error instanceof Error ? error.message : "Failed to print receipt. Please try again.");
+      } finally {
+        setPrintingId(null);
+        setReceiptData(null);
+      }
+    }, 500);
+  };
+
+  const toggleReceiptSelection = (id: string) => {
+    setSelectedReceiptIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const printSelectedReceipts = () => {
+    const selectedPayments = activePayments.filter((p) => selectedReceiptIds.includes(p.id));
+    if (selectedPayments.length === 0) {
+      alert("Select at least one transaction to print.");
+      return;
+    }
+    const data = buildReceiptDataFromPayments(selectedPayments, new Date().toISOString());
+    setPrintingId("bulk");
+    setReceiptData(data);
     setTimeout(async () => {
       try {
         await printFromElement(receiptRef);
@@ -476,7 +553,17 @@ export const FeeTransactions = ({
         <h3 className="text-lg font-semibold text-white flex items-center gap-2">
           <Receipt className="w-5 h-5 text-lime-400 flex-shrink-0" /> Fee Details & Transactions
         </h3>
-        {hasFee && (
+        <div className="flex flex-col items-start sm:items-end gap-2">
+          <button
+            type="button"
+            onClick={printSelectedReceipts}
+            disabled={selectedReceiptIds.length === 0 || printingId === "bulk"}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-lime-500/20 hover:bg-lime-500/30 disabled:bg-gray-600 disabled:cursor-not-allowed text-lime-300 disabled:text-gray-500 rounded-lg text-xs font-semibold transition-colors"
+          >
+            <Printer className="w-3.5 h-3.5 shrink-0" />
+            {printingId === "bulk" ? "Printing..." : `Print Selected (${selectedReceiptIds.length})`}
+          </button>
+          {hasFee && (
           <div className="text-left sm:text-right">
             <p className="text-[10px] text-gray-400 font-bold tracking-widest uppercase">FEES PAID / TOTAL</p>
             <p className="text-xl sm:text-2xl font-bold text-white">
@@ -484,7 +571,8 @@ export const FeeTransactions = ({
               <span className="text-gray-500">/ ₹{total.toLocaleString("en-IN")}</span>
             </p>
           </div>
-        )}
+          )}
+        </div>
       </div>
 
       {!hasAny ? (
@@ -494,6 +582,7 @@ export const FeeTransactions = ({
           <table className="w-full text-left min-w-[980px]">
             <thead>
               <tr className="text-[11px] text-gray-400 font-bold tracking-wider uppercase border-b border-white/5">
+                <th className="pb-4 font-medium">PRINT</th>
                 <th className="pb-4 font-medium">DATE</th>
                 <th className="pb-4 font-medium">DESCRIPTION</th>
                 <th className="pb-4 font-medium">FEE TYPE</th>
@@ -514,6 +603,15 @@ export const FeeTransactions = ({
                     key={p.id}
                     className="border-b border-white/5 last:border-0 hover:bg-white/[0.02] transition-colors"
                   >
+                    <td className="py-4 sm:py-5">
+                      <input
+                        type="checkbox"
+                        checked={selectedReceiptIds.includes(p.id)}
+                        onChange={() => toggleReceiptSelection(p.id)}
+                        className="h-4 w-4 rounded border-white/30 accent-lime-500"
+                        aria-label={`Select ${p.feeTypeName || "transaction"} for receipt print`}
+                      />
+                    </td>
                     <td className="py-4 sm:py-5 text-gray-400 whitespace-nowrap">
                       {new Date(p.createdAt).toISOString().slice(0, 10)}
                     </td>

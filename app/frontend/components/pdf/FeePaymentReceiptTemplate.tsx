@@ -6,15 +6,17 @@ export interface FeePaymentReceiptData {
   schoolLogo?: string | null;
   schoolAddress?: string;
   studentName: string;
+  admissionNumber?: string;
   className: string;
+  academicYear?: string;
+  fatherName?: string;
+  motherName?: string;
   residencyType: string;
   parentName: string;
   parentPhone: string;
   createdAt: string | Date;
-  /** Table rows (description + amount); total should match sum shown in footer. */
-  lines: Array<{ description: string; amount: number }>;
+  lines: Array<{ description: string; amount: number; paymentMethod?: string; utrNo?: string }>;
   total: number;
-  /** Defaults to "Fee Receipt"; use "Admission Receipt" for application/admission fee lines to match the admission tab. */
   receiptTitle?: string;
 }
 
@@ -22,15 +24,42 @@ type Props = {
   data: FeePaymentReceiptData | null;
 };
 
-const formatMoney = (n: number) =>
-  `₹${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const numberToWords = (value: number) => {
+  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+  const under1000 = (n: number): string => {
+    let out = "";
+    if (n >= 100) {
+      out += `${ones[Math.floor(n / 100)]} Hundred `;
+      n %= 100;
+    }
+    if (n >= 20) {
+      out += `${tens[Math.floor(n / 10)]} `;
+      n %= 10;
+    }
+    if (n > 0) out += `${ones[n]} `;
+    return out.trim();
+  };
+  const n = Math.floor(Math.max(0, value));
+  if (n === 0) return "Zero only";
+  const crore = Math.floor(n / 10000000);
+  const lakh = Math.floor((n % 10000000) / 100000);
+  const thousand = Math.floor((n % 100000) / 1000);
+  const rest = n % 1000;
+  const parts: string[] = [];
+  if (crore) parts.push(`${under1000(crore)} Crore`);
+  if (lakh) parts.push(`${under1000(lakh)} Lakh`);
+  if (thousand) parts.push(`${under1000(thousand)} Thousand`);
+  if (rest) parts.push(under1000(rest));
+  return `${parts.join(" ")} only`;
+};
 
 const SingleReceipt = ({ data }: { data: FeePaymentReceiptData }) => {
-  const formattedDate = format(new Date(data.createdAt), "dd MMMM yyyy, hh:mm a");
+  const formattedDate = format(new Date(data.createdAt), "dd-MM-yyyy");
 
   return (
     <div
-      className="p-8 font-sans flex flex-col"
+      className="p-6 font-sans flex flex-col"
       style={{
         width: "800px",
         height: "510px",
@@ -42,129 +71,97 @@ const SingleReceipt = ({ data }: { data: FeePaymentReceiptData }) => {
       }}
     >
       <div
-        className="h-2 rounded-t-2xl -mt-8 -mx-8 mb-4 flex-shrink-0"
-        style={{ background: "linear-gradient(90deg, #84cc16 0%, #10b981 45%, #06b6d4 100%)" }}
-      />
-
-      <div className="flex flex-col border-b-2 pb-3 mb-4 flex-shrink-0" style={{ borderColor: "#e2e8f0" }}>
-        <div className="flex justify-between items-start w-full">
-          <div className="flex gap-4 items-center">
-            {data.schoolLogo ? (
-              <img
-                src={data.schoolLogo}
-                alt="Logo"
-                className="w-14 h-14 object-contain rounded-full border"
-                style={{ borderColor: "#e2e8f0" }}
-              />
-            ) : (
-              <div
-                className="w-14 h-14 rounded-full border-2 flex items-center justify-center text-[9px] font-bold text-gray-400"
-                style={{ borderColor: "#e2e8f0" }}
-              >
-                LOGO
-              </div>
-            )}
-            <div>
-              <h1 className="text-2xl font-extrabold tracking-tight leading-tight" style={{ color: "#1e293b" }}>
-                {data.schoolName || "School"}
-              </h1>
-              <p className="text-xs mt-0.5" style={{ color: "#64748b" }}>
-                {data.schoolAddress || "-"}
-              </p>
-            </div>
-          </div>
-          <div className="text-right whitespace-nowrap pt-1">
-            <p className="text-xs font-semibold" style={{ color: "#64748b" }}>
-              {formattedDate}
-            </p>
-          </div>
-        </div>
-        <div className="text-center mt-2">
-          <h2 className="text-xl font-black uppercase tracking-widest" style={{ color: "#475569" }}>
-            {data.receiptTitle?.trim() || "Fee Receipt"}
-          </h2>
-        </div>
+        className="absolute inset-0 flex items-center justify-center pointer-events-none"
+        style={{ opacity: 0.06 }}
+      >
+        <img
+          src={data.schoolLogo || "/timelylogo.webp"}
+          alt="watermark"
+          className="w-48 h-48 object-contain"
+        />
       </div>
 
-      <div className="grid grid-cols-2 gap-6 mb-4 flex-shrink-0">
-        <div className="rounded-xl p-3 border" style={{ backgroundColor: "#f0fdf4", borderColor: "#dcfce7" }}>
-          <p className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: "#16a34a" }}>
-            Student Information
-          </p>
-          <div className="space-y-1.5 text-xs">
-            <div>
-              <span style={{ color: "#64748b" }}>Name:</span>{" "}
-              <span className="font-semibold">{data.studentName}</span>
+      <div className="border-b pb-2 mb-3" style={{ borderColor: "#000" }}>
+        <div className="flex items-center justify-center gap-3">
+          {data.schoolLogo ? (
+            <img src={data.schoolLogo} alt="Logo" className="w-12 h-12 object-contain rounded-full border" style={{ borderColor: "#000" }} />
+          ) : (
+            <div className="w-12 h-12 rounded-full border flex items-center justify-center text-[9px] font-bold" style={{ borderColor: "#000" }}>
+              LOGO
             </div>
-            <div>
-              <span style={{ color: "#64748b" }}>Class:</span>{" "}
-              <span className="font-semibold">{data.className}</span>
-            </div>
-            <div>
-              <span style={{ color: "#64748b" }}>Type:</span>{" "}
-              <span className="font-semibold">{data.residencyType}</span>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-xl p-3 border" style={{ backgroundColor: "#f0f9ff", borderColor: "#dbeafe" }}>
-          <p className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: "#0284c7" }}>
-            Parent Information
-          </p>
-          <div className="space-y-1.5 text-xs">
-            <div>
-              <span style={{ color: "#64748b" }}>Parent Name:</span>{" "}
-              <span className="font-semibold">{data.parentName}</span>
-            </div>
-            {data.parentPhone && data.parentPhone !== "-" ? (
-              <div>
-                <span style={{ color: "#64748b" }}>Phone:</span>{" "}
-                <span className="font-semibold">{data.parentPhone}</span>
-              </div>
-            ) : null}
+          )}
+          <div className="text-center">
+            <h1 className="text-[28px] font-bold leading-tight tracking-wide">{data.schoolName || "School"}</h1>
+            <p className="text-xs leading-tight">{data.schoolAddress || "-"}</p>
+            <h2 className="text-sm font-semibold mt-1">{data.receiptTitle?.trim() || "Fee Receipt"}</h2>
           </div>
         </div>
       </div>
 
-      <div className="mb-2 rounded-xl overflow-hidden border flex-shrink-0" style={{ borderColor: "#e2e8f0" }}>
+      <div className="grid grid-cols-2 gap-6 mb-3 text-xs">
+        <div className="space-y-1">
+          <div className="font-semibold">Receipt To</div>
+          <div><span className="font-semibold">Student Name:</span> {data.studentName}</div>
+          <div><span className="font-semibold">Admission No.:</span> {data.admissionNumber || "-"}</div>
+          <div><span className="font-semibold">Class:</span> {data.className}</div>
+          <div><span className="font-semibold">Academic Year:</span> {data.academicYear || "-"}</div>
+        </div>
+        <div className="space-y-1">
+          <div><span className="font-semibold">Father Name:</span> {data.fatherName || data.parentName || "-"}</div>
+          <div><span className="font-semibold">Mother Name:</span> {data.motherName || "-"}</div>
+          <div><span className="font-semibold">Receipt Date:</span> {formattedDate}</div>
+          <div><span className="font-semibold">Phone:</span> {data.parentPhone || "-"}</div>
+        </div>
+      </div>
+
+      <div className="mb-2 rounded-sm overflow-hidden border" style={{ borderColor: "#000" }}>
         <table className="w-full text-xs">
-          <thead style={{ backgroundColor: "#1e293b", color: "#ffffff" }}>
-            <tr className="uppercase text-[10px] tracking-wider">
-              <th className="px-5 py-2.5 text-left">Description</th>
-              <th className="px-5 py-2.5 text-right">Amount</th>
+          <thead>
+            <tr className="uppercase text-[10px] tracking-wider border-b" style={{ borderColor: "#000" }}>
+              <th className="px-3 py-2 text-left">Sl No.</th>
+              <th className="px-3 py-2 text-left">Particulars</th>
+              <th className="px-3 py-2 text-left">Payment Method</th>
+              <th className="px-3 py-2 text-left">UTR / Ref</th>
+              <th className="px-3 py-2 text-right">Amount</th>
             </tr>
           </thead>
-          <tbody style={{ backgroundColor: "#ffffff" }}>
+          <tbody>
             {data.lines.map((row, idx) => (
-              <tr
-                key={`${row.description}-${idx}`}
-                className="border-b"
-                style={{
-                  borderColor: "#f1f5f9",
-                  backgroundColor: idx % 2 === 0 ? "#ffffff" : "#f8fafc",
-                }}
-              >
-                <td className="px-5 py-3">{row.description}</td>
-                <td className="px-5 py-3 text-right font-semibold tabular-nums">{formatMoney(row.amount)}</td>
+              <tr key={`${row.description}-${idx}`} className="border-b" style={{ borderColor: "#000" }}>
+                <td className="px-3 py-2 text-center">{idx + 1}</td>
+                <td className="px-3 py-2">{row.description}</td>
+                <td className="px-3 py-2">{row.paymentMethod || "-"}</td>
+                <td className="px-3 py-2">{row.utrNo || "-"}</td>
+                <td className="px-3 py-2 text-right font-semibold">Rs. {Number(row.amount || 0).toLocaleString("en-IN")}.00</td>
               </tr>
             ))}
           </tbody>
-          <tfoot style={{ backgroundColor: "#f0fdf4" }}>
+          <tfoot>
             <tr>
-              <td className="px-5 py-2.5 font-bold uppercase text-[10px] tracking-wider">Total Paid</td>
-              <td className="px-5 py-2.5 text-right font-black tabular-nums text-sm" style={{ color: "#65a30d" }}>
-                {formatMoney(data.total)}
+              <td className="px-3 py-2 font-semibold" colSpan={4}>
+                Total in Words: {numberToWords(data.total)}
+              </td>
+              <td className="px-3 py-2 text-right font-bold">
+                Total: Rs.{Number(data.total || 0).toLocaleString("en-IN")}
               </td>
             </tr>
           </tfoot>
         </table>
       </div>
 
+      <div className="mt-4 flex items-end justify-end text-xs">
+        <div className="text-xs font-semibold">
+          <div className="border-t pt-1 min-w-[140px] text-center" style={{ borderColor: "#000" }}>
+            Authorised Signature
+          </div>
+        </div>
+      </div>
+
       <div
-        className="absolute bottom-3 left-0 right-0 text-center text-[10px] font-semibold pt-2 border-t flex flex-col gap-0.5 mx-8"
-        style={{ color: "#94a3b8", borderColor: "#f1f5f9" }}
+        className="absolute bottom-2 left-0 right-0 text-center text-[11px]"
+        style={{ fontWeight: 400 }}
       >
-        <p>This is a computer-generated receipt and does not require a physical signature.</p>
-        <p>Powered by Timelly</p>
+        Powered by Timelly
       </div>
     </div>
   );
@@ -172,12 +169,11 @@ const SingleReceipt = ({ data }: { data: FeePaymentReceiptData }) => {
 
 const FeePaymentReceiptTemplate = forwardRef<HTMLDivElement, Props>(({ data }, ref) => {
   if (!data) return null;
-
   return (
     <div style={{ position: "fixed", top: "-9999px", left: "-9999px", zIndex: -9999 }}>
       <div ref={ref} style={{ width: "800px", display: "flex", flexDirection: "column" }}>
         <SingleReceipt data={data} />
-        <div style={{ width: "100%", borderTop: "2px dashed #cbd5e1", margin: "4px 0" }} />
+        <div style={{ width: "100%", borderTop: "1px dashed #555", margin: "3px 0" }} />
         <SingleReceipt data={data} />
       </div>
     </div>

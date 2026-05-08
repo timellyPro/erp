@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Download, Search } from "lucide-react";
 import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
 import SelectInput from "../../common/SelectInput";
 import type { Class, FeeRecord } from "./types";
 import { schoolAdminStudentDetailsFeesUrl } from "./studentDetailsNav";
@@ -18,6 +19,7 @@ interface FeeRecordsTableProps {
 }
 
 type ReportPeriod = "DAY_WISE" | "MONTH_WISE" | "YEAR_WISE" | "ACADEMIC_YEAR_WISE";
+type ExportFormat = "xlsx" | "csv" | "pdf";
 
 export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps) {
   const router = useRouter();
@@ -32,6 +34,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     const start = now.getMonth() >= 5 ? now.getFullYear() : now.getFullYear() - 1;
     return `${start}-${start + 1}`;
   });
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("xlsx");
   const [page, setPage] = useState(1);
 
   const filteredFees = fees.filter((f) => {
@@ -91,6 +94,314 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     XLSX.writeFile(workbook, filename);
   };
 
+  const downloadCsv = (filename: string, rows: Record<string, string | number>[]) => {
+    if (!rows.length) return;
+    const headers = Object.keys(rows[0]);
+    const escapeCsvValue = (value: string | number | undefined) =>
+      `"${String(value ?? "").replace(/"/g, '""')}"`;
+    const csv = [
+      headers.join(","),
+      ...rows.map((row) => headers.map((header) => escapeCsvValue(row[header])).join(",")),
+    ].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const loadImageAsDataUrl = async (url: string) => {
+    try {
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      return await new Promise<string | null>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve((reader.result as string) || null);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  const drawPrettyPdf = async ({
+    filename,
+    title,
+    subtitle,
+    rows,
+    schoolName,
+    schoolAddress,
+    logoUrl,
+  }: {
+    filename: string;
+    title: string;
+    subtitle?: string;
+    rows: Record<string, string | number>[];
+    schoolName?: string;
+    schoolAddress?: string;
+    logoUrl?: string | null;
+  }) => {
+    if (!rows.length) return;
+
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 10;
+    const printableWidth = pageWidth - margin * 2;
+    const headerLabels: Record<string, string> = {
+      Date: "DATE",
+      "Student Name": "STUDENT NAME",
+      "Admission No": "ADMISSION NO",
+      Class: "CLASS",
+      "Fee Head": "FEE HEAD",
+      "Payment Method": "PAYMENT MODE",
+      "UTR / Ref": "UTR / REF",
+      Amount: "AMOUNT (INR)",
+      "Admission Email": "EMAIL",
+      "Fee Type": "FEE TYPE",
+      "Total Fee": "TOTAL FEE",
+      "Discount %": "DISCOUNT %",
+      "Discount Amount": "DISCOUNT AMOUNT",
+      "Final Fee": "FINAL FEE",
+      Paid: "PAID",
+      Pending: "PENDING",
+      Status: "STATUS",
+    };
+    const rightAlignHeaders = new Set(["Amount", "Total Fee", "Discount Amount", "Final Fee", "Paid", "Pending"]);
+    const headers = Object.keys(rows[0]);
+    const preferredWidthMap: Record<string, number> = {
+      Date: 22,
+      "Student Name": 42,
+      "Admission No": 26,
+      Class: 20,
+      "Fee Head": 50,
+      "Fee Type": 48,
+      "Payment Method": 24,
+      "UTR / Ref": 28,
+      Amount: 22,
+      "Admission Email": 40,
+      "Total Fee": 22,
+      "Discount %": 20,
+      "Discount Amount": 30,
+      "Final Fee": 22,
+      Paid: 18,
+      Pending: 22,
+      Status: 18,
+    };
+
+    const baseWidths = headers.map((header) => {
+      const label = headerLabels[header] || header.toUpperCase();
+      const labelWidth = doc.getTextWidth(label) + 7;
+      return Math.max(preferredWidthMap[header] || 18, labelWidth);
+    });
+    const widthTotal = baseWidths.reduce((sum, width) => sum + width, 0);
+    const columnWidths = [...baseWidths];
+    if (widthTotal < printableWidth) {
+      const remaining = printableWidth - widthTotal;
+      const growHeaders = ["Student Name", "Fee Head", "Fee Type"];
+      const presentGrowHeaders = growHeaders.filter((header) => headers.includes(header));
+      const growBy = presentGrowHeaders.length > 0 ? remaining / presentGrowHeaders.length : 0;
+      presentGrowHeaders.forEach((header) => {
+        const idx = headers.indexOf(header);
+        if (idx >= 0) columnWidths[idx] += growBy;
+      });
+    } else if (widthTotal > printableWidth) {
+      const scale = printableWidth / widthTotal;
+      headers.forEach((_, idx) => {
+        columnWidths[idx] = columnWidths[idx] * scale;
+      });
+    }
+    const rowHeight = 7;
+
+    const logoData = logoUrl ? await loadImageAsDataUrl(logoUrl) : null;
+
+    const drawPageFrame = (isFirstPage: boolean) => {
+      doc.setFillColor(250, 251, 255);
+      doc.rect(0, 0, pageWidth, pageHeight, "F");
+      if (isFirstPage) {
+        const schoolAddressText = (schoolAddress || "Address not available").replace(/\s+/g, " ").trim();
+        const maxAddressWidth = pageWidth - margin * 2 - 30;
+        const addressLines = (doc.splitTextToSize(
+          schoolAddressText,
+          Math.max(80, maxAddressWidth)
+        ) as string[]) || ["Address not available"];
+        const visibleAddressLines = addressLines.slice(0, 2);
+        const dynamicTopBandHeight = 34 + Math.max(0, visibleAddressLines.length - 1) * 5;
+
+        doc.setFillColor(22, 40, 72);
+        doc.rect(0, 0, pageWidth, dynamicTopBandHeight, "F");
+
+        doc.setTextColor(255, 255, 255);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(16);
+        doc.text(schoolName || "School", pageWidth / 2, 12, { align: "center" });
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9.5);
+        doc.text(visibleAddressLines, pageWidth / 2, 18, { align: "center" });
+        const titleY = 18 + visibleAddressLines.length * 5 + 3;
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(12);
+        doc.text(title, pageWidth / 2, titleY, { align: "center" });
+        if (subtitle) {
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(10);
+          doc.text(subtitle, pageWidth / 2, titleY + 6, { align: "center" });
+        }
+
+        if (logoData) {
+          try {
+            doc.addImage(logoData, "PNG", margin, 6, 18, 18);
+          } catch {
+            // Ignore invalid image format gracefully.
+          }
+        }
+      }
+
+      if (logoData) {
+        try {
+          doc.addImage(logoData, "PNG", pageWidth / 2 - 22, pageHeight / 2 - 22, 44, 44);
+        } catch {
+          // Ignore invalid image format gracefully.
+        }
+      } else {
+        doc.setTextColor(226, 232, 242);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(16);
+        doc.text((schoolName || "SCHOOL").toUpperCase(), pageWidth / 2, pageHeight / 2 + 2, { align: "center" });
+      }
+
+      const tableY = isFirstPage ? 44 : 10;
+      doc.setFillColor(230, 236, 248);
+      doc.rect(margin, tableY, printableWidth, 8.5, "F");
+      doc.setDrawColor(196, 208, 229);
+      doc.rect(margin, tableY, printableWidth, pageHeight - tableY - 12);
+
+      let x = margin;
+      doc.setTextColor(30, 41, 59);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8.5);
+      headers.forEach((header, idx) => {
+        const label = headerLabels[header] || header.toUpperCase();
+        const width = columnWidths[idx];
+        if (rightAlignHeaders.has(header)) {
+          doc.text(label, x + width - 2, tableY + 5.6, { align: "right" });
+        } else {
+          doc.text(label, x + 2, tableY + 5.6);
+        }
+        x += width;
+      });
+      return tableY + 12;
+    };
+
+    const fitTextToWidth = (text: string, maxWidth: number) => {
+      if (!text) return "-";
+      if (doc.getTextWidth(text) <= maxWidth) return text;
+      const ellipsis = "...";
+      let low = 0;
+      let high = text.length;
+      let best = "";
+      while (low <= high) {
+        const mid = Math.floor((low + high) / 2);
+        const candidate = `${text.slice(0, mid)}${ellipsis}`;
+        if (doc.getTextWidth(candidate) <= maxWidth) {
+          best = candidate;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+      return best || ellipsis;
+    };
+
+    const fitCellText = (text: string, maxWidth: number) => {
+      const normalized = text.replace(/\s+/g, " ").trim() || "-";
+      const lines = doc.splitTextToSize(normalized, maxWidth) as string[];
+      if (lines.length <= 1) return lines[0] || "-";
+      return fitTextToWidth(normalized, maxWidth);
+    };
+
+    let y = drawPageFrame(true);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.2);
+
+    rows.forEach((row, rowIndex) => {
+      const studentNameIdx = headers.indexOf("Student Name");
+      const studentCellWidth = studentNameIdx >= 0 ? columnWidths[studentNameIdx] : 0;
+      const studentRawValue = studentNameIdx >= 0 ? row["Student Name"] : "-";
+      const studentValue =
+        typeof studentRawValue === "number"
+          ? studentRawValue.toLocaleString("en-IN")
+          : String(studentRawValue ?? "-").replace(/\s+/g, " ").trim();
+      const studentLines =
+        studentNameIdx >= 0
+          ? ((doc.splitTextToSize(studentValue || "-", Math.max(10, studentCellWidth - 4)) as string[]) || ["-"])
+          : ["-"];
+      const lineHeight = 3.8;
+      const dynamicRowHeight = Math.max(rowHeight, studentLines.length * lineHeight + 2.4);
+
+      if (y + dynamicRowHeight > pageHeight - 14) {
+        doc.addPage();
+        y = drawPageFrame(false);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8.2);
+      }
+
+      const rowTop = y - 5.4;
+      if (rowIndex % 2 === 0) {
+        doc.setFillColor(245, 248, 255);
+        doc.rect(margin + 0.2, rowTop, printableWidth - 0.4, dynamicRowHeight, "F");
+      }
+
+      let x = margin;
+      headers.forEach((header, idx) => {
+        const rawValue = row[header];
+        const displayValue =
+          typeof rawValue === "number"
+            ? rawValue.toLocaleString("en-IN")
+            : String(rawValue ?? "-");
+        const width = columnWidths[idx];
+
+        doc.setTextColor(39, 51, 79);
+        if (header === "Student Name") {
+          const wrappedLines = (doc.splitTextToSize(
+            displayValue.replace(/\s+/g, " ").trim() || "-",
+            Math.max(10, width - 4)
+          ) as string[]) || ["-"];
+          wrappedLines.forEach((line, lineIdx) => {
+            doc.text(line, x + 2, rowTop + 4.8 + lineIdx * lineHeight);
+          });
+        } else {
+          const clipped = fitCellText(displayValue, Math.max(10, width - 4));
+          if (rightAlignHeaders.has(header)) {
+            doc.text(clipped, x + width - 2, y, { align: "right" });
+          } else {
+            doc.text(clipped, x + 2, y);
+          }
+        }
+        x += width;
+      });
+      y += dynamicRowHeight;
+    });
+
+    doc.setTextColor(71, 85, 105);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.text(`Generated on ${new Date().toLocaleString()}`, pageWidth - margin, pageHeight - 5.2, {
+      align: "right",
+    });
+    doc.save(filename);
+  };
+
+  const removeAdmissionEmailColumn = (rows: Record<string, string | number>[]) =>
+    rows.map((row) => {
+      const { "Admission Email": _omit, ...rest } = row;
+      return rest;
+    });
+
   const getReportPeriodLabel = (value: ReportPeriod) => {
     if (value === "DAY_WISE") return "Day Wise";
     if (value === "MONTH_WISE") return "Month Wise";
@@ -148,7 +459,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     const txData = await txRes.json().catch(() => ({}));
     const schoolPayload = await schoolRes.json().catch(() => ({}));
     const school = schoolPayload?.school as
-      | { name?: string; address?: string; location?: string; affiliationLine?: string }
+      | { name?: string; address?: string; location?: string; affiliationLine?: string; logoUrl?: string | null }
       | null
       | undefined;
 
@@ -178,29 +489,86 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
       return;
     }
 
-    const workbook = XLSX.utils.book_new();
-
     const headerDateLabel =
       reportPeriod === "DAY_WISE" ? formatDdMmYyyyFromYmdInput(reportDate) : getReportPeriodValue();
     const dayReportTitle =
       reportPeriod === "DAY_WISE" ? "Day Report" : `${getReportPeriodLabel(reportPeriod)} — collections`;
 
-    appendDayReportSheet(workbook, "Day Report", school, dayReportTitle, headerDateLabel, filteredTx);
-
     const fileDate = new Date().toISOString().slice(0, 10);
     const safePeriod = reportPeriod.toLowerCase();
-    XLSX.writeFile(workbook, `fee-report-${safePeriod}-${fileDate}.xlsx`);
+    const baseName = `fee-report-${safePeriod}-${fileDate}`;
+    const rows = filteredTx.map((t) => ({
+      Date: new Date(t.createdAt).toLocaleDateString("en-GB"),
+      "Student Name": t.student?.user?.name || "-",
+      "Admission No": t.student?.admissionNumber || "-",
+      Class: t.student?.class
+        ? `${t.student.class.name || ""}${t.student.class.section ? `-${t.student.class.section}` : ""}`
+        : "-",
+      "Fee Head":
+        Array.isArray(t.feeAllocations) && t.feeAllocations.length
+          ? t.feeAllocations.map((a) => a.name).join(", ")
+          : t.feeTypeName || "-",
+      "Payment Method": t.gateway || "-",
+      "UTR / Ref": t.transactionId || t.hyperpgTxnId || "-",
+      Amount: t.amount ?? 0,
+    }));
+
+    if (exportFormat === "xlsx") {
+      const workbook = XLSX.utils.book_new();
+      appendDayReportSheet(workbook, "Day Report", school, dayReportTitle, headerDateLabel, filteredTx);
+      XLSX.writeFile(workbook, `${baseName}.xlsx`);
+      return;
+    }
+
+    if (exportFormat === "csv") {
+      downloadCsv(`${baseName}.csv`, rows);
+      return;
+    }
+
+    await drawPrettyPdf({
+      filename: `${baseName}.pdf`,
+      title: "Fee Collection Report",
+      subtitle: `${getReportPeriodLabel(reportPeriod)} | ${headerDateLabel}`,
+      rows,
+      schoolName: school?.name || "School",
+      schoolAddress: [school?.address, school?.location, school?.affiliationLine].filter(Boolean).join(", "),
+      logoUrl: school?.logoUrl || null,
+    });
   };
 
-  const exportAllClasses = () => {
+  const exportAllClasses = async () => {
     if (fees.length === 0) {
       alert("No fee records available to export.");
       return;
     }
-    downloadExcel(`fee-records-all-classes-${new Date().toISOString().slice(0, 10)}.xlsx`, fees);
+    const fileDate = new Date().toISOString().slice(0, 10);
+    const baseName = `fee-records-all-classes-${fileDate}`;
+    if (exportFormat === "xlsx") {
+      downloadExcel(`${baseName}.xlsx`, fees);
+      return;
+    }
+    const rows = toSheetRows(fees);
+    if (exportFormat === "csv") {
+      downloadCsv(`${baseName}.csv`, rows);
+      return;
+    }
+    const schoolRes = await fetch("/api/school/mine", { credentials: "include", cache: "no-store" });
+    const schoolPayload = await schoolRes.json().catch(() => ({}));
+    const school = schoolPayload?.school as
+      | { name?: string; address?: string; location?: string; affiliationLine?: string; logoUrl?: string | null }
+      | null
+      | undefined;
+    await drawPrettyPdf({
+      filename: `${baseName}.pdf`,
+      title: "Fee Records (All Classes)",
+      rows: removeAdmissionEmailColumn(rows),
+      schoolName: school?.name || "School",
+      schoolAddress: [school?.address, school?.location, school?.affiliationLine].filter(Boolean).join(", "),
+      logoUrl: school?.logoUrl || null,
+    });
   };
 
-  const exportSelectedClass = () => {
+  const exportSelectedClass = async () => {
     if (!selectedClass) {
       alert("Please select a class for class-wise export.");
       return;
@@ -212,10 +580,31 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     }
     const className = classLabelById.get(selectedClass) || "class";
     const safeClassName = className.replaceAll(/[^\w-]+/g, "_");
-    downloadExcel(
-      `fee-records-${safeClassName}-${new Date().toISOString().slice(0, 10)}.xlsx`,
-      rows
-    );
+    const fileDate = new Date().toISOString().slice(0, 10);
+    const baseName = `fee-records-${safeClassName}-${fileDate}`;
+    if (exportFormat === "xlsx") {
+      downloadExcel(`${baseName}.xlsx`, rows);
+      return;
+    }
+    const reportRows = toSheetRows(rows);
+    if (exportFormat === "csv") {
+      downloadCsv(`${baseName}.csv`, reportRows);
+      return;
+    }
+    const schoolRes = await fetch("/api/school/mine", { credentials: "include", cache: "no-store" });
+    const schoolPayload = await schoolRes.json().catch(() => ({}));
+    const school = schoolPayload?.school as
+      | { name?: string; address?: string; location?: string; affiliationLine?: string; logoUrl?: string | null }
+      | null
+      | undefined;
+    await drawPrettyPdf({
+      filename: `${baseName}.pdf`,
+      title: `Fee Records (${className})`,
+      rows: removeAdmissionEmailColumn(reportRows),
+      schoolName: school?.name || "School",
+      schoolAddress: [school?.address, school?.location, school?.affiliationLine].filter(Boolean).join(", "),
+      logoUrl: school?.logoUrl || null,
+    });
   };
 
   return (
@@ -275,9 +664,18 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
               placeholder="e.g. 2025-2026"
             />
           )}
+          <SelectInput
+            value={exportFormat}
+            onChange={(value) => setExportFormat(value as ExportFormat)}
+            options={[
+              { label: "Export as Excel (.xlsx)", value: "xlsx" },
+              { label: "Export as CSV (.csv)", value: "csv" },
+              { label: "Export as PDF (.pdf)", value: "pdf" },
+            ]}
+          />
           <button
             type="button"
-          onClick={() => void exportFinalTemplate()}
+            onClick={() => void exportFinalTemplate()}
             className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300 hover:bg-amber-500/20"
           >
             <Download size={16} />

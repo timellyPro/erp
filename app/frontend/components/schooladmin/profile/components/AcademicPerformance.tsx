@@ -1,23 +1,28 @@
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, CartesianGrid } from "recharts";
 import { TrendingUp } from "lucide-react";
 import SelectInput from "../../../common/SelectInput";
+import type { ReactNode } from "react";
 
 type Props = {
   data?: Array<{ subject: string; score: number }>;
+  rightAction?: ReactNode;
 };
 
-export const AcademicPerformance = ({ data = [] }: Props) => {
+export const AcademicPerformance = ({ data = [], rightAction }: Props) => {
   const chartData = data.length > 0 ? data : [];
 
   return (
     <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl sm:rounded-[32px] p-4 sm:p-8 w-full max-w-3xl min-w-0 overflow-hidden">
-      <div className="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-center mb-6 sm:mb-10 min-w-0">
-        <h3 className="text-white text-lg sm:text-2xl font-bold flex items-center gap-2 sm:gap-3 min-w-0">
-          <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6 text-[#b4f44d] flex-shrink-0" />
-          <span className="leading-tight">Academic Performance</span>
-        </h3>
+      <div className="flex flex-col gap-4 mb-6 sm:mb-10 min-w-0">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h3 className="text-white text-lg sm:text-2xl font-bold flex items-center gap-2 sm:gap-3 min-w-0">
+            <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6 text-[#b4f44d] flex-shrink-0" />
+            <span className="leading-tight">Academic Performance</span>
+          </h3>
+          {rightAction ? <div className="w-full sm:w-auto">{rightAction}</div> : null}
+        </div>
 
-        <div className="w-full sm:w-auto sm:min-w-[140px] min-w-0">
+        <div className="w-full sm:w-auto sm:min-w-[140px] min-w-0 sm:max-w-[180px]">
           <SelectInput
             value="Midterm"
             options={[{ label: "Midterm", value: "Midterm" }]}

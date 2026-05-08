@@ -80,10 +80,12 @@ export const FeesBreakdown = ({
     amount: string;
     mode: "CASH" | "ONLINE" | "CHEQUE" | "DD" | "OTHERS";
     referenceNo: string;
+    paymentDate: string;
   }>({
     amount: "",
     mode: "CASH",
     referenceNo: "",
+    paymentDate: new Date().toISOString().slice(0, 10),
   });
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
@@ -195,6 +197,7 @@ export const FeesBreakdown = ({
       amount: head.due > 0 ? head.due.toFixed(2) : "",
       mode: "CASH",
       referenceNo: "",
+      paymentDate: new Date().toISOString().slice(0, 10),
     });
   };
 
@@ -262,6 +265,7 @@ export const FeesBreakdown = ({
           refNo: ref || undefined,
           transactionId: ref || undefined,
           selectedHeads: [selectedHead],
+          paymentDate: paymentForm.paymentDate,
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -805,6 +809,20 @@ export const FeesBreakdown = ({
                   <option value="DD">DD (Demand Draft)</option>
                   <option value="OTHERS">Others</option>
                 </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-white/60">Payment date</label>
+                <input
+                  type="date"
+                  value={paymentForm.paymentDate}
+                  onChange={(e) =>
+                    setPaymentForm((prev) => ({
+                      ...prev,
+                      paymentDate: e.target.value,
+                    }))
+                  }
+                  className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-white"
+                />
               </div>
               <div>
                 <label className="mb-1 block text-xs font-medium text-white/60">UTR / Reference number</label>
