@@ -35,6 +35,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     return `${start}-${start + 1}`;
   });
   const [exportFormat, setExportFormat] = useState<ExportFormat>("xlsx");
+  const [feeDueExporting, setFeeDueExporting] = useState(false);
   const [page, setPage] = useState(1);
 
   const filteredFees = fees.filter((f) => {
@@ -568,6 +569,38 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     });
   };
 
+  const exportFeeDueReport = async () => {
+    if (fees.length === 0) {
+      alert("No fee records available for this report.");
+      return;
+    }
+    setFeeDueExporting(true);
+    try {
+      const q = selectedClass ? `?classId=${encodeURIComponent(selectedClass)}` : "";
+      const res = await fetch(`/api/fees/export/fee-due-report${q}`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { message?: string };
+        alert(data.message || "Failed to export fee due report.");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `fee-due-report-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error(e);
+      alert("Failed to export fee due report.");
+    } finally {
+      setFeeDueExporting(false);
+    }
+  };
+
   const exportSelectedClass = async () => {
     if (!selectedClass) {
       alert("Please select a class for class-wise export.");
@@ -707,6 +740,15 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
             ]}
           />
         </div>
+        <button
+          type="button"
+          onClick={() => void exportFeeDueReport()}
+          disabled={feeDueExporting}
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-sm text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
+        >
+          <Download size={16} />
+          {feeDueExporting ? "Exporting…" : "Fee Due Report (Excel)"}
+        </button>
         <button
           type="button"
           onClick={exportAllClasses}
