@@ -1108,7 +1108,12 @@ export default function TeacherAdmissionTab() {
           parentWhatsapp: a.parentWhatsapp ?? "",
           bankAccountNo: a.bankAccountNo ?? "",
           motherName: (a as any).motherName ?? "",
-          motherPhone: (a as any).motherPhone ?? "",
+          // Mother phone is stored on the application as `emergencyMotherNo` (same as student profile).
+          motherPhone: (() => {
+            const em = String((a as { emergencyMotherNo?: string | null }).emergencyMotherNo ?? "").trim();
+            if (em && em !== "-") return em;
+            return "";
+          })(),
           motherAadharNo: (a as any).motherAadharNo ?? "",
           motherEmail: (a as any).motherEmail ?? "",
           panNumber: (a as any).panNumber ?? "",
@@ -1171,6 +1176,8 @@ export default function TeacherAdmissionTab() {
         firstName,
         middleName,
         lastName,
+        /** Explicit so mother name always reaches API (profile reads synced `Student.motherName` on save). */
+        motherName: form.motherName?.trim() ? form.motherName.trim() : null,
         classId: form.classId || null,
         applicationFee: form.applicationFee.trim() ? Number(form.applicationFee) : null,
         admissionFee: form.admissionFee.trim() ? Number(form.admissionFee) : null,
@@ -1215,7 +1222,9 @@ export default function TeacherAdmissionTab() {
       }
     } catch (e) {
       setMessageTone("error");
-      setMessage(e instanceof Error ? e.message : `Failed to ${editId ? "update" : "save"} admission`);
+      const msg = e instanceof Error ? e.message : `Failed to ${editId ? "update" : "save"} admission`;
+      setMessage(msg);
+      throw new Error(msg);
     } finally {
       setSubmitting(false);
     }
@@ -1268,7 +1277,9 @@ export default function TeacherAdmissionTab() {
                       try {
                         await submit();
                         if (editId) router.push("?tab=admission&view=all");
-                      } catch {}
+                      } catch {
+                        // Error message already set on the form; do not leave edit view on failed save.
+                      }
                     }}
                     disabled={submitting}
                     className="px-4 py-2 rounded-xl bg-lime-400 text-black font-semibold hover:bg-lime-500 disabled:opacity-60 flex items-center gap-2"

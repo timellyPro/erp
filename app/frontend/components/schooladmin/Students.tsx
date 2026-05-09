@@ -73,6 +73,7 @@ export default function StudentsManagementPage({ classes, reload }: Props) {
           onToggleAddForm={() => page.setShowAddForm((prev) => !prev)}
           onToggleUpload={() => page.setShowUploadPanel((prev) => !prev)}
           onDownloadReport={page.handleDownloadReport}
+          exportDetailsLoading={page.exportingDetails}
         />
 
         {page.showUploadPanel && (

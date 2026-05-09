@@ -1213,6 +1213,7 @@ model StudentApplication {
 
   // Parent Details
   parentName       String
+  motherName       String?
   parentOccupation String
   officeAddress    String
   parentPhone      String

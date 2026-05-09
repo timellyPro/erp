@@ -4,6 +4,7 @@ import prisma from "@/lib/db";
 import { setApplicationEnrolled } from "@/lib/admissionsListQuery";
 import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
 import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
+import { buildAddressFromParts } from "@/lib/studentAddressFormat";
 
 function normalizePhone10(phone: string) {
   const d = phone.replace(/\D/g, "");
@@ -34,7 +35,7 @@ function buildAddressFromApplication(app: {
   state: string;
   pinCode: string;
 }) {
-  return [app.houseNo, app.street, app.town, app.city, app.state, app.pinCode].filter(Boolean).join(", ").trim();
+  return buildAddressFromParts([app.houseNo, app.street, app.town, app.city, app.state, app.pinCode]);
 }
 
 /**
@@ -58,6 +59,7 @@ export async function enrollStudentFromAdmissionApplication(params: {
       parentPhone: string;
       aadharNo: string;
       parentName: string;
+      motherName: string | null;
       dateOfBirth: Date;
       gender: string;
       previousSchoolName: string;
@@ -78,7 +80,7 @@ export async function enrollStudentFromAdmissionApplication(params: {
       parentOccupation: string;
     }>
   >(
-    Prisma.sql`SELECT "studentId", "classId", "firstName", "middleName", "lastName", "parentPhone", "aadharNo", "parentName", "dateOfBirth", "gender", "previousSchoolName", "rollNo", "penNumber", "apaarId", "fedenaNo", "houseNo", "street", "town", "city", "state", "pinCode", "parentEmail", "residencyType", "applicationFee", "admissionFee", "parentOccupation" FROM "StudentApplication" WHERE "id" = ${applicationId} AND "schoolId" = ${schoolId} LIMIT 1`
+    Prisma.sql`SELECT "studentId", "classId", "firstName", "middleName", "lastName", "parentPhone", "aadharNo", "parentName", "motherName", "dateOfBirth", "gender", "previousSchoolName", "rollNo", "penNumber", "apaarId", "fedenaNo", "houseNo", "street", "town", "city", "state", "pinCode", "parentEmail", "residencyType", "applicationFee", "admissionFee", "parentOccupation" FROM "StudentApplication" WHERE "id" = ${applicationId} AND "schoolId" = ${schoolId} LIMIT 1`
   );
   const app = appRows[0];
 
@@ -283,7 +285,7 @@ export async function enrollStudentFromAdmissionApplication(params: {
           gender: genderRaw,
           previousSchool,
           fatherName,
-          motherName: null,
+          motherName: app.motherName?.trim() || null,
           occupation: app.parentOccupation?.trim() || null,
           aadhaarNo: aadhaarCleaned,
           phoneNo,
