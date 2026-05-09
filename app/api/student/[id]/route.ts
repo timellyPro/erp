@@ -89,6 +89,25 @@ export async function GET(_req: Request, context: RouteParams) {
       return NextResponse.json({ message: "Student not found" }, { status: 404 });
     }
 
+    // Some legacy rows may not have the StudentApplication relation linked via `studentId`.
+    // Fall back by Aadhaar within school so parent/mother contact still appears in profile.
+    const fallbackApplication =
+      student.application ??
+      (await prisma.studentApplication.findFirst({
+        where: {
+          schoolId: student.schoolId,
+          aadharNo: student.aadhaarNo,
+        },
+        select: {
+          emergencyMotherNo: true,
+        },
+        orderBy: { updatedAt: "desc" },
+      }));
+
+    const motherPhoneRaw = String(fallbackApplication?.emergencyMotherNo ?? "").trim();
+    const motherPhoneResolved =
+      !motherPhoneRaw || motherPhoneRaw === "-" || motherPhoneRaw === "—" ? "" : motherPhoneRaw;
+
     const payments = await prisma.payment.findMany({
       where: { studentId: id },
       orderBy: { createdAt: "desc" },
@@ -276,7 +295,7 @@ export async function GET(_req: Request, context: RouteParams) {
         fatherOccupation: student.occupation ?? "",
         motherOccupation: student.occupation ?? "",
         fatherPhone: student.phoneNo ?? "",
-        motherPhone: student.application?.emergencyMotherNo ?? "",
+        motherPhone: motherPhoneResolved,
         previousSchool: student.previousSchool ?? "",
         aadhaarNo: student.aadhaarNo ?? "",
         officeAddress: student.application?.officeAddress ?? "",

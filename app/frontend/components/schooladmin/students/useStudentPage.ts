@@ -278,6 +278,7 @@ export default function useStudentPage({ classes, reload }: Props) {
   const [editErrors, setEditErrors] = useState<StudentFormErrors>({});
   const [editSaving, setEditSaving] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [exportingDetails, setExportingDetails] = useState(false);
 
   useEffect(() => {
     if (stableClasses.length) {
@@ -795,8 +796,49 @@ export default function useStudentPage({ classes, reload }: Props) {
     }
   };
 
-  const handleDownloadReport = () => {
-    toast.info("Downloading report...");
+  const handleDownloadReport = async () => {
+    if (exportingDetails) return;
+    setExportingDetails(true);
+    try {
+      const params = new URLSearchParams();
+      if (selectedClassIdForFetch) {
+        params.set("classId", selectedClassIdForFetch);
+      } else {
+        if (selectedClass) params.set("className", selectedClass);
+        if (selectedSection) params.set("section", selectedSection);
+      }
+      const res = await fetch(
+        `/api/student/export-details?${params.toString()}`,
+        { credentials: "include", cache: "no-store" }
+      );
+      if (!res.ok) {
+        let message = "Export failed";
+        try {
+          const data = (await res.json()) as { message?: string };
+          if (typeof data.message === "string" && data.message) {
+            message = data.message;
+          }
+        } catch {
+          /* ignore */
+        }
+        toast.error(message);
+        return;
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "Student-details-report.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success("Report downloaded");
+    } catch {
+      toast.error("Export failed");
+    } finally {
+      setExportingDetails(false);
+    }
   };
 
   return {
@@ -845,6 +887,7 @@ export default function useStudentPage({ classes, reload }: Props) {
     handleEditSave,
     handleDelete,
     handleDownloadReport,
+    exportingDetails,
     showSuccess,
     setShowSuccess,
   };

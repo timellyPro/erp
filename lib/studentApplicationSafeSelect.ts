@@ -49,6 +49,7 @@ export const studentApplicationDetailSelect = {
   state: true,
   pinCode: true,
   parentName: true,
+  motherName: true,
   parentOccupation: true,
   officeAddress: true,
   parentPhone: true,

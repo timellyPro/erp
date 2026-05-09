@@ -77,6 +77,8 @@ export async function POST(req: Request) {
       "state",
       "pinCode",
       "parentName",
+      "motherName",
+      "motherPhone",
       "parentOccupation",
       "officeAddress",
       "parentPhone",
@@ -168,6 +170,7 @@ export async function POST(req: Request) {
         state: requiredString(body.state, "state"),
         pinCode: requiredString(body.pinCode, "pinCode"),
         parentName: requiredString(body.parentName, "parentName"),
+        motherName: optionalString(body.motherName),
         parentOccupation: requiredString(body.parentOccupation, "parentOccupation"),
         officeAddress: requiredString(body.officeAddress, "officeAddress"),
         parentPhone: requiredString(body.parentPhone, "parentPhone"),
@@ -183,7 +186,10 @@ export async function POST(req: Request) {
         previousSchoolName: optionalString(body.previousSchoolName) ?? "-",
         previousSchoolAddress: optionalString(body.previousSchoolAddress) ?? "-",
         emergencyFatherNo: optionalString(body.emergencyFatherNo) ?? "-",
-        emergencyMotherNo: optionalString(body.emergencyMotherNo) ?? "-",
+        emergencyMotherNo:
+          optionalString(body.emergencyMotherNo) ??
+          optionalString((body as Record<string, unknown>).motherPhone) ??
+          "-",
         emergencyGuardianNo: optionalString(body.emergencyGuardianNo) ?? "-",
       },
       select: {

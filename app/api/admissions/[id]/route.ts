@@ -118,6 +118,14 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
     const parentAadharDefault =
       aadharForParent.length >= 8 ? `${aadharForParent.slice(0, 8)}0000` : `${aadharForParent.padEnd(8, "0")}0000`;
 
+    const linkedStudent = await prisma.studentApplication.findFirst({
+      where: { id, schoolId },
+      select: { studentId: true },
+    });
+    if (!linkedStudent) {
+      return NextResponse.json({ message: "Not found" }, { status: 404 });
+    }
+
     const updated = await prisma.studentApplication.update({
       where: { id },
       data: {
@@ -164,6 +172,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
         state: requiredString(body.state, "state"),
         pinCode: requiredString(body.pinCode, "pinCode"),
         parentName: requiredString(body.parentName, "parentName"),
+        motherName: optionalString(body.motherName),
         parentOccupation: requiredString(body.parentOccupation, "parentOccupation"),
         officeAddress: requiredString(body.officeAddress, "officeAddress"),
         parentPhone: requiredString(body.parentPhone, "parentPhone"),
@@ -174,7 +183,10 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
         previousSchoolName: optionalString(body.previousSchoolName) ?? "-",
         previousSchoolAddress: optionalString(body.previousSchoolAddress) ?? "-",
         emergencyFatherNo: optionalString(body.emergencyFatherNo) ?? "-",
-        emergencyMotherNo: optionalString(body.emergencyMotherNo) ?? "-",
+        emergencyMotherNo:
+          optionalString(body.emergencyMotherNo) ??
+          optionalString((body as Record<string, unknown>).motherPhone) ??
+          "-",
         emergencyGuardianNo: optionalString(body.emergencyGuardianNo) ?? "-",
       },
       select: { id: true },
@@ -183,6 +195,23 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
     // safety: tenant check (avoid leaking existence across tenants)
     const tenantRow = await prisma.studentApplication.findFirst({ where: { id: updated.id, schoolId }, select: { id: true } });
     if (!tenantRow) return NextResponse.json({ message: "Not found" }, { status: 404 });
+
+    // Student profile reads `Student.motherName` / `Student.fatherName`, not the application row.
+    if (linkedStudent.studentId) {
+      const studentInSchool = await prisma.student.findFirst({
+        where: { id: linkedStudent.studentId, schoolId },
+        select: { id: true },
+      });
+      if (studentInSchool) {
+        await prisma.student.update({
+          where: { id: studentInSchool.id },
+          data: {
+            fatherName: requiredString(body.parentName, "parentName"),
+            motherName: optionalString(body.motherName),
+          },
+        });
+      }
+    }
 
     return NextResponse.json({ message: "Updated", id: updated.id }, { status: 200 });
   } catch (e: unknown) {

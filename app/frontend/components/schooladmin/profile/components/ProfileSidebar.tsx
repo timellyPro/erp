@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Users, Mail, Phone, MapPin, Bookmark, Pencil, X, CircleDollarSign } from "lucide-react";
 import SelectInput from "../../../common/SelectInput";
+import { formatStoredAddressForDisplay } from "@/lib/studentAddressFormat";
 
 const getResidencyLabel = (value?: string) => {
   const normalized = (value || "").trim().toLowerCase();
@@ -53,16 +54,7 @@ export const ProfileSidebar = ({
   onSaved,
   onOpenFees,
 }: Props) => {
-  const normalizedAddress = (() => {
-    const raw = (student.address || "").trim();
-    if (!raw) return "—";
-    const parts = raw
-      .split(",")
-      .map((p) => p.trim())
-      .filter(Boolean);
-    const uniqueOrdered = parts.filter((p, idx) => parts.findIndex((x) => x.toLowerCase() === p.toLowerCase()) === idx);
-    return uniqueOrdered.length > 0 ? uniqueOrdered.join(", ") : raw;
-  })();
+  const normalizedAddress = formatStoredAddressForDisplay(student.address || "");
 
   const [studentModalOpen, setStudentModalOpen] = useState(false);
   const [parentModalOpen, setParentModalOpen] = useState(false);
