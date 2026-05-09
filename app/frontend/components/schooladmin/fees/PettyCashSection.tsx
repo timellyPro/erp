@@ -374,11 +374,13 @@ export default function PettyCashSection() {
     let y = 44;
     const headers = ["Date", "Head of Account", "Description", "Voucher No", "Type", "Amount (INR)"];
     const colWidths = [24, 46, 52, 24, 18, 22];
-    const rowHeight = 7;
+    const headerRowHeight = 7;
+    const minDataRowHeight = 7;
+    const cellTopPadMm = 4.8;
 
     const drawHeader = () => {
       doc.setFillColor(132, 204, 22);
-      doc.rect(margin, y, pageWidth - margin * 2, rowHeight, "F");
+      doc.rect(margin, y, pageWidth - margin * 2, headerRowHeight, "F");
       doc.setTextColor(20, 20, 20);
       doc.setFont("helvetica", "bold");
       doc.setFontSize(9);
@@ -387,16 +389,33 @@ export default function PettyCashSection() {
         doc.text(h, x, y + 4.8);
         x += colWidths[idx];
       });
-      y += rowHeight;
+      y += headerRowHeight;
     };
 
     drawHeader();
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8.8);
 
+    const lineHeightMm =
+      (typeof doc.getLineHeightFactor === "function" ? doc.getLineHeightFactor() : 1.15) *
+      doc.getFontSize() *
+      0.352778;
+
     for (let i = 0; i < filteredExpenses.length; i += 1) {
       const row = filteredExpenses[i];
-      if (y > pageHeight - 16) {
+      const dateStr = new Date(row.expenseDate).toLocaleDateString("en-IN");
+      const headStr = String(row.headOfAccount || row.itemName);
+      const descStr = String(row.description || "-");
+      const voucherStr = String(row.voucherNo);
+      const typeStr = String(row.paymentType || "CASH");
+      const amountStr = `INR ${Number(row.amount).toLocaleString()}`;
+
+      const headLines = doc.splitTextToSize(headStr, colWidths[1] - 2);
+      const descLines = doc.splitTextToSize(descStr, colWidths[2] - 2);
+      const maxWrapLines = Math.max(1, headLines.length, descLines.length);
+      const rowHeight = Math.max(minDataRowHeight, cellTopPadMm + maxWrapLines * lineHeightMm + 1);
+
+      if (y + rowHeight > pageHeight - 16) {
         doc.addPage();
         y = 14;
         drawHeader();
@@ -409,20 +428,24 @@ export default function PettyCashSection() {
 
       doc.setTextColor(30, 30, 30);
       let x = margin + 1.5;
-      const values = [
-        new Date(row.expenseDate).toLocaleDateString("en-IN"),
-        row.headOfAccount || row.itemName,
-        row.description || "-",
-        String(row.voucherNo),
-        row.paymentType || "CASH",
-        `INR ${Number(row.amount).toLocaleString()}`,
-      ];
-      values.forEach((v, idx) => {
-        const maxWidth = colWidths[idx] - 2;
-        const text = String(v).length > 42 && idx === 4 ? `${String(v).slice(0, 39)}...` : String(v);
-        doc.text(text, x, y + 4.8, { maxWidth });
-        x += colWidths[idx];
-      });
+
+      doc.text(dateStr, x, y + cellTopPadMm, { maxWidth: colWidths[0] - 2 });
+      x += colWidths[0];
+
+      doc.text(headLines, x, y + cellTopPadMm);
+      x += colWidths[1];
+
+      doc.text(descLines, x, y + cellTopPadMm);
+      x += colWidths[2];
+
+      doc.text(voucherStr, x, y + cellTopPadMm, { maxWidth: colWidths[3] - 2 });
+      x += colWidths[3];
+
+      doc.text(typeStr, x, y + cellTopPadMm, { maxWidth: colWidths[4] - 2 });
+      x += colWidths[4];
+
+      doc.text(amountStr, x, y + cellTopPadMm, { maxWidth: colWidths[5] - 2 });
+
       y += rowHeight;
     }
 
