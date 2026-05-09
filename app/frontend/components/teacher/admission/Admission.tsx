@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
-import { CheckCircle, Pencil, PlusCircle, Printer, Save, Search, Trash2, UserPlus, Loader2 } from "lucide-react";
+import { CheckCircle, Pencil, PlusCircle, Printer, Save, Search, Trash2, UserPlus, Loader2, IndianRupee } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
 import PageTabs from "../../schooladmin/schooladmincomponents/PageHeaderTabs";
 import InputField from "../../schooladmin/schooladmincomponents/InputField";
@@ -70,6 +70,8 @@ type AdmissionRow = {
 };
 
 type FeeType = "APPLICATION" | "ADMISSION";
+type FeeAssignRow = { id: string; name: string; amount: string };
+type FeeHeadOption = { key: string; name: string; amount: number; selected: boolean };
 
 type FormState = {
   applicationNo: string;
@@ -302,6 +304,209 @@ export default function TeacherAdmissionTab() {
     referenceNo: "",
     remarks: "",
   });
+  const [feeAssignDialog, setFeeAssignDialog] = useState<AdmissionRow | null>(null);
+  const [feeAssignRows, setFeeAssignRows] = useState<FeeAssignRow[]>([]);
+  const [assigningFees, setAssigningFees] = useState(false);
+  const [assignFeeError, setAssignFeeError] = useState<string | null>(null);
+  const [existingStudentExtras, setExistingStudentExtras] = useState<Array<{ id: string; name: string; amount: number }>>([]);
+  const [editingExistingFeeId, setEditingExistingFeeId] = useState<string | null>(null);
+  const [editingExistingFeeName, setEditingExistingFeeName] = useState("");
+  const [editingExistingFeeAmount, setEditingExistingFeeAmount] = useState("");
+  const [dbFeeHeadOptions, setDbFeeHeadOptions] = useState<FeeHeadOption[]>([]);
+  const [classBaseFeeTotal, setClassBaseFeeTotal] = useState<number | null>(null);
+
+  const seededFeeRowsForResidency = useCallback((residencyType: string | null | undefined): FeeAssignRow[] => {
+    const now = Date.now();
+    const normalized = normalizeResidencyType(residencyType);
+    if (normalized === "Hosteller") {
+      return [{ id: `seed-${now}`, name: "Hostel Fee", amount: "" }];
+    }
+    if (normalized === "Day Scholar") {
+      return [{ id: `seed-${now}`, name: "Transport Fee", amount: "" }];
+    }
+    return [{ id: `seed-${now}`, name: "", amount: "" }];
+  }, []);
+
+  const openAssignFeesDialog = useCallback(
+    async (row: AdmissionRow) => {
+      if (!row.studentId) {
+        setMessageTone("error");
+        setMessage("Approve enrollment first, then assign student-specific fees.");
+        return;
+      }
+      setFeeAssignDialog(row);
+      setFeeAssignRows(seededFeeRowsForResidency(row.residencyType));
+      setAssignFeeError(null);
+      setExistingStudentExtras([]);
+      setDbFeeHeadOptions([]);
+      setClassBaseFeeTotal(null);
+
+      try {
+        const [extrasRes, structureRes] = await Promise.all([
+          fetch("/api/fees/extra", { credentials: "include", cache: "no-store" }),
+          row.classId
+            ? fetch(`/api/fees/structure?classId=${encodeURIComponent(row.classId)}`, {
+                credentials: "include",
+                cache: "no-store",
+              })
+            : Promise.resolve(null),
+        ]);
+
+        if (extrasRes.ok) {
+          const extrasJson = await extrasRes.json().catch(() => ({}));
+          const allExtras = Array.isArray(extrasJson?.extraFees) ? extrasJson.extraFees : [];
+          const studentExtras = allExtras
+            .filter((x: any) => x?.targetType === "STUDENT" && x?.targetStudentId === row.studentId)
+            .map((x: any) => ({
+              id: String(x.id),
+              name: String(x.name ?? "Extra Fee"),
+              amount: Number(x.amount ?? 0),
+            }));
+          setExistingStudentExtras(studentExtras);
+
+          const classSection = row.class?.section ?? null;
+          const rosterHeads = allExtras.filter((x: any) => {
+            const t = String(x?.targetType ?? "");
+            if (t === "SCHOOL") return true;
+            if (t === "CLASS") return !!row.classId && x?.targetClassId === row.classId;
+            if (t === "SECTION") {
+              return !!row.classId && x?.targetClassId === row.classId && String(x?.targetSection ?? "") === String(classSection ?? "");
+            }
+            if (t === "STUDENT") return x?.targetStudentId === row.studentId;
+            return false;
+          });
+          const byName = new Map<string, number>();
+          for (const h of rosterHeads) {
+            const name = String(h?.name ?? "").trim();
+            const amount = Number(h?.amount ?? 0);
+            if (!name || amount <= 0) continue;
+            if (!byName.has(name)) byName.set(name, amount);
+          }
+          setDbFeeHeadOptions(
+            Array.from(byName.entries())
+              .map(([name, amount]) => ({
+                key: `${name.toLowerCase()}|${amount}`,
+                name,
+                amount,
+                selected: false,
+              }))
+              .sort((a, b) => a.name.localeCompare(b.name))
+          );
+        }
+
+        if (structureRes && structureRes.ok) {
+          const structureJson = await structureRes.json().catch(() => ({}));
+          const first = Array.isArray(structureJson?.structures) ? structureJson.structures[0] : null;
+          const components = Array.isArray(first?.components) ? first.components : [];
+          const total = components.reduce((sum: number, c: any) => sum + (Number(c?.amount) || 0), 0);
+          setClassBaseFeeTotal(total);
+        }
+      } catch {
+        // Keep modal usable even if preview fetch fails.
+      }
+    },
+    [seededFeeRowsForResidency]
+  );
+
+  const addAssignFeeRow = () => {
+    setFeeAssignRows((prev) => [...prev, { id: `row-${Date.now()}-${Math.random()}`, name: "", amount: "" }]);
+  };
+
+  const addSelectedDbHeadsToRows = () => {
+    const selected = dbFeeHeadOptions.filter((x) => x.selected);
+    if (selected.length === 0) return;
+    setFeeAssignRows((prev) => [
+      ...prev,
+      ...selected.map((x) => ({
+        id: `db-${Date.now()}-${Math.random()}`,
+        name: x.name,
+        amount: String(x.amount),
+      })),
+    ]);
+    setDbFeeHeadOptions((prev) => prev.map((x) => ({ ...x, selected: false })));
+  };
+
+  const updateExistingStudentFee = useCallback(async () => {
+    if (!editingExistingFeeId) return;
+    const name = editingExistingFeeName.trim();
+    const amount = Number(editingExistingFeeAmount);
+    if (!name || !Number.isFinite(amount) || amount <= 0) {
+      setAssignFeeError("Enter valid fee name and amount.");
+      return;
+    }
+    try {
+      setAssignFeeError(null);
+      const res = await fetch(`/api/fees/extra/${editingExistingFeeId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, amount }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || "Failed to update fee");
+      setExistingStudentExtras((prev) =>
+        prev.map((x) => (x.id === editingExistingFeeId ? { ...x, name, amount } : x))
+      );
+      setEditingExistingFeeId(null);
+      setEditingExistingFeeName("");
+      setEditingExistingFeeAmount("");
+      setMessageTone("success");
+      setMessage("Assigned fee updated.");
+    } catch (e) {
+      setAssignFeeError(e instanceof Error ? e.message : "Failed to update fee");
+    }
+  }, [editingExistingFeeAmount, editingExistingFeeId, editingExistingFeeName]);
+
+  const deleteExistingStudentFee = useCallback(async (feeId: string) => {
+    try {
+      setAssignFeeError(null);
+      const res = await fetch(`/api/fees/extra/${feeId}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || "Failed to delete fee");
+      setExistingStudentExtras((prev) => prev.filter((x) => x.id !== feeId));
+      setMessageTone("success");
+      setMessage("Assigned fee deleted.");
+    } catch (e) {
+      setAssignFeeError(e instanceof Error ? e.message : "Failed to delete fee");
+    }
+  }, []);
+
+  const saveAssignedFees = useCallback(async () => {
+    if (!feeAssignDialog?.studentId) return;
+    const cleaned = feeAssignRows
+      .map((r) => ({ name: r.name.trim(), amount: Number(r.amount) }))
+      .filter((r) => r.name.length > 0 && Number.isFinite(r.amount) && r.amount > 0);
+
+    if (cleaned.length === 0) {
+      setAssignFeeError("Add at least one fee with valid name and amount.");
+      return;
+    }
+
+    setAssigningFees(true);
+    setAssignFeeError(null);
+    try {
+      for (const row of cleaned) {
+        const res = await fetch("/api/fees/extra", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: row.name,
+            amount: row.amount,
+            targetType: "STUDENT",
+            targetStudentId: feeAssignDialog.studentId,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.message || `Failed to assign ${row.name}`);
+      }
+      setMessageTone("success");
+      setMessage("Student fees assigned successfully.");
+      setFeeAssignDialog(null);
+    } catch (e) {
+      setAssignFeeError(e instanceof Error ? e.message : "Failed to assign fees");
+    } finally {
+      setAssigningFees(false);
+    }
+  }, [feeAssignDialog, feeAssignRows]);
 
   useEffect(() => {
     // Fetch School Info
@@ -786,6 +991,17 @@ export default function TeacherAdmissionTab() {
                   >
                     {busy ? <Loader2 size={12} className="animate-spin" /> : <UserPlus size={12} />}
                     {busy ? "Approving..." : "Approve"}
+                  </button>
+                )}
+                {enrolled && (
+                  <button
+                    type="button"
+                    onClick={() => openAssignFeesDialog(r)}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold bg-sky-500/20 border border-sky-500/35 text-sky-100 hover:bg-sky-500/30"
+                    title="Assign extra fees like transport / hostel"
+                  >
+                    <IndianRupee size={12} />
+                    Assign fees
                   </button>
                 )}
                 <button
@@ -1428,6 +1644,18 @@ export default function TeacherAdmissionTab() {
                         </button>
                       </div>
                     )}
+                    {r.studentId && (
+                      <div className="mt-2">
+                        <button
+                          type="button"
+                          onClick={() => openAssignFeesDialog(r)}
+                          className="w-full px-3 py-2 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-200 text-xs inline-flex items-center justify-center gap-1"
+                        >
+                          <IndianRupee size={13} />
+                          Assign Extra Fees
+                        </button>
+                      </div>
+                    )}
                     <div className="mt-3 flex flex-col gap-2">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {Number(r.applicationFee ?? 0) > 0 && !r.applicationFeePaid && (
@@ -1599,6 +1827,214 @@ export default function TeacherAdmissionTab() {
                 {paying && <Loader2 size={16} className="animate-spin" />}
                 {paying ? "Processing..." : "Pay Now"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {feeAssignDialog && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-white/10 bg-[#0B1220] p-5 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-white font-semibold">Assign Fees</div>
+                <p className="text-sm text-white/70">
+                  {`${feeAssignDialog.firstName} ${feeAssignDialog.lastName}`} · {classLabel(feeAssignDialog)} · {normalizeResidencyType(feeAssignDialog.residencyType)}
+                </p>
+              </div>
+              {classBaseFeeTotal !== null && (
+                <div className="text-right text-xs text-white/60">
+                  <div>Class structure (base)</div>
+                  <div className="text-white/80 font-semibold">{formatInrCell(classBaseFeeTotal)}</div>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-white/70">
+              Global class fee structure is already applied on enrollment. Use this section for student-level extras like transport, hostel, books, etc.
+            </div>
+
+            {existingStudentExtras.length > 0 && (
+              <div className="rounded-xl border border-white/10 bg-black/20 p-3 space-y-2">
+                <div className="text-xs font-semibold text-white/80">Already assigned extras</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {existingStudentExtras.map((ef) => (
+                    <div key={ef.id} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/70 space-y-2">
+                      {editingExistingFeeId === ef.id ? (
+                        <div className="space-y-2">
+                          <input
+                            type="text"
+                            value={editingExistingFeeName}
+                            onChange={(e) => setEditingExistingFeeName(e.target.value)}
+                            className="w-full rounded-lg bg-black/20 border border-white/10 px-2 py-1.5 text-white"
+                            placeholder="Fee name"
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={editingExistingFeeAmount}
+                            onChange={(e) => setEditingExistingFeeAmount(e.target.value)}
+                            className="w-full rounded-lg bg-black/20 border border-white/10 px-2 py-1.5 text-white"
+                            placeholder="Amount"
+                          />
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={updateExistingStudentFee}
+                              className="rounded-lg bg-lime-500/20 px-2 py-1 text-[11px] text-lime-200"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingExistingFeeId(null);
+                                setEditingExistingFeeName("");
+                                setEditingExistingFeeAmount("");
+                              }}
+                              className="rounded-lg border border-white/20 px-2 py-1 text-[11px] text-white/70"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div>
+                            <span className="text-white/90">{ef.name}</span> · {formatInrCell(ef.amount)}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingExistingFeeId(ef.id);
+                                setEditingExistingFeeName(ef.name);
+                                setEditingExistingFeeAmount(String(ef.amount));
+                              }}
+                              className="rounded-lg border border-white/20 px-2 py-1 text-[11px] text-white/80"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteExistingStudentFee(ef.id)}
+                              className="rounded-lg border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] text-red-200"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {dbFeeHeadOptions.length > 0 && (
+              <div className="rounded-xl border border-white/10 bg-black/20 p-3 space-y-3">
+                <div className="text-xs font-semibold text-white/80">Fee heads from DB (select to reuse)</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-44 overflow-auto pr-1">
+                  {dbFeeHeadOptions.map((h) => (
+                    <label key={h.key} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/80">
+                      <input
+                        type="checkbox"
+                        checked={h.selected}
+                        onChange={(e) =>
+                          setDbFeeHeadOptions((prev) =>
+                            prev.map((x) => (x.key === h.key ? { ...x, selected: e.target.checked } : x))
+                          )
+                        }
+                      />
+                      <span className="flex-1">{h.name}</span>
+                      <span>{formatInrCell(h.amount)}</span>
+                    </label>
+                  ))}
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    onClick={addSelectedDbHeadsToRows}
+                    className="px-3 py-2 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-200 text-xs"
+                  >
+                    Add selected heads
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {assignFeeError && (
+              <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
+                {assignFeeError}
+              </div>
+            )}
+
+            <div className="space-y-2">
+              {feeAssignRows.map((row) => (
+                <div key={row.id} className="grid grid-cols-1 md:grid-cols-[1fr_160px_90px] gap-2">
+                  <input
+                    type="text"
+                    value={row.name}
+                    onChange={(e) =>
+                      setFeeAssignRows((prev) =>
+                        prev.map((x) => (x.id === row.id ? { ...x, name: e.target.value } : x))
+                      )
+                    }
+                    className="w-full rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-white"
+                    placeholder="Fee name (e.g. Transport Fee / Hostel Fee)"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={row.amount}
+                    onChange={(e) =>
+                      setFeeAssignRows((prev) =>
+                        prev.map((x) => (x.id === row.id ? { ...x, amount: e.target.value } : x))
+                      )
+                    }
+                    className="w-full rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-white"
+                    placeholder="Amount"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setFeeAssignRows((prev) => prev.filter((x) => x.id !== row.id))}
+                    className="rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-200 hover:bg-red-500/20"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={addAssignFeeRow}
+                className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white/80 text-sm hover:bg-white/10"
+              >
+                + Add another fee
+              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setFeeAssignDialog(null)}
+                  disabled={assigningFees}
+                  className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-white/70"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={saveAssignedFees}
+                  disabled={assigningFees}
+                  className="px-4 py-2 rounded-xl bg-lime-400 text-black font-semibold disabled:opacity-60 flex items-center justify-center gap-2"
+                >
+                  {assigningFees && <Loader2 size={16} className="animate-spin" />}
+                  {assigningFees ? "Assigning..." : "Save Fees"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
