@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { isStudentHosteller } from "@/lib/extraFeeResidencyScope";
+import { admissionWorkflowByIds, studentApplicationHasWorkflowColumn } from "@/lib/admissionsListQuery";
 
 export const dynamic = "force-dynamic";
 
@@ -52,8 +54,8 @@ export async function GET(req: Request) {
       startYear = now.getMonth() >= 4 ? now.getFullYear() : now.getFullYear() - 1;
     }
 
-    const yearStart = new Date(startYear, 5, 1); // June 1 of startYear
-    const yearEnd = new Date(startYear + 1, 4, 31, 23, 59, 59); // May 31 of next year
+    const yearStart = new Date(startYear, 3, 1); // Apr 1 of startYear
+    const yearEnd = new Date(startYear + 1, 2, 31, 23, 59, 59, 999); // Mar 31 of next year
 
     // available years: only current and optionally next after April
     const availableYears: number[] = [startYear];
@@ -437,12 +439,134 @@ export async function GET(req: Request) {
       { male: 0, female: 0, total: 0 }
     );
 
+    type AdmissionComparisonAgg = {
+      classLabel: string;
+      existingDayScholarMale: number;
+      existingDayScholarFemale: number;
+      existingHostelMale: number;
+      existingHostelFemale: number;
+      newDayScholarMale: number;
+      newDayScholarFemale: number;
+      newHostelMale: number;
+      newHostelFemale: number;
+    };
+    const emptyAdmissionComparisonAgg = (classLabel: string): AdmissionComparisonAgg => ({
+      classLabel,
+      existingDayScholarMale: 0,
+      existingDayScholarFemale: 0,
+      existingHostelMale: 0,
+      existingHostelFemale: 0,
+      newDayScholarMale: 0,
+      newDayScholarFemale: 0,
+      newHostelMale: 0,
+      newHostelFemale: 0,
+    });
+    const admissionComparisonMap = new Map<string, AdmissionComparisonAgg>();
+    const studentsForAdmissionComparison = await prisma.student.findMany({
+      where: {
+        schoolId,
+        classId: { not: null },
+        ...(classId ? { classId } : {}),
+      },
+      select: {
+        createdAt: true,
+        gender: true,
+        residencyType: true,
+        application: {
+          select: {
+            id: true,
+            admissionNo: true,
+            fedenaNo: true,
+          },
+        },
+        class: { select: { name: true } },
+      },
+    });
+    const applicationIds = studentsForAdmissionComparison
+      .map((s) => s.application?.id)
+      .filter((id): id is string => Boolean(id));
+    const hasWorkflowColumn = await studentApplicationHasWorkflowColumn();
+    const appWorkflowMap = await admissionWorkflowByIds(applicationIds, hasWorkflowColumn);
+
+    for (const s of studentsForAdmissionComparison) {
+      const classLabel = (s.class?.name ?? "Unknown class").trim() || "Unknown class";
+      if (!admissionComparisonMap.has(classLabel)) {
+        admissionComparisonMap.set(classLabel, emptyAdmissionComparisonAgg(classLabel));
+      }
+      const row = admissionComparisonMap.get(classLabel);
+      if (!row) continue;
+
+      const normalizedGender = (s.gender ?? "").trim().toLowerCase();
+      const isMale = ["male", "m", "boy", "boys"].includes(normalizedGender);
+      const isFemale = ["female", "f", "girl", "girls"].includes(normalizedGender);
+      if (!isMale && !isFemale) continue;
+
+      const isHostel = isStudentHosteller(s.residencyType);
+      const workflowStatus = s.application?.id ? appWorkflowMap.get(s.application.id) : undefined;
+      const cameFromAdmissionModule = Boolean(
+        s.application &&
+          (
+            workflowStatus === "APPROVED" ||
+            // Fallback when workflow status is unavailable/legacy:
+            Boolean((s.application.admissionNo ?? "").trim()) ||
+            Boolean((s.application.fedenaNo ?? "").trim())
+          )
+      );
+
+      if (cameFromAdmissionModule) {
+        if (isHostel) {
+          if (isMale) row.newHostelMale += 1;
+          else row.newHostelFemale += 1;
+        } else {
+          if (isMale) row.newDayScholarMale += 1;
+          else row.newDayScholarFemale += 1;
+        }
+      } else {
+        if (isHostel) {
+          if (isMale) row.existingHostelMale += 1;
+          else row.existingHostelFemale += 1;
+        } else {
+          if (isMale) row.existingDayScholarMale += 1;
+          else row.existingDayScholarFemale += 1;
+        }
+      }
+    }
+
+    const admissionComparison = Array.from(admissionComparisonMap.values()).sort((a, b) =>
+      a.classLabel.localeCompare(b.classLabel, undefined, { numeric: true })
+    );
+    const admissionComparisonTotals = admissionComparison.reduce(
+      (acc, row) => {
+        acc.existingDayScholarMale += row.existingDayScholarMale;
+        acc.existingDayScholarFemale += row.existingDayScholarFemale;
+        acc.existingHostelMale += row.existingHostelMale;
+        acc.existingHostelFemale += row.existingHostelFemale;
+        acc.newDayScholarMale += row.newDayScholarMale;
+        acc.newDayScholarFemale += row.newDayScholarFemale;
+        acc.newHostelMale += row.newHostelMale;
+        acc.newHostelFemale += row.newHostelFemale;
+        return acc;
+      },
+      {
+        existingDayScholarMale: 0,
+        existingDayScholarFemale: 0,
+        existingHostelMale: 0,
+        existingHostelFemale: 0,
+        newDayScholarMale: 0,
+        newDayScholarFemale: 0,
+        newHostelMale: 0,
+        newHostelFemale: 0,
+      }
+    );
+
     return NextResponse.json({
       availableYears,
       classes,
       selectedYear: startYear,
       enrollmentByClassSection,
       enrollmentByClassSectionTotals,
+      admissionComparison,
+      admissionComparisonTotals,
       feeCollectionByClass,
       feeCollectionTotals,
       stats: {

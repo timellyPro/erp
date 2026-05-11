@@ -64,6 +64,7 @@ export async function saveClassFeeStructureAndSyncStudents(args: {
           classId: args.classId,
           section: student.class?.section ?? null,
           studentId: student.id,
+          residencyType: student.residencyType ?? "Day Scholar",
         });
         const newTotalFee = parts.totalFee;
         const newFinalFee = finalFeeFromStructureAndExtras(

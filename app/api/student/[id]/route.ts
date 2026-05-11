@@ -16,7 +16,13 @@ function normalizeResidencyType(value: unknown): string | null | undefined {
   if (!raw) return "Day Scholar";
   const normalized = raw.toLowerCase().replace(/\s+/g, "");
   if (normalized === "dayscholar" || normalized === "dayscholer") return "Day Scholar";
-  if (normalized === "hostler" || normalized === "hosteler" || normalized === "hosteller" || normalized === "hoster") {
+  if (
+    normalized === "hostel" ||
+    normalized === "hostler" ||
+    normalized === "hosteler" ||
+    normalized === "hosteller" ||
+    normalized === "hoster"
+  ) {
     return "Hosteller";
   }
   return raw;
@@ -579,7 +585,7 @@ export async function PUT(req: Request, context: RouteParams) {
       });
     }
 
-    if (classId !== undefined) {
+    if (classId !== undefined || residencyType !== undefined) {
       const refreshed = await prisma.student.findFirst({
         where: { id, schoolId },
         include: { class: { select: { section: true } } },

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { extraFeeAppliesToStudentResidency, parseExtraFeeResidencyScopeBody } from "@/lib/extraFeeResidencyScope";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -83,6 +84,14 @@ export async function POST(req: Request) {
 
     const body = await req.json();
     const { name, amount, targetType, targetClassId, targetSection, targetStudentId } = body;
+    const parsedScope = parseExtraFeeResidencyScopeBody(body.residencyScope);
+    if (parsedScope === null) {
+      return NextResponse.json(
+        { message: "residencyScope must be ALL, HOSTELLER, or DAY_SCHOLAR when provided" },
+        { status: 400 }
+      );
+    }
+    const residencyScope = parsedScope;
 
     if (!name || typeof amount !== "number" || amount <= 0 || !targetType) {
       return NextResponse.json(
@@ -109,53 +118,50 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "targetStudentId required when targetType is STUDENT" }, { status: 400 });
     }
 
-    const extraFee = await prisma.$transaction(async (tx) => {
-      const created = await tx.extraFee.create({
-        data: {
-          schoolId,
-          name: String(name).trim(),
-          amount: Number(amount),
-          targetType,
-          targetClassId: targetClassId || null,
-          targetSection: targetSection || null,
-          targetStudentId: targetStudentId || null,
-        },
-      });
-
-      const studentWhere =
-        targetType === "SCHOOL"
-          ? { schoolId }
-          : targetType === "SECTION" && targetClassId && targetSection
-            ? { schoolId, classId: targetClassId, class: { section: targetSection } }
-            : targetType === "CLASS" && targetClassId
-              ? { schoolId, classId: targetClassId }
-              : targetType === "STUDENT" && targetStudentId
-                ? { schoolId, id: targetStudentId }
-                : null;
-
-      if (studentWhere) {
-        const students = await tx.student.findMany({
-          where: studentWhere,
-          select: { id: true },
-        });
-        for (const s of students) {
-          const fee = await tx.studentFee.findUnique({ where: { studentId: s.id } });
-          if (!fee) continue;
-          const newTotalFee = fee.totalFee + amount;
-          const newFinalFee = fee.finalFee + amount;
-          const newRemainingFee = Math.max(0, newFinalFee - fee.amountPaid);
-          await tx.studentFee.update({
-            where: { studentId: s.id },
-            data: {
-              totalFee: newTotalFee,
-              finalFee: newFinalFee,
-              remainingFee: newRemainingFee,
-            },
-          });
-        }
-      }
-      return created;
+    const extraFee = await prisma.extraFee.create({
+      data: {
+        schoolId,
+        name: String(name).trim(),
+        amount: Number(amount),
+        targetType,
+        targetClassId: targetClassId || null,
+        targetSection: targetSection || null,
+        targetStudentId: targetStudentId || null,
+        residencyScope,
+      },
     });
+
+    const studentWhere =
+      targetType === "SCHOOL"
+        ? { schoolId }
+        : targetType === "SECTION" && targetClassId && targetSection
+          ? { schoolId, classId: targetClassId, class: { section: targetSection } }
+          : targetType === "CLASS" && targetClassId
+            ? { schoolId, classId: targetClassId }
+            : targetType === "STUDENT" && targetStudentId
+              ? { schoolId, id: targetStudentId }
+              : null;
+
+    if (studentWhere) {
+      const students = await prisma.student.findMany({
+        where: studentWhere,
+        select: { id: true, residencyType: true },
+      });
+      const eligibleStudentIds = students
+        .filter((s) => extraFeeAppliesToStudentResidency(residencyScope, s.residencyType))
+        .map((s) => s.id);
+
+      if (eligibleStudentIds.length > 0) {
+        await prisma.studentFee.updateMany({
+          where: { studentId: { in: eligibleStudentIds } },
+          data: {
+            totalFee: { increment: amount },
+            finalFee: { increment: amount },
+            remainingFee: { increment: amount },
+          },
+        });
+      }
+    }
 
     return NextResponse.json({ extraFee }, { status: 201 });
   } catch (error: any) {

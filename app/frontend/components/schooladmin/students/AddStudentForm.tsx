@@ -146,7 +146,7 @@ export default function AddStudentForm({
             onChange={(value) => onFieldChange("residencyType", value)}
             options={[
               { label: "Day Scholar", value: "Day Scholar" },
-              { label: "Hosteller", value: "Hosteller" },
+              { label: "Hostel", value: "Hosteller" },
             ]}
             bgColor="white"
           />

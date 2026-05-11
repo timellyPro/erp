@@ -4,13 +4,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
-import { CheckCircle, Pencil, PlusCircle, Printer, Save, Search, Trash2, UserPlus, Loader2, IndianRupee } from "lucide-react";
+import { CheckCircle, Pencil, PlusCircle, Printer, Save, Search, Trash2, UserPlus, Loader2, IndianRupee, Download, ChevronDown } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
 import PageTabs from "../../schooladmin/schooladmincomponents/PageHeaderTabs";
 import InputField from "../../schooladmin/schooladmincomponents/InputField";
 import DataTable from "../../common/TableLayout";
 import SearchInput from "../../common/SearchInput";
 import AdmissionReceiptTemplate, { type AdmissionReceiptData } from "../../pdf/AdmissionReceiptTemplate";
+import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
 
 type Gender = "MALE" | "FEMALE";
 type BoardingType = "SEMI_RESIDENTIAL" | "REGULAR_BOARDER";
@@ -245,9 +246,13 @@ function normalizeResidencyType(value: string | null | undefined): string {
   const v = (value ?? "").trim().toLowerCase().replace(/\s+/g, "");
   if (!v) return "Day Scholar";
   if (v === "dayscholar" || v === "dayscholer") return "Day Scholar";
-  if (v === "hostler" || v === "hosteler" || v === "hosteller" || v === "hoster") return "Hosteller";
+  if (v === "hostel" || v === "hostler" || v === "hosteler" || v === "hosteller" || v === "hoster") return "Hosteller";
   if (v === "rte") return "RTE";
   return value?.trim() || "Day Scholar";
+}
+
+function displayResidencyType(value: string | null | undefined): string {
+  return formatResidencyTypeForDisplay(normalizeResidencyType(value));
 }
 
 export default function TeacherAdmissionTab() {
@@ -264,6 +269,7 @@ export default function TeacherAdmissionTab() {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [applicationsCount, setApplicationsCount] = useState(0);
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<{ gradeSought: string; boardingType: string; from: string; to: string; classId: string }>({
     gradeSought: "",
@@ -273,6 +279,7 @@ export default function TeacherAdmissionTab() {
     classId: "",
   });
   const [listPhase, setListPhase] = useState<"all" | "pending" | "upcoming" | "approved">("all");
+  const [showExportMenu, setShowExportMenu] = useState(false);
   const [workflowBusyId, setWorkflowBusyId] = useState<string | null>(null);
 
   const [reloadKey, setReloadKey] = useState(0);
@@ -314,6 +321,40 @@ export default function TeacherAdmissionTab() {
   const [editingExistingFeeAmount, setEditingExistingFeeAmount] = useState("");
   const [dbFeeHeadOptions, setDbFeeHeadOptions] = useState<FeeHeadOption[]>([]);
   const [classBaseFeeTotal, setClassBaseFeeTotal] = useState<number | null>(null);
+
+  const buildAdmissionExportQuery = useCallback(
+    (format: "xlsx" | "csv" | "print") => {
+      const params = new URLSearchParams();
+      params.set("format", format);
+      if (listPhase !== "all") params.set("phase", listPhase);
+      if (search.trim()) params.set("search", search.trim());
+      if (filters.gradeSought) params.set("gradeSought", filters.gradeSought);
+      if (filters.boardingType) params.set("boardingType", filters.boardingType);
+      if (filters.classId) params.set("classId", filters.classId);
+      if (filters.from) params.set("from", filters.from);
+      if (filters.to) params.set("to", filters.to);
+      return params.toString();
+    },
+    [filters.boardingType, filters.classId, filters.from, filters.gradeSought, filters.to, listPhase, search]
+  );
+
+  const exportAdmissions = useCallback(
+    (format: "xlsx" | "csv" | "print") => {
+      const qs = buildAdmissionExportQuery(format);
+      const url = `/api/admissions/export?${qs}`;
+      if (format === "print") {
+        window.open(url, "_blank", "noopener,noreferrer");
+        return;
+      }
+      const a = document.createElement("a");
+      a.href = url;
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    },
+    [buildAdmissionExportQuery]
+  );
 
   const seededFeeRowsForResidency = useCallback((residencyType: string | null | undefined): FeeAssignRow[] => {
     const now = Date.now();
@@ -608,7 +649,7 @@ export default function TeacherAdmissionTab() {
       className: r.class ? `${r.class.name}${r.class.section ? `-${r.class.section}` : ""}` : r.gradeSought,
       gradeSought: r.gradeSought,
       boardingType: r.boardingType,
-      residencyType: normalizeResidencyType(r.residencyType),
+      residencyType: displayResidencyType(r.residencyType),
       parentName: r.parentName || "-",
       parentPhone: r.parentPhone || "-",
       createdAt: paidAt ? new Date(paidAt).toLocaleString() : new Date(r.createdAt).toLocaleString(),
@@ -872,7 +913,7 @@ export default function TeacherAdmissionTab() {
       {
         header: "Residency",
         render: (r: AdmissionRow) => (
-          <span className="text-sm text-white/70">{normalizeResidencyType(r.residencyType)}</span>
+          <span className="text-sm text-white/70">{displayResidencyType(r.residencyType)}</span>
         ),
       },
       {
@@ -1051,6 +1092,7 @@ export default function TeacherAdmissionTab() {
         if (!ok) throw new Error(d?.message || "Failed to load admissions");
         setRows(Array.isArray(d?.applications) ? d.applications : []);
         const total = Number(d?.total ?? 0);
+        setApplicationsCount(total);
         const pageSize = Number(d?.pageSize ?? 10);
         const computed = Math.max(1, Math.ceil(total / Math.max(1, pageSize)));
         setTotalPages(computed);
@@ -1058,6 +1100,7 @@ export default function TeacherAdmissionTab() {
       })
       .catch((e) => {
         setRows([]);
+        setApplicationsCount(0);
         setTotalPages(1);
         setMessageTone("error");
         setMessage(e instanceof Error ? e.message : "Failed to load admissions");
@@ -1243,7 +1286,7 @@ export default function TeacherAdmissionTab() {
           <PageTabs
             tabs={[
               { label: "New Application", value: "add" },
-              { label: "Applications", value: "all" },
+              { label: `Applications (${applicationsCount})`, value: "all" },
             ]}
             queryKey="view"
           />
@@ -1321,7 +1364,7 @@ export default function TeacherAdmissionTab() {
                   onChange={(v) => setForm((p) => ({ ...p, residencyType: v }))}
                   options={[
                     { label: "Day Scholar", value: "Day Scholar" },
-                    { label: "Hosteller", value: "Hosteller" },
+                    { label: "Hostel", value: "Hosteller" },
                     { label: "RTE", value: "RTE" },
                   ]}
                 />
@@ -1540,6 +1583,51 @@ export default function TeacherAdmissionTab() {
                     ]}
                   />
                 </div>
+                <div className="relative w-full md:w-auto md:ml-auto">
+                  <button
+                    type="button"
+                    onClick={() => setShowExportMenu((v) => !v)}
+                    className="w-full md:w-auto inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/80 hover:bg-white/10"
+                  >
+                    <Download size={16} />
+                    Export
+                    <ChevronDown size={14} className={`transition-transform ${showExportMenu ? "rotate-180" : ""}`} />
+                  </button>
+                  {showExportMenu && (
+                    <div className="absolute right-0 z-20 mt-2 min-w-[220px] overflow-hidden rounded-xl border border-white/10 bg-[#0b1220] shadow-xl">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowExportMenu(false);
+                          exportAdmissions("xlsx");
+                        }}
+                        className="block w-full px-4 py-2.5 text-left text-sm text-white/85 hover:bg-white/10"
+                      >
+                        Export Excel (.xlsx)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowExportMenu(false);
+                          exportAdmissions("csv");
+                        }}
+                        className="block w-full px-4 py-2.5 text-left text-sm text-white/85 hover:bg-white/10"
+                      >
+                        Export CSV (.csv)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowExportMenu(false);
+                          exportAdmissions("print");
+                        }}
+                        className="block w-full px-4 py-2.5 text-left text-sm text-white/85 hover:bg-white/10"
+                      >
+                        Export PDF (Print)
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="flex flex-wrap gap-2">
@@ -1618,7 +1706,7 @@ export default function TeacherAdmissionTab() {
                     <div className="text-white/50 text-xs mt-1">
                       {classLabel(r)} · {formatGradeLabel(r.gradeSought)} · {formatBoardingLabel(r.boardingType)}
                     </div>
-                    <div className="text-white/50 text-xs mt-0.5">{normalizeResidencyType(r.residencyType)}</div>
+                    <div className="text-white/50 text-xs mt-0.5">{displayResidencyType(r.residencyType)}</div>
                     <div className="text-white/50 text-xs mt-1">
                       {r.parentName} · {r.parentPhone}
                     </div>
@@ -1850,7 +1938,7 @@ export default function TeacherAdmissionTab() {
               <div>
                 <div className="text-white font-semibold">Assign Fees</div>
                 <p className="text-sm text-white/70">
-                  {`${feeAssignDialog.firstName} ${feeAssignDialog.lastName}`} · {classLabel(feeAssignDialog)} · {normalizeResidencyType(feeAssignDialog.residencyType)}
+                  {`${feeAssignDialog.firstName} ${feeAssignDialog.lastName}`} · {classLabel(feeAssignDialog)} · {displayResidencyType(feeAssignDialog.residencyType)}
                 </p>
               </div>
               {classBaseFeeTotal !== null && (

@@ -979,6 +979,8 @@ model ExtraFee {
   targetClassId   String?
   targetSection   String?
   targetStudentId String?
+  // ALL | HOSTELLER | DAY_SCHOLAR — who is charged this head (default ALL).
+  residencyScope  String  @default("ALL")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

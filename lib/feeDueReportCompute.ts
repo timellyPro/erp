@@ -1,5 +1,6 @@
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
+import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
 
 export type FeeDueColumnGroup = {
   /** Stable id: `BASE@classId@index`, `EXTRA_NAME@slug` (merged extras with same name), or legacy `EXTRA:id` */
@@ -42,6 +43,7 @@ export type ExtraFeeLite = {
   targetClassId: string | null;
   targetSection: string | null;
   targetStudentId: string | null;
+  residencyScope?: string | null;
 };
 
 export type StudentFeeDueInput = {
@@ -76,21 +78,39 @@ function extraFeeApplies(
 /** Extras for fee-due columns: class / section / student only (not whole-school catalog — that would add a column for every student). */
 function applicableExtrasForDueReport(
   extraFees: ExtraFeeLite[],
-  opts: { classId: string | null; section: string | null; studentId: string },
+  opts: {
+    classId: string | null;
+    section: string | null;
+    studentId: string;
+    studentResidency: string | null | undefined;
+  },
   includeSchoolWideExtras: boolean
 ): ExtraFeeLite[] {
   return extraFees.filter((ef) => {
+    if (!extraFeeAppliesToStudentResidency(ef.residencyScope, opts.studentResidency)) return false;
     if (ef.targetType === "SCHOOL") return includeSchoolWideExtras;
     return extraFeeApplies(ef, opts);
   });
 }
 
+function extraFeeAppliesToStudentForRoster(
+  ef: ExtraFeeLite,
+  st: StudentFeeDueInput,
+  includeSchoolWideExtras: boolean
+): boolean {
+  if (!extraFeeAppliesToStudentResidency(ef.residencyScope, st.category)) return false;
+  if (ef.targetType === "SCHOOL") return includeSchoolWideExtras;
+  return extraFeeApplies(ef, { classId: st.classId, section: st.section, studentId: st.studentId });
+}
+
 /** Extra fee heads that apply to at least one student in the export roster. */
-export function extraFeesForExportRoster(extraFees: ExtraFeeLite[], students: StudentFeeDueInput[]): ExtraFeeLite[] {
+export function extraFeesForExportRoster(
+  extraFees: ExtraFeeLite[],
+  students: StudentFeeDueInput[],
+  includeSchoolWideExtras: boolean
+): ExtraFeeLite[] {
   return extraFees.filter((ef) =>
-    students.some((st) =>
-      extraFeeApplies(ef, { classId: st.classId, section: st.section, studentId: st.studentId })
-    )
+    students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, includeSchoolWideExtras))
   );
 }
 
@@ -101,13 +121,11 @@ export function extraFeesForDueReportRoster(
   includeSchoolWideExtras: boolean
 ): ExtraFeeLite[] {
   if (includeSchoolWideExtras) {
-    return extraFeesForExportRoster(extraFees, students);
+    return extraFeesForExportRoster(extraFees, students, true);
   }
   return extraFees.filter((ef) => {
     if (ef.targetType === "SCHOOL") return false;
-    return students.some((st) =>
-      extraFeeApplies(ef, { classId: st.classId, section: st.section, studentId: st.studentId })
-    );
+    return students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, false));
   });
 }
 
@@ -241,6 +259,7 @@ function computeStudentHeads(
       classId,
       section,
       studentId: fee.studentId,
+      studentResidency: fee.category,
     },
     includeSchoolWideExtras
   );

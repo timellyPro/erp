@@ -1,4 +1,5 @@
 import prisma from "@/lib/db";
+import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
 
 type ExtraFeeRow = {
   amount: number;
@@ -6,6 +7,7 @@ type ExtraFeeRow = {
   targetClassId: string | null;
   targetSection: string | null;
   targetStudentId: string | null;
+  residencyScope: string | null;
 };
 
 type ComponentRow = { name: string; amount: number };
@@ -15,7 +17,12 @@ export type TuitionDb = Pick<typeof prisma, "classFeeStructure" | "extraFee">;
 
 export function sumExtraFeesForStudent(
   extraFees: ExtraFeeRow[],
-  opts: { classId: string | null; section: string | null; studentId: string | null }
+  opts: {
+    classId: string | null;
+    section: string | null;
+    studentId: string | null;
+    residencyType: string | null;
+  }
 ): number {
   let extraTotal = 0;
   for (const ef of extraFees) {
@@ -28,7 +35,9 @@ export function sumExtraFeesForStudent(
       (ef.targetType === "STUDENT" &&
         opts.studentId &&
         ef.targetStudentId === opts.studentId);
-    if (applies) extraTotal += ef.amount;
+    if (!applies) continue;
+    if (!extraFeeAppliesToStudentResidency(ef.residencyScope, opts.residencyType)) continue;
+    extraTotal += ef.amount;
   }
   return extraTotal;
 }
@@ -54,6 +63,7 @@ export async function computeStudentTuitionParts(
     classId: string | null;
     section: string | null;
     studentId: string | null;
+    residencyType: string | null;
   }
 ): Promise<{ base: number; extrasTotal: number; totalFee: number }> {
   const base = await sumClassBaseTuition(db, args.classId);
@@ -65,6 +75,7 @@ export async function computeStudentTuitionParts(
       targetClassId: true,
       targetSection: true,
       targetStudentId: true,
+      residencyScope: true,
     },
   });
   const extrasTotal = sumExtraFeesForStudent(extraFees, args);
@@ -78,6 +89,7 @@ export async function computeStudentTuitionTotalFee(
     classId: string | null;
     section: string | null;
     studentId: string | null;
+    residencyType: string | null;
   }
 ): Promise<number> {
   const p = await computeStudentTuitionParts(db, args);
@@ -106,7 +118,7 @@ export function finalFeeFromTotalAndDiscount(totalFee: number, discountPercent: 
   return finalFeeFromStructureAndExtras(totalFee, 0, discountPercent);
 }
 
-type FeeWriteDb = Pick<typeof prisma, "classFeeStructure" | "extraFee" | "studentFee">;
+type FeeWriteDb = Pick<typeof prisma, "classFeeStructure" | "extraFee" | "studentFee" | "student">;
 
 export async function upsertStudentFeeFromStructure(
   db: FeeWriteDb,
@@ -119,11 +131,18 @@ export async function upsertStudentFeeFromStructure(
     amountPaid: number;
   }
 ) {
+  const studentRow = await db.student.findUnique({
+    where: { id: params.studentId },
+    select: { residencyType: true },
+  });
+  const residencyType = studentRow?.residencyType ?? "Day Scholar";
+
   const parts = await computeStudentTuitionParts(db, {
     schoolId: params.schoolId,
     classId: params.classId,
     section: params.section,
     studentId: params.studentId,
+    residencyType,
   });
   const totalFee = parts.totalFee;
   const finalFee = finalFeeFromStructureAndExtras(parts.base, parts.extrasTotal, params.discountPercent);

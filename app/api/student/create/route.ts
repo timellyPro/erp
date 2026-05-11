@@ -19,7 +19,13 @@ function normalizeResidencyType(value: unknown) {
   if (!raw) return "Day Scholar";
   const normalized = raw.toLowerCase().replace(/\s+/g, "");
   if (normalized === "dayscholar" || normalized === "dayscholer") return "Day Scholar";
-  if (normalized === "hostler" || normalized === "hosteler" || normalized === "hosteller" || normalized === "hoster") {
+  if (
+    normalized === "hostel" ||
+    normalized === "hostler" ||
+    normalized === "hosteler" ||
+    normalized === "hosteller" ||
+    normalized === "hoster"
+  ) {
     return "Hosteller";
   }
   return raw;
@@ -528,6 +534,7 @@ export async function POST(req: Request) {
           classId,
           section: classSection,
           studentId: studentRecord.id,
+          residencyType: effectiveResidencyType,
         });
 
         // Create (or link) StudentApplication to keep all admission fields for this student.

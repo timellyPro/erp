@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { purgeExpiredNewsFeeds } from "@/lib/newsfeedRetention";
+import { paymentTypeExportLabel } from "@/lib/feePaymentGateway";
 
 declare const globalThis: {
   schoolDashboardPurgeLastRunAt?: number;
@@ -30,7 +31,32 @@ function toDate(value: unknown): Date | null {
   return null;
 }
 
-export async function GET() {
+function paymentMethodBucket(gateway: string | null | undefined): {
+  key: string;
+  label: string;
+} {
+  const g = String(gateway ?? "").trim().toUpperCase();
+  if (!g || g === "OFFLINE" || g === "CASH" || g === "OFFLINE_CASH") {
+    return { key: "CASH", label: "Cash" };
+  }
+  if (g === "HYPERPG" || g === "ONLINE" || g === "OFFLINE_ONLINE") {
+    return { key: "ONLINE", label: "Online" };
+  }
+  return {
+    key: g,
+    label: paymentTypeExportLabel(gateway) || "Others",
+  };
+}
+
+function parseIsoDateOnly(raw: string | null): Date | null {
+  if (!raw) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const parsed = new Date(`${raw}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+}
+
+export async function GET(request: Request) {
   const session = await getServerSession(authOptions);
 
   if (!session?.user) {
@@ -88,12 +114,23 @@ export async function GET() {
     maybePurgeExpiredNewsFeeds();
 
     const now = new Date();
+    const url = new URL(request.url);
+    const requestedDate = parseIsoDateOnly(url.searchParams.get("date"));
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfWeek = new Date(now);
     startOfWeek.setDate(now.getDate() - 7);
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const todayEnd = new Date(todayStart);
     todayEnd.setDate(todayEnd.getDate() + 1);
+    const collectionStart = requestedDate
+      ? new Date(
+          requestedDate.getUTCFullYear(),
+          requestedDate.getUTCMonth(),
+          requestedDate.getUTCDate()
+        )
+      : todayStart;
+    const collectionEnd = new Date(collectionStart);
+    collectionEnd.setDate(collectionEnd.getDate() + 1);
 
     // Parallel fetches for dashboard data
     const [
@@ -106,6 +143,7 @@ export async function GET() {
       leaves,
       newsFeeds,
       recentPayments,
+      todayPayments,
     ] = await Promise.all([
       prisma.class.count({ where: { schoolId } }),
       prisma.student.count({ where: { schoolId } }),
@@ -171,6 +209,18 @@ export async function GET() {
         orderBy: { createdAt: "desc" },
         take: 10,
       }),
+      prisma.payment.findMany({
+        where: {
+          student: { schoolId },
+          status: "SUCCESS",
+          purpose: "FEES",
+          createdAt: { gte: collectionStart, lt: collectionEnd },
+        },
+        select: {
+          amount: true,
+          gateway: true,
+        },
+      }),
     ]);
 
     // Class count change (this month)
@@ -219,6 +269,37 @@ export async function GET() {
       if (n >= 1000) return `₹${(n / 1000).toFixed(1)}K`;
       return `₹${Math.round(n)}`;
     };
+
+    const todayCollectionByMethodMap = new Map<
+      string,
+      { key: string; label: string; amount: number; count: number }
+    >();
+    let todayCollectionTotal = 0;
+    for (const payment of todayPayments) {
+      const amount = Number(payment.amount ?? 0);
+      if (!Number.isFinite(amount) || amount <= 0) continue;
+      const bucket = paymentMethodBucket(payment.gateway);
+      const existing = todayCollectionByMethodMap.get(bucket.key);
+      if (existing) {
+        existing.amount += amount;
+        existing.count += 1;
+      } else {
+        todayCollectionByMethodMap.set(bucket.key, {
+          key: bucket.key,
+          label: bucket.label,
+          amount,
+          count: 1,
+        });
+      }
+      todayCollectionTotal += amount;
+    }
+
+    const todayCollectionByMethod = Array.from(todayCollectionByMethodMap.values()).sort((a, b) => {
+      const priority = (key: string) => (key === "CASH" ? 0 : key === "ONLINE" ? 1 : 2);
+      const byPriority = priority(a.key) - priority(b.key);
+      if (byPriority !== 0) return byPriority;
+      return b.amount - a.amount;
+    });
 
     const workshops = eventsUpcoming.map((e) => {
       const eventDate = toDate(e.eventDate);
@@ -314,6 +395,8 @@ export async function GET() {
         feesCollected: formatCurrency(totalPaid),
         feesCollectedRaw: totalPaid,
         feesCollectedPct: collectedPct,
+        todayCollectionTotal: formatCurrency(todayCollectionTotal),
+        todayCollectionTotalRaw: todayCollectionTotal,
       },
       attendance: {
         present,
@@ -326,6 +409,14 @@ export async function GET() {
         latePct: totalToday > 0 ? ((late / totalToday) * 100).toFixed(1) : "0",
       },
       workshops,
+      todayCollectionByMethod: todayCollectionByMethod.map((m) => ({
+        key: m.key,
+        label: m.label,
+        amount: Math.round(m.amount * 100) / 100,
+        formattedAmount: `₹${Math.round(m.amount).toLocaleString("en-IN")}`,
+        count: m.count,
+      })),
+      collectionDate: collectionStart.toISOString().slice(0, 10),
       teachersOnLeave,
       recentActivities: activities,
       latestNews,

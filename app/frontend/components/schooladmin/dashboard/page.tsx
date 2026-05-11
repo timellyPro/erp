@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { StatCard } from "../dashboard/components/StatCard";
 import { AttendanceCard } from "./components/AttendanceCard";
 import { SidebarList } from "./components/SidebarList";
@@ -22,6 +22,8 @@ type DashboardData = {
     workshopsThisWeek: number;
     feesCollected: string;
     feesCollectedPct: number;
+    todayCollectionTotal: string;
+    todayCollectionTotalRaw: number;
   };
   attendance: {
     present: number;
@@ -39,6 +41,13 @@ type DashboardData = {
     date?: string;
     participants: number;
     status: string;
+  }>;
+  todayCollectionByMethod: Array<{
+    key: string;
+    label: string;
+    amount: number;
+    formattedAmount: string;
+    count: number;
   }>;
   teachersOnLeave: Array<{
     id: string;
@@ -68,6 +77,14 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const router=useRouter();
+  const dateInputRef = useRef<HTMLInputElement | null>(null);
+  const [selectedCollectionDate, setSelectedCollectionDate] = useState(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = `${d.getMonth() + 1}`.padStart(2, "0");
+    const day = `${d.getDate()}`.padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  });
   const { data: session } = useSession();
   const userName = useMemo(() => {
     const n = session?.user?.name?.trim();
@@ -76,11 +93,12 @@ export default function Dashboard() {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    setLoading(true);
     (async () => {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30000);
       try {
-        const dashboardRes = await fetch("/api/school/dashboard", { 
+        const dashboardRes = await fetch(`/api/school/dashboard?date=${encodeURIComponent(selectedCollectionDate)}`, { 
           credentials: "include",
           cache: "no-store",
           signal: controller.signal,
@@ -120,8 +138,40 @@ export default function Dashboard() {
     })();
     return () => {
       cancelled = true;
+      clearTimeout(timeout);
+      controller.abort();
     };
-  }, []);
+  }, [selectedCollectionDate]);
+
+  const formatChange = (n: number) =>
+    n >= 0 ? `+${n} this month` : `${n} this month`;
+
+  const todayCollectionDate = new Date(`${selectedCollectionDate}T12:00:00`).toLocaleDateString("en-IN", {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+
+  const todayCollectionRows = (() => {
+    const rows = data?.todayCollectionByMethod ?? [];
+    const cash = rows.find((r) => r.key === "CASH") ?? {
+      key: "CASH",
+      label: "Cash",
+      amount: 0,
+      formattedAmount: "₹0",
+      count: 0,
+    };
+    const online = rows.find((r) => r.key === "ONLINE") ?? {
+      key: "ONLINE",
+      label: "Online",
+      amount: 0,
+      formattedAmount: "₹0",
+      count: 0,
+    };
+    const others = rows.filter((r) => r.key !== "CASH" && r.key !== "ONLINE");
+    return [cash, online, ...others];
+  })();
 
   if (loading) {
     return (
@@ -130,9 +180,6 @@ export default function Dashboard() {
       </div>
     );
   }
-
-  const formatChange = (n: number) =>
-    n >= 0 ? `+${n} this month` : `${n} this month`;
 
   return (
     <div className="min-h-screen space-y-4 md:space-y-8 max-w-[1900px] mx-auto">
@@ -167,9 +214,9 @@ export default function Dashboard() {
               Icon={UserCheck}
             />
             <StatCard
-              label="Upcoming Workshops"
-              value={String(data.stats.upcomingWorkshops)}
-              trend={`${data.stats.workshopsThisWeek} this week`}
+              label="Today Collection"
+              value={data.stats.todayCollectionTotal}
+              trend={`${todayCollectionRows.length} payment method${todayCollectionRows.length > 1 ? "s" : ""}`}
               Icon={CalendarDays}
             />
             <StatCard
@@ -193,16 +240,58 @@ export default function Dashboard() {
                 absentPct={data.attendance.absentPct}
                 latePct={data.attendance.latePct}
               />
-              <SidebarList
-                title="Upcoming Workshops"
-                subtitle="Scheduled events and workshops"
-                items={data.workshops.map((w) => ({
-                  title: w.title,
-                  subtitle: `${w.date ? new Date(w.date).toLocaleDateString("en-IN", { month: "short", day: "numeric", year: "numeric" }) : "-"} • ${w.participants} participants`,
-                  status: w.status as "Confirmed" | "Scheduled",
-                  type: "workshop" as const,
-                }))}
-              />
+              <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-2xl p-4 sm:p-6 md:p-8">
+                <div className="flex items-start justify-between gap-4 mb-5">
+                  <div>
+                    <h3 className="font-bold text-xl text-white">Today Collection</h3>
+                    <p className="text-gray-400 text-sm mt-0.5">{todayCollectionDate}</p>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <input
+                      ref={dateInputRef}
+                      type="date"
+                      value={selectedCollectionDate}
+                      onChange={(e) => setSelectedCollectionDate(e.target.value)}
+                      className="sr-only"
+                      aria-label="Select collection date"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!dateInputRef.current) return;
+                        if (typeof dateInputRef.current.showPicker === "function") {
+                          dateInputRef.current.showPicker();
+                        } else {
+                          dateInputRef.current.click();
+                        }
+                      }}
+                      className="rounded-xl px-3 py-2 bg-white/10 border border-white/20 text-white hover:bg-white/15 transition-colors"
+                      title="Select date"
+                    >
+                      <CalendarDays className="w-4 h-4" />
+                    </button>
+                    <div className="rounded-xl px-3 py-2 bg-lime-400/15 border border-lime-300/20">
+                      <p className="text-[11px] text-lime-300 font-semibold">Total</p>
+                      <p className="text-white font-black text-lg">{data.stats.todayCollectionTotal}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {todayCollectionRows.map((row) => (
+                    <div
+                      key={row.key}
+                      className="flex items-center justify-between rounded-xl bg-white/5 border border-white/10 px-4 py-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-white font-semibold text-sm">{row.label}</p>
+                        <p className="text-gray-400 text-xs">{row.count} payment{row.count === 1 ? "" : "s"}</p>
+                      </div>
+                      <p className="text-lime-300 font-bold text-base">{row.formattedAmount}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
 
             <div className="space-y-4 sm:space-y-6 md:space-y-8">

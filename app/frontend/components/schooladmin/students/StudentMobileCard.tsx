@@ -4,13 +4,12 @@ import { Eye, Pencil, Trash2 } from "lucide-react";
 import { AVATAR_URL } from "../../../constants/images";
 import { StudentRow } from "./types";
 import { getAge } from "./utils";
+import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
 
 const getResidencyLabel = (value?: string) => {
-  const normalized = (value || "").trim().toLowerCase();
-  if (!normalized) return "-";
-  if (normalized.includes("host")) return "Hosteller";
-  if (normalized.includes("day")) return "Day Scholar";
-  return value || "-";
+  const raw = (value || "").trim();
+  if (!raw) return "-";
+  return formatResidencyTypeForDisplay(raw);
 };
 
 type Props = {

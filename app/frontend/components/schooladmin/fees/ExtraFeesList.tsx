@@ -16,6 +16,13 @@ interface ExtraFeesListProps {
   onSuccess: () => void;
 }
 
+function residencyLabel(scope: string | null | undefined): string {
+  const s = (scope ?? "ALL").toUpperCase();
+  if (s === "HOSTELLER") return "Hostel only";
+  if (s === "DAY_SCHOLAR") return "Day scholars only";
+  return "All students";
+}
+
 function targetLabel(
   ef: ExtraFee,
   classes: Array<{ id: string; name: string; section: string | null }>,
@@ -172,6 +179,7 @@ export default function ExtraFeesList({
               }}
             >
               Applies to: {targetLabel(ef, classes, students)}
+              <span className="block mt-1 text-xs text-white/50">Residency: {residencyLabel(ef.residencyScope)}</span>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
               {editingId === ef.id ? (
@@ -222,6 +230,7 @@ export default function ExtraFeesList({
               <th className="py-3">Name</th>
               <th className="py-3">Amount</th>
               <th className="py-3">Applies To</th>
+              <th className="py-3">Residency</th>
               <th className="py-3 w-20">Actions</th>
             </tr>
           </thead>
@@ -276,6 +285,7 @@ export default function ExtraFeesList({
                 >
                   {targetLabel(ef, classes, students)}
                 </td>
+                <td className="py-3 text-gray-400">{residencyLabel(ef.residencyScope)}</td>
                 <td className="py-3">
                   {editingId === ef.id ? (
                     <div className="flex gap-1">

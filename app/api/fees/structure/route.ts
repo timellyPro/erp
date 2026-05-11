@@ -5,6 +5,7 @@ import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import { saveClassFeeStructureAndSyncStudents } from "@/lib/classFeeStructureApply";
 import { finalFeeFromStructureAndExtras } from "@/lib/studentTuitionFromStructure";
+import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -147,6 +148,7 @@ export async function DELETE(req: Request) {
         targetClassId: true,
         targetSection: true,
         targetStudentId: true,
+        residencyScope: true,
       },
     });
 
@@ -167,7 +169,9 @@ export async function DELETE(req: Request) {
                 ef.targetClassId === classId &&
                 ef.targetSection === student.class?.section) ||
               (ef.targetType === "STUDENT" && ef.targetStudentId === student.id);
-            if (applies) extraTotal += ef.amount;
+            if (!applies) continue;
+            if (!extraFeeAppliesToStudentResidency(ef.residencyScope, student.residencyType)) continue;
+            extraTotal += ef.amount;
           }
 
           const newFinalFee = finalFeeFromStructureAndExtras(0, extraTotal, fee.discountPercent);

@@ -5,6 +5,7 @@ import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
+import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -37,6 +38,7 @@ export async function GET() {
         student: {
           select: {
             id: true,
+            residencyType: true,
             class: { select: { id: true, name: true, section: true } },
             user: { select: { id: true, name: true, email: true } },
           },
@@ -80,6 +82,7 @@ export async function GET() {
         targetClassId: true,
         targetSection: true,
         targetStudentId: true,
+        residencyScope: true,
       },
     });
 
@@ -248,7 +251,9 @@ export async function GET() {
 
       const baseComponents = classId ? componentsByClassId.get(classId) ?? [] : [];
 
+      const residency = fee.student.residencyType ?? "Day Scholar";
       const applicableExtraFees = extraFees.filter((ef) => {
+        if (!extraFeeAppliesToStudentResidency(ef.residencyScope, residency)) return false;
         if (ef.targetType === "SCHOOL") return true;
         if (ef.targetType === "CLASS") return !!classId && ef.targetClassId === classId;
         if (ef.targetType === "SECTION")
