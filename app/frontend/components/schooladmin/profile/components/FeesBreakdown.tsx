@@ -60,6 +60,7 @@ export const FeesBreakdown = ({
   const [headCards, setHeadCards] = useState<
     Array<{
       key: string;
+      sourceKey?: string;
       label: string;
       amount: number;
       paid: number;
@@ -89,6 +90,61 @@ export const FeesBreakdown = ({
   });
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+
+  const splitHostelIntoInstallments = <
+    T extends {
+      key: string;
+      label: string;
+      amount: number;
+      paid: number;
+      due: number;
+      extraFeeId?: string;
+      canDeleteExtra?: boolean;
+    }
+  >(
+    heads: T[]
+  ): Array<T & { sourceKey?: string }> => {
+    const out: Array<T & { sourceKey?: string }> = [];
+    for (const h of heads) {
+      const isHostel = (h.label || "").trim().toLowerCase() === "hostel fee";
+      if (!isHostel) {
+        out.push(h);
+        continue;
+      }
+
+      const total = Number(h.amount) || 0;
+      const paidTotal = Math.max(Number(h.paid) || 0, 0);
+      const firstAmount = Math.round((total / 2) * 100) / 100;
+      const secondAmount = Math.round((total - firstAmount) * 100) / 100;
+
+      const firstPaid = Math.min(paidTotal, firstAmount);
+      const secondPaid = Math.min(Math.max(paidTotal - firstAmount, 0), secondAmount);
+      const firstDue = Math.max(firstAmount - firstPaid, 0);
+      const secondDue = Math.max(secondAmount - secondPaid, 0);
+
+      out.push({
+        ...h,
+        key: `${h.key}::INST1`,
+        sourceKey: h.key,
+        label: `${h.label} (1st Installment)`,
+        amount: firstAmount,
+        paid: firstPaid,
+        due: firstDue,
+      });
+      out.push({
+        ...h,
+        key: `${h.key}::INST2`,
+        sourceKey: h.key,
+        label: `${h.label} (2nd Installment)`,
+        amount: secondAmount,
+        paid: secondPaid,
+        due: secondDue,
+        // Keep edit/delete controls on first installment card only.
+        canDeleteExtra: false,
+      });
+    }
+    return out;
+  };
 
   // Calculate breakdown by fee type from payments
   const feeBreakdown = new Map<string, { amount: number; paidAmount: number }>();
@@ -147,7 +203,7 @@ export const FeesBreakdown = ({
           extraFeeId: typeof h.extraFeeId === "string" ? h.extraFeeId : undefined,
           canDeleteExtra: Boolean(h.canDeleteOnStudentProfile),
         }));
-        setHeadCards(normalized);
+        setHeadCards(splitHostelIntoInstallments(normalized));
         setHeadsTotalAmount(
           Number(data?.totalAmount) ||
             normalized.reduce((s: number, h: { amount: number }) => s + h.amount, 0)
@@ -202,8 +258,9 @@ export const FeesBreakdown = ({
   };
 
   const selectedHeadFromCard = (head: { key: string; label: string; extraFeeId?: string }) => {
-    if (head.key.startsWith("BASE:")) {
-      const componentIndex = Number(head.key.slice("BASE:".length));
+    const sourceKey = (head as { sourceKey?: string }).sourceKey || head.key;
+    if (sourceKey.startsWith("BASE:")) {
+      const componentIndex = Number(sourceKey.slice("BASE:".length));
       if (Number.isFinite(componentIndex)) {
         return {
           headType: "BASE_COMPONENT" as const,
@@ -218,10 +275,10 @@ export const FeesBreakdown = ({
         extraFeeId: head.extraFeeId,
       };
     }
-    if (head.key.startsWith("EXTRA:")) {
+    if (sourceKey.startsWith("EXTRA:")) {
       return {
         headType: "EXTRA_FEE" as const,
-        extraFeeId: head.key.slice("EXTRA:".length),
+        extraFeeId: sourceKey.slice("EXTRA:".length),
       };
     }
     return null;

@@ -6,6 +6,7 @@ import PageHeader from "../common/PageHeader";
 import FeeStatCards from "./fees/FeeStatCards";
 import OfflinePaymentForm from "./fees/OfflinePaymentForm";
 import AddExtraFeeForm from "./fees/AddExtraFeeForm";
+import HostelMessFeesPanel from "./fees/HostelMessFeesPanel";
 import ExtraFeesList from "./fees/ExtraFeesList";
 import FeeStructureConfig from "./fees/FeeStructureConfig";
 import FeeRecordsTable from "./fees/FeeRecordsTable";
@@ -119,7 +120,9 @@ export default function FeesTab({ section }: FeesTabProps) {
             className={
               section === undefined
                 ? "grid grid-cols-1 gap-4 xl:grid-cols-2 xl:gap-6"
-                : "mx-auto w-full max-w-3xl"
+                : section === "add-extra-fees"
+                  ? "mx-auto w-full max-w-4xl"
+                  : "mx-auto w-full max-w-3xl"
             }
           >
             {(section === undefined || section === "offline-payment") && (
@@ -136,8 +139,15 @@ export default function FeesTab({ section }: FeesTabProps) {
             {(section === undefined || section === "add-extra-fees") && (
               <div
                 id="fees-section-add-extra-fees"
-                className={`scroll-mt-28 min-w-0 ${section === undefined ? "" : "mt-4"}`}
+                className={`scroll-mt-28 min-w-0 flex flex-col ${section === "add-extra-fees" ? "gap-6" : section === undefined ? "mt-4" : ""}`}
               >
+                {section === "add-extra-fees" && (
+                  <HostelMessFeesPanel
+                    classes={classes}
+                    extraFees={extraFees}
+                    onSuccess={reloadAfterMutation}
+                  />
+                )}
                 <AddExtraFeeForm classes={classes} students={students} onSuccess={reloadAfterMutation} />
               </div>
             )}
@@ -180,7 +190,7 @@ export default function FeesTab({ section }: FeesTabProps) {
         {(section === undefined || section === "petty-cash") && (
           <div
             id="fees-section-petty-cash"
-            className={`scroll-mt-28 ${section === undefined ? "" : "mx-auto w-full max-w-4xl"}`}
+            className={`scroll-mt-28 ${section === undefined ? "" : "w-full"}`}
           >
             <PettyCashSection />
           </div>

@@ -44,6 +44,8 @@ export interface ExtraFee {
   targetClassId: string | null;
   targetSection: string | null;
   targetStudentId: string | null;
+  /** ALL | HOSTELLER | DAY_SCHOLAR */
+  residencyScope?: string | null;
 }
 
 export interface FeeStructure {

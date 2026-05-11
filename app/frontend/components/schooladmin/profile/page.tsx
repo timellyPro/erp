@@ -444,6 +444,7 @@ function StudentDetailsPageContent() {
 
 type DueHeadRow = {
   key: string;
+  sourceKey?: string;
   label: string;
   totalAmount: number;
   paidAmount: number;
@@ -472,6 +473,46 @@ function StudentFeesPaymentModal({
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [error, setError] = useState<string | null>(null);
 
+  const splitHostelIntoInstallments = (rowsIn: DueHeadRow[]): DueHeadRow[] => {
+    const out: DueHeadRow[] = [];
+    for (const r of rowsIn) {
+      const isHostel = (r.label || "").trim().toLowerCase() === "hostel fee";
+      if (!isHostel) {
+        out.push(r);
+        continue;
+      }
+      const total = Number(r.totalAmount) || 0;
+      const paidTotal = Math.max(Number(r.paidAmount) || 0, 0);
+      const firstAmount = Math.round((total / 2) * 100) / 100;
+      const secondAmount = Math.round((total - firstAmount) * 100) / 100;
+
+      const firstPaid = Math.min(paidTotal, firstAmount);
+      const secondPaid = Math.min(Math.max(paidTotal - firstAmount, 0), secondAmount);
+      const firstDue = Math.max(firstAmount - firstPaid, 0);
+      const secondDue = Math.max(secondAmount - secondPaid, 0);
+
+      out.push({
+        ...r,
+        key: `${r.key}::INST1`,
+        sourceKey: r.key,
+        label: `${r.label} (1st Installment)`,
+        totalAmount: firstAmount,
+        paidAmount: firstPaid,
+        dueBefore: firstDue,
+      });
+      out.push({
+        ...r,
+        key: `${r.key}::INST2`,
+        sourceKey: r.key,
+        label: `${r.label} (2nd Installment)`,
+        totalAmount: secondAmount,
+        paidAmount: secondPaid,
+        dueBefore: secondDue,
+      });
+    }
+    return out;
+  };
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -487,8 +528,7 @@ function StudentFeesPaymentModal({
         }
         const dueHeads = Array.isArray(data?.dueHeads) ? data.dueHeads : [];
         if (!cancelled) {
-          setRows(
-            dueHeads.map((h: { key: string; label: string; dueBefore: number; snapshotAmount?: number }) => ({
+          const mappedRows = dueHeads.map((h: { key: string; label: string; dueBefore: number; snapshotAmount?: number }) => ({
               key: h.key,
               label: h.label || "Fee Head",
               totalAmount: Number(h.snapshotAmount) || 0,
@@ -496,8 +536,8 @@ function StudentFeesPaymentModal({
               discountAmount: 0,
               dueBefore: Number(h.dueBefore) || 0,
               payAmount: "",
-            }))
-          );
+            }));
+          setRows(splitHostelIntoInstallments(mappedRows));
               setPaymentDate(new Date().toISOString().slice(0, 10));
         }
       } catch (e) {
@@ -573,8 +613,9 @@ function StudentFeesPaymentModal({
 
     const selectedHeads = selectedRows
       .map((r) => {
-        if (r.key.startsWith("BASE:")) {
-          const idx = Number(r.key.slice("BASE:".length));
+        const sourceKey = r.sourceKey || r.key;
+        if (sourceKey.startsWith("BASE:")) {
+          const idx = Number(sourceKey.slice("BASE:".length));
           if (!Number.isFinite(idx)) return null;
           return {
             headType: "BASE_COMPONENT" as const,
@@ -582,10 +623,10 @@ function StudentFeesPaymentModal({
             componentName: r.label,
           };
         }
-        if (r.key.startsWith("EXTRA:")) {
+        if (sourceKey.startsWith("EXTRA:")) {
           return {
             headType: "EXTRA_FEE" as const,
-            extraFeeId: r.key.slice("EXTRA:".length),
+            extraFeeId: sourceKey.slice("EXTRA:".length),
           };
         }
         return null;
@@ -611,7 +652,7 @@ function StudentFeesPaymentModal({
           transactionId: referenceNo.trim() || undefined,
           paymentDate,
           selectedHeads,
-          explicitAllocations: selectedRows.map((r) => ({ key: r.key, amount: Number(r.payAmount) })),
+          explicitAllocations: selectedRows.map((r) => ({ key: r.sourceKey || r.key, amount: Number(r.payAmount) })),
         }),
       });
       const data = await res.json().catch(() => ({}));

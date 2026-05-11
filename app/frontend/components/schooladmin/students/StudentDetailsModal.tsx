@@ -5,6 +5,7 @@ import { StudentRow } from "./types";
 import { getAge } from "./utils";
 import { AVATAR_URL } from "../../../constants/images";
 import { formatStoredAddressForDisplay } from "@/lib/studentAddressFormat";
+import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
 
 type Props = {
   student: StudentRow;
@@ -73,7 +74,9 @@ export default function StudentDetailsModal({ student, onClose, onEdit }: Props)
               </div>
               <div className="bg-white/5 rounded-lg p-3 border border-white/10">
                 <p className="text-xs text-gray-500 mb-1">Residency</p>
-                <p className="text-sm font-semibold text-gray-200">{student.residencyType || "Day Scholar"}</p>
+                <p className="text-sm font-semibold text-gray-200">
+                  {formatResidencyTypeForDisplay(student.residencyType || "Day Scholar")}
+                </p>
               </div>
             </div>
           </div>

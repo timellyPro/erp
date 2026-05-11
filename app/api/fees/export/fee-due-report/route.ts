@@ -72,6 +72,7 @@ export async function GET(req: Request) {
           targetClassId: true,
           targetSection: true,
           targetStudentId: true,
+          residencyScope: true,
         },
       }),
     ]);
@@ -84,6 +85,7 @@ export async function GET(req: Request) {
       targetClassId: e.targetClassId,
       targetSection: e.targetSection,
       targetStudentId: e.targetStudentId,
+      residencyScope: e.residencyScope,
     }));
 
     const componentsByClassId = new Map<string, Array<{ name: string; amount: number }>>();

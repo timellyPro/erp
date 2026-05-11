@@ -4,6 +4,7 @@ import FeePaymentReceiptTemplate, {
   type FeePaymentReceiptData,
 } from "../../../pdf/FeePaymentReceiptTemplate";
 import { printFromElement } from "@/lib/pdfUtils";
+import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
 
 type PaymentRow = {
   id: string;
@@ -483,7 +484,7 @@ export const FeeTransactions = ({
       academicYear: `${startYear}-${String(startYear + 1).slice(-2)}`,
       fatherName: parentName || "-",
       motherName: motherName || "-",
-      residencyType: residencyType || "Day Scholar",
+      residencyType: formatResidencyTypeForDisplay(residencyType || "Day Scholar"),
       parentName: parentName || "-",
       parentPhone: parentPhone || "-",
       createdAt,

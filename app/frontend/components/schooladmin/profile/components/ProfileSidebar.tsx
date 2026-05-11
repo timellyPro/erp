@@ -4,13 +4,12 @@ import { useEffect, useState } from "react";
 import { Users, Mail, Phone, MapPin, Bookmark, Pencil, X, CircleDollarSign } from "lucide-react";
 import SelectInput from "../../../common/SelectInput";
 import { formatStoredAddressForDisplay } from "@/lib/studentAddressFormat";
+import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
 
 const getResidencyLabel = (value?: string) => {
-  const normalized = (value || "").trim().toLowerCase();
-  if (!normalized) return "Day Scholar";
-  if (normalized.includes("host")) return "Hosteller";
-  if (normalized.includes("day")) return "Day Scholar";
-  return value || "Day Scholar";
+  const raw = (value || "").trim();
+  if (!raw) return "Day Scholar";
+  return formatResidencyTypeForDisplay(raw);
 };
 
 interface StudentProfileProps {
@@ -400,7 +399,7 @@ export const ProfileSidebar = ({
                   onChange={setSResidency}
                   options={[
                     { label: "Day Scholar", value: "Day Scholar" },
-                    { label: "Hosteller", value: "Hosteller" },
+                    { label: "Hostel", value: "Hosteller" },
                   ]}
                   bgColor="black"
                 />

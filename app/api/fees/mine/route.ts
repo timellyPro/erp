@@ -5,6 +5,7 @@ import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
+import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -27,7 +28,12 @@ export async function GET() {
       where: { studentId },
       include: {
         student: {
-          select: { classId: true, schoolId: true, class: { select: { id: true, name: true, section: true } } },
+          select: {
+            classId: true,
+            schoolId: true,
+            residencyType: true,
+            class: { select: { id: true, name: true, section: true } },
+          },
         },
       },
     });
@@ -48,7 +54,7 @@ export async function GET() {
           })
         : null;
 
-    const extraFees = await prisma.extraFee.findMany({
+    const extraFeesRaw = await prisma.extraFee.findMany({
       where: {
         schoolId: fee.student.schoolId,
         OR: [
@@ -66,7 +72,21 @@ export async function GET() {
             : []),
         ],
       },
+      select: {
+        id: true,
+        name: true,
+        amount: true,
+        targetType: true,
+        targetClassId: true,
+        targetSection: true,
+        targetStudentId: true,
+        residencyScope: true,
+      },
     });
+    const residency = fee.student.residencyType ?? "Day Scholar";
+    const extraFees = extraFeesRaw.filter((ef) =>
+      extraFeeAppliesToStudentResidency(ef.residencyScope, residency)
+    );
 
     const payments = await prisma.payment.findMany({
       where: { studentId, eventRegistrationId: null },
