@@ -15,6 +15,10 @@ export interface FeeSummary {
   totalStudents: number;
   paid: number;
   pending: number;
+  /** Sum of base tuition (structure + extras) before discount — StudentFee.totalFee */
+  totalFee: number;
+  /** Sum of (totalFee − finalFee) — documented discount amount */
+  totalDiscount: number;
   totalCollected: number;
   totalDue: number;
 }
@@ -46,6 +50,7 @@ export interface ExtraFee {
   targetStudentId: string | null;
   /** ALL | HOSTELLER | DAY_SCHOLAR */
   residencyScope?: string | null;
+  splitIntoTwoInstallments?: boolean;
 }
 
 export interface FeeStructure {

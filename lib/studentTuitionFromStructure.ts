@@ -1,7 +1,12 @@
 import prisma from "@/lib/db";
-import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import {
+  extraFeeAppliesToStudentResidency,
+  isStudentHosteller,
+  normalizeExtraFeeResidencyScope,
+} from "@/lib/extraFeeResidencyScope";
 
-type ExtraFeeRow = {
+export type ExtraFeeRow = {
+  name?: string | null;
   amount: number;
   targetType: string;
   targetClassId: string | null;
@@ -10,10 +15,77 @@ type ExtraFeeRow = {
   residencyScope: string | null;
 };
 
+function normName(raw: string | null | undefined): string {
+  return String(raw ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+/** Official catalog row from Hostel and mess fees panel. */
+function hasCanonicalSchoolHostel(extraFees: ExtraFeeRow[]): boolean {
+  return extraFees.some(
+    (ef) =>
+      normName(ef.name) === "hostel fee" &&
+      ef.targetType === "SCHOOL" &&
+      normalizeExtraFeeResidencyScope(ef.residencyScope) === "HOSTELLER"
+  );
+}
+
+function hasCanonicalClassMess(extraFees: ExtraFeeRow[], classId: string | null): boolean {
+  if (!classId) return false;
+  return extraFees.some(
+    (ef) =>
+      normName(ef.name) === "mess fee" && ef.targetType === "CLASS" && ef.targetClassId === classId
+  );
+}
+
+/**
+ * Legacy bulk extras often split hostel/mess into two heads (1st/2nd installment). When the canonical
+ * "Hostel Fee" / "Mess Fee" catalog rows exist, those legacy rows would double-count with the new amounts.
+ */
+function isLegacyHostelInstallmentExtra(ef: ExtraFeeRow): boolean {
+  const n = normName(ef.name);
+  if (!n || n === "hostel fee" || n === "mess fee") return false;
+  if (!n.includes("hostel")) return false;
+  return nameLooksLikeSplitInstallment(n);
+}
+
+function isLegacyMessInstallmentExtra(ef: ExtraFeeRow): boolean {
+  const n = normName(ef.name);
+  if (!n || n === "mess fee" || n === "hostel fee") return false;
+  if (!n.includes("mess")) return false;
+  return nameLooksLikeSplitInstallment(n);
+}
+
+function nameLooksLikeSplitInstallment(n: string): boolean {
+  return (
+    n.includes("installment") ||
+    n.includes("instalment") ||
+    /\b1st\b/.test(n) ||
+    /\b2nd\b/.test(n) ||
+    n.includes("first installment") ||
+    n.includes("second installment") ||
+    (n.includes(" half") && (n.includes("1") || n.includes("2")))
+  );
+}
+
 type ComponentRow = { name: string; amount: number };
 
 /** DB client slice used for tuition totals (works with `prisma` or a `$transaction` callback client). */
 export type TuitionDb = Pick<typeof prisma, "classFeeStructure" | "extraFee">;
+
+function shouldOmitLegacySplitDuplicate(
+  ef: ExtraFeeRow,
+  allSchoolExtras: ExtraFeeRow[],
+  opts: { classId: string | null; residencyType: string | null }
+): boolean {
+  const canonicalHostel = hasCanonicalSchoolHostel(allSchoolExtras);
+  const canonicalMess = hasCanonicalClassMess(allSchoolExtras, opts.classId);
+  const hosteller = isStudentHosteller(opts.residencyType);
+  if (canonicalHostel && hosteller && isLegacyHostelInstallmentExtra(ef)) return true;
+  if (canonicalMess && opts.classId && isLegacyMessInstallmentExtra(ef)) return true;
+  return false;
+}
 
 export function sumExtraFeesForStudent(
   extraFees: ExtraFeeRow[],
@@ -37,9 +109,30 @@ export function sumExtraFeesForStudent(
         ef.targetStudentId === opts.studentId);
     if (!applies) continue;
     if (!extraFeeAppliesToStudentResidency(ef.residencyScope, opts.residencyType)) continue;
+    if (shouldOmitLegacySplitDuplicate(ef, extraFees, opts)) continue;
+
     extraTotal += ef.amount;
   }
   return extraTotal;
+}
+
+/** For fee breakdown UI: drop legacy bulk hostel/mess installment heads when canonical catalog rows exist. */
+export function shouldOmitLegacySplitHostelMessExtraForBreakdown<
+  T extends {
+    name: string;
+    amount: number;
+    targetType: string;
+    targetClassId: string | null;
+    targetSection: string | null;
+    targetStudentId: string | null;
+    residencyScope: string | null;
+  }
+>(
+  ef: T,
+  allSchoolExtras: T[],
+  opts: { classId: string | null; residencyType: string | null }
+): boolean {
+  return shouldOmitLegacySplitDuplicate(ef as ExtraFeeRow, allSchoolExtras as ExtraFeeRow[], opts);
 }
 
 export async function sumClassBaseTuition(db: TuitionDb, classId: string | null): Promise<number> {
@@ -70,6 +163,7 @@ export async function computeStudentTuitionParts(
   const extraFees = await db.extraFee.findMany({
     where: { schoolId: args.schoolId },
     select: {
+      name: true,
       amount: true,
       targetType: true,
       targetClassId: true,

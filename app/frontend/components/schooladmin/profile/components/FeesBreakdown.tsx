@@ -1,14 +1,32 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Download, Zap, Settings, PlusCircle, Trash2, Pencil, X } from "lucide-react";
+import { Download, Zap, Settings, PlusCircle, Trash2, Pencil, X, Tag, AlertCircle } from "lucide-react";
 import { generatePDF } from "@/lib/pdfUtils";
 import { ModifyFeeModal, DISCOUNT_HEAD_OVERALL_KEY, type FeeHeadOption } from "./ModifyFeeModal";
 import { AddExtraFeeModal } from "./AddExtraFeeModal";
+import { AssignFeeHeadsCatalogModal } from "./AssignFeeHeadsCatalogModal";
 import { EditExtraFeeModal } from "./EditExtraFeeModal";
+import { shouldSplitFeeHeadIntoTwoInstallments } from "@/lib/feeHeadInstallmentSplit";
+
+function baseComponentIndexFromHead(head: {
+  key: string;
+  sourceKey?: string;
+  extraFeeId?: string;
+}): number | null {
+  if (head.extraFeeId) return null;
+  const sk = head.sourceKey ?? head.key;
+  if (!sk.startsWith("BASE:")) return null;
+  const rest = sk.slice("BASE:".length);
+  const idxPart = rest.split("::")[0];
+  const n = Number(idxPart);
+  return Number.isFinite(n) ? n : null;
+}
 
 type Props = {
   studentId: string;
+  /** Required to edit or delete class-wide (structure) fee heads from this screen. */
+  classId?: string | null;
   totalFee: number;
   baseTotalFee: number;
   discountPercent: number;
@@ -31,10 +49,13 @@ type Props = {
   discountFeeHeadLabel?: string | null;
   discountRemarks?: string | null;
   onFeeModified?: () => void;
+  /** Used to seed assign-from-catalog rows (hostel vs transport hint). */
+  residencyType?: string | null;
 };
 
 export const FeesBreakdown = ({
   studentId,
+  classId = null,
   totalFee,
   baseTotalFee,
   discountPercent,
@@ -49,14 +70,30 @@ export const FeesBreakdown = ({
   discountFeeHeadLabel,
   discountRemarks,
   onFeeModified,
+  residencyType,
 }: Props) => {
   const receiptRef = useRef<HTMLDivElement>(null);
   const [isGeneratingReceipt, setIsGeneratingReceipt] = useState(false);
   const [showModifyFee, setShowModifyFee] = useState(false);
   const [showAddExtraFee, setShowAddExtraFee] = useState(false);
-  const [editExtra, setEditExtra] = useState<{ id: string; name: string; amount: number } | null>(null);
+  const [showAssignFeeHeadsCatalog, setShowAssignFeeHeadsCatalog] = useState(false);
+  const [editExtra, setEditExtra] = useState<{
+    id: string;
+    name: string;
+    amount: number;
+    splitIntoTwoInstallments?: boolean;
+  } | null>(null);
   const [headsLoading, setHeadsLoading] = useState(false);
   const [deletingExtraId, setDeletingExtraId] = useState<string | null>(null);
+  const [baseHeadBusyKey, setBaseHeadBusyKey] = useState<string | null>(null);
+  const [editBaseHead, setEditBaseHead] = useState<{
+    classId: string;
+    componentIndex: number;
+    name: string;
+    amount: string;
+  } | null>(null);
+  const [editBaseError, setEditBaseError] = useState("");
+  const [baseStructureMutating, setBaseStructureMutating] = useState(false);
   const [headCards, setHeadCards] = useState<
     Array<{
       key: string;
@@ -67,12 +104,17 @@ export const FeesBreakdown = ({
       due: number;
       extraFeeId?: string;
       canDeleteExtra?: boolean;
+      extraFeeFullAmount?: number;
+      extraFeeNameForEdit?: string;
+      splitIntoTwoInstallments?: boolean;
+      headType?: string;
     }>
   >([]);
   const [headsTotalAmount, setHeadsTotalAmount] = useState<number | null>(null);
   const [headsRemainingAmount, setHeadsRemainingAmount] = useState<number | null>(null);
   const [payingHead, setPayingHead] = useState<{
     key: string;
+    sourceKey?: string;
     label: string;
     due: number;
     extraFeeId?: string;
@@ -91,7 +133,7 @@ export const FeesBreakdown = ({
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
-  const splitHostelIntoInstallments = <
+  const splitHostelOrMessIntoTwoInstallments = <
     T extends {
       key: string;
       label: string;
@@ -100,14 +142,19 @@ export const FeesBreakdown = ({
       due: number;
       extraFeeId?: string;
       canDeleteExtra?: boolean;
+      splitIntoTwoInstallments?: boolean;
+      headType?: string;
     }
   >(
     heads: T[]
-  ): Array<T & { sourceKey?: string }> => {
-    const out: Array<T & { sourceKey?: string }> = [];
+  ): Array<T & { sourceKey?: string; extraFeeFullAmount?: number; extraFeeNameForEdit?: string }> => {
+    const out: Array<T & { sourceKey?: string; extraFeeFullAmount?: number; extraFeeNameForEdit?: string }> = [];
     for (const h of heads) {
-      const isHostel = (h.label || "").trim().toLowerCase() === "hostel fee";
-      if (!isHostel) {
+      if (
+        !shouldSplitFeeHeadIntoTwoInstallments(h.label, {
+          splitIntoTwoInstallments: h.splitIntoTwoInstallments,
+        })
+      ) {
         out.push(h);
         continue;
       }
@@ -122,25 +169,31 @@ export const FeesBreakdown = ({
       const firstDue = Math.max(firstAmount - firstPaid, 0);
       const secondDue = Math.max(secondAmount - secondPaid, 0);
 
+      const baseName = (h.label || "").trim();
+      const meta = {
+        extraFeeFullAmount: total,
+        extraFeeNameForEdit: baseName,
+      };
+
       out.push({
         ...h,
+        ...meta,
         key: `${h.key}::INST1`,
         sourceKey: h.key,
-        label: `${h.label} (1st Installment)`,
+        label: `${baseName} (1st Installment)`,
         amount: firstAmount,
         paid: firstPaid,
         due: firstDue,
       });
       out.push({
         ...h,
+        ...meta,
         key: `${h.key}::INST2`,
         sourceKey: h.key,
-        label: `${h.label} (2nd Installment)`,
+        label: `${baseName} (2nd Installment)`,
         amount: secondAmount,
         paid: secondPaid,
         due: secondDue,
-        // Keep edit/delete controls on first installment card only.
-        canDeleteExtra: false,
       });
     }
     return out;
@@ -202,8 +255,11 @@ export const FeesBreakdown = ({
           due: Number(h.dueBefore) || 0,
           extraFeeId: typeof h.extraFeeId === "string" ? h.extraFeeId : undefined,
           canDeleteExtra: Boolean(h.canDeleteOnStudentProfile),
+          headType: typeof h.headType === "string" ? h.headType : undefined,
+          splitIntoTwoInstallments:
+            h.headType === "EXTRA_FEE" ? Boolean(h.splitIntoTwoInstallments) : undefined,
         }));
-        setHeadCards(splitHostelIntoInstallments(normalized));
+        setHeadCards(splitHostelOrMessIntoTwoInstallments(normalized));
         setHeadsTotalAmount(
           Number(data?.totalAmount) ||
             normalized.reduce((s: number, h: { amount: number }) => s + h.amount, 0)
@@ -246,7 +302,13 @@ export const FeesBreakdown = ({
   const displayAdmission = admissionNumber || "—";
   const displayClass = classDisplayName || "—";
 
-  const openHeadPaymentModal = (head: { key: string; label: string; due: number; extraFeeId?: string }) => {
+  const openHeadPaymentModal = (head: {
+    key: string;
+    sourceKey?: string;
+    label: string;
+    due: number;
+    extraFeeId?: string;
+  }) => {
     setPayingHead(head);
     setPaymentError(null);
     setPaymentForm({
@@ -257,17 +319,14 @@ export const FeesBreakdown = ({
     });
   };
 
-  const selectedHeadFromCard = (head: { key: string; label: string; extraFeeId?: string }) => {
-    const sourceKey = (head as { sourceKey?: string }).sourceKey || head.key;
-    if (sourceKey.startsWith("BASE:")) {
-      const componentIndex = Number(sourceKey.slice("BASE:".length));
-      if (Number.isFinite(componentIndex)) {
-        return {
-          headType: "BASE_COMPONENT" as const,
-          componentIndex,
-          componentName: head.label,
-        };
-      }
+  const selectedHeadFromCard = (head: { key: string; label: string; extraFeeId?: string; sourceKey?: string }) => {
+    const baseIdx = baseComponentIndexFromHead(head);
+    if (baseIdx !== null) {
+      return {
+        headType: "BASE_COMPONENT" as const,
+        componentIndex: baseIdx,
+        componentName: head.label,
+      };
     }
     if (head.extraFeeId) {
       return {
@@ -275,13 +334,110 @@ export const FeesBreakdown = ({
         extraFeeId: head.extraFeeId,
       };
     }
+    const sourceKey = head.sourceKey ?? head.key;
     if (sourceKey.startsWith("EXTRA:")) {
-      return {
-        headType: "EXTRA_FEE" as const,
-        extraFeeId: sourceKey.slice("EXTRA:".length),
-      };
+      const extraId = sourceKey.slice("EXTRA:".length).split("::")[0];
+      if (extraId) {
+        return {
+          headType: "EXTRA_FEE" as const,
+          extraFeeId: extraId,
+        };
+      }
     }
     return null;
+  };
+
+  const normalizeStructureComponentsForSave = (
+    raw: Array<{ name: unknown; amount: unknown }>
+  ): Array<{ name: string; amount: number }> =>
+    raw
+      .map((c) => ({
+        name: typeof c.name === "string" ? c.name.trim() : String(c.name ?? "").trim(),
+        amount: typeof c.amount === "number" ? c.amount : Number(c.amount),
+      }))
+      .filter((c) => c.name.length > 0 && Number.isFinite(c.amount));
+
+  const persistClassFeeStructure = async (
+    targetClassId: string,
+    rawComponents: Array<{ name: unknown; amount: unknown }>
+  ) => {
+    const normalized = normalizeStructureComponentsForSave(rawComponents);
+    if (normalized.length === 0) {
+      const res = await fetch(`/api/fees/structure?classId=${encodeURIComponent(targetClassId)}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof data.message === "string" ? data.message : "Failed to remove fee structure");
+      }
+      return;
+    }
+    const res = await fetch("/api/fees/structure", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ classId: targetClassId, components: normalized }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(typeof data.message === "string" ? data.message : "Failed to save fee structure");
+    }
+  };
+
+  const fetchClassStructureRows = async (
+    targetClassId: string
+  ): Promise<Array<{ name: unknown; amount: unknown }>> => {
+    const res = await fetch(`/api/fees/structure?classId=${encodeURIComponent(targetClassId)}`, {
+      credentials: "include",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(typeof data.message === "string" ? data.message : "Could not load fee structure");
+    }
+    const structures = Array.isArray(data.structures) ? data.structures : [];
+    const s = structures.find((x: { classId: string }) => x.classId === targetClassId);
+    return Array.isArray(s?.components) ? s.components : [];
+  };
+
+  const handleSaveEditBaseHead = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editBaseHead) return;
+    setEditBaseError("");
+    const name = editBaseHead.name.trim();
+    const amt = Number(editBaseHead.amount);
+    if (!name) {
+      setEditBaseError("Please enter a fee name.");
+      return;
+    }
+    if (!Number.isFinite(amt) || amt <= 0) {
+      setEditBaseError("Please enter a valid positive amount.");
+      return;
+    }
+    setBaseStructureMutating(true);
+    try {
+      const rows = await fetchClassStructureRows(editBaseHead.classId);
+      if (editBaseHead.componentIndex < 0 || editBaseHead.componentIndex >= rows.length) {
+        alert("That fee head no longer exists in the class structure. Refresh the page.");
+        setEditBaseHead(null);
+        return;
+      }
+      const next = rows.map((c, i) =>
+        i === editBaseHead.componentIndex
+          ? { name, amount: amt }
+          : {
+              name: typeof c.name === "string" ? c.name : String(c.name ?? ""),
+              amount: typeof c.amount === "number" ? c.amount : Number(c.amount),
+            }
+      );
+      await persistClassFeeStructure(editBaseHead.classId, next);
+      setEditBaseHead(null);
+      onFeeModified?.();
+    } catch (err) {
+      setEditBaseError(err instanceof Error ? err.message : "Save failed");
+    } finally {
+      setBaseStructureMutating(false);
+    }
   };
 
   const submitHeadPayment = async () => {
@@ -346,6 +502,14 @@ export const FeesBreakdown = ({
           <span className="leading-tight">Fees Breakdown</span>
         </h3>
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto sm:flex-wrap sm:justify-end">
+          <button
+            type="button"
+            onClick={() => setShowAssignFeeHeadsCatalog(true)}
+            className="inline-flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] touch-manipulation bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/35 text-sky-100 rounded-lg text-sm font-semibold transition-colors"
+          >
+            <PlusCircle className="w-4 h-4 flex-shrink-0" />
+            Assign from catalog
+          </button>
           <button
             type="button"
             onClick={() => setShowAddExtraFee(true)}
@@ -442,59 +606,153 @@ export const FeesBreakdown = ({
               >
                 <div className="flex items-start justify-between gap-2">
                   <p className="text-xs text-gray-400 uppercase tracking-wide min-w-0 flex-1">{h.label}</p>
-                  {h.canDeleteExtra && h.extraFeeId ? (
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        type="button"
-                        title="Edit this student extra fee"
-                        disabled={deletingExtraId === h.extraFeeId}
-                        onClick={() =>
-                          setEditExtra({
-                            id: h.extraFeeId!,
-                            name: h.label,
-                            amount: h.amount,
-                          })
-                        }
-                        className="p-2 rounded-lg border border-white/15 text-gray-300 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        title="Remove this student extra fee"
-                        disabled={deletingExtraId === h.extraFeeId}
-                        onClick={async () => {
-                          if (
-                            !confirm(
-                              `Remove extra fee "${h.label}" from this student? Their total due will be reduced by this fee amount.`
-                            )
-                          ) {
-                            return;
+                  <div className="flex items-center gap-1 shrink-0">
+                    {h.extraFeeId ? (
+                      <>
+                        <button
+                          type="button"
+                          title="Edit this fee head (applies to everyone in scope for school/class fees)"
+                          disabled={deletingExtraId === h.extraFeeId}
+                          onClick={() =>
+                            setEditExtra({
+                              id: h.extraFeeId!,
+                              name: h.extraFeeNameForEdit ?? h.label,
+                              amount: h.extraFeeFullAmount ?? h.amount,
+                              splitIntoTwoInstallments: h.splitIntoTwoInstallments,
+                            })
                           }
-                          try {
-                            setDeletingExtraId(h.extraFeeId!);
-                            const res = await fetch(`/api/fees/extra/${encodeURIComponent(h.extraFeeId!)}`, {
-                              method: "DELETE",
-                              credentials: "include",
-                            });
-                            const data = await res.json().catch(() => ({}));
-                            if (!res.ok) {
-                              alert(typeof data.message === "string" ? data.message : "Delete failed");
+                          className="p-2 rounded-lg border border-white/15 text-gray-300 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          title={
+                            h.canDeleteExtra
+                              ? "Remove this student-only extra fee"
+                              : "Remove this fee head (school/class/section — affects all students in scope)"
+                          }
+                          disabled={deletingExtraId === h.extraFeeId}
+                          onClick={async () => {
+                            const feeTitle = h.extraFeeNameForEdit ?? h.label;
+                            const msg = h.canDeleteExtra
+                              ? `Remove extra fee "${feeTitle}" for this student? Their total due will be reduced by the full fee amount.`
+                              : `Delete fee "${feeTitle}" from the catalog? This removes it for every student in its scope (school / class / section), not only this profile.`;
+                            if (!confirm(msg)) {
                               return;
                             }
-                            onFeeModified?.();
-                          } catch {
-                            alert("Delete failed");
-                          } finally {
-                            setDeletingExtraId(null);
-                          }
-                        }}
-                        className="p-2 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/15 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ) : null}
+                            try {
+                              setDeletingExtraId(h.extraFeeId!);
+                              const res = await fetch(`/api/fees/extra/${encodeURIComponent(h.extraFeeId!)}`, {
+                                method: "DELETE",
+                                credentials: "include",
+                              });
+                              const data = await res.json().catch(() => ({}));
+                              if (!res.ok) {
+                                alert(typeof data.message === "string" ? data.message : "Delete failed");
+                                return;
+                              }
+                              onFeeModified?.();
+                            } catch {
+                              alert("Delete failed");
+                            } finally {
+                              setDeletingExtraId(null);
+                            }
+                          }}
+                          className="p-2 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/15 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
+                    ) : null}
+                    {!h.extraFeeId && classId && baseComponentIndexFromHead(h) !== null ? (
+                      <>
+                        <button
+                          type="button"
+                          title="Edit class fee head (updates the global fee structure for every student in this class)"
+                          disabled={baseHeadBusyKey === h.key || baseStructureMutating}
+                          onClick={async () => {
+                            if (!classId) {
+                              alert(
+                                "This student has no class assigned. Class fee heads can only be edited when the student is in a class."
+                              );
+                              return;
+                            }
+                            const idx = baseComponentIndexFromHead(h);
+                            if (idx === null) return;
+                            setEditBaseError("");
+                            setBaseHeadBusyKey(h.key);
+                            try {
+                              const rows = await fetchClassStructureRows(classId);
+                              const row = rows[idx] as { name?: unknown; amount?: unknown } | undefined;
+                              if (!row) {
+                                alert("That fee head no longer exists in the class structure. Refresh the page.");
+                                return;
+                              }
+                              setEditBaseHead({
+                                classId,
+                                componentIndex: idx,
+                                name: typeof row.name === "string" ? row.name : String(row.name ?? ""),
+                                amount: String(
+                                  typeof row.amount === "number" ? row.amount : Number(row.amount ?? 0)
+                                ),
+                              });
+                            } catch (err) {
+                              alert(err instanceof Error ? err.message : "Could not load fee structure.");
+                            } finally {
+                              setBaseHeadBusyKey(null);
+                            }
+                          }}
+                          className="p-2 rounded-lg border border-white/15 text-gray-300 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          title="Remove class fee head from the class structure (affects every student in this class)"
+                          disabled={baseHeadBusyKey === h.key || baseStructureMutating}
+                          onClick={async () => {
+                            if (!classId) {
+                              alert(
+                                "This student has no class assigned. Class fee heads can only be removed when the student is in a class."
+                              );
+                              return;
+                            }
+                            const idx = baseComponentIndexFromHead(h);
+                            if (idx === null) return;
+                            const feeTitle = h.label;
+                            if (
+                              !confirm(
+                                `Remove "${feeTitle}" from the class fee structure?\n\nThis updates the global breakdown for every student in this class, not only this student.`
+                              )
+                            ) {
+                              return;
+                            }
+                            setBaseHeadBusyKey(h.key);
+                            setBaseStructureMutating(true);
+                            try {
+                              const rows = await fetchClassStructureRows(classId);
+                              if (idx < 0 || idx >= rows.length) {
+                                alert("That fee head no longer exists in the class structure. Refresh the page.");
+                                return;
+                              }
+                              const next = rows.filter((_, i) => i !== idx);
+                              await persistClassFeeStructure(classId, next);
+                              onFeeModified?.();
+                            } catch (err) {
+                              alert(err instanceof Error ? err.message : "Delete failed");
+                            } finally {
+                              setBaseStructureMutating(false);
+                              setBaseHeadBusyKey(null);
+                            }
+                          }}
+                          className="p-2 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/15 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
+                    ) : null}
+                  </div>
                 </div>
                 <p className="text-lg font-bold text-white">₹{h.amount.toLocaleString("en-IN")}</p>
                 <p className="text-xs text-lime-400 mt-auto">
@@ -509,6 +767,7 @@ export const FeesBreakdown = ({
                     onClick={() =>
                       openHeadPaymentModal({
                         key: h.key,
+                        sourceKey: h.sourceKey,
                         label: h.label,
                         due: h.due,
                         extraFeeId: h.extraFeeId,
@@ -786,6 +1045,20 @@ export const FeesBreakdown = ({
         />
       )}
 
+      {showAssignFeeHeadsCatalog && (
+        <AssignFeeHeadsCatalogModal
+          studentId={studentId}
+          studentName={studentName ?? "Student"}
+          classDisplayName={classDisplayName ?? "-"}
+          residencyType={residencyType}
+          onClose={() => setShowAssignFeeHeadsCatalog(false)}
+          onSuccess={() => {
+            setShowAssignFeeHeadsCatalog(false);
+            onFeeModified?.();
+          }}
+        />
+      )}
+
       {showAddExtraFee && (
         <AddExtraFeeModal
           studentId={studentId}
@@ -797,11 +1070,79 @@ export const FeesBreakdown = ({
         />
       )}
 
+      {editBaseHead && (
+        <div className="fixed inset-0 z-[125] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="relative w-full max-w-md overflow-hidden rounded-[2rem] border border-white/10 bg-[#0F172A] shadow-2xl">
+            <div className="p-6">
+              <h2 className="mb-2 text-2xl font-bold text-white">Edit class fee head</h2>
+              <p className="mb-6 text-sm text-gray-400">
+                This updates the class fee structure. Every student in this class gets recalculated totals from the
+                updated heads (plus extras and discounts).
+              </p>
+              <form onSubmit={handleSaveEditBaseHead} className="space-y-5">
+                {editBaseError ? (
+                  <div className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-400">
+                    <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                    <p>{editBaseError}</p>
+                  </div>
+                ) : null}
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-gray-300">Fee name</label>
+                  <div className="relative">
+                    <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                      <Tag className="h-5 w-5 text-gray-500" />
+                    </div>
+                    <input
+                      type="text"
+                      value={editBaseHead.name}
+                      onChange={(e) =>
+                        setEditBaseHead((prev) => (prev ? { ...prev, name: e.target.value } : null))
+                      }
+                      className="w-full rounded-xl border border-white/10 bg-black/30 py-3 pl-10 pr-4 text-white outline-none focus:ring-2 focus:ring-blue-500/40"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-gray-300">Amount (₹)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={editBaseHead.amount}
+                    onChange={(e) =>
+                      setEditBaseHead((prev) => (prev ? { ...prev, amount: e.target.value } : null))
+                    }
+                    className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none focus:ring-2 focus:ring-blue-500/40"
+                  />
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => !baseStructureMutating && setEditBaseHead(null)}
+                    className="flex-1 rounded-xl border border-white/15 py-3 text-sm font-semibold text-white/80 hover:bg-white/5"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={baseStructureMutating}
+                    className="flex-1 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
+                  >
+                    {baseStructureMutating ? "Saving…" : "Save"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
       {editExtra && (
         <EditExtraFeeModal
           extraFeeId={editExtra.id}
           initialName={editExtra.name}
           initialAmount={editExtra.amount}
+          initialSplitIntoTwoInstallments={editExtra.splitIntoTwoInstallments}
           onClose={() => setEditExtra(null)}
           onSuccess={() => {
             setEditExtra(null);

@@ -4,8 +4,7 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import { saveClassFeeStructureAndSyncStudents } from "@/lib/classFeeStructureApply";
-import { finalFeeFromStructureAndExtras } from "@/lib/studentTuitionFromStructure";
-import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import { finalFeeFromStructureAndExtras, sumExtraFeesForStudent } from "@/lib/studentTuitionFromStructure";
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -143,6 +142,7 @@ export async function DELETE(req: Request) {
     const extraFees = await prisma.extraFee.findMany({
       where: { schoolId },
       select: {
+        name: true,
         amount: true,
         targetType: true,
         targetClassId: true,
@@ -160,19 +160,12 @@ export async function DELETE(req: Request) {
           const fee = student.fee;
           if (!fee) return;
 
-          let extraTotal = 0;
-          for (const ef of extraFees) {
-            const applies =
-              ef.targetType === "SCHOOL" ||
-              (ef.targetType === "CLASS" && ef.targetClassId === classId) ||
-              (ef.targetType === "SECTION" &&
-                ef.targetClassId === classId &&
-                ef.targetSection === student.class?.section) ||
-              (ef.targetType === "STUDENT" && ef.targetStudentId === student.id);
-            if (!applies) continue;
-            if (!extraFeeAppliesToStudentResidency(ef.residencyScope, student.residencyType)) continue;
-            extraTotal += ef.amount;
-          }
+          const extraTotal = sumExtraFeesForStudent(extraFees, {
+            classId,
+            section: student.class?.section ?? null,
+            studentId: student.id,
+            residencyType: student.residencyType ?? "Day Scholar",
+          });
 
           const newFinalFee = finalFeeFromStructureAndExtras(0, extraTotal, fee.discountPercent);
           const newRemainingFee = Math.max(0, newFinalFee - fee.amountPaid);

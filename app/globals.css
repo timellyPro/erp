@@ -147,3 +147,20 @@ textarea::placeholder {
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: rgba(180, 240, 61, 0.5);
 }
+
+/*
+ * Number inputs: hide steppers and avoid Tailwind/layer order overriding earlier rules.
+ * For currency fields, prefer type="text" inputMode="decimal" where spinners still appear.
+ */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  margin: 0 !important;
+  display: none !important;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield !important;
+  appearance: textfield !important;
+}

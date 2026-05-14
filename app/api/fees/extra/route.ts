@@ -84,6 +84,7 @@ export async function POST(req: Request) {
 
     const body = await req.json();
     const { name, amount, targetType, targetClassId, targetSection, targetStudentId } = body;
+    const splitIntoTwoInstallments = Boolean(body.splitIntoTwoInstallments);
     const parsedScope = parseExtraFeeResidencyScopeBody(body.residencyScope);
     if (parsedScope === null) {
       return NextResponse.json(
@@ -128,6 +129,7 @@ export async function POST(req: Request) {
         targetSection: targetSection || null,
         targetStudentId: targetStudentId || null,
         residencyScope,
+        splitIntoTwoInstallments,
       },
     });
 

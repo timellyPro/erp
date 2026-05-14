@@ -27,6 +27,7 @@ export default function AddExtraFeeForm({ classes, students, onSuccess }: AddExt
   const [section, setSection] = useState("");
   const [studentId, setStudentId] = useState("");
   const [saving, setSaving] = useState(false);
+  const [splitIntoTwoInstallments, setSplitIntoTwoInstallments] = useState(false);
 
   const handleSubmit = async () => {
     if (!name.trim() || !amount || Number(amount) <= 0) {
@@ -40,6 +41,7 @@ export default function AddExtraFeeForm({ classes, students, onSuccess }: AddExt
         amount: Number(amount),
         targetType,
         residencyScope,
+        splitIntoTwoInstallments,
       };
       if (targetType === "CLASS") body.targetClassId = classId || undefined;
       if (targetType === "SECTION") {
@@ -65,6 +67,7 @@ export default function AddExtraFeeForm({ classes, students, onSuccess }: AddExt
       setSection("");
       setStudentId("");
       setResidencyScope("ALL");
+      setSplitIntoTwoInstallments(false);
       onSuccess();
     } finally {
       setSaving(false);
@@ -111,14 +114,41 @@ export default function AddExtraFeeForm({ classes, students, onSuccess }: AddExt
               </label>
               <input
                 id="extra-fee-amount"
-                type="number"
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
                 value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+                onChange={(e) => {
+                  const v = e.target.value.replace(/[^\d.]/g, "");
+                  const dot = v.indexOf(".");
+                  if (dot === -1) {
+                    setAmount(v);
+                    return;
+                  }
+                  const intPart = v.slice(0, dot).replace(/\D/g, "");
+                  const frac = v.slice(dot + 1).replace(/\D/g, "").slice(0, 2);
+                  setAmount(frac.length > 0 ? `${intPart}.${frac}` : `${intPart}.`);
+                }}
                 className={inputClass}
                 placeholder="0"
               />
             </div>
           </div>
+
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/10 bg-black/20 px-3 py-3 text-xs text-white/80">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 shrink-0 rounded border-white/20 bg-black/40 text-lime-500 focus:ring-lime-500/40"
+              checked={splitIntoTwoInstallments}
+              onChange={(e) => setSplitIntoTwoInstallments(e.target.checked)}
+            />
+            <span>
+              <span className="font-medium text-white/90">Two installments (50% + 50%)</span>
+              <span className="mt-0.5 block text-[11px] text-white/45">
+                Student fee breakdown shows 1st and 2nd installment cards for this head.
+              </span>
+            </span>
+          </label>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5">
             <SelectInput

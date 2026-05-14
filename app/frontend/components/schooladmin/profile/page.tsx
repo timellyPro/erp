@@ -1,13 +1,14 @@
 "use client";
 
-import { Suspense, useEffect, useLayoutEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AcademicPerformance } from "./components/AcademicPerformance";
 import { FeeTransactions } from "./components/FeeTransactions";
 import { FeesBreakdown } from "./components/FeesBreakdown";
 import { ProfileSidebar } from "./components/ProfileSidebar";
 import { AttendanceTrends } from "./components/AttendanceTrends";
 import { Certificates } from "./components/Certificates";
+import { shouldSplitFeeHeadIntoTwoInstallments } from "@/lib/feeHeadInstallmentSplit";
 import { StudentSearchAutocomplete } from "./components/StudentSearchAutocomplete";
 import { Calendar, BookOpen, Activity, Clock, FileSpreadsheet, X } from "lucide-react";
 import BulkExtraFeeByTimellyModal from "./components/BulkExtraFeeByTimellyModal";
@@ -82,6 +83,8 @@ type StudentOption = {
 };
 
 function StudentDetailsPageContent() {
+  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const studentIdFromUrl = searchParams.get("studentId");
   const focusFromUrl = searchParams.get("focus");
@@ -131,18 +134,39 @@ function StudentDetailsPageContent() {
     return () => { cancelled = true; };
   }, []);
 
+  // Deep link (?studentId=…): follow the URL when it changes. Do NOT depend on `students` here — that
+  // was resetting selection back to the URL id on every list refresh and overwrote the student's dropdown pick.
   useEffect(() => {
-    if (students.length === 0) return;
-    if (studentIdFromUrl && students.some((s) => s.id === studentIdFromUrl)) {
-      setSelectedId(studentIdFromUrl);
-      return;
-    }
     if (studentIdFromUrl) {
-      setSelectedId(students[0].id);
-      return;
+      setSelectedId(studentIdFromUrl);
     }
+  }, [studentIdFromUrl]);
+
+  useEffect(() => {
+    if (studentIdFromUrl) return;
+    if (students.length === 0) return;
     setSelectedId((prev) => (prev && students.some((s) => s.id === prev) ? prev : students[0].id));
   }, [students, studentIdFromUrl]);
+
+  const syncStudentIdInUrl = useCallback(
+    (nextId: string | null) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (nextId) params.set("studentId", nextId);
+      else params.delete("studentId");
+      const qs = params.toString();
+      const base = pathname || "/";
+      router.replace(qs ? `${base}?${qs}` : base, { scroll: false });
+    },
+    [pathname, router, searchParams]
+  );
+
+  const selectStudent = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      syncStudentIdInUrl(id);
+    },
+    [syncStudentIdInUrl]
+  );
 
   useLayoutEffect(() => {
     if (loading || !detail || focusFromUrl !== "fees") return;
@@ -194,7 +218,29 @@ function StudentDetailsPageContent() {
     return true;
   });
 
-  const selectedOption = filtered.find((s) => s.id === selectedId) ?? filtered[0];
+  /** Options for the Students List <select>; must include selectedId or the browser can reset the value. */
+  const studentSelectOptions = useMemo(() => {
+    const core = filtered.map((s) => ({
+      label: `${s.name} -${s.admissionNumber || "-"} | ${s.classDisplay || "-"} | ${s.parentName || "-"}`,
+      value: s.id,
+    }));
+    if (selectedId && !core.some((o) => o.value === selectedId)) {
+      const st = students.find((s) => s.id === selectedId);
+      if (st) {
+        return [
+          {
+            label: `${st.name} -${st.admissionNumber || "-"} | ${st.classDisplay || "-"} | ${st.parentName || "-"}`,
+            value: st.id,
+          },
+          ...core,
+        ];
+      }
+      return [{ label: "Student (from link) — loading…", value: selectedId }, ...core];
+    }
+    return core;
+  }, [filtered, students, selectedId]);
+
+  const selectedOption = filtered.find((s) => s.id === selectedId) ?? students.find((s) => s.id === selectedId) ?? filtered[0];
   const classOptions = [{ label: "All Classes", value: "" }, ...classes.map((c) => ({ label: `${c.name}${c.section ? ` - ${c.section}` : ""}`, value: c.id }))];
   const sections = Array.from(new Set(classes.map((c) => c.section).filter(Boolean))) as string[];
   const sectionOptions = [{ label: "All Sections", value: "" }, ...sections.map((s) => ({ label: s, value: s }))];
@@ -232,7 +278,7 @@ function StudentDetailsPageContent() {
               students={students}
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
-              onSelectStudent={setSelectedId}
+              onSelectStudent={selectStudent}
               selectedId={selectedId}
               classFilter={filterClass}
               sectionFilter={filterSection}
@@ -260,14 +306,12 @@ function StudentDetailsPageContent() {
             <label className="text-xs text-gray-500 mb-2 block">Students List</label>
             <SelectInput
               value={selectedId ?? ""}
-              onChange={(value) => setSelectedId(value || null)}
-              options={[
-                { label: "Select student", value: "" },
-                ...filtered.map((s) => ({
-                  label: `${s.name} -${s.admissionNumber || "-"} | ${s.classDisplay || "-"} | ${s.parentName || "-"}`,
-                  value: s.id,
-                })),
-              ]}
+              onChange={(value) => {
+                const next = value || null;
+                setSelectedId(next);
+                syncStudentIdInUrl(next);
+              }}
+              options={[{ label: "Select student", value: "" }, ...studentSelectOptions]}
               bgColor="black"
             />
           </div>
@@ -394,6 +438,7 @@ function StudentDetailsPageContent() {
               <>
                 <FeesBreakdown
                   studentId={detail.student.id}
+                  classId={detail.student.class?.id ?? null}
                   totalFee={detail.fee.totalFee}
                   baseTotalFee={detail.fee.baseTotalFee}
                   discountPercent={detail.fee.discountPercent}
@@ -408,6 +453,7 @@ function StudentDetailsPageContent() {
                   discountFeeHeadLabel={detail.fee.discountFeeHeadLabel}
                   discountRemarks={detail.fee.discountRemarks}
                   onFeeModified={() => setReloadKey(prev => prev + 1)}
+                  residencyType={detail.student.residencyType ?? null}
                 />
               </>
             )}
@@ -451,7 +497,26 @@ type DueHeadRow = {
   discountAmount: number;
   dueBefore: number;
   payAmount: string;
+  /** User opted to pay the full balance for this fee head */
+  payEntireHead: boolean;
+  splitIntoTwoInstallments?: boolean;
 };
+
+function dueToPayInputString(due: number): string {
+  if (!Number.isFinite(due) || due <= 0) return "";
+  return String(Math.round(due * 100) / 100);
+}
+
+/** Plain text amount field: digits and one decimal, max 2 fractional digits */
+function sanitizeMoneyInput(raw: string): string {
+  if (!raw) return "";
+  const cleaned = raw.replace(/[^\d.]/g, "");
+  const dot = cleaned.indexOf(".");
+  if (dot === -1) return cleaned;
+  const intPart = cleaned.slice(0, dot).replace(/\D/g, "");
+  const frac = cleaned.slice(dot + 1).replace(/\D/g, "").slice(0, 2);
+  return frac.length > 0 ? `${intPart}.${frac}` : `${intPart}.`;
+}
 
 function StudentFeesPaymentModal({
   studentId,
@@ -473,11 +538,10 @@ function StudentFeesPaymentModal({
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [error, setError] = useState<string | null>(null);
 
-  const splitHostelIntoInstallments = (rowsIn: DueHeadRow[]): DueHeadRow[] => {
+  const splitHostelOrMessIntoTwoInstallments = (rowsIn: DueHeadRow[]): DueHeadRow[] => {
     const out: DueHeadRow[] = [];
     for (const r of rowsIn) {
-      const isHostel = (r.label || "").trim().toLowerCase() === "hostel fee";
-      if (!isHostel) {
+      if (!shouldSplitFeeHeadIntoTwoInstallments(r.label, { splitIntoTwoInstallments: r.splitIntoTwoInstallments })) {
         out.push(r);
         continue;
       }
@@ -491,23 +555,27 @@ function StudentFeesPaymentModal({
       const firstDue = Math.max(firstAmount - firstPaid, 0);
       const secondDue = Math.max(secondAmount - secondPaid, 0);
 
+      const base = (r.label || "").trim();
+
       out.push({
         ...r,
         key: `${r.key}::INST1`,
         sourceKey: r.key,
-        label: `${r.label} (1st Installment)`,
+        label: `${base} (1st Installment)`,
         totalAmount: firstAmount,
         paidAmount: firstPaid,
         dueBefore: firstDue,
+        payEntireHead: false,
       });
       out.push({
         ...r,
         key: `${r.key}::INST2`,
         sourceKey: r.key,
-        label: `${r.label} (2nd Installment)`,
+        label: `${base} (2nd Installment)`,
         totalAmount: secondAmount,
         paidAmount: secondPaid,
         dueBefore: secondDue,
+        payEntireHead: false,
       });
     }
     return out;
@@ -528,7 +596,15 @@ function StudentFeesPaymentModal({
         }
         const dueHeads = Array.isArray(data?.dueHeads) ? data.dueHeads : [];
         if (!cancelled) {
-          const mappedRows = dueHeads.map((h: { key: string; label: string; dueBefore: number; snapshotAmount?: number }) => ({
+          const mappedRows = dueHeads.map(
+            (h: {
+              key: string;
+              label: string;
+              dueBefore: number;
+              snapshotAmount?: number;
+              headType?: string;
+              splitIntoTwoInstallments?: boolean;
+            }) => ({
               key: h.key,
               label: h.label || "Fee Head",
               totalAmount: Number(h.snapshotAmount) || 0,
@@ -536,8 +612,12 @@ function StudentFeesPaymentModal({
               discountAmount: 0,
               dueBefore: Number(h.dueBefore) || 0,
               payAmount: "",
-            }));
-          setRows(splitHostelIntoInstallments(mappedRows));
+              payEntireHead: false,
+              splitIntoTwoInstallments:
+                h.headType === "EXTRA_FEE" ? Boolean(h.splitIntoTwoInstallments) : undefined,
+            })
+          );
+          setRows(splitHostelOrMessIntoTwoInstallments(mappedRows));
               setPaymentDate(new Date().toISOString().slice(0, 10));
         }
       } catch (e) {
@@ -552,7 +632,36 @@ function StudentFeesPaymentModal({
   }, [studentId]);
 
   const setRowAmount = (key: string, value: string) => {
-    setRows((prev) => prev.map((r) => (r.key === key ? { ...r, payAmount: value } : r)));
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.key !== key) return r;
+        const next = sanitizeMoneyInput(value);
+        const parsed = Number(next);
+        const matchesFull =
+          next.trim() !== "" &&
+          Number.isFinite(parsed) &&
+          parsed > 0 &&
+          Math.abs(parsed - r.dueBefore) <= 0.01;
+        return { ...r, payAmount: next, payEntireHead: matchesFull };
+      })
+    );
+    setShowPaymentStep(false);
+  };
+
+  const togglePayEntireHead = (key: string, checked: boolean) => {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.key !== key) return r;
+        if (checked) {
+          return {
+            ...r,
+            payEntireHead: true,
+            payAmount: dueToPayInputString(r.dueBefore),
+          };
+        }
+        return { ...r, payEntireHead: false, payAmount: "" };
+      })
+    );
     setShowPaymentStep(false);
   };
 
@@ -690,7 +799,7 @@ function StudentFeesPaymentModal({
         ) : (
           <>
             <div className="max-h-[360px] overflow-auto rounded-xl border border-white/10">
-              <table className="w-full min-w-[980px] text-sm">
+              <table className="w-full min-w-[1040px] text-sm">
                 <thead className="bg-white/5 text-left text-white/70">
                   <tr>
                     <th className="px-3 py-2">Fee Type</th>
@@ -698,6 +807,9 @@ function StudentFeesPaymentModal({
                     <th className="px-3 py-2">Discount</th>
                     <th className="px-3 py-2">Paid Amount</th>
                     <th className="px-3 py-2">Balance</th>
+                    <th className="w-14 px-2 py-2 text-center" title="Pay full balance for this head">
+                      All
+                    </th>
                     <th className="px-3 py-2">Record Fee</th>
                   </tr>
                 </thead>
@@ -709,16 +821,26 @@ function StudentFeesPaymentModal({
                       <td className="px-3 py-2 text-cyan-300">₹{r.discountAmount.toLocaleString("en-IN")}</td>
                       <td className="px-3 py-2 text-lime-300">₹{r.paidAmount.toLocaleString("en-IN")}</td>
                       <td className="px-3 py-2 text-amber-300">₹{r.dueBefore.toLocaleString("en-IN")}</td>
+                      <td className="px-2 py-2 text-center align-middle">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 cursor-pointer accent-lime-400 disabled:cursor-not-allowed disabled:opacity-40"
+                          checked={r.payEntireHead}
+                          disabled={r.dueBefore <= 0}
+                          onChange={(e) => togglePayEntireHead(r.key, e.target.checked)}
+                          aria-label={`Pay full balance for ${r.label}`}
+                        />
+                      </td>
                       <td className="px-3 py-2">
                         <input
-                          type="number"
-                          min={0}
-                          max={r.dueBefore}
-                          step="0.01"
+                          type="text"
+                          inputMode="decimal"
+                          autoComplete="off"
                           value={r.payAmount}
                           onChange={(e) => setRowAmount(r.key, e.target.value)}
                           className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-white"
                           placeholder="0.00"
+                          aria-label={`Record fee for ${r.label}`}
                         />
                       </td>
                     </tr>
@@ -729,6 +851,7 @@ function StudentFeesPaymentModal({
                     <td className="px-3 py-2 text-cyan-300">₹{totals.discountAmount.toLocaleString("en-IN")}</td>
                     <td className="px-3 py-2 text-lime-300">₹{totals.paidAmount.toLocaleString("en-IN")}</td>
                     <td className="px-3 py-2 text-amber-300">₹{totals.balance.toLocaleString("en-IN")}</td>
+                    <td className="px-2 py-2" />
                     <td className="px-3 py-2 text-blue-300">₹{total.toLocaleString("en-IN")}</td>
                   </tr>
                 </tbody>

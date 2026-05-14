@@ -80,12 +80,15 @@ export async function PATCH(
     }
 
     const body = await req.json();
-    const { name, amount } = body;
+    const { name, amount, splitIntoTwoInstallments } = body;
 
-    const updates: Record<string, string | number> = {};
+    const updates: Record<string, string | number | boolean> = {};
     if (name !== undefined) updates.name = String(name).trim();
     if (amount !== undefined && typeof amount === "number" && amount > 0)
       updates.amount = amount;
+    if (splitIntoTwoInstallments !== undefined) {
+      updates.splitIntoTwoInstallments = Boolean(splitIntoTwoInstallments);
+    }
 
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ extraFee });
