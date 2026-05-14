@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
 import {
   AreaChart,
   Area,
@@ -144,11 +145,18 @@ type AnalysisResponse = {
 };
 
 import Spinner from "../common/Spinner";
-import PageHeader from "../common/PageHeader";
 import SelectInput from "../common/SelectInput";
+import AnalysisSectionNav from "./AnalysisSectionNav";
+
+export type AnalysisSection = "overview" | "gender-enrollment" | "admission-comparison" | "fee-collection";
+
+type AnalysisDashboardProps = {
+  section?: AnalysisSection;
+};
+
 /* ---------------- Component ---------------- */
 
-export default function AnalysisDashboard() {
+export default function AnalysisDashboard({ section = "overview" }: AnalysisDashboardProps) {
   const [data, setData] = useState<AnalysisResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -658,15 +666,20 @@ export default function AnalysisDashboard() {
   /* ---------------- UI ---------------- */
 
   return (
-    <div className="min-h-screen p-3 sm:p-4 md:p-6 text-white">
-      {/* Header */}
-      <PageHeader
-        title="Analysis & Reports"
-        subtitle="Comprehensive insights into school performance"
-        className="border"
-        transparent={false}
-        rightSlot={
-          <div className="flex flex-wrap items-center gap-2 self-center">
+    <div className="min-h-screen p-3 pb-6 text-white sm:p-4 md:p-5">
+      {/* Title, filters, and section nav — single card */}
+      <motion.div
+        initial={{ opacity: 0, y: -8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+        className="mb-4 rounded-xl border border-white/10 bg-white/5 p-4 shadow-[0_8px_28px_-10px_rgba(0,0,0,0.4)] backdrop-blur-xl sm:mb-5 sm:rounded-2xl sm:p-5"
+      >
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between md:gap-4">
+          <div className="min-w-0">
+            <h1 className="text-xl font-bold leading-tight text-white sm:text-2xl">Analysis & Reports</h1>
+            <p className="mt-0.5 text-sm text-white/60">Comprehensive insights into school performance</p>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2 md:justify-end">
             <div className="relative">
               <select
                 value={classId}
@@ -692,7 +705,7 @@ export default function AnalysisDashboard() {
                   </option>
                 ))}
               </select>
-              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-white/60 pointer-events-none" />
+              <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-white/60" />
             </div>
             <div className="relative">
               <select
@@ -708,7 +721,7 @@ export default function AnalysisDashboard() {
                   appearance-none
                   bg-black/40
                   text-white
-                  px-6 sm:px-7 py-2 pl-2
+                  px-6 py-2 pl-2
                   rounded-xl
                   text-sm
                   border border-white/10
@@ -717,6 +730,7 @@ export default function AnalysisDashboard() {
                   cursor-pointer
                   text-center
                   min-w-[100px]
+                  sm:px-7
                 "
               >
                 {(data.availableYears ?? []).map((y) => (
@@ -725,13 +739,18 @@ export default function AnalysisDashboard() {
                   </option>
                 ))}
               </select>
-              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-white/60 pointer-events-none" />
+              <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-white/60" />
             </div>
           </div>
-        }
-      />
+        </div>
 
-      {/* Stats - responsive grid */}
+        <div className="mt-4 border-t border-white/10 pt-4">
+          <AnalysisSectionNav embedded />
+        </div>
+      </motion.div>
+
+      {/* Stats - responsive grid (overview only) */}
+      {section === "overview" ? (
       <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6">
         {stats.map((stat, i) => (
           <div
@@ -765,8 +784,10 @@ export default function AnalysisDashboard() {
           </div>
         ))}
       </div>
+      ) : null}
 
       {/* Charts Row 1 */}
+      {section === "overview" ? (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-4 sm:mb-6">
         <div className="rounded-xl sm:rounded-2xl p-4 sm:p-5 bg-white/10 backdrop-blur-md min-h-[280px] sm:min-h-[320px]">
           <div className="flex items-center gap-2 mb-4">
@@ -824,8 +845,10 @@ export default function AnalysisDashboard() {
           </ResponsiveContainer>
         </div>
       </div>
+      ) : null}
 
       {/* Charts Row 2 */}
+      {section === "overview" ? (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         <div className="rounded-xl sm:rounded-2xl p-4 sm:p-5 bg-white/10 backdrop-blur-md min-h-[280px] sm:min-h-[320px]">
           <div className="flex items-center gap-2 mb-4">
@@ -899,8 +922,10 @@ export default function AnalysisDashboard() {
           </ResponsiveContainer>
         </div>
       </div>
+      ) : null}
 
       {/* Top Performing Teachers - sorted best first */}
+      {section === "overview" ? (
       <div className="mt-4 sm:mt-6 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
         <div className="mb-4 sm:mb-5">
           <div className="flex items-center gap-2">
@@ -952,9 +977,11 @@ export default function AnalysisDashboard() {
           </div>
         )}
       </div>
+      ) : null}
 
       {/* Enrollment by gender: class & section */}
-      <div className="mt-4 sm:mt-6 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
+      {section === "gender-enrollment" ? (
+      <div className="mt-0 sm:mt-0 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <div className="flex items-center gap-2">
@@ -1080,9 +1107,11 @@ export default function AnalysisDashboard() {
           onPageChange={setEnrollmentPage}
         />
       </div>
+      ) : null}
 
       {/* New admission comparison report */}
-      <div className="mt-4 sm:mt-6 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
+      {section === "admission-comparison" ? (
+      <div className="mt-0 sm:mt-0 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
         <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <div className="flex items-center gap-2">
@@ -1172,9 +1201,11 @@ export default function AnalysisDashboard() {
           </table>
         </div>
       </div>
+      ) : null}
 
       {/* Fee collection: class & section */}
-      <div className="mt-4 sm:mt-6 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
+      {section === "fee-collection" ? (
+      <div className="mt-0 sm:mt-0 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
         <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <div className="flex items-center gap-2">
@@ -1300,6 +1331,7 @@ export default function AnalysisDashboard() {
           onPageChange={setFeePage}
         />
       </div>
+      ) : null}
     </div>
   );
 }
