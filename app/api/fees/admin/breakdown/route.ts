@@ -7,6 +7,7 @@ import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
 import { structureMultiplierAfterDiscount, shouldOmitLegacySplitHostelMessExtraForBreakdown } from "@/lib/studentTuitionFromStructure";
 import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 import { shouldSplitFeeHeadIntoTwoInstallments } from "@/lib/feeHeadInstallmentSplit";
 
 function normalizeExtraFeeName(name: string): string {
@@ -234,16 +235,19 @@ export async function GET(req: Request) {
       }));
     }
     const residency = student.residencyType ?? "Day Scholar";
+    const rte = isStudentRte(residency);
     const extraFees = dedupeExtraFeesForStudent(
       extraFeesRaw.filter((ef) => extraFeeAppliesToStudentResidency(ef.residencyScope, residency)),
       student.id
-    ).filter(
-      (ef) =>
-        !shouldOmitLegacySplitHostelMessExtraForBreakdown(ef, extraFeesRaw, {
-          classId,
-          residencyType: residency,
-        })
-    );
+    )
+      .filter(
+        (ef) =>
+          !shouldOmitLegacySplitHostelMessExtraForBreakdown(ef, extraFeesRaw, {
+            classId,
+            residencyType: residency,
+          })
+      )
+      .filter((ef) => !(rte && isTuitionNamedExtraFee(ef.name)));
 
     const allHeads: InternalHead[] = [
       ...baseComps.map(
@@ -251,7 +255,7 @@ export async function GET(req: Request) {
           key: `BASE:${idx}`,
           headType: "BASE_COMPONENT",
           label: c.name,
-          snapshotDue: c.amount * structMult,
+          snapshotDue: rte ? 0 : c.amount * structMult,
         })
       ),
       ...extraFees.map(

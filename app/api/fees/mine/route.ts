@@ -6,6 +6,7 @@ import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
 import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -84,9 +85,9 @@ export async function GET() {
       },
     });
     const residency = fee.student.residencyType ?? "Day Scholar";
-    const extraFees = extraFeesRaw.filter((ef) =>
-      extraFeeAppliesToStudentResidency(ef.residencyScope, residency)
-    );
+    const extraFees = extraFeesRaw
+      .filter((ef) => extraFeeAppliesToStudentResidency(ef.residencyScope, residency))
+      .filter((ef) => !(isStudentRte(residency) && isTuitionNamedExtraFee(ef.name)));
 
     const payments = await prisma.payment.findMany({
       where: { studentId, eventRegistrationId: null },
@@ -112,6 +113,7 @@ export async function GET() {
       }));
 
     const structMult = structureMultiplierAfterDiscount(fee.discountPercent);
+    const rte = isStudentRte(residency);
 
     type HeadKey =
       | { key: string; headType: "BASE_COMPONENT"; componentIndex: number; label: string; snapshotDue: number }
@@ -123,7 +125,7 @@ export async function GET() {
         headType: "BASE_COMPONENT" as const,
         componentIndex: idx,
         label: c.name,
-        snapshotDue: c.amount * structMult,
+        snapshotDue: rte ? 0 : c.amount * structMult,
       })),
       ...extraFees.map((ef) => ({
         key: `EXTRA:${ef.id}`,
@@ -187,10 +189,11 @@ export async function GET() {
       };
     });
 
+    const rawComponents = (components?.components as Array<{ name: string; amount: number }>) || [];
     const payload = {
       fee: {
         ...fee,
-        components: (components?.components as Array<{ name: string; amount: number }>) || [],
+        components: rte ? rawComponents.map((c) => ({ ...c, amount: 0 })) : rawComponents,
         extraFees,
         payments,
         refunds,

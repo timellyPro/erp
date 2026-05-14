@@ -6,6 +6,7 @@ import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
 import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -254,6 +255,7 @@ export async function GET() {
       const residency = fee.student.residencyType ?? "Day Scholar";
       const applicableExtraFees = extraFees.filter((ef) => {
         if (!extraFeeAppliesToStudentResidency(ef.residencyScope, residency)) return false;
+        if (isStudentRte(residency) && isTuitionNamedExtraFee(ef.name)) return false;
         if (ef.targetType === "SCHOOL") return true;
         if (ef.targetType === "CLASS") return !!classId && ef.targetClassId === classId;
         if (ef.targetType === "SECTION")
@@ -267,7 +269,7 @@ export async function GET() {
 
       for (let i = 0; i < baseComponents.length; i++) {
         const headKey = `BASE:${i}`;
-        const snapshotDue = baseComponents[i].amount * structMult;
+        const snapshotDue = isStudentRte(residency) ? 0 : baseComponents[i].amount * structMult;
         const paidAlloc = netPaidByStudentHead.get(`${studentId}|${headKey}`) ?? 0;
         const paidLegacy = totalSnapshotDue > 0 ? legacyPaidTotal * (snapshotDue / totalSnapshotDue) : 0;
         const paidBefore = Math.max(paidAlloc + paidLegacy, 0);

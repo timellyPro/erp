@@ -6,6 +6,7 @@ import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
 import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 import { canonicalizeGatewayForStorage } from "@/lib/feePaymentGateway";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
@@ -152,9 +153,10 @@ export async function POST(req: Request) {
       select: { id: true, name: true, amount: true, targetType: true, residencyScope: true },
     });
     const residency = student.residencyType ?? "Day Scholar";
-    const extraFees = extraFeesRaw.filter((ef) =>
-      extraFeeAppliesToStudentResidency(ef.residencyScope, residency)
-    );
+    const rte = isStudentRte(residency);
+    const extraFees = extraFeesRaw
+      .filter((ef) => extraFeeAppliesToStudentResidency(ef.residencyScope, residency))
+      .filter((ef) => !(rte && isTuitionNamedExtraFee(ef.name)));
 
     type Head =
       | { key: string; headType: "BASE_COMPONENT"; componentIndex: number; componentName: string; snapshotDue: number }
@@ -167,7 +169,7 @@ export async function POST(req: Request) {
         headType: "BASE_COMPONENT",
         componentIndex: idx,
         componentName: c.name,
-        snapshotDue: c.amount * structMult,
+        snapshotDue: rte ? 0 : c.amount * structMult,
       });
     });
     for (const ef of extraFees) {

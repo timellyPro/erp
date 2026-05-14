@@ -4,6 +4,7 @@ import {
   isStudentHosteller,
   normalizeExtraFeeResidencyScope,
 } from "@/lib/extraFeeResidencyScope";
+import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 
 export type ExtraFeeRow = {
   name?: string | null;
@@ -110,6 +111,7 @@ export function sumExtraFeesForStudent(
     if (!applies) continue;
     if (!extraFeeAppliesToStudentResidency(ef.residencyScope, opts.residencyType)) continue;
     if (shouldOmitLegacySplitDuplicate(ef, extraFees, opts)) continue;
+    if (isStudentRte(opts.residencyType) && isTuitionNamedExtraFee(ef.name)) continue;
 
     extraTotal += ef.amount;
   }
@@ -159,7 +161,8 @@ export async function computeStudentTuitionParts(
     residencyType: string | null;
   }
 ): Promise<{ base: number; extrasTotal: number; totalFee: number }> {
-  const base = await sumClassBaseTuition(db, args.classId);
+  let base = await sumClassBaseTuition(db, args.classId);
+  if (isStudentRte(args.residencyType)) base = 0;
   const extraFees = await db.extraFee.findMany({
     where: { schoolId: args.schoolId },
     select: {
