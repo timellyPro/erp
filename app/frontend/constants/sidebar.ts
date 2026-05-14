@@ -266,7 +266,7 @@ export const SCHOOLADMIN_MENU_ITEMS: SidebarItem[] = [
     {
         label: "Analysis",
         tab: "analysis",
-        href: "/frontend/pages/schooladmin?tab=analysis",
+        href: "/frontend/pages/schooladmin/analysis",
         icon: ChartColumn,
         permission: Permission.ANALYSIS,
     },

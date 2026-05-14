@@ -13,13 +13,11 @@ import NewsFeed from "../../components/schooladmin/Newsfeed";
 import WorkshopsAndEventsTab from "../../components/schooladmin/workshopsandevents";
 import TeacherAuditTab from "../../components/schooladmin/TeacherAudit";
 import AddUser from "../../components/schooladmin/AddUser";
-import SchoolAdminFeesTab from "../../components/schooladmin/Fees";
 import SchoolAdminDashboard from "../../components/schooladmin/dashboard/page";
 import StudentDetails from "../../components/schooladmin/StudentDetails";
 import Certificates from "../../components/schooladmin/Certificates";
 //import { ExamsPageInner } from "../../components/schooladmin/Exams";
 import ExamsPage from "../../components/schooladmin/exams/exams";
-import SchoolAdminAnalysisTab from "../../components/schooladmin/Analysis";
 import SchoolAdminSettingsTab from "../../components/schooladmin/Settings";
 import SchoolAdminTeacherTab from "../../components/schooladmin/TeachersTab";
 import SchoolAdminCircularsTab from "../../components/schooladmin/circularTab";
@@ -75,12 +73,23 @@ function SchoolAdminContent() {
     if (tab === "fees") {
       router.replace("/frontend/pages/schooladmin/fees");
     }
+    if (tab === "analysis") {
+      router.replace("/frontend/pages/schooladmin/analysis");
+    }
   }, [router, tab]);
 
   if (tab === "fees") {
     return (
       <div className="flex min-h-[40vh] items-center justify-center text-white/70">
         Redirecting to Fees...
+      </div>
+    );
+  }
+
+  if (tab === "analysis") {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center text-white/70">
+        Redirecting to Analysis...
       </div>
     );
   }
@@ -115,11 +124,6 @@ function SchoolAdminContent() {
         return <Certificates />;
       case "exams":
         return <ExamsPage />;
-        
-      case "analysis":
-        return <SchoolAdminAnalysisTab />;
-      case "fees":
-        return <SchoolAdminFeesTab />;
       case "settings":
         return <SchoolAdminSettingsTab />;
       default:
