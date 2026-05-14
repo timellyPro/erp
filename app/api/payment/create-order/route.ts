@@ -6,6 +6,7 @@ import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
 import type { Prisma } from "@prisma/client";
 import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 
 const hyperpgBaseUrl = process.env.HYPERPG_BASE_URL || "https://sandbox.hyperpg.in";
 const globalHyperpgMerchantId = process.env.HYPERPG_MERCHANT_ID;
@@ -180,9 +181,10 @@ export async function POST(req: Request) {
         select: { id: true, name: true, amount: true, targetType: true, residencyScope: true },
       });
       const residency = student.residencyType ?? "Day Scholar";
-      const extraFees = extraFeesRaw.filter((ef) =>
-        extraFeeAppliesToStudentResidency(ef.residencyScope, residency)
-      );
+      const rte = isStudentRte(residency);
+      const extraFees = extraFeesRaw
+        .filter((ef) => extraFeeAppliesToStudentResidency(ef.residencyScope, residency))
+        .filter((ef) => !(rte && isTuitionNamedExtraFee(ef.name)));
 
       const getHeadKey = (h: SelectedHead) => {
         if (h.headType === "BASE_COMPONENT") return `BASE:${h.componentIndex}`;
@@ -195,7 +197,7 @@ export async function POST(req: Request) {
         ...baseComponents.map((c, idx): Head => ({
           key: `BASE:${idx}`,
           headType: "BASE_COMPONENT",
-          snapshotDue: c.amount * structMult,
+          snapshotDue: rte ? 0 : c.amount * structMult,
           componentIndex: idx,
           componentName: c.name,
         })),

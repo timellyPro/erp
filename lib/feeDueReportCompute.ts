@@ -1,6 +1,7 @@
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
 import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 
 export type FeeDueColumnGroup = {
   /** Stable id: `BASE@classId@index`, `EXTRA_NAME@slug` (merged extras with same name), or legacy `EXTRA:id` */
@@ -88,6 +89,7 @@ function applicableExtrasForDueReport(
 ): ExtraFeeLite[] {
   return extraFees.filter((ef) => {
     if (!extraFeeAppliesToStudentResidency(ef.residencyScope, opts.studentResidency)) return false;
+    if (isStudentRte(opts.studentResidency) && isTuitionNamedExtraFee(ef.name)) return false;
     if (ef.targetType === "SCHOOL") return includeSchoolWideExtras;
     return extraFeeApplies(ef, opts);
   });
@@ -99,6 +101,7 @@ function extraFeeAppliesToStudentForRoster(
   includeSchoolWideExtras: boolean
 ): boolean {
   if (!extraFeeAppliesToStudentResidency(ef.residencyScope, st.category)) return false;
+  if (isStudentRte(st.category) && isTuitionNamedExtraFee(ef.name)) return false;
   if (ef.targetType === "SCHOOL") return includeSchoolWideExtras;
   return extraFeeApplies(ef, { classId: st.classId, section: st.section, studentId: st.studentId });
 }
@@ -264,9 +267,10 @@ function computeStudentHeads(
     includeSchoolWideExtras
   );
 
+  const rte = isStudentRte(fee.category);
   const heads: HeadRow[] = [];
   for (let i = 0; i < baseComponents.length; i++) {
-    const gross = Number(baseComponents[i]?.amount) || 0;
+    const gross = rte ? 0 : Number(baseComponents[i]?.amount) || 0;
     const snapshotDue = gross * structMult;
     const concession = Math.max(gross - snapshotDue, 0);
     const groupId = baseGroupId(classId, i);
