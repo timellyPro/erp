@@ -28,6 +28,8 @@ interface FeeStats {
   totalStudents: number;
   paid: number;
   pending: number;
+  totalFee?: number;
+  totalDiscount?: number;
   totalCollected: number;
   totalDue: number;
 }

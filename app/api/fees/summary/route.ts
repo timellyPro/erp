@@ -311,6 +311,10 @@ export async function GET() {
     const stats = fees.reduce(
       (acc, fee) => {
         acc.totalStudents += 1;
+        const base = Number(fee.totalFee) || 0;
+        const final = Number(fee.finalFee) || 0;
+        acc.totalFee += base;
+        acc.totalDiscount += Math.max(0, base - final);
         acc.totalCollected += fee.amountPaid;
         acc.totalDue += fee.remainingFee;
         if (fee.remainingFee <= 0) {
@@ -320,7 +324,15 @@ export async function GET() {
         }
         return acc;
       },
-      { totalStudents: 0, paid: 0, pending: 0, totalCollected: 0, totalDue: 0 }
+      {
+        totalStudents: 0,
+        paid: 0,
+        pending: 0,
+        totalFee: 0,
+        totalDiscount: 0,
+        totalCollected: 0,
+        totalDue: 0,
+      }
     );
 
     return NextResponse.json({ fees: feesWithTypes, stats }, { status: 200 });

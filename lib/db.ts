@@ -167,12 +167,17 @@ const createPrismaWithRedis = () => {
   });
 };
 
-const prisma = globalThis.prismaGlobal ?? createPrismaWithRedis();
+let prisma: ReturnType<typeof createPrismaWithRedis> = globalThis.prismaGlobal ?? createPrismaWithRedis();
+
+// Next.js dev HMR can keep a Prisma singleton from before `prisma generate`; new models are then undefined.
+const delegate = prisma as unknown as { extraFeeHeadTemplate?: { create?: unknown } };
+if (
+  process.env.NODE_ENV === "development" &&
+  typeof delegate.extraFeeHeadTemplate?.create !== "function"
+) {
+  prisma = createPrismaWithRedis();
+}
+
+globalThis.prismaGlobal = prisma;
 
 export default prisma;
-
-// In serverless environments (like Vercel), we still want to reuse the connection
-// but we need to handle it differently. The globalThis check works in both dev and production.
-if (!globalThis.prismaGlobal) {
-  globalThis.prismaGlobal = prisma;
-}

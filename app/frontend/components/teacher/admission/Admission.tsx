@@ -2,7 +2,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { CheckCircle, Pencil, PlusCircle, Printer, Save, Search, Trash2, UserPlus, Loader2, IndianRupee, Download, ChevronDown } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
@@ -12,6 +12,8 @@ import DataTable from "../../common/TableLayout";
 import SearchInput from "../../common/SearchInput";
 import AdmissionReceiptTemplate, { type AdmissionReceiptData } from "../../pdf/AdmissionReceiptTemplate";
 import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
+import { normalizeExtraFeeResidencyScope } from "@/lib/extraFeeResidencyScope";
+import { studentDetailsFeesUrlForPathname } from "../../schooladmin/fees/studentDetailsNav";
 
 type Gender = "MALE" | "FEMALE";
 type BoardingType = "SEMI_RESIDENTIAL" | "REGULAR_BOARDER";
@@ -71,8 +73,49 @@ type AdmissionRow = {
 };
 
 type FeeType = "APPLICATION" | "ADMISSION";
-type FeeAssignRow = { id: string; name: string; amount: string };
-type FeeHeadOption = { key: string; name: string; amount: number; selected: boolean };
+type FeeAssignRow = {
+  id: string;
+  name: string;
+  amount: string;
+  residencyScope?: string;
+  splitIntoTwoInstallments?: boolean;
+};
+type FeeHeadOption = {
+  key: string;
+  name: string;
+  amount: number;
+  selected: boolean;
+  scopeLabel: string;
+  residencyScope: string;
+  splitIntoTwoInstallments: boolean;
+};
+
+function sanitizeMoneyInput(raw: string): string {
+  if (!raw) return "";
+  const cleaned = raw.replace(/[^\d.]/g, "");
+  const dot = cleaned.indexOf(".");
+  if (dot === -1) return cleaned;
+  const intPart = cleaned.slice(0, dot).replace(/\D/g, "");
+  const frac = cleaned.slice(dot + 1).replace(/\D/g, "").slice(0, 2);
+  return frac.length > 0 ? `${intPart}.${frac}` : `${intPart}.`;
+}
+
+function formatCatalogExtraScope(
+  x: { targetType?: string | null; targetClassId?: string | null; targetSection?: string | null },
+  classById: Map<string, string>
+): string {
+  const t = String(x.targetType ?? "");
+  if (t === "SCHOOL") return "School-wide";
+  const classLabel = x.targetClassId ? classById.get(String(x.targetClassId)) : undefined;
+  if (t === "CLASS") return classLabel ? `Class ${classLabel}` : "Class-specific";
+  if (t === "SECTION") {
+    const sec = x.targetSection ? String(x.targetSection) : "";
+    if (classLabel && sec) return `${classLabel} · section ${sec}`;
+    if (classLabel) return `${classLabel} · section`;
+    return "Section-specific";
+  }
+  return t || "—";
+}
 
 type FormState = {
   applicationNo: string;
@@ -257,6 +300,7 @@ function displayResidencyType(value: string | null | undefined): string {
 
 export default function TeacherAdmissionTab() {
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const view = (searchParams.get("view") ?? "add") === "all" ? "all" : "add";
   const editId = searchParams.get("editId");
@@ -315,10 +359,13 @@ export default function TeacherAdmissionTab() {
   const [feeAssignRows, setFeeAssignRows] = useState<FeeAssignRow[]>([]);
   const [assigningFees, setAssigningFees] = useState(false);
   const [assignFeeError, setAssignFeeError] = useState<string | null>(null);
-  const [existingStudentExtras, setExistingStudentExtras] = useState<Array<{ id: string; name: string; amount: number }>>([]);
+  const [existingStudentExtras, setExistingStudentExtras] = useState<
+    Array<{ id: string; name: string; amount: number; splitIntoTwoInstallments: boolean }>
+  >([]);
   const [editingExistingFeeId, setEditingExistingFeeId] = useState<string | null>(null);
   const [editingExistingFeeName, setEditingExistingFeeName] = useState("");
   const [editingExistingFeeAmount, setEditingExistingFeeAmount] = useState("");
+  const [editingExistingFeeSplit, setEditingExistingFeeSplit] = useState(false);
   const [dbFeeHeadOptions, setDbFeeHeadOptions] = useState<FeeHeadOption[]>([]);
   const [classBaseFeeTotal, setClassBaseFeeTotal] = useState<number | null>(null);
 
@@ -383,8 +430,9 @@ export default function TeacherAdmissionTab() {
       setClassBaseFeeTotal(null);
 
       try {
-        const [extrasRes, structureRes] = await Promise.all([
+        const [extrasRes, templatesRes, structureRes] = await Promise.all([
           fetch("/api/fees/extra", { credentials: "include", cache: "no-store" }),
+          fetch("/api/fees/extra-head-templates", { credentials: "include", cache: "no-store" }),
           row.classId
             ? fetch(`/api/fees/structure?classId=${encodeURIComponent(row.classId)}`, {
                 credentials: "include",
@@ -393,6 +441,30 @@ export default function TeacherAdmissionTab() {
             : Promise.resolve(null),
         ]);
 
+        let templateHeads: FeeHeadOption[] = [];
+        if (templatesRes.ok) {
+          const tplJson = await templatesRes.json().catch(() => ({}));
+          const tplList = Array.isArray(tplJson?.templates) ? tplJson.templates : [];
+          templateHeads = tplList
+            .map((x: { id?: string; name?: string; amount?: number; splitIntoTwoInstallments?: boolean }): FeeHeadOption | null => {
+              const id = String(x.id ?? "");
+              const name = String(x.name ?? "").trim();
+              const amount = Number(x.amount ?? 0);
+              if (!id || !name || !Number.isFinite(amount) || amount <= 0) return null;
+              return {
+                key: `template:${id}`,
+                name,
+                amount,
+                selected: false,
+                scopeLabel: "Custom saved head",
+                residencyScope: normalizeExtraFeeResidencyScope("ALL"),
+                splitIntoTwoInstallments: Boolean(x.splitIntoTwoInstallments),
+              };
+            })
+            .filter((h: FeeHeadOption | null): h is FeeHeadOption => h !== null);
+        }
+
+        let catalogHeads: FeeHeadOption[] = [];
         if (extrasRes.ok) {
           const extrasJson = await extrasRes.json().catch(() => ({}));
           const allExtras = Array.isArray(extrasJson?.extraFees) ? extrasJson.extraFees : [];
@@ -402,38 +474,46 @@ export default function TeacherAdmissionTab() {
               id: String(x.id),
               name: String(x.name ?? "Extra Fee"),
               amount: Number(x.amount ?? 0),
+              splitIntoTwoInstallments: Boolean(x.splitIntoTwoInstallments),
             }));
           setExistingStudentExtras(studentExtras);
 
-          const classSection = row.class?.section ?? null;
-          const rosterHeads = allExtras.filter((x: any) => {
-            const t = String(x?.targetType ?? "");
-            if (t === "SCHOOL") return true;
-            if (t === "CLASS") return !!row.classId && x?.targetClassId === row.classId;
-            if (t === "SECTION") {
-              return !!row.classId && x?.targetClassId === row.classId && String(x?.targetSection ?? "") === String(classSection ?? "");
-            }
-            if (t === "STUDENT") return x?.targetStudentId === row.studentId;
-            return false;
-          });
-          const byName = new Map<string, number>();
-          for (const h of rosterHeads) {
-            const name = String(h?.name ?? "").trim();
-            const amount = Number(h?.amount ?? 0);
-            if (!name || amount <= 0) continue;
-            if (!byName.has(name)) byName.set(name, amount);
-          }
-          setDbFeeHeadOptions(
-            Array.from(byName.entries())
-              .map(([name, amount]) => ({
-                key: `${name.toLowerCase()}|${amount}`,
+          const classById = new Map(classes.map((c) => [c.id, `${c.name}${c.section ? `-${c.section}` : ""}`]));
+          const catalogExtras = allExtras.filter((x: { targetType?: string }) =>
+            ["SCHOOL", "CLASS", "SECTION"].includes(String(x?.targetType ?? ""))
+          );
+          catalogHeads = catalogExtras
+            .map((x: Record<string, unknown>): FeeHeadOption | null => {
+              const id = String(x.id ?? "");
+              const name = String(x.name ?? "").trim();
+              const amount = Number(x.amount ?? 0);
+              if (!id || !name || !Number.isFinite(amount) || amount <= 0) return null;
+              return {
+                key: id,
                 name,
                 amount,
                 selected: false,
-              }))
-              .sort((a, b) => a.name.localeCompare(b.name))
-          );
+                scopeLabel: formatCatalogExtraScope(
+                  {
+                    targetType: x.targetType as string | null,
+                    targetClassId: x.targetClassId as string | null,
+                    targetSection: x.targetSection as string | null,
+                  },
+                  classById
+                ),
+                residencyScope: normalizeExtraFeeResidencyScope(x.residencyScope),
+                splitIntoTwoInstallments: Boolean(x.splitIntoTwoInstallments),
+              };
+            })
+            .filter((h: FeeHeadOption | null): h is FeeHeadOption => h !== null);
         }
+
+        setDbFeeHeadOptions(
+          [...templateHeads, ...catalogHeads].sort(
+            (a: FeeHeadOption, b: FeeHeadOption) =>
+              a.name.localeCompare(b.name) || a.scopeLabel.localeCompare(b.scopeLabel)
+          )
+        );
 
         if (structureRes && structureRes.ok) {
           const structureJson = await structureRes.json().catch(() => ({}));
@@ -446,7 +526,7 @@ export default function TeacherAdmissionTab() {
         // Keep modal usable even if preview fetch fails.
       }
     },
-    [seededFeeRowsForResidency]
+    [seededFeeRowsForResidency, classes]
   );
 
   const addAssignFeeRow = () => {
@@ -462,6 +542,8 @@ export default function TeacherAdmissionTab() {
         id: `db-${Date.now()}-${Math.random()}`,
         name: x.name,
         amount: String(x.amount),
+        residencyScope: x.residencyScope,
+        splitIntoTwoInstallments: x.splitIntoTwoInstallments,
       })),
     ]);
     setDbFeeHeadOptions((prev) => prev.map((x) => ({ ...x, selected: false })));
@@ -480,22 +562,27 @@ export default function TeacherAdmissionTab() {
       const res = await fetch(`/api/fees/extra/${editingExistingFeeId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, amount }),
+        body: JSON.stringify({ name, amount, splitIntoTwoInstallments: editingExistingFeeSplit }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || "Failed to update fee");
       setExistingStudentExtras((prev) =>
-        prev.map((x) => (x.id === editingExistingFeeId ? { ...x, name, amount } : x))
+        prev.map((x) =>
+          x.id === editingExistingFeeId
+            ? { ...x, name, amount, splitIntoTwoInstallments: editingExistingFeeSplit }
+            : x
+        )
       );
       setEditingExistingFeeId(null);
       setEditingExistingFeeName("");
       setEditingExistingFeeAmount("");
+      setEditingExistingFeeSplit(false);
       setMessageTone("success");
       setMessage("Assigned fee updated.");
     } catch (e) {
       setAssignFeeError(e instanceof Error ? e.message : "Failed to update fee");
     }
-  }, [editingExistingFeeAmount, editingExistingFeeId, editingExistingFeeName]);
+  }, [editingExistingFeeAmount, editingExistingFeeId, editingExistingFeeName, editingExistingFeeSplit]);
 
   const deleteExistingStudentFee = useCallback(async (feeId: string) => {
     try {
@@ -514,7 +601,12 @@ export default function TeacherAdmissionTab() {
   const saveAssignedFees = useCallback(async () => {
     if (!feeAssignDialog?.studentId) return;
     const cleaned = feeAssignRows
-      .map((r) => ({ name: r.name.trim(), amount: Number(r.amount) }))
+      .map((r) => ({
+        name: r.name.trim(),
+        amount: Number(r.amount),
+        residencyScope: r.residencyScope,
+        splitIntoTwoInstallments: r.splitIntoTwoInstallments === true,
+      }))
       .filter((r) => r.name.length > 0 && Number.isFinite(r.amount) && r.amount > 0);
 
     if (cleaned.length === 0) {
@@ -534,20 +626,25 @@ export default function TeacherAdmissionTab() {
             amount: row.amount,
             targetType: "STUDENT",
             targetStudentId: feeAssignDialog.studentId,
+            residencyScope: row.residencyScope ?? "ALL",
+            splitIntoTwoInstallments: row.splitIntoTwoInstallments,
           }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.message || `Failed to assign ${row.name}`);
       }
-      setMessageTone("success");
-      setMessage("Student fees assigned successfully.");
+      const savedStudentId = feeAssignDialog.studentId;
       setFeeAssignDialog(null);
+      setFeeAssignRows([]);
+      setMessageTone("success");
+      setMessage("Student fees assigned successfully. Opening student profile…");
+      router.push(studentDetailsFeesUrlForPathname(pathname, savedStudentId));
     } catch (e) {
       setAssignFeeError(e instanceof Error ? e.message : "Failed to assign fees");
     } finally {
       setAssigningFees(false);
     }
-  }, [feeAssignDialog, feeAssignRows]);
+  }, [feeAssignDialog, feeAssignRows, pathname, router]);
 
   useEffect(() => {
     // Fetch School Info
@@ -842,8 +939,15 @@ export default function TeacherAdmissionTab() {
   }, []);
 
   const classNameOptions = useMemo(() => {
-    const names = Array.from(new Set(classes.map((c) => c.name).filter(Boolean)));
-    return [{ label: "Unassigned", value: "" }, ...names.map((n) => ({ label: n, value: n }))];
+    const namesFromDb = Array.from(new Set(classes.map((c) => c.name).filter(Boolean)));
+    const sortedDb = [...namesFromDb].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const dbLower = new Set(sortedDb.map((n) => n.trim().toLowerCase()));
+    const syntheticGrades = GRADES.filter((g) => !dbLower.has(g.label.trim().toLowerCase())).map((g) => g.label);
+    return [
+      { label: "Unassigned", value: "" },
+      ...sortedDb.map((n) => ({ label: n, value: n })),
+      ...syntheticGrades.map((label) => ({ label, value: label })),
+    ];
   }, [classes]);
 
   const sectionOptions = useMemo(() => {
@@ -867,7 +971,20 @@ export default function TeacherAdmissionTab() {
       return;
     }
 
-    const candidates = classes.filter((c) => c.name === selectedClassName);
+    const candidates = classes.filter(
+      (c) => c.name.trim().toLowerCase() === selectedClassName.trim().toLowerCase()
+    );
+    if (candidates.length === 0) {
+      const g = GRADES.find(
+        (x) => x.label.trim().toLowerCase() === selectedClassName.trim().toLowerCase()
+      );
+      if (g) {
+        setForm((p) => ({ ...p, classId: "", gradeSought: g.value }));
+      }
+      setSelectedSection("");
+      return;
+    }
+
     if (candidates.length === 1) {
       setForm((p) => ({ ...p, classId: candidates[0].id }));
       setSelectedSection(candidates[0].section ?? "");
@@ -1932,195 +2049,241 @@ export default function TeacherAdmissionTab() {
       )}
 
       {feeAssignDialog && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-2xl rounded-2xl border border-white/10 bg-[#0B1220] p-5 space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-white font-semibold">Assign Fees</div>
-                <p className="text-sm text-white/70">
-                  {`${feeAssignDialog.firstName} ${feeAssignDialog.lastName}`} · {classLabel(feeAssignDialog)} · {displayResidencyType(feeAssignDialog.residencyType)}
-                </p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="flex max-h-[min(92vh,56rem)] w-full max-w-2xl min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0B1220] shadow-xl">
+            <div className="shrink-0 space-y-4 border-b border-white/10 p-5 pb-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-white font-semibold">Assign Fees</div>
+                  <p className="text-sm text-white/70">
+                    {`${feeAssignDialog.firstName} ${feeAssignDialog.lastName}`} · {classLabel(feeAssignDialog)} ·{" "}
+                    {displayResidencyType(feeAssignDialog.residencyType)}
+                  </p>
+                </div>
+                {classBaseFeeTotal !== null && (
+                  <div className="text-right text-xs text-white/60">
+                    <div>Class structure (base)</div>
+                    <div className="text-white/80 font-semibold">{formatInrCell(classBaseFeeTotal)}</div>
+                  </div>
+                )}
               </div>
-              {classBaseFeeTotal !== null && (
-                <div className="text-right text-xs text-white/60">
-                  <div>Class structure (base)</div>
-                  <div className="text-white/80 font-semibold">{formatInrCell(classBaseFeeTotal)}</div>
+
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-white/70">
+                Global class fee structure is already applied on enrollment. Use this section for student-level extras
+                like transport, hostel, books, etc.
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-y-contain px-5 py-4 [-webkit-overflow-scrolling:touch]">
+              {existingStudentExtras.length > 0 && (
+                <div className="rounded-xl border border-white/10 bg-black/20 p-3 space-y-2">
+                  <div className="text-xs font-semibold text-white/80">Already assigned extras</div>
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    {existingStudentExtras.map((ef) => (
+                      <div
+                        key={ef.id}
+                        className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/70 space-y-2"
+                      >
+                        {editingExistingFeeId === ef.id ? (
+                          <div className="space-y-2">
+                            <input
+                              type="text"
+                              value={editingExistingFeeName}
+                              onChange={(e) => setEditingExistingFeeName(e.target.value)}
+                              className="w-full rounded-lg bg-black/20 border border-white/10 px-2 py-1.5 text-white"
+                              placeholder="Fee name"
+                            />
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              autoComplete="off"
+                              value={editingExistingFeeAmount}
+                              onChange={(e) => setEditingExistingFeeAmount(sanitizeMoneyInput(e.target.value))}
+                              className="w-full rounded-lg bg-black/20 border border-white/10 px-2 py-1.5 text-white"
+                              placeholder="Amount"
+                            />
+                            <label className="flex cursor-pointer items-start gap-2 text-[11px] text-white/70">
+                              <input
+                                type="checkbox"
+                                className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded border-white/20 bg-black/40"
+                                checked={editingExistingFeeSplit}
+                                onChange={(e) => setEditingExistingFeeSplit(e.target.checked)}
+                              />
+                              <span>Two installments (50% + 50%) on fee breakdown</span>
+                            </label>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={updateExistingStudentFee}
+                                className="rounded-lg bg-lime-500/20 px-2 py-1 text-[11px] text-lime-200"
+                              >
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingExistingFeeId(null);
+                                  setEditingExistingFeeName("");
+                                  setEditingExistingFeeAmount("");
+                                  setEditingExistingFeeSplit(false);
+                                }}
+                                className="rounded-lg border border-white/20 px-2 py-1 text-[11px] text-white/70"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div>
+                              <span className="text-white/90">{ef.name}</span> · {formatInrCell(ef.amount)}
+                              {ef.splitIntoTwoInstallments ? (
+                                <span className="ml-1.5 text-[10px] font-semibold uppercase text-sky-300">· 2 inst.</span>
+                              ) : null}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingExistingFeeId(ef.id);
+                                  setEditingExistingFeeName(ef.name);
+                                  setEditingExistingFeeAmount(String(ef.amount));
+                                  setEditingExistingFeeSplit(ef.splitIntoTwoInstallments);
+                                }}
+                                className="rounded-lg border border-white/20 px-2 py-1 text-[11px] text-white/80"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => deleteExistingStudentFee(ef.id)}
+                                className="rounded-lg border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] text-red-200"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
-            </div>
 
-            <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-white/70">
-              Global class fee structure is already applied on enrollment. Use this section for student-level extras like transport, hostel, books, etc.
-            </div>
-
-            {existingStudentExtras.length > 0 && (
-              <div className="rounded-xl border border-white/10 bg-black/20 p-3 space-y-2">
-                <div className="text-xs font-semibold text-white/80">Already assigned extras</div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  {existingStudentExtras.map((ef) => (
-                    <div key={ef.id} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/70 space-y-2">
-                      {editingExistingFeeId === ef.id ? (
-                        <div className="space-y-2">
-                          <input
-                            type="text"
-                            value={editingExistingFeeName}
-                            onChange={(e) => setEditingExistingFeeName(e.target.value)}
-                            className="w-full rounded-lg bg-black/20 border border-white/10 px-2 py-1.5 text-white"
-                            placeholder="Fee name"
-                          />
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={editingExistingFeeAmount}
-                            onChange={(e) => setEditingExistingFeeAmount(e.target.value)}
-                            className="w-full rounded-lg bg-black/20 border border-white/10 px-2 py-1.5 text-white"
-                            placeholder="Amount"
-                          />
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={updateExistingStudentFee}
-                              className="rounded-lg bg-lime-500/20 px-2 py-1 text-[11px] text-lime-200"
-                            >
-                              Save
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingExistingFeeId(null);
-                                setEditingExistingFeeName("");
-                                setEditingExistingFeeAmount("");
-                              }}
-                              className="rounded-lg border border-white/20 px-2 py-1 text-[11px] text-white/70"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <div>
-                            <span className="text-white/90">{ef.name}</span> · {formatInrCell(ef.amount)}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingExistingFeeId(ef.id);
-                                setEditingExistingFeeName(ef.name);
-                                setEditingExistingFeeAmount(String(ef.amount));
-                              }}
-                              className="rounded-lg border border-white/20 px-2 py-1 text-[11px] text-white/80"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => deleteExistingStudentFee(ef.id)}
-                              className="rounded-lg border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] text-red-200"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {dbFeeHeadOptions.length > 0 && (
               <div className="rounded-xl border border-white/10 bg-black/20 p-3 space-y-3">
-                <div className="text-xs font-semibold text-white/80">Fee heads from DB (select to reuse)</div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-44 overflow-auto pr-1">
-                  {dbFeeHeadOptions.map((h) => (
-                    <label key={h.key} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/80">
-                      <input
-                        type="checkbox"
-                        checked={h.selected}
-                        onChange={(e) =>
-                          setDbFeeHeadOptions((prev) =>
-                            prev.map((x) => (x.key === h.key ? { ...x, selected: e.target.checked } : x))
-                          )
-                        }
-                      />
-                      <span className="flex-1">{h.name}</span>
-                      <span>{formatInrCell(h.amount)}</span>
-                    </label>
-                  ))}
-                </div>
-                <div>
-                  <button
-                    type="button"
-                    onClick={addSelectedDbHeadsToRows}
-                    className="px-3 py-2 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-200 text-xs"
-                  >
-                    Add selected heads
-                  </button>
-                </div>
+                <div className="text-xs font-semibold text-white/80">Fee heads catalog</div>
+                <p className="text-[11px] text-white/50">
+                  Custom heads saved under <span className="text-white/70">Fees → Add extra fees</span>, plus school /
+                  class / section extras from that page. Select and add to this student, or enter custom rows below.
+                </p>
+                {dbFeeHeadOptions.length === 0 ? (
+                  <p className="text-xs text-white/45 py-1">
+                    No heads yet. Under <span className="text-white/70">Fees → Add extra fees</span>, add{" "}
+                    <span className="text-white/70">Custom fee heads</span> or scoped extras (school / class / section),
+                    then open Assign Fees again.
+                  </p>
+                ) : (
+                  <>
+                    <div className="grid max-h-[min(38vh,14rem)] min-h-0 grid-cols-1 gap-2 overflow-y-auto overflow-x-hidden overscroll-y-contain pr-1 touch-pan-y [-webkit-overflow-scrolling:touch] md:grid-cols-2">
+                      {dbFeeHeadOptions.map((h) => (
+                        <label
+                          key={h.key}
+                          className="flex min-h-0 items-start gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/80"
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 shrink-0"
+                            checked={h.selected}
+                            onChange={(e) =>
+                              setDbFeeHeadOptions((prev) =>
+                                prev.map((x) => (x.key === h.key ? { ...x, selected: e.target.checked } : x))
+                              )
+                            }
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-white/90">{h.name}</span>
+                            <span className="block text-[10px] text-white/45 mt-0.5">
+                              {h.scopeLabel}
+                              {h.splitIntoTwoInstallments ? " · 2 installments" : ""}
+                            </span>
+                          </span>
+                          <span className="shrink-0 font-medium">{formatInrCell(h.amount)}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <div>
+                      <button
+                        type="button"
+                        onClick={addSelectedDbHeadsToRows}
+                        className="rounded-xl border border-sky-500/30 bg-sky-500/15 px-3 py-2 text-xs text-sky-200"
+                      >
+                        Add selected heads
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
-            )}
 
-            {assignFeeError && (
-              <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
-                {assignFeeError}
-              </div>
-            )}
-
-            <div className="space-y-2">
-              {feeAssignRows.map((row) => (
-                <div key={row.id} className="grid grid-cols-1 md:grid-cols-[1fr_160px_90px] gap-2">
-                  <input
-                    type="text"
-                    value={row.name}
-                    onChange={(e) =>
-                      setFeeAssignRows((prev) =>
-                        prev.map((x) => (x.id === row.id ? { ...x, name: e.target.value } : x))
-                      )
-                    }
-                    className="w-full rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-white"
-                    placeholder="Fee name (e.g. Transport Fee / Hostel Fee)"
-                  />
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={row.amount}
-                    onChange={(e) =>
-                      setFeeAssignRows((prev) =>
-                        prev.map((x) => (x.id === row.id ? { ...x, amount: e.target.value } : x))
-                      )
-                    }
-                    className="w-full rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-white"
-                    placeholder="Amount"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setFeeAssignRows((prev) => prev.filter((x) => x.id !== row.id))}
-                    className="rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-200 hover:bg-red-500/20"
-                  >
-                    Remove
-                  </button>
+              {assignFeeError && (
+                <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
+                  {assignFeeError}
                 </div>
-              ))}
+              )}
+
+              <div className="space-y-2">
+                {feeAssignRows.map((row) => (
+                  <div key={row.id} className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_160px_90px]">
+                    <input
+                      type="text"
+                      value={row.name}
+                      onChange={(e) =>
+                        setFeeAssignRows((prev) =>
+                          prev.map((x) => (x.id === row.id ? { ...x, name: e.target.value } : x))
+                        )
+                      }
+                      className="w-full rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-white"
+                      placeholder="Fee name (e.g. Transport Fee / Hostel Fee)"
+                    />
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      autoComplete="off"
+                      value={row.amount}
+                      onChange={(e) => {
+                        const v = sanitizeMoneyInput(e.target.value);
+                        setFeeAssignRows((prev) =>
+                          prev.map((x) => (x.id === row.id ? { ...x, amount: v } : x))
+                        );
+                      }}
+                      className="w-full rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-white"
+                      placeholder="Amount"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setFeeAssignRows((prev) => prev.filter((x) => x.id !== row.id))}
+                      className="rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-200 hover:bg-red-500/20"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
 
-            <div className="flex items-center justify-between">
+            <div className="flex shrink-0 flex-col-reverse gap-3 border-t border-white/10 bg-[#0B1220] p-5 sm:flex-row sm:items-center sm:justify-between">
               <button
                 type="button"
                 onClick={addAssignFeeRow}
-                className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white/80 text-sm hover:bg-white/10"
+                className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80 hover:bg-white/10"
               >
                 + Add another fee
               </button>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center justify-end gap-3">
                 <button
                   type="button"
                   onClick={() => setFeeAssignDialog(null)}
                   disabled={assigningFees}
-                  className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-white/70"
+                  className="rounded-xl bg-white/5 px-4 py-2 border border-white/10 text-white/70"
                 >
                   Cancel
                 </button>
@@ -2128,7 +2291,7 @@ export default function TeacherAdmissionTab() {
                   type="button"
                   onClick={saveAssignedFees}
                   disabled={assigningFees}
-                  className="px-4 py-2 rounded-xl bg-lime-400 text-black font-semibold disabled:opacity-60 flex items-center justify-center gap-2"
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-lime-400 px-4 py-2 font-semibold text-black disabled:opacity-60"
                 >
                   {assigningFees && <Loader2 size={16} className="animate-spin" />}
                   {assigningFees ? "Assigning..." : "Save Fees"}

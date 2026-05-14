@@ -56,11 +56,9 @@ export async function GET(_req: Request, context: RouteParams) {
       schoolId = adminSchool?.id ?? null;
     }
 
-    const student = await prisma.student.findUnique({
-      where: {
-        id,
-        ...(schoolId ? { schoolId } : {}),
-      },
+    const whereClause = schoolId ? { id, schoolId } : { id };
+    const student = await prisma.student.findFirst({
+      where: whereClause,
       include: {
         user: { select: { id: true, name: true, email: true, photoUrl: true } },
         class: { select: { id: true, name: true, section: true } },

@@ -7,6 +7,8 @@ type Props = {
   extraFeeId: string;
   initialName: string;
   initialAmount: number;
+  /** When set, controls two-installment display for this head in student fee UI. */
+  initialSplitIntoTwoInstallments?: boolean;
   onClose: () => void;
   onSuccess: () => void;
 };
@@ -15,19 +17,24 @@ export const EditExtraFeeModal = ({
   extraFeeId,
   initialName,
   initialAmount,
+  initialSplitIntoTwoInstallments = false,
   onClose,
   onSuccess,
 }: Props) => {
   const [name, setName] = useState(initialName);
   const [amount, setAmount] = useState(String(initialAmount));
+  const [splitIntoTwoInstallments, setSplitIntoTwoInstallments] = useState(
+    Boolean(initialSplitIntoTwoInstallments)
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     setName(initialName);
     setAmount(String(initialAmount));
+    setSplitIntoTwoInstallments(Boolean(initialSplitIntoTwoInstallments));
     setError("");
-  }, [extraFeeId, initialName, initialAmount]);
+  }, [extraFeeId, initialName, initialAmount, initialSplitIntoTwoInstallments]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,6 +58,7 @@ export const EditExtraFeeModal = ({
         body: JSON.stringify({
           name: name.trim(),
           amount: feeAmount,
+          splitIntoTwoInstallments,
         }),
       });
 
@@ -73,8 +81,8 @@ export const EditExtraFeeModal = ({
         <div className="p-6">
           <h2 className="text-2xl font-bold text-white mb-2">Edit extra fee</h2>
           <p className="text-gray-400 text-sm mb-6">
-            Update the name or amount for this student-only fee. Totals on the student fee record adjust by the
-            amount difference.
+            Update the name or amount. Totals on affected student fee records adjust when the amount changes. Two
+            installments only changes how this head appears on the fee breakdown (50% + 50%).
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -118,6 +126,22 @@ export const EditExtraFeeModal = ({
                 />
               </div>
             </div>
+
+            <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/10 bg-black/20 px-3 py-3 text-sm text-white/80">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-white/20 bg-black/40 text-lime-500 focus:ring-lime-500/40"
+                checked={splitIntoTwoInstallments}
+                onChange={(e) => setSplitIntoTwoInstallments(e.target.checked)}
+              />
+              <span>
+                <span className="font-medium text-white">Show as two installments</span>
+                <span className="mt-0.5 block text-xs text-white/50">
+                  Splits this fee into 1st and 2nd installment cards (50% each) on the student profile, like hostel
+                  fee.
+                </span>
+              </span>
+            </label>
 
             <div className="flex items-center gap-3 pt-4">
               <button

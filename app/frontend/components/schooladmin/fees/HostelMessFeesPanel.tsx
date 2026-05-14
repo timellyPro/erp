@@ -56,7 +56,7 @@ export default function HostelMessFeesPanel({ classes, extraFees, onSuccess }: H
         const res = await fetch(`/api/fees/extra/${existingSchoolHostel.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ amount: amt }),
+          body: JSON.stringify({ amount: amt, splitIntoTwoInstallments: true }),
         });
         const data = await res.json();
         if (!res.ok) {
@@ -72,6 +72,7 @@ export default function HostelMessFeesPanel({ classes, extraFees, onSuccess }: H
             amount: amt,
             targetType: "SCHOOL",
             residencyScope: "HOSTELLER",
+            splitIntoTwoInstallments: true,
           }),
         });
         const data = await res.json();
@@ -121,7 +122,7 @@ export default function HostelMessFeesPanel({ classes, extraFees, onSuccess }: H
         const res = await fetch(`/api/fees/extra/${existingMess.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ amount: amt }),
+          body: JSON.stringify({ amount: amt, splitIntoTwoInstallments: true }),
         });
         const data = await res.json();
         if (!res.ok) {
@@ -138,6 +139,7 @@ export default function HostelMessFeesPanel({ classes, extraFees, onSuccess }: H
             targetType: "CLASS",
             targetClassId: messClassId,
             residencyScope: "ALL",
+            splitIntoTwoInstallments: true,
           }),
         });
         const data = await res.json();

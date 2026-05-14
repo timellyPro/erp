@@ -4,9 +4,11 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import PageHeader from "../common/PageHeader";
 import FeeStatCards from "./fees/FeeStatCards";
+import AdmissionFeeDayReport from "./fees/AdmissionFeeDayReport";
 import OfflinePaymentForm from "./fees/OfflinePaymentForm";
 import AddExtraFeeForm from "./fees/AddExtraFeeForm";
 import HostelMessFeesPanel from "./fees/HostelMessFeesPanel";
+import ExtraFeeHeadTemplatesPanel from "./fees/ExtraFeeHeadTemplatesPanel";
 import ExtraFeesList from "./fees/ExtraFeesList";
 import FeeStructureConfig from "./fees/FeeStructureConfig";
 import FeeRecordsTable from "./fees/FeeRecordsTable";
@@ -42,16 +44,17 @@ export default function FeesTab({ section }: FeesTabProps) {
   const [structures, setStructures] = useState<FeeStructure[]>([]);
   const [extraFees, setExtraFees] = useState<ExtraFee[]>([]);
   const [loading, setLoading] = useState(true);
+  const [recalcBusy, setRecalcBusy] = useState(false);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const [sumRes, clsRes, stuRes, structRes, extraRes] = await Promise.all([
-        fetch("/api/fees/summary"),
-        fetch("/api/class/list"),
-        fetch("/api/student/list"),
-        fetch("/api/fees/structure"),
-        fetch("/api/fees/extra"),
+        fetch("/api/fees/summary", { credentials: "include" }),
+        fetch("/api/class/list", { credentials: "include" }),
+        fetch("/api/student/list", { credentials: "include" }),
+        fetch("/api/fees/structure", { credentials: "include" }),
+        fetch("/api/fees/extra", { credentials: "include" }),
       ]);
       const [sumData, clsData, stuData, structData, extraData] = await Promise.all([
         sumRes.json(),
@@ -74,11 +77,11 @@ export default function FeesTab({ section }: FeesTabProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    void fetchData();
+  }, [fetchData]);
 
   const reloadAfterMutation = useCallback(() => {
     void (async () => {
@@ -89,7 +92,40 @@ export default function FeesTab({ section }: FeesTabProps) {
         /* noop */
       }
     })();
-  }, [router]);
+  }, [router, fetchData]);
+
+  const recalculateAllStudentFees = useCallback(async () => {
+    if (
+      !confirm(
+        "Recalculate fee totals for every student in your school from the current class structures and extra fees?\n\nThis fixes stored totals after removing duplicate hostel/mess rows. Recorded payments and discounts are kept."
+      )
+    ) {
+      return;
+    }
+    setRecalcBusy(true);
+    try {
+      const res = await fetch("/api/fees/recalculate-student-fees", {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(typeof data.message === "string" ? data.message : "Recalculate failed");
+        return;
+      }
+      await fetchData();
+      try {
+        router.refresh();
+      } catch {
+        /* noop */
+      }
+      alert(`Updated ${typeof data.updatedStudents === "number" ? data.updatedStudents : ""} student fee records.`);
+    } catch {
+      alert("Recalculate failed");
+    } finally {
+      setRecalcBusy(false);
+    }
+  }, [router, fetchData]);
 
   if (loading) {
     return (
@@ -110,8 +146,29 @@ export default function FeesTab({ section }: FeesTabProps) {
         <FeesSectionNav />
 
         {(section === undefined || section === "overview") && (
-          <div id="fees-section-overview" className="scroll-mt-28">
+          <div id="fees-section-overview" className="scroll-mt-28 space-y-6">
             <FeeStatCards stats={stats} />
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur sm:p-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-white">Stored totals out of date?</h3>
+                  <p className="mt-1 max-w-2xl text-xs leading-relaxed text-gray-400">
+                    After removing duplicate hostel/mess extra fees, totals in the database may still reflect old sums.
+                    Recalculate once so the overview matches the current fee catalog (payments and discounts are not
+                    changed).
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={recalcBusy}
+                  onClick={() => void recalculateAllStudentFees()}
+                  className="shrink-0 rounded-xl border border-amber-500/35 bg-amber-500/15 px-4 py-2.5 text-sm font-semibold text-amber-100 hover:bg-amber-500/25 disabled:opacity-50"
+                >
+                  {recalcBusy ? "Recalculating…" : "Recalculate all student fees"}
+                </button>
+              </div>
+            </div>
+            <AdmissionFeeDayReport />
           </div>
         )}
 
@@ -142,11 +199,14 @@ export default function FeesTab({ section }: FeesTabProps) {
                 className={`scroll-mt-28 min-w-0 flex flex-col ${section === "add-extra-fees" ? "gap-6" : section === undefined ? "mt-4" : ""}`}
               >
                 {section === "add-extra-fees" && (
-                  <HostelMessFeesPanel
-                    classes={classes}
-                    extraFees={extraFees}
-                    onSuccess={reloadAfterMutation}
-                  />
+                  <>
+                    <HostelMessFeesPanel
+                      classes={classes}
+                      extraFees={extraFees}
+                      onSuccess={reloadAfterMutation}
+                    />
+                    <ExtraFeeHeadTemplatesPanel onSuccess={reloadAfterMutation} />
+                  </>
                 )}
                 <AddExtraFeeForm classes={classes} students={students} onSuccess={reloadAfterMutation} />
               </div>

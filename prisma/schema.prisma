@@ -253,7 +253,8 @@ model School {
   users              User[]
   settings           SchoolSettings?
   classFeeStructures ClassFeeStructure[]
-  extraFees          ExtraFee[]
+  extraFees               ExtraFee[]
+  extraFeeHeadTemplates   ExtraFeeHeadTemplate[]
   pettyCashExpenses  PettyCashExpense[]
   studentApplications StudentApplication[]
 }
@@ -981,6 +982,8 @@ model ExtraFee {
   targetStudentId String?
   // ALL | HOSTELLER | DAY_SCHOLAR — who is charged this head (default ALL).
   residencyScope  String  @default("ALL")
+  /// When true, student fee UI shows this head as two 50/50 installments (like hostel/mess).
+  splitIntoTwoInstallments Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -988,6 +991,21 @@ model ExtraFee {
   @@index([schoolId])
   @@index([targetStudentId])
   @@index([targetClassId])
+}
+
+/// Reusable fee head (title + amount) for picking in Admission → Assign Fees. Does not post to student balances until assigned.
+model ExtraFeeHeadTemplate {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name      String
+  amount    Float
+  /// When true, assigning this template creates an extra fee shown as two 50/50 installments in student UI.
+  splitIntoTwoInstallments Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([schoolId])
 }
 
 model PettyCashExpense {

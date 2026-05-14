@@ -12,6 +12,7 @@ type Props = {
 export const AddExtraFeeModal = ({ studentId, onClose, onSuccess }: Props) => {
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("");
+  const [splitIntoTwoInstallments, setSplitIntoTwoInstallments] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -39,6 +40,7 @@ export const AddExtraFeeModal = ({ studentId, onClose, onSuccess }: Props) => {
           amount: feeAmount,
           targetType: "STUDENT",
           targetStudentId: studentId,
+          splitIntoTwoInstallments,
         }),
       });
 
@@ -107,6 +109,21 @@ export const AddExtraFeeModal = ({ studentId, onClose, onSuccess }: Props) => {
                 />
               </div>
             </div>
+
+            <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/10 bg-black/20 px-3 py-3 text-sm text-white/80">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-white/20 bg-black/40 text-lime-500 focus:ring-lime-500/40"
+                checked={splitIntoTwoInstallments}
+                onChange={(e) => setSplitIntoTwoInstallments(e.target.checked)}
+              />
+              <span>
+                <span className="font-medium text-white">Two installments (50% + 50%)</span>
+                <span className="mt-0.5 block text-xs text-white/50">
+                  Shows this fee as 1st and 2nd installment on the breakdown, like hostel fee.
+                </span>
+              </span>
+            </label>
 
             <div className="flex items-center gap-3 pt-4">
               <button

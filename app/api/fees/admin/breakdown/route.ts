@@ -1,11 +1,56 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { Prisma } from "@prisma/client";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
-import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
+import { structureMultiplierAfterDiscount, shouldOmitLegacySplitHostelMessExtraForBreakdown } from "@/lib/studentTuitionFromStructure";
 import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import { shouldSplitFeeHeadIntoTwoInstallments } from "@/lib/feeHeadInstallmentSplit";
+
+function normalizeExtraFeeName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/** Stale `npx prisma generate` (or DB without migration) — Prisma rejects unknown select fields. */
+function isUnknownExtraFeeSplitFieldError(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientValidationError) {
+    return (
+      error.message.includes("Unknown field") && error.message.includes("splitIntoTwoInstallments")
+    );
+  }
+  const msg = error instanceof Error ? error.message : String(error);
+  return msg.includes("Unknown field") && msg.includes("splitIntoTwoInstallments");
+}
+
+/** Prefer student-specific over section/class/school when the same fee name+amount appears twice (duplicate assignments). */
+function dedupeExtraFeesForStudent<
+  T extends {
+    id: string;
+    name: string;
+    amount: number;
+    targetType: string;
+    targetStudentId: string | null;
+    splitIntoTwoInstallments?: boolean;
+  }
+>(fees: T[], studentId: string): T[] {
+  const priority = (f: T) => {
+    if (f.targetType === "STUDENT" && f.targetStudentId === studentId) return 4;
+    if (f.targetType === "SECTION") return 3;
+    if (f.targetType === "CLASS") return 2;
+    if (f.targetType === "SCHOOL") return 1;
+    return 0;
+  };
+  const best = new Map<string, T>();
+  for (const f of fees) {
+    const amt = Math.round((Number(f.amount) || 0) * 100) / 100;
+    const key = `${normalizeExtraFeeName(f.name)}|${amt}`;
+    const cur = best.get(key);
+    if (!cur || priority(f) > priority(cur)) best.set(key, f);
+  }
+  return Array.from(best.values());
+}
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -50,6 +95,8 @@ type HeadDueResponse =
       extraFeeId: string;
       /** Only student-assigned extras can be removed from this profile without affecting others. */
       canDeleteOnStudentProfile: boolean;
+      /** When true, UI may show this head as two 50/50 installments. */
+      splitIntoTwoInstallments: boolean;
     };
 
 type InternalHead =
@@ -61,6 +108,7 @@ type InternalHead =
       snapshotDue: number;
       extraFeeId: string;
       canDeleteOnStudentProfile: boolean;
+      splitIntoTwoInstallments: boolean;
     };
 
 export async function GET(req: Request) {
@@ -125,30 +173,76 @@ export async function GET(req: Request) {
     const classId = student.class?.id ?? null;
     const classSection = student.class?.section ?? null;
 
-    const extraFeesRaw = await prisma.extraFee.findMany({
-      where: {
-        schoolId,
-        OR: [
-          { targetType: "SCHOOL" },
-          ...(classId ? [{ targetType: "CLASS", targetClassId: classId }] : []),
-          ...(classId && classSection
-            ? [{ targetType: "SECTION", targetClassId: classId, targetSection: classSection }]
-            : []),
-          { targetType: "STUDENT", targetStudentId: student.id },
-        ],
-      },
-      select: {
-        id: true,
-        name: true,
-        amount: true,
-        targetType: true,
-        targetStudentId: true,
-        residencyScope: true,
-      },
-    });
+    const extraFeeWhere = {
+      schoolId,
+      OR: [
+        { targetType: "SCHOOL" as const },
+        ...(classId ? [{ targetType: "CLASS" as const, targetClassId: classId }] : []),
+        ...(classId && classSection
+          ? [{ targetType: "SECTION" as const, targetClassId: classId, targetSection: classSection }]
+          : []),
+        { targetType: "STUDENT" as const, targetStudentId: student.id },
+      ],
+    };
+
+    const extraFeeSelectBase = {
+      id: true,
+      name: true,
+      amount: true,
+      targetType: true,
+      targetClassId: true,
+      targetSection: true,
+      targetStudentId: true,
+      residencyScope: true,
+    } as const;
+
+    type ExtraFeeBreakdownRow = {
+      id: string;
+      name: string;
+      amount: number;
+      targetType: string;
+      targetClassId: string | null;
+      targetSection: string | null;
+      targetStudentId: string | null;
+      residencyScope: string;
+      splitIntoTwoInstallments?: boolean;
+    };
+
+    let extraFeesRaw: ExtraFeeBreakdownRow[];
+    try {
+      extraFeesRaw = await prisma.extraFee.findMany({
+        where: extraFeeWhere,
+        // After `prisma generate`, this field exists on the client. Cast until CI/local client is regenerated.
+        select: { ...extraFeeSelectBase, splitIntoTwoInstallments: true } as typeof extraFeeSelectBase & {
+          splitIntoTwoInstallments: true;
+        },
+      });
+    } catch (e) {
+      if (!isUnknownExtraFeeSplitFieldError(e)) throw e;
+      console.warn(
+        "[fees/admin/breakdown] ExtraFee.splitIntoTwoInstallments unavailable on this Prisma client or DB. " +
+          "Using name-based installment rules only until you run: npx prisma db push && npx prisma generate " +
+          "(stop `npm run dev` first on Windows if generate fails with EPERM)."
+      );
+      const rows = await prisma.extraFee.findMany({
+        where: extraFeeWhere,
+        select: extraFeeSelectBase,
+      });
+      extraFeesRaw = rows.map((r) => ({
+        ...r,
+        splitIntoTwoInstallments: shouldSplitFeeHeadIntoTwoInstallments(r.name),
+      }));
+    }
     const residency = student.residencyType ?? "Day Scholar";
-    const extraFees = extraFeesRaw.filter((ef) =>
-      extraFeeAppliesToStudentResidency(ef.residencyScope, residency)
+    const extraFees = dedupeExtraFeesForStudent(
+      extraFeesRaw.filter((ef) => extraFeeAppliesToStudentResidency(ef.residencyScope, residency)),
+      student.id
+    ).filter(
+      (ef) =>
+        !shouldOmitLegacySplitHostelMessExtraForBreakdown(ef, extraFeesRaw, {
+          classId,
+          residencyType: residency,
+        })
     );
 
     const allHeads: InternalHead[] = [
@@ -169,6 +263,7 @@ export async function GET(req: Request) {
           extraFeeId: ef.id,
           canDeleteOnStudentProfile:
             ef.targetType === "STUDENT" && ef.targetStudentId === student.id,
+          splitIntoTwoInstallments: Boolean(ef.splitIntoTwoInstallments),
         })
       ),
     ];
@@ -234,6 +329,7 @@ export async function GET(req: Request) {
         dueBefore,
         extraFeeId: h.extraFeeId,
         canDeleteOnStudentProfile: h.canDeleteOnStudentProfile,
+        splitIntoTwoInstallments: h.splitIntoTwoInstallments,
       };
     });
 
