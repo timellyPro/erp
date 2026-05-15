@@ -8,7 +8,9 @@ import { FeesBreakdown } from "./components/FeesBreakdown";
 import { ProfileSidebar } from "./components/ProfileSidebar";
 import { AttendanceTrends } from "./components/AttendanceTrends";
 import { Certificates } from "./components/Certificates";
-import { shouldSplitFeeHeadIntoTwoInstallments } from "@/lib/feeHeadInstallmentSplit";
+import { splitFeeHeadsForDisplay } from "@/lib/feeHeadInstallmentDisplay";
+import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
+import { loadStudentDetailsBundle } from "@/lib/loadStudentDetailsBundle";
 import { StudentSearchAutocomplete } from "./components/StudentSearchAutocomplete";
 import { Calendar, BookOpen, Activity, Clock, FileSpreadsheet, X } from "lucide-react";
 import BulkExtraFeeByTimellyModal from "./components/BulkExtraFeeByTimellyModal";
@@ -42,6 +44,7 @@ type StudentDetail = {
   fee: {
     baseTotalFee: number;
     discountPercent: number;
+    discountFixedAmount?: number | null;
     totalFee: number;
     amountPaid: number;
     remainingFee: number;
@@ -93,6 +96,8 @@ function StudentDetailsPageContent() {
   /** Seed from URL so `/api/student/:id` runs immediately instead of waiting for the full student list. */
   const [selectedId, setSelectedId] = useState<string | null>(studentIdFromUrl);
   const [detail, setDetail] = useState<StudentDetail | null>(null);
+  const [feeBreakdown, setFeeBreakdown] = useState<AdminStudentFeeBreakdownResult | null>(null);
+  const [feeBreakdownPending, setFeeBreakdownPending] = useState(false);
   const [loading, setLoading] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
@@ -179,31 +184,47 @@ function StudentDetailsPageContent() {
   useEffect(() => {
     if (!selectedId) {
       setDetail(null);
+      setFeeBreakdown(null);
       return;
     }
     let cancelled = false;
     setLoading(true);
-    fetch(`/api/student/${selectedId}`, { credentials: "include", cache: "no-store" })
-      .then(async (r) => {
-        const d = await r.json();
-        if (!r.ok) throw new Error(d?.message || "Failed to load student");
-        return d;
-      })
-      .then((d) => {
-        if (!cancelled && d?.student) {
-          setDetail(d);
+    setDetail(null);
+    setFeeBreakdown(null);
+    setFeeBreakdownPending(true);
+    loadStudentDetailsBundle(selectedId, {
+      onProfileLoaded: (bundle) => {
+        if (cancelled) return;
+        const { feeBreakdown: _fb, ...rest } = bundle;
+        if (rest?.student) {
+          setDetail(rest);
+          setLoading(false);
+        }
+      },
+    })
+      .then((bundle) => {
+        if (cancelled) return;
+        const { feeBreakdown: breakdown, ...rest } = bundle;
+        if (rest?.student) {
+          setDetail(rest);
+          setFeeBreakdown(breakdown ?? null);
         } else {
           setDetail(null);
+          setFeeBreakdown(null);
         }
       })
       .catch((err) => {
         if (!cancelled) {
           setDetail(null);
+          setFeeBreakdown(null);
           console.error("Student details error:", err);
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setFeeBreakdownPending(false);
+        }
       });
     return () => { cancelled = true; };
   }, [selectedId, reloadKey]);
@@ -448,12 +469,16 @@ function StudentDetailsPageContent() {
                   studentName={detail.student.name}
                   admissionNumber={detail.student.admissionNumber}
                   classDisplayName={detail.student.class?.displayName ?? "-"}
+                  classSection={detail.student.class?.section ?? null}
                   schoolName={detail.student.schoolName}
                   discountFeeHeadKey={detail.fee.discountFeeHeadKey}
                   discountFeeHeadLabel={detail.fee.discountFeeHeadLabel}
                   discountRemarks={detail.fee.discountRemarks}
+                  discountFixedAmount={detail.fee.discountFixedAmount}
                   onFeeModified={() => setReloadKey(prev => prev + 1)}
                   residencyType={detail.student.residencyType ?? null}
+                  initialFeeBreakdown={feeBreakdown}
+                  feeBreakdownPending={feeBreakdownPending}
                 />
               </>
             )}
@@ -538,48 +563,37 @@ function StudentFeesPaymentModal({
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [error, setError] = useState<string | null>(null);
 
-  const splitHostelOrMessIntoTwoInstallments = (rowsIn: DueHeadRow[]): DueHeadRow[] => {
-    const out: DueHeadRow[] = [];
-    for (const r of rowsIn) {
-      if (!shouldSplitFeeHeadIntoTwoInstallments(r.label, { splitIntoTwoInstallments: r.splitIntoTwoInstallments })) {
-        out.push(r);
-        continue;
-      }
-      const total = Number(r.totalAmount) || 0;
-      const paidTotal = Math.max(Number(r.paidAmount) || 0, 0);
-      const firstAmount = Math.round((total / 2) * 100) / 100;
-      const secondAmount = Math.round((total - firstAmount) * 100) / 100;
-
-      const firstPaid = Math.min(paidTotal, firstAmount);
-      const secondPaid = Math.min(Math.max(paidTotal - firstAmount, 0), secondAmount);
-      const firstDue = Math.max(firstAmount - firstPaid, 0);
-      const secondDue = Math.max(secondAmount - secondPaid, 0);
-
-      const base = (r.label || "").trim();
-
-      out.push({
-        ...r,
-        key: `${r.key}::INST1`,
-        sourceKey: r.key,
-        label: `${base} (1st Installment)`,
-        totalAmount: firstAmount,
-        paidAmount: firstPaid,
-        dueBefore: firstDue,
-        payEntireHead: false,
-      });
-      out.push({
-        ...r,
-        key: `${r.key}::INST2`,
-        sourceKey: r.key,
-        label: `${base} (2nd Installment)`,
-        totalAmount: secondAmount,
-        paidAmount: secondPaid,
-        dueBefore: secondDue,
-        payEntireHead: false,
-      });
-    }
-    return out;
-  };
+  const mapDueRowsForPayment = (
+    rowsIn: Array<{
+      key: string;
+      label: string;
+      totalAmount: number;
+      paidAmount: number;
+      dueBefore: number;
+      splitIntoTwoInstallments?: boolean;
+    }>
+  ): DueHeadRow[] =>
+    splitFeeHeadsForDisplay(
+      rowsIn.map((r) => ({
+        key: r.key,
+        label: r.label,
+        amount: r.totalAmount,
+        paid: r.paidAmount,
+        due: r.dueBefore,
+        splitIntoTwoInstallments: r.splitIntoTwoInstallments,
+      }))
+    ).map((h) => ({
+      key: h.key,
+      sourceKey: h.sourceKey,
+      label: h.label,
+      totalAmount: h.amount,
+      paidAmount: h.paid,
+      discountAmount: 0,
+      dueBefore: h.due,
+      payAmount: "",
+      payEntireHead: false,
+      splitIntoTwoInstallments: h.splitIntoTwoInstallments,
+    }));
 
   useEffect(() => {
     let cancelled = false;
@@ -617,7 +631,7 @@ function StudentFeesPaymentModal({
                 h.headType === "EXTRA_FEE" ? Boolean(h.splitIntoTwoInstallments) : undefined,
             })
           );
-          setRows(splitHostelOrMessIntoTwoInstallments(mappedRows));
+          setRows(mapDueRowsForPayment(mappedRows));
               setPaymentDate(new Date().toISOString().slice(0, 10));
         }
       } catch (e) {

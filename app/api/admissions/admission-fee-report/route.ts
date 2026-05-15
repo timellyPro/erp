@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
+import { admissionFeeTotalsByChannel } from "@/lib/admissionFeeCollectionChannel";
 import prisma from "@/lib/db";
 import { assertCanManageAdmissions, getSessionSchoolId } from "../_utils";
 
@@ -131,6 +132,9 @@ export async function GET(req: Request) {
       },
       { count: 0, amount: 0 }
     );
+    totals.amount = Math.round(totals.amount * 100) / 100;
+
+    const totalsByChannel = admissionFeeTotalsByChannel(applications);
 
     return NextResponse.json(
       {
@@ -140,6 +144,7 @@ export async function GET(req: Request) {
         byDay,
         byMonth,
         totals,
+        totalsByChannel,
       },
       { status: 200 }
     );

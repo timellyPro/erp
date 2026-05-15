@@ -19,6 +19,8 @@ type ApplicationRow = {
 
 type Bucket = { period: string; count: number; amount: number };
 
+type ChannelTotals = { count: number; amount: number };
+
 type ReportPayload = {
   from: string;
   to: string;
@@ -26,6 +28,7 @@ type ReportPayload = {
   byDay: Bucket[];
   byMonth: Bucket[];
   totals: { count: number; amount: number };
+  totalsByChannel?: Partial<{ cash: ChannelTotals; online: ChannelTotals }>;
 };
 
 function defaultDateRange() {
@@ -69,6 +72,64 @@ async function loadImageAsDataUrl(url: string): Promise<string | null> {
   }
 }
 
+type PdfAlign = "left" | "center" | "right";
+type Rgb = [number, number, number];
+
+function formatReportYmd(ymd: string): string {
+  const d = new Date(`${ymd}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return ymd;
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function formatSummaryPeriod(period: string, groupMode: GroupMode): string {
+  if (groupMode === "month" && /^\d{4}-\d{2}$/.test(period)) {
+    const d = new Date(`${period}-01T12:00:00`);
+    if (!Number.isNaN(d.getTime())) {
+      return d.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+    }
+  }
+  if (groupMode === "day" && /^\d{4}-\d{2}-\d{2}$/.test(period)) {
+    return formatReportYmd(period);
+  }
+  return period;
+}
+
+function formatInrPdf(amount: number): string {
+  return `₹ ${Math.round(amount).toLocaleString("en-IN")}`;
+}
+
+function formatPaymentModePdf(mode: string | null): string {
+  const m = String(mode ?? "").trim().toUpperCase();
+  if (m === "ONLINE") return "Online";
+  if (m === "OFFLINE") return "Offline";
+  return m ? m.charAt(0) + m.slice(1).toLowerCase() : "—";
+}
+
+/** Short label for PDF cells (UPI ref details go on second line if needed). */
+function formatPaymentMethodPdf(method: string | null): { primary: string; detail?: string } {
+  const raw = String(method ?? "").trim();
+  if (!raw) return { primary: "—" };
+  const parts = raw.split("|").map((p) => p.trim()).filter(Boolean);
+  const head = (parts[0] ?? "").toUpperCase();
+  let primary = head.replace(/_/g, " ");
+  if (primary === "BANK TRANSFER") primary = "Bank transfer";
+  if (primary === "CASH") primary = "Cash";
+  if (primary === "UPI") primary = "UPI";
+  const refPart = parts.find((p) => p.toUpperCase().startsWith("REF:"));
+  if (refPart) {
+    return { primary, detail: refPart.replace(/^REF:\s*/i, "Ref: ") };
+  }
+  return { primary };
+}
+
+function columnWidths(total: number, ratios: number[]): number[] {
+  const sum = ratios.reduce((a, b) => a + b, 0);
+  const widths = ratios.map((r) => Math.floor(((total * r) / sum) * 10) / 10);
+  const used = widths.slice(0, -1).reduce((a, b) => a + b, 0);
+  widths[widths.length - 1] = Math.round((total - used) * 10) / 10;
+  return widths;
+}
+
 /** Premium PDF export: branded header, KPI cards, tables with zebra rows & pagination. */
 async function exportAdmissionFeeReportPdf(
   data: ReportPayload,
@@ -96,17 +157,19 @@ async function exportAdmissionFeeReportPdf(
     doc.rect(0, 0, W, H, "F");
   };
 
+  const periodLabel = `${formatReportYmd(data.from)} – ${formatReportYmd(data.to)}`;
+
   const drawHeroHeader = () => {
     doc.setFillColor(...ink.slate);
-    doc.rect(0, 0, W, 36, "F");
+    doc.rect(0, 0, W, 38, "F");
     doc.setFillColor(...ink.teal);
-    doc.rect(0, 36, W, 1.8, "F");
+    doc.rect(0, 38, W, 1.8, "F");
 
     const titleX = logoDataUrl ? m + 22 : m;
     if (logoDataUrl) {
       const fmt = logoDataUrl.includes("image/png") ? "PNG" : "JPEG";
       try {
-        doc.addImage(logoDataUrl, fmt, m, 9, 16, 16);
+        doc.addImage(logoDataUrl, fmt, m, 10, 16, 16);
       } catch {
         /* ignore */
       }
@@ -114,18 +177,22 @@ async function exportAdmissionFeeReportPdf(
     doc.setTextColor(255, 255, 255);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
-    doc.text(school.name, titleX, 14);
-    doc.setFontSize(17);
-    doc.text("Admission fee collection report", titleX, 24);
+    doc.text(school.name, titleX, 15);
+    doc.setFontSize(16);
+    doc.text("Admission Fee Collection Report", titleX, 25);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(180, 200, 220);
-    const periodLabel = `${data.from}  →  ${data.to}`;
-    const viewLabel = groupMode === "day" ? "Date-wise totals" : "Month-wise totals";
+    const viewLabel = groupMode === "day" ? "Date-wise summary" : "Month-wise summary";
     doc.text(periodLabel, W - m, 14, { align: "right" });
-    doc.text(viewLabel, W - m, 20, { align: "right" });
+    doc.text(viewLabel, W - m, 21, { align: "right" });
     doc.setFontSize(8);
-    doc.text(`Generated ${new Date().toLocaleString("en-IN")}`, W - m, 30, { align: "right" });
+    doc.text(
+      `Generated ${new Date().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}`,
+      W - m,
+      31,
+      { align: "right" }
+    );
   };
 
   const drawContinuationHeader = () => {
@@ -138,10 +205,10 @@ async function exportAdmissionFeeReportPdf(
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
     doc.setTextColor(200, 210, 220);
-    doc.text(`${data.from} → ${data.to} · page ${page}`, W - m, 9, { align: "right" });
+    doc.text(`${periodLabel} · page ${page}`, W - m, 9, { align: "right" });
   };
 
-  let y = 44;
+  let y = 46;
 
   const stampFooter = () => {
     doc.setFontSize(7.5);
@@ -171,30 +238,136 @@ async function exportAdmissionFeeReportPdf(
   drawPageBackground();
   drawHeroHeader();
 
-  // KPI cards
-  const cardY = y;
-  const cardH = 22;
-  const gap = 4;
-  const cardW = (contentW - gap * 2) / 3;
-  const round = 3;
-  const drawCard = (i: number, title: string, value: string, accent: boolean) => {
-    const x = m + i * (cardW + gap);
+  const drawKpiCard = (
+    x: number,
+    cy: number,
+    w: number,
+    h: number,
+    title: string,
+    lines: string[],
+    accent: boolean
+  ) => {
     doc.setDrawColor(...line);
     doc.setFillColor(255, 255, 255);
-    doc.roundedRect(x, cardY, cardW, cardH, round, round, "FD");
+    doc.roundedRect(x, cy, w, h, 3, 3, "FD");
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(8);
+    doc.setFontSize(7.5);
     doc.setTextColor(...muted);
-    doc.text(title, x + 4, cardY + 7);
+    doc.text(title, x + 5, cy + 8);
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(accent ? 13 : 12);
     doc.setTextColor(...(accent ? ink.teal : text));
-    doc.text(value, x + 4, cardY + 16);
+    let vy = cy + 15;
+    lines.forEach((line, li) => {
+      doc.setFontSize(li === 0 ? (accent ? 14 : 12) : 8.5);
+      doc.setFont("helvetica", li === 0 ? "bold" : "normal");
+      if (li > 0) doc.setTextColor(...muted);
+      const wrapped = doc.splitTextToSize(line, w - 10);
+      doc.text(wrapped, x + 5, vy);
+      vy += wrapped.length * (li === 0 ? 5.5 : 4.2);
+    });
   };
-  drawCard(0, "Applications (paid)", String(data.totals.count), false);
-  drawCard(1, "Total collected", `₹ ${data.totals.amount.toLocaleString("en-IN")}`, true);
-  drawCard(2, "Reporting window", `${data.from} to ${data.to}`, false);
-  y = cardY + cardH + 10;
+
+  const kpiGap = 5;
+  const kpiRowH = 26;
+  const topCardW = (contentW - kpiGap * 2) / 3;
+  const cardY = y;
+
+  drawKpiCard(m, cardY, topCardW, kpiRowH, "Applications (paid)", [String(data.totals.count)], false);
+  drawKpiCard(
+    m + topCardW + kpiGap,
+    cardY,
+    topCardW,
+    kpiRowH,
+    "Total collected",
+    [formatInrPdf(data.totals.amount)],
+    true
+  );
+  drawKpiCard(
+    m + (topCardW + kpiGap) * 2,
+    cardY,
+    topCardW,
+    kpiRowH,
+    "Reporting period",
+    [formatReportYmd(data.from), `to ${formatReportYmd(data.to)}`],
+    false
+  );
+
+  const cash = data.totalsByChannel?.cash;
+  const online = data.totalsByChannel?.online;
+  const channelRow: Array<{ title: string; lines: string[] }> = [];
+  if (cash) {
+    channelRow.push({
+      title: "Cash collected",
+      lines: [formatInrPdf(cash.amount), `${cash.count} application${cash.count === 1 ? "" : "s"}`],
+    });
+  }
+  if (online) {
+    channelRow.push({
+      title: "Online collected",
+      lines: [formatInrPdf(online.amount), `${online.count} application${online.count === 1 ? "" : "s"}`],
+    });
+  }
+
+  let kpiBlockH = kpiRowH;
+  if (channelRow.length > 0) {
+    const chY = cardY + kpiRowH + kpiGap;
+    const chW =
+      channelRow.length === 1
+        ? topCardW
+        : (contentW - kpiGap * (channelRow.length - 1)) / channelRow.length;
+    channelRow.forEach((card, i) => {
+      const x = m + i * (chW + kpiGap);
+      drawKpiCard(x, chY, chW, kpiRowH, card.title, card.lines, false);
+    });
+    kpiBlockH = kpiRowH * 2 + kpiGap;
+  }
+
+  y = cardY + kpiBlockH + 10;
+
+  const padX = 3;
+  const lineHeightMm = (fontSize: number) => fontSize * 0.352778 * 1.18;
+
+  const colStarts = (widths: number[]) => {
+    const xs: number[] = [m];
+    for (let i = 0; i < widths.length - 1; i++) xs.push(xs[i]! + widths[i]!);
+    return xs;
+  };
+
+  const cellBaseline = (rowTop: number, rowH: number, lineCount: number, fontSize: number) => {
+    const blockH = lineCount * lineHeightMm(fontSize);
+    return rowTop + Math.max(4.5, (rowH - blockH) / 2 + lineHeightMm(fontSize));
+  };
+
+  const writeCell = (
+    lines: string[],
+    colX: number,
+    colW: number,
+    rowTop: number,
+    rowH: number,
+    align: PdfAlign,
+    opts?: { bold?: boolean; color?: Rgb; fontSize?: number }
+  ) => {
+    const fontSize = opts?.fontSize ?? 8.5;
+    doc.setFontSize(fontSize);
+    doc.setFont("helvetica", opts?.bold ? "bold" : "normal");
+    doc.setTextColor(...(opts?.color ?? text));
+    const innerW = colW - padX * 2;
+    const anchorX =
+      align === "right" ? colX + colW - padX : align === "center" ? colX + colW / 2 : colX + padX;
+    let ty = cellBaseline(rowTop, rowH, lines.length, fontSize);
+    for (const line of lines) {
+      doc.text(line, anchorX, ty, { align, maxWidth: innerW });
+      ty += lineHeightMm(fontSize);
+    }
+  };
+
+  const paintZebraRow = (rowTop: number, rowH: number, idx: number) => {
+    if (idx % 2 === 0) doc.setFillColor(255, 255, 255);
+    else doc.setFillColor(248, 250, 252);
+    doc.rect(m, rowTop, contentW, rowH, "F");
+    doc.setDrawColor(...line);
+    doc.line(m, rowTop + rowH, m + contentW, rowTop + rowH);
+  };
 
   // Section: Summary table
   ensureSpace(28);
@@ -202,12 +375,18 @@ async function exportAdmissionFeeReportPdf(
   doc.setFontSize(11);
   doc.setTextColor(...text);
   doc.text(groupMode === "day" ? "Summary by date" : "Summary by month", m, y);
-  y += 6;
+  y += 7;
 
-  const wPeriod = contentW * 0.5;
-  const sumHeaderH = 8;
-  const rowH = 7.5;
-  const amountRightX = m + contentW - 4;
+  const sumWidths = columnWidths(contentW, [54, 16, 30]);
+  const sumXs = colStarts(sumWidths);
+  const sumAligns: PdfAlign[] = ["left", "center", "right"];
+  const sumHeaders = [
+    groupMode === "day" ? "Date" : "Month",
+    "Applications",
+    "Amount",
+  ];
+  const sumHeaderH = 9;
+  const sumRowH = 8;
 
   const drawSummaryHeader = () => {
     doc.setFillColor(...ink.slate);
@@ -215,37 +394,41 @@ async function exportAdmissionFeeReportPdf(
     doc.setTextColor(255, 255, 255);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8.5);
-    doc.text(groupMode === "day" ? "Date" : "Month", m + 3, y + 5.3);
-    doc.text("Applications", m + wPeriod + 2, y + 5.3);
-    doc.text("Amount (₹)", amountRightX, y + 5.3, { align: "right" });
+    sumHeaders.forEach((label, i) => {
+      writeCell([label], sumXs[i]!, sumWidths[i]!, y, sumHeaderH, sumAligns[i]!, {
+        bold: true,
+        color: [255, 255, 255],
+        fontSize: 8.5,
+      });
+    });
     y += sumHeaderH;
   };
 
   drawSummaryHeader();
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
   buckets.forEach((b, idx) => {
-    ensureSpace(rowH + 1, drawSummaryHeader);
-    if (idx % 2 === 0) {
-      doc.setFillColor(255, 255, 255);
-      doc.rect(m, y, contentW, rowH, "F");
-    } else {
-      doc.setFillColor(248, 250, 252);
-      doc.rect(m, y, contentW, rowH, "F");
-    }
-    doc.setDrawColor(...line);
-    doc.line(m, y + rowH, m + contentW, y + rowH);
-    doc.setTextColor(...text);
-    doc.text(b.period, m + 3, y + 5.2, { maxWidth: wPeriod - 4 });
-    doc.text(String(b.count), m + wPeriod + 2, y + 5.2);
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(...ink.teal);
-    doc.text(`₹ ${b.amount.toLocaleString("en-IN")}`, amountRightX, y + 5.2, { align: "right" });
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(...text);
-    y += rowH;
+    ensureSpace(sumRowH + 1, drawSummaryHeader);
+    paintZebraRow(y, sumRowH, idx);
+    writeCell(
+      [formatSummaryPeriod(b.period, groupMode)],
+      sumXs[0]!,
+      sumWidths[0]!,
+      y,
+      sumRowH,
+      "left"
+    );
+    writeCell([String(b.count)], sumXs[1]!, sumWidths[1]!, y, sumRowH, "center");
+    writeCell(
+      [formatInrPdf(b.amount)],
+      sumXs[2]!,
+      sumWidths[2]!,
+      y,
+      sumRowH,
+      "right",
+      { bold: true, color: ink.teal }
+    );
+    y += sumRowH;
   });
-  y += 8;
+  y += 10;
 
   // Applications detail
   if (data.applications.length > 0) {
@@ -254,11 +437,13 @@ async function exportAdmissionFeeReportPdf(
     doc.setFontSize(11);
     doc.setTextColor(...text);
     doc.text("Application detail", m, y);
-    y += 6;
+    y += 7;
 
-    const dCols = [34, 62, 34, 28, 40, 22, 38];
-    const dHeader = ["App. no.", "Applicant", "Class / grade", "Fee (₹)", "Paid on", "Mode", "Method"];
-    const detailHeaderH = 8;
+    const dWidths = columnWidths(contentW, [12, 23, 14, 10, 17, 9, 15]);
+    const dXs = colStarts(dWidths);
+    const dHeaders = ["App. no.", "Applicant", "Class / grade", "Fee", "Paid on", "Mode", "Method"];
+    const dAligns: PdfAlign[] = ["left", "left", "left", "right", "left", "center", "left"];
+    const detailHeaderH = 9;
 
     const drawDetailHeader = () => {
       doc.setFillColor(236, 253, 245);
@@ -266,67 +451,73 @@ async function exportAdmissionFeeReportPdf(
       doc.setLineWidth(0.35);
       doc.roundedRect(m, y, contentW, detailHeaderH, 1.2, 1.2, "FD");
       doc.setLineWidth(0.2);
-      doc.setTextColor(15, 80, 70);
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(7.8);
-      let hx = m + 2.5;
-      dHeader.forEach((h, i) => {
-        const align = i >= 3 && i <= 4 ? "center" : i === 3 ? "right" : "left";
-        const tw = dCols[i] - 3;
-        if (align === "right") doc.text(h, hx + dCols[i] - 2, y + 5.2, { align: "right" });
-        else if (align === "center") doc.text(h, hx + dCols[i] / 2, y + 5.2, { align: "center" });
-        else doc.text(h, hx, y + 5.2, { maxWidth: tw });
-        hx += dCols[i];
+      dHeaders.forEach((label, i) => {
+        writeCell([label], dXs[i]!, dWidths[i]!, y, detailHeaderH, dAligns[i]!, {
+          bold: true,
+          color: [15, 80, 70],
+          fontSize: 7.8,
+        });
       });
       y += detailHeaderH;
     };
 
     drawDetailHeader();
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(7.6);
-    const lh =
-      (typeof doc.getLineHeightFactor === "function" ? doc.getLineHeightFactor() : 1.12) * 7.6 * 0.352778;
 
     data.applications.forEach((a, idx) => {
-      const nameLines = doc.splitTextToSize(a.applicantName, dCols[1] - 3);
-      const classLines = doc.splitTextToSize(a.classOrGrade, dCols[2] - 2);
-      const modeStr = a.paymentMode || "—";
-      const methodStr = a.paymentMethod || "—";
-      const methodLines = doc.splitTextToSize(methodStr, dCols[6] - 2);
-      const rowInner = Math.max(1, nameLines.length, classLines.length, methodLines.length);
-      const rowHeight = Math.max(7.5, 4 + rowInner * lh);
+      const methodFmt = formatPaymentMethodPdf(a.paymentMethod);
+      const methodLines = methodFmt.detail
+        ? [methodFmt.primary, methodFmt.detail]
+        : [methodFmt.primary];
+      const paidLines = doc.splitTextToSize(
+        new Date(a.paidAtIso).toLocaleString("en-IN", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+        dWidths[4]! - padX * 2
+      );
+      const nameLines = doc.splitTextToSize(a.applicantName, dWidths[1]! - padX * 2);
+      const classLines = doc.splitTextToSize(a.classOrGrade, dWidths[2]! - padX * 2);
+      const appNoLines = doc.splitTextToSize(a.applicationNo, dWidths[0]! - padX * 2);
+      const lineCount = Math.max(
+        1,
+        appNoLines.length,
+        nameLines.length,
+        classLines.length,
+        paidLines.length,
+        methodLines.length
+      );
+      const rowHeight = Math.max(8, 3 + lineCount * lineHeightMm(7.5));
 
       ensureSpace(rowHeight + 1, drawDetailHeader);
-      if (idx % 2 === 0) {
-        doc.setFillColor(255, 255, 255);
-      } else {
-        doc.setFillColor(248, 250, 252);
-      }
-      doc.rect(m, y, contentW, rowHeight, "F");
-      doc.setDrawColor(...line);
-      doc.line(m, y + rowHeight, m + contentW, y + rowHeight);
+      paintZebraRow(y, rowHeight, idx);
 
-      doc.setTextColor(...text);
-      let rx = m + 2.5;
-      doc.text(a.applicationNo, rx, y + 5, { maxWidth: dCols[0] - 2 });
-      rx += dCols[0];
-      doc.text(nameLines, rx, y + 4.5);
-      rx += dCols[1];
-      doc.text(classLines, rx, y + 4.5);
-      rx += dCols[2];
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(...ink.teal);
-      doc.text(`₹${a.admissionFee.toLocaleString("en-IN")}`, rx + dCols[3] - 2, y + 5, { align: "right" });
-      doc.setFont("helvetica", "normal");
-      doc.setTextColor(...text);
-      rx += dCols[3];
-      doc.text(new Date(a.paidAtIso).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" }), rx, y + 5, {
-        maxWidth: dCols[4] - 2,
-      });
-      rx += dCols[4];
-      doc.text(modeStr, rx, y + 5, { maxWidth: dCols[5] - 2 });
-      rx += dCols[5];
-      doc.text(methodLines, rx, y + 4.5);
+      writeCell(appNoLines, dXs[0]!, dWidths[0]!, y, rowHeight, "left", { fontSize: 7.5 });
+      writeCell(nameLines, dXs[1]!, dWidths[1]!, y, rowHeight, "left", { fontSize: 7.5 });
+      writeCell(classLines, dXs[2]!, dWidths[2]!, y, rowHeight, "left", { fontSize: 7.5 });
+      writeCell(
+        [formatInrPdf(a.admissionFee)],
+        dXs[3]!,
+        dWidths[3]!,
+        y,
+        rowHeight,
+        "right",
+        { bold: true, color: ink.teal, fontSize: 7.5 }
+      );
+      writeCell(paidLines, dXs[4]!, dWidths[4]!, y, rowHeight, "left", { fontSize: 7.2 });
+      writeCell(
+        [formatPaymentModePdf(a.paymentMode)],
+        dXs[5]!,
+        dWidths[5]!,
+        y,
+        rowHeight,
+        "center",
+        { fontSize: 7.5 }
+      );
+      writeCell(methodLines, dXs[6]!, dWidths[6]!, y, rowHeight, "left", { fontSize: 7.2 });
+
       y += rowHeight;
     });
   } else {
@@ -377,9 +568,32 @@ export default function AdmissionFeeDayReport() {
     return groupMode === "day" ? data.byDay : data.byMonth;
   }, [data, groupMode]);
 
+  const channelTotals = data?.totalsByChannel;
+
   const exportExcel = () => {
     if (!data) return;
     const wb = XLSX.utils.book_new();
+
+    const overviewRows: Array<Record<string, string | number>> = [
+      { Metric: "Applications (paid)", Value: data.totals.count },
+      { Metric: "Total collected (₹)", Value: Math.round(data.totals.amount * 100) / 100 },
+    ];
+    if (channelTotals?.cash) {
+      overviewRows.push({
+        Metric: "Cash collected (₹)",
+        Value: Math.round(channelTotals.cash.amount * 100) / 100,
+      });
+      overviewRows.push({ Metric: "Cash applications", Value: channelTotals.cash.count });
+    }
+    if (channelTotals?.online) {
+      overviewRows.push({
+        Metric: "Online collected (₹)",
+        Value: Math.round(channelTotals.online.amount * 100) / 100,
+      });
+      overviewRows.push({ Metric: "Online applications", Value: channelTotals.online.count });
+    }
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(overviewRows), "Overview");
+
     const summaryRows = buckets.map((b) => ({
       Period: groupMode === "day" ? b.period : `${b.period}-01`,
       "Applications (count)": b.count,
@@ -494,7 +708,11 @@ export default function AdmissionFeeDayReport() {
       ) : null}
 
       {data && !loading ? (
-        <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div
+          className={`mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 ${
+            channelTotals?.cash && channelTotals?.online ? "lg:grid-cols-4" : "lg:grid-cols-3"
+          }`}
+        >
           <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3">
             <p className="text-xs text-gray-400">Applications (paid in range)</p>
             <p className="text-xl font-bold text-white">{data.totals.count}</p>
@@ -503,12 +721,24 @@ export default function AdmissionFeeDayReport() {
             <p className="text-xs text-gray-400">Total admission fee collected</p>
             <p className="text-xl font-bold text-emerald-300">₹{data.totals.amount.toLocaleString("en-IN")}</p>
           </div>
-          <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3 sm:col-span-1">
-            <p className="text-xs text-gray-400">Export</p>
-            <p className="text-sm text-gray-300">
-              Excel includes summary + every application row. PDF includes summary and the first page of applications.
-            </p>
-          </div>
+          {channelTotals?.cash ? (
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3">
+              <p className="text-xs text-amber-200/80">Cash collected</p>
+              <p className="text-xl font-bold text-amber-100">
+                ₹{channelTotals.cash.amount.toLocaleString("en-IN")}
+              </p>
+              <p className="mt-0.5 text-xs text-amber-200/60">{channelTotals.cash.count} application(s)</p>
+            </div>
+          ) : null}
+          {channelTotals?.online ? (
+            <div className="rounded-xl border border-sky-500/25 bg-sky-500/10 px-4 py-3">
+              <p className="text-xs text-sky-200/80">Online collected</p>
+              <p className="text-xl font-bold text-sky-100">
+                ₹{channelTotals.online.amount.toLocaleString("en-IN")}
+              </p>
+              <p className="mt-0.5 text-xs text-sky-200/60">{channelTotals.online.count} application(s)</p>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

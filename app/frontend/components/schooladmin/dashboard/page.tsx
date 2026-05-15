@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StatCard } from "../dashboard/components/StatCard";
 import { AttendanceCard } from "./components/AttendanceCard";
 import { SidebarList } from "./components/SidebarList";
-import { Users, GraduationCap, UserCheck, CalendarDays, Wallet } from "lucide-react";
+import { CollectionStatCard } from "./components/CollectionStatCard";
+import { Users, GraduationCap, UserCheck, Wallet } from "lucide-react";
+import { todayYmdLocal } from "@/lib/schoolDashboardCollection";
+import { loadSchoolDashboardCollection } from "@/lib/loadSchoolDashboardCollection";
 import Spinner from "../../common/Spinner";
 import { useRouter } from "next/navigation";
 import { ROUTES } from "@/app/frontend/constants/routes";
@@ -76,15 +79,11 @@ export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const router=useRouter();
-  const dateInputRef = useRef<HTMLInputElement | null>(null);
-  const [selectedCollectionDate, setSelectedCollectionDate] = useState(() => {
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = `${d.getMonth() + 1}`.padStart(2, "0");
-    const day = `${d.getDate()}`.padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  });
+  const router = useRouter();
+  const [selectedCollectionDate, setSelectedCollectionDate] = useState(() => todayYmdLocal());
+  const [collectionLoading, setCollectionLoading] = useState(false);
+  const lastFetchedCollectionDateRef = useRef<string | null>(null);
+  const collectionAbortRef = useRef<AbortController | null>(null);
   const { data: session } = useSession();
   const userName = useMemo(() => {
     const n = session?.user?.name?.trim();
@@ -98,15 +97,19 @@ export default function Dashboard() {
     setLoading(true);
     (async () => {
       try {
-        const dashboardRes = await fetch(`/api/school/dashboard?date=${encodeURIComponent(selectedCollectionDate)}`, { 
-          credentials: "include",
-          cache: "no-store",
-          signal: controller.signal,
-        });
+        const dashboardRes = await fetch(
+          `/api/school/dashboard?date=${encodeURIComponent(todayYmdLocal())}`,
+          {
+            credentials: "include",
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        );
 
         if (!dashboardRes.ok) {
           const errorData = await dashboardRes.json().catch(() => ({}));
-          const errorMessage = errorData.message || dashboardRes.statusText || "Failed to load dashboard";
+          const errorMessage =
+            errorData.message || dashboardRes.statusText || "Failed to load dashboard";
           console.error("Dashboard API error:", errorMessage, "Status:", dashboardRes.status);
           if (!cancelled) {
             setError(errorMessage);
@@ -118,16 +121,17 @@ export default function Dashboard() {
         if (!cancelled) {
           setData(json);
           setError(null);
+          lastFetchedCollectionDateRef.current = todayYmdLocal();
         }
-      } catch (error) {
-        console.error("Dashboard fetch error:", error);
+      } catch (err) {
+        console.error("Dashboard fetch error:", err);
         if (!cancelled) {
           const message =
-            error instanceof DOMException && error.name === "AbortError"
+            err instanceof DOMException && err.name === "AbortError"
               ? "Dashboard request timed out. Please try again."
-              : error instanceof Error
-              ? error.message
-              : "Unable to load dashboard data";
+              : err instanceof Error
+                ? err.message
+                : "Unable to load dashboard data";
           setError(message);
           setData(null);
         }
@@ -141,95 +145,142 @@ export default function Dashboard() {
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [selectedCollectionDate]);
+  }, []);
+
+  const fetchCollectionForDate = useCallback(async (dateYmd: string) => {
+    if (dateYmd === lastFetchedCollectionDateRef.current) return;
+
+    collectionAbortRef.current?.abort();
+    const controller = new AbortController();
+    collectionAbortRef.current = controller;
+
+    setCollectionLoading(true);
+    try {
+      const collection = await loadSchoolDashboardCollection(dateYmd, controller.signal);
+      if (controller.signal.aborted) return;
+
+      lastFetchedCollectionDateRef.current = dateYmd;
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              todayCollectionByMethod: collection.todayCollectionByMethod,
+              stats: {
+                ...prev.stats,
+                todayCollectionTotal: collection.todayCollectionTotal,
+                todayCollectionTotalRaw: collection.todayCollectionTotalRaw,
+              },
+            }
+          : prev
+      );
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      console.error("Collection fetch error:", err);
+    } finally {
+      if (!controller.signal.aborted) setCollectionLoading(false);
+    }
+  }, []);
+
+  const handleCollectionDateChange = useCallback(
+    (dateYmd: string) => {
+      if (!dateYmd || dateYmd === selectedCollectionDate) return;
+      setSelectedCollectionDate(dateYmd);
+      void fetchCollectionForDate(dateYmd);
+    },
+    [selectedCollectionDate, fetchCollectionForDate]
+  );
+
+  useEffect(() => {
+    return () => {
+      collectionAbortRef.current?.abort();
+    };
+  }, []);
 
   const formatChange = (n: number) =>
     n >= 0 ? `+${n} this month` : `${n} this month`;
 
-  const todayCollectionDate = new Date(`${selectedCollectionDate}T12:00:00`).toLocaleDateString("en-IN", {
-    weekday: "short",
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
+  const emptyCollectionRow = {
+    key: "",
+    label: "",
+    amount: 0,
+    formattedAmount: "₹0",
+    count: 0,
+  };
 
-  const todayCollectionRows = (() => {
-    const rows = data?.todayCollectionByMethod ?? [];
-    const cash = rows.find((r) => r.key === "CASH") ?? {
-      key: "CASH",
-      label: "Cash",
-      amount: 0,
-      formattedAmount: "₹0",
-      count: 0,
-    };
-    const online = rows.find((r) => r.key === "ONLINE") ?? {
-      key: "ONLINE",
-      label: "Online",
-      amount: 0,
-      formattedAmount: "₹0",
-      count: 0,
-    };
-    const others = rows.filter((r) => r.key !== "CASH" && r.key !== "ONLINE");
-    return [cash, online, ...others];
-  })();
+  const collectionCash = data?.todayCollectionByMethod?.find((r) => r.key === "CASH") ?? {
+    ...emptyCollectionRow,
+    key: "CASH",
+    label: "Cash",
+  };
+  const collectionOnline = data?.todayCollectionByMethod?.find((r) => r.key === "ONLINE") ?? {
+    ...emptyCollectionRow,
+    key: "ONLINE",
+    label: "Online",
+  };
 
-  if (loading) {
+  if (loading && !data) {
     return (
       <div className="min-h-screen p-6 md:p-10 flex items-center justify-center">
-        <div className="text-white/70"><Spinner/></div>
+        <div className="text-white/70">
+          <Spinner />
+        </div>
       </div>
     );
   }
 
   return (
     <div className="min-h-screen space-y-4 md:space-y-8 max-w-[1900px] mx-auto">
-      <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-2xl p-2 sm:p-8 md:p-4 mb-6 md:mb-10 bg-gradient-to-br from-white/5 to-transparent border-none">
-        <h2 className="text-2xl sm:text-4xl md:text-2xl font-black text-white mb-2 md:mb-3">
-          Welcome back, {userName}! 👋
-        </h2>
-        <p className="text-gray-400 text-sm sm:text-base md:text-md font-medium">
-          Here&apos;s what&apos;s happening in your school today.
-        </p>
+      <div className="bg-white/5 backdrop-blur-xl rounded-2xl p-4 sm:p-6 md:p-6 mb-6 md:mb-10 bg-gradient-to-br from-white/5 to-transparent border border-white/10">
+        <div className="min-w-0 mb-4 sm:mb-5">
+          <h2 className="text-2xl sm:text-4xl md:text-2xl font-black text-white mb-2 md:mb-3">
+            Welcome back, {userName}! 👋
+          </h2>
+          <p className="text-gray-400 text-sm sm:text-base md:text-md font-medium">
+            Here&apos;s what&apos;s happening in your school today.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 sm:gap-3">
+          <StatCard
+            label="Total Classes"
+            value={String(data?.stats.totalClasses ?? "—")}
+            trend={data ? formatChange(data.stats.totalClassesChange) : "—"}
+            Icon={Users}
+          />
+          <StatCard
+            label="Total Students"
+            value={data ? data.stats.totalStudents.toLocaleString() : "—"}
+            trend={data ? formatChange(data.stats.totalStudentsChange) : "—"}
+            Icon={GraduationCap}
+          />
+          <StatCard
+            label="Total Teachers"
+            value={String(data?.stats.totalTeachers ?? "—")}
+            trend={data ? formatChange(data.stats.totalTeachersChange) : "—"}
+            Icon={UserCheck}
+          />
+          <StatCard
+            label="Fees Collected"
+            value={data?.stats.feesCollected ?? "—"}
+            trend={data ? `${data.stats.feesCollectedPct}% collected` : "—"}
+            trendColor="text-lime-400"
+            Icon={Wallet}
+          />
+          <CollectionStatCard
+            selectedDate={selectedCollectionDate}
+            onDateChange={handleCollectionDateChange}
+            totalFormatted={data?.stats.todayCollectionTotal ?? "₹0"}
+            cash={collectionCash}
+            online={collectionOnline}
+            loading={collectionLoading}
+          />
+        </div>
       </div>
 
       {data && (
         <>
-          <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-4 sm:gap-4 md:gap-3">
-            <StatCard
-              label="Total Classes"
-              value={String(data.stats.totalClasses)}
-              trend={formatChange(data.stats.totalClassesChange)}
-              Icon={Users}
-            />
-            <StatCard
-              label="Total Students"
-              value={data.stats.totalStudents.toLocaleString()}
-              trend={formatChange(data.stats.totalStudentsChange)}
-              Icon={GraduationCap}
-            />
-            <StatCard
-              label="Total Teachers"
-              value={String(data.stats.totalTeachers)}
-              trend={formatChange(data.stats.totalTeachersChange)}
-              Icon={UserCheck}
-            />
-            <StatCard
-              label="Today Collection"
-              value={data.stats.todayCollectionTotal}
-              trend={`${todayCollectionRows.length} payment method${todayCollectionRows.length > 1 ? "s" : ""}`}
-              Icon={CalendarDays}
-            />
-            <StatCard
-              label="Fees Collected"
-              value={data.stats.feesCollected}
-              trend={`${data.stats.feesCollectedPct}% collected`}
-              trendColor="text-lime-400"
-              Icon={Wallet}
-            />
-          </div>
-
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 lg:gap-8">
-            <div className="lg:col-span-2 space-y-4 sm:space-y-6 lg:space-y-8">
+            <div className="lg:col-span-2">
               <AttendanceCard
                 present={data.attendance.present}
                 absent={data.attendance.absent}
@@ -240,58 +291,6 @@ export default function Dashboard() {
                 absentPct={data.attendance.absentPct}
                 latePct={data.attendance.latePct}
               />
-              <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-2xl p-4 sm:p-6 md:p-8">
-                <div className="flex items-start justify-between gap-4 mb-5">
-                  <div>
-                    <h3 className="font-bold text-xl text-white">Today Collection</h3>
-                    <p className="text-gray-400 text-sm mt-0.5">{todayCollectionDate}</p>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <input
-                      ref={dateInputRef}
-                      type="date"
-                      value={selectedCollectionDate}
-                      onChange={(e) => setSelectedCollectionDate(e.target.value)}
-                      className="sr-only"
-                      aria-label="Select collection date"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!dateInputRef.current) return;
-                        if (typeof dateInputRef.current.showPicker === "function") {
-                          dateInputRef.current.showPicker();
-                        } else {
-                          dateInputRef.current.click();
-                        }
-                      }}
-                      className="rounded-xl px-3 py-2 bg-white/10 border border-white/20 text-white hover:bg-white/15 transition-colors"
-                      title="Select date"
-                    >
-                      <CalendarDays className="w-4 h-4" />
-                    </button>
-                    <div className="rounded-xl px-3 py-2 bg-lime-400/15 border border-lime-300/20">
-                      <p className="text-[11px] text-lime-300 font-semibold">Total</p>
-                      <p className="text-white font-black text-lg">{data.stats.todayCollectionTotal}</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  {todayCollectionRows.map((row) => (
-                    <div
-                      key={row.key}
-                      className="flex items-center justify-between rounded-xl bg-white/5 border border-white/10 px-4 py-3"
-                    >
-                      <div className="min-w-0">
-                        <p className="text-white font-semibold text-sm">{row.label}</p>
-                        <p className="text-gray-400 text-xs">{row.count} payment{row.count === 1 ? "" : "s"}</p>
-                      </div>
-                      <p className="text-lime-300 font-bold text-base">{row.formattedAmount}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
             </div>
 
             <div className="space-y-4 sm:space-y-6 md:space-y-8">
@@ -305,7 +304,7 @@ export default function Dashboard() {
                   status: t.status === "APPROVED" ? "Approved" : "Pending",
                   type: "teacher" as const,
                 }))}
-                onViewAllClick={()=>router.push(ROUTES.SCHOOLADMIN_TEACHER_LEAVE_TAB)}
+                onViewAllClick={() => router.push(ROUTES.SCHOOLADMIN_TEACHER_LEAVE_TAB)}
               />
               <SidebarList
                 title="Recent Activities"
@@ -315,7 +314,13 @@ export default function Dashboard() {
                   subtitle: a.subtitle,
                   meta: a.meta,
                   type: "activity" as const,
-                  activityType: (a.type?.includes("Leave") ? "leave" : a.type?.includes("Fee") ? "fee" : a.type?.includes("News") ? "news" : "certificate") as "leave" | "fee" | "news" | "certificate",
+                  activityType: (a.type?.includes("Leave")
+                    ? "leave"
+                    : a.type?.includes("Fee")
+                      ? "fee"
+                      : a.type?.includes("News")
+                        ? "news"
+                        : "certificate") as "leave" | "fee" | "news" | "certificate",
                 }))}
               />
             </div>
@@ -330,7 +335,10 @@ export default function Dashboard() {
               <h3 className="text-xl font-bold text-white">Latest News</h3>
               <p className="text-gray-400 text-sm mt-0.5">Recent announcements and updates</p>
             </div>
-            <button onClick={()=>router.push(ROUTES.SCHOOLADMIN_NEWSFEED_TAB)} className="rounded-xl bg-lime-400 px-4 sm:px-5 py-2.5 text-sm font-bold text-black hover:bg-lime-300 transition-colors inline-flex items-center gap-1 min-h-[44px] touch-manipulation">
+            <button
+              onClick={() => router.push(ROUTES.SCHOOLADMIN_NEWSFEED_TAB)}
+              className="rounded-xl bg-lime-400 px-4 sm:px-5 py-2.5 text-sm font-bold text-black hover:bg-lime-300 transition-colors inline-flex items-center gap-1 min-h-[44px] touch-manipulation"
+            >
               View All <span>→</span>
             </button>
           </div>
@@ -341,9 +349,7 @@ export default function Dashboard() {
                 <p className="text-sm text-gray-400 mt-1">{n.description}</p>
                 <div className="flex justify-between items-center mt-2">
                   <span className="text-xs text-gray-500">Posted by {n.postedBy}</span>
-                  <span className="text-xs text-gray-500">
-                    {formatTimeAgo(n.createdAt)}
-                  </span>
+                  <span className="text-xs text-gray-500">{formatTimeAgo(n.createdAt)}</span>
                 </div>
               </div>
             ))}
@@ -367,7 +373,7 @@ export default function Dashboard() {
           </button>
         </div>
       )}
-      
+
       {!data && !error && !loading && (
         <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-2xl p-8 text-center text-gray-400">
           No dashboard data available.

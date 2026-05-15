@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { isOverallDiscountKey } from "@/lib/studentFeeHeadDiscount";
 
 type RouteParams =
   | { params: { id: string } }
@@ -73,7 +74,14 @@ export async function PATCH(req: Request, context: RouteParams) {
     }
 
     const body = await req.json();
-    const { totalFee, discountPercent, discountFeeHeadKey, discountFeeHeadLabel, discountRemarks } = body;
+    const {
+      totalFee,
+      discountPercent,
+      discountFixedAmount: rawDiscountFixedAmount,
+      discountFeeHeadKey,
+      discountFeeHeadLabel,
+      discountRemarks,
+    } = body;
 
     let newTotalFee = typeof totalFee === "number" ? totalFee : existing.totalFee;
     let newDiscount =
@@ -124,7 +132,17 @@ export async function PATCH(req: Request, context: RouteParams) {
       remarksVal = null;
     }
 
-    const finalFee = newTotalFee * (1 - newDiscount / 100);
+    const discountRupee =
+      hasDiscount && typeof rawDiscountFixedAmount === "number" && rawDiscountFixedAmount > 0
+        ? rawDiscountFixedAmount
+        : hasDiscount
+          ? Math.round(newTotalFee * (newDiscount / 100) * 100) / 100
+          : 0;
+
+    const discountFixedAmount =
+      hasDiscount && !isOverallDiscountKey(headKey) ? discountRupee : null;
+
+    const finalFee = Math.max(0, Math.round((newTotalFee - discountRupee) * 100) / 100);
     const remainingFee = Math.max(finalFee - existing.amountPaid, 0);
 
     const updated = await prisma.studentFee.update({

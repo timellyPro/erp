@@ -1,9 +1,10 @@
 import prisma from "@/lib/db";
+import { extraFeeAppliesToStudent, normalizeExtraFeeResidencyScope } from "@/lib/extraFeeResidencyScope";
 import {
-  extraFeeAppliesToStudentResidency,
-  isStudentHosteller,
-  normalizeExtraFeeResidencyScope,
-} from "@/lib/extraFeeResidencyScope";
+  baseNameFromInstallmentFee,
+  installmentIndexFromName,
+  isInstallmentFeeName,
+} from "@/lib/extraFeeInstallments";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 
 export type ExtraFeeRow = {
@@ -22,51 +23,31 @@ function normName(raw: string | null | undefined): string {
     .toLowerCase();
 }
 
-/** Official catalog row from Hostel and mess fees panel. */
-function hasCanonicalSchoolHostel(extraFees: ExtraFeeRow[]): boolean {
-  return extraFees.some(
-    (ef) =>
-      normName(ef.name) === "hostel fee" &&
-      ef.targetType === "SCHOOL" &&
-      normalizeExtraFeeResidencyScope(ef.residencyScope) === "HOSTELLER"
-  );
-}
-
-function hasCanonicalClassMess(extraFees: ExtraFeeRow[], classId: string | null): boolean {
-  if (!classId) return false;
-  return extraFees.some(
-    (ef) =>
-      normName(ef.name) === "mess fee" && ef.targetType === "CLASS" && ef.targetClassId === classId
+/** Same target scope (school/class/section/student + residency). */
+function sameExtraScope(a: ExtraFeeRow, b: ExtraFeeRow): boolean {
+  return (
+    a.targetType === b.targetType &&
+    a.targetClassId === b.targetClassId &&
+    a.targetSection === b.targetSection &&
+    a.targetStudentId === b.targetStudentId &&
+    normalizeExtraFeeResidencyScope(a.residencyScope) === normalizeExtraFeeResidencyScope(b.residencyScope)
   );
 }
 
 /**
- * Legacy bulk extras often split hostel/mess into two heads (1st/2nd installment). When the canonical
- * "Hostel Fee" / "Mess Fee" catalog rows exist, those legacy rows would double-count with the new amounts.
+ * Legacy imports sometimes added installment-named rows while a lump base row still exists.
+ * Omit installment duplicates when a non-installment row with the same base name exists in the same scope.
  */
-function isLegacyHostelInstallmentExtra(ef: ExtraFeeRow): boolean {
-  const n = normName(ef.name);
-  if (!n || n === "hostel fee" || n === "mess fee") return false;
-  if (!n.includes("hostel")) return false;
-  return nameLooksLikeSplitInstallment(n);
-}
-
-function isLegacyMessInstallmentExtra(ef: ExtraFeeRow): boolean {
-  const n = normName(ef.name);
-  if (!n || n === "mess fee" || n === "hostel fee") return false;
-  if (!n.includes("mess")) return false;
-  return nameLooksLikeSplitInstallment(n);
-}
-
-function nameLooksLikeSplitInstallment(n: string): boolean {
-  return (
-    n.includes("installment") ||
-    n.includes("instalment") ||
-    /\b1st\b/.test(n) ||
-    /\b2nd\b/.test(n) ||
-    n.includes("first installment") ||
-    n.includes("second installment") ||
-    (n.includes(" half") && (n.includes("1") || n.includes("2")))
+function isLegacyInstallmentDuplicate(ef: ExtraFeeRow, allSchoolExtras: ExtraFeeRow[]): boolean {
+  if (!isInstallmentFeeName(ef.name)) return false;
+  const baseNorm = normName(baseNameFromInstallmentFee(ef.name ?? ""));
+  if (!baseNorm) return false;
+  return allSchoolExtras.some(
+    (other) =>
+      other !== ef &&
+      sameExtraScope(ef, other) &&
+      !isInstallmentFeeName(other.name) &&
+      normName(other.name) === baseNorm
   );
 }
 
@@ -75,17 +56,46 @@ type ComponentRow = { name: string; amount: number };
 /** DB client slice used for tuition totals (works with `prisma` or a `$transaction` callback client). */
 export type TuitionDb = Pick<typeof prisma, "classFeeStructure" | "extraFee">;
 
+/** Preloaded rows for bulk recalculate — same totals, far fewer queries. */
+export type TuitionBulkCache = {
+  extraFees: ExtraFeeRow[];
+  baseByClassId: Map<string, number>;
+};
+
+function baseFromStructureComponents(components: ComponentRow[] | null | undefined): number {
+  return (components ?? []).reduce((a, c) => a + (Number(c?.amount) || 0), 0);
+}
+
+/** Full lump row when 1st + 2nd installment rows already exist for the same fee (same scope). */
+function isLegacyLumpWhenInstallmentPairExists(
+  ef: ExtraFeeRow,
+  allSchoolExtras: ExtraFeeRow[]
+): boolean {
+  if (isInstallmentFeeName(ef.name)) return false;
+  const baseNorm = normName(ef.name);
+  if (!baseNorm) return false;
+  let hasFirst = false;
+  let hasSecond = false;
+  for (const other of allSchoolExtras) {
+    if (other === ef) continue;
+    if (!sameExtraScope(ef, other)) continue;
+    const idx = installmentIndexFromName(other.name);
+    if (!idx) continue;
+    if (normName(baseNameFromInstallmentFee(other.name ?? "")) !== baseNorm) continue;
+    if (idx === 1) hasFirst = true;
+    if (idx === 2) hasSecond = true;
+  }
+  return hasFirst && hasSecond;
+}
+
 function shouldOmitLegacySplitDuplicate(
   ef: ExtraFeeRow,
-  allSchoolExtras: ExtraFeeRow[],
-  opts: { classId: string | null; residencyType: string | null }
+  allSchoolExtras: ExtraFeeRow[]
 ): boolean {
-  const canonicalHostel = hasCanonicalSchoolHostel(allSchoolExtras);
-  const canonicalMess = hasCanonicalClassMess(allSchoolExtras, opts.classId);
-  const hosteller = isStudentHosteller(opts.residencyType);
-  if (canonicalHostel && hosteller && isLegacyHostelInstallmentExtra(ef)) return true;
-  if (canonicalMess && opts.classId && isLegacyMessInstallmentExtra(ef)) return true;
-  return false;
+  return (
+    isLegacyInstallmentDuplicate(ef, allSchoolExtras) ||
+    isLegacyLumpWhenInstallmentPairExists(ef, allSchoolExtras)
+  );
 }
 
 export function sumExtraFeesForStudent(
@@ -109,8 +119,9 @@ export function sumExtraFeesForStudent(
         opts.studentId &&
         ef.targetStudentId === opts.studentId);
     if (!applies) continue;
-    if (!extraFeeAppliesToStudentResidency(ef.residencyScope, opts.residencyType)) continue;
-    if (shouldOmitLegacySplitDuplicate(ef, extraFees, opts)) continue;
+    if (!extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, opts.residencyType))
+      continue;
+    if (shouldOmitLegacySplitDuplicate(ef, extraFees)) continue;
     if (isStudentRte(opts.residencyType) && isTuitionNamedExtraFee(ef.name)) continue;
 
     extraTotal += ef.amount;
@@ -118,7 +129,7 @@ export function sumExtraFeesForStudent(
   return extraTotal;
 }
 
-/** For fee breakdown UI: drop legacy bulk hostel/mess installment heads when canonical catalog rows exist. */
+/** For fee breakdown UI: drop legacy installment duplicates when a lump base row exists in the same scope. */
 export function shouldOmitLegacySplitHostelMessExtraForBreakdown<
   T extends {
     name: string;
@@ -134,7 +145,7 @@ export function shouldOmitLegacySplitHostelMessExtraForBreakdown<
   allSchoolExtras: T[],
   opts: { classId: string | null; residencyType: string | null }
 ): boolean {
-  return shouldOmitLegacySplitDuplicate(ef as ExtraFeeRow, allSchoolExtras as ExtraFeeRow[], opts);
+  return shouldOmitLegacySplitDuplicate(ef as ExtraFeeRow, allSchoolExtras as ExtraFeeRow[]);
 }
 
 export async function sumClassBaseTuition(db: TuitionDb, classId: string | null): Promise<number> {
@@ -143,8 +154,41 @@ export async function sumClassBaseTuition(db: TuitionDb, classId: string | null)
     where: { classId },
     select: { components: true },
   });
-  const comps = (structure?.components as ComponentRow[] | null) ?? [];
-  return comps.reduce((a, c) => a + (Number(c?.amount) || 0), 0);
+  return baseFromStructureComponents(structure?.components as ComponentRow[] | null);
+}
+
+/** One query for all class bases — used by bulk fee recalculate only. */
+export async function buildTuitionBulkCache(
+  db: TuitionDb,
+  schoolId: string,
+  classIds: ReadonlyArray<string | null | undefined>
+): Promise<TuitionBulkCache> {
+  const extraFees = await db.extraFee.findMany({
+    where: { schoolId },
+    select: {
+      name: true,
+      amount: true,
+      targetType: true,
+      targetClassId: true,
+      targetSection: true,
+      targetStudentId: true,
+      residencyScope: true,
+    },
+  });
+
+  const uniqueClassIds = [...new Set(classIds.filter((id): id is string => Boolean(id)))];
+  const baseByClassId = new Map<string, number>();
+  if (uniqueClassIds.length > 0) {
+    const structures = await db.classFeeStructure.findMany({
+      where: { classId: { in: uniqueClassIds } },
+      select: { classId: true, components: true },
+    });
+    for (const row of structures) {
+      baseByClassId.set(row.classId, baseFromStructureComponents(row.components as ComponentRow[]));
+    }
+  }
+
+  return { extraFees, baseByClassId };
 }
 
 /**
@@ -159,24 +203,96 @@ export async function computeStudentTuitionParts(
     section: string | null;
     studentId: string | null;
     residencyType: string | null;
-  }
+  },
+  cache?: TuitionBulkCache
 ): Promise<{ base: number; extrasTotal: number; totalFee: number }> {
-  let base = await sumClassBaseTuition(db, args.classId);
+  let base = 0;
+  if (args.classId) {
+    if (cache?.baseByClassId.has(args.classId)) {
+      base = cache.baseByClassId.get(args.classId) ?? 0;
+    } else {
+      base = await sumClassBaseTuition(db, args.classId);
+      cache?.baseByClassId.set(args.classId, base);
+    }
+  }
   if (isStudentRte(args.residencyType)) base = 0;
-  const extraFees = await db.extraFee.findMany({
-    where: { schoolId: args.schoolId },
-    select: {
-      name: true,
-      amount: true,
-      targetType: true,
-      targetClassId: true,
-      targetSection: true,
-      targetStudentId: true,
-      residencyScope: true,
-    },
-  });
+
+  const extraFees =
+    cache?.extraFees ??
+    (await db.extraFee.findMany({
+      where: { schoolId: args.schoolId },
+      select: {
+        name: true,
+        amount: true,
+        targetType: true,
+        targetClassId: true,
+        targetSection: true,
+        targetStudentId: true,
+        residencyScope: true,
+      },
+    }));
+
   const extrasTotal = sumExtraFeesForStudent(extraFees, args);
   return { base, extrasTotal, totalFee: base + extrasTotal };
+}
+
+/** In-memory tuition parts when {@link TuitionBulkCache} is already loaded (bulk recalculate). */
+export function computeStudentTuitionPartsSync(
+  args: {
+    classId: string | null;
+    section: string | null;
+    studentId: string | null;
+    residencyType: string | null;
+  },
+  cache: TuitionBulkCache
+): { base: number; extrasTotal: number; totalFee: number } {
+  let base = args.classId ? (cache.baseByClassId.get(args.classId) ?? 0) : 0;
+  if (isStudentRte(args.residencyType)) base = 0;
+  const extrasTotal = sumExtraFeesForStudent(cache.extraFees, args);
+  return { base, extrasTotal, totalFee: base + extrasTotal };
+}
+
+export type StudentFeeRecalcPayload = {
+  studentId: string;
+  totalFee: number;
+  discountPercent: number;
+  finalFee: number;
+  amountPaid: number;
+  remainingFee: number;
+};
+
+/** Same numbers as {@link upsertStudentFeeFromStructure}, without a DB round-trip. */
+export function buildStudentFeeRecalcPayload(
+  student: {
+    id: string;
+    classId: string | null;
+    section: string | null;
+    residencyType: string | null;
+    discountPercent: number;
+    amountPaid: number;
+  },
+  cache: TuitionBulkCache
+): StudentFeeRecalcPayload {
+  const parts = computeStudentTuitionPartsSync(
+    {
+      classId: student.classId,
+      section: student.section,
+      studentId: student.id,
+      residencyType: student.residencyType,
+    },
+    cache
+  );
+  const discountPercent = student.discountPercent;
+  const finalFee = finalFeeFromStructureAndExtras(parts.base, parts.extrasTotal, discountPercent);
+  const amountPaid = student.amountPaid;
+  return {
+    studentId: student.id,
+    totalFee: parts.totalFee,
+    discountPercent,
+    finalFee,
+    amountPaid,
+    remainingFee: Math.max(0, Math.round((finalFee - amountPaid) * 100) / 100),
+  };
 }
 
 export async function computeStudentTuitionTotalFee(
@@ -226,21 +342,31 @@ export async function upsertStudentFeeFromStructure(
     section: string | null;
     discountPercent: number;
     amountPaid: number;
-  }
+    /** Skip per-student Student lookup when bulk recalculating. */
+    residencyType?: string | null;
+  },
+  cache?: TuitionBulkCache
 ) {
-  const studentRow = await db.student.findUnique({
-    where: { id: params.studentId },
-    select: { residencyType: true },
-  });
-  const residencyType = studentRow?.residencyType ?? "Day Scholar";
+  let residencyType = params.residencyType ?? null;
+  if (residencyType == null) {
+    const studentRow = await db.student.findUnique({
+      where: { id: params.studentId },
+      select: { residencyType: true },
+    });
+    residencyType = studentRow?.residencyType ?? "Day Scholar";
+  }
 
-  const parts = await computeStudentTuitionParts(db, {
-    schoolId: params.schoolId,
-    classId: params.classId,
-    section: params.section,
-    studentId: params.studentId,
-    residencyType,
-  });
+  const parts = await computeStudentTuitionParts(
+    db,
+    {
+      schoolId: params.schoolId,
+      classId: params.classId,
+      section: params.section,
+      studentId: params.studentId,
+      residencyType,
+    },
+    cache
+  );
   const totalFee = parts.totalFee;
   const finalFee = finalFeeFromStructureAndExtras(parts.base, parts.extrasTotal, params.discountPercent);
   const remainingFee = Math.max(0, finalFee - params.amountPaid);

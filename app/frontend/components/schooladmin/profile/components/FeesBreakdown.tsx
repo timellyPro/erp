@@ -7,7 +7,9 @@ import { ModifyFeeModal, DISCOUNT_HEAD_OVERALL_KEY, type FeeHeadOption } from ".
 import { AddExtraFeeModal } from "./AddExtraFeeModal";
 import { AssignFeeHeadsCatalogModal } from "./AssignFeeHeadsCatalogModal";
 import { EditExtraFeeModal } from "./EditExtraFeeModal";
-import { shouldSplitFeeHeadIntoTwoInstallments } from "@/lib/feeHeadInstallmentSplit";
+import { splitFeeHeadsForDisplay } from "@/lib/feeHeadInstallmentDisplay";
+import { storedDiscountRupeeAmount } from "@/lib/studentFeeHeadDiscount";
+import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
 
 function baseComponentIndexFromHead(head: {
   key: string;
@@ -48,9 +50,15 @@ type Props = {
   discountFeeHeadKey?: string | null;
   discountFeeHeadLabel?: string | null;
   discountRemarks?: string | null;
+  discountFixedAmount?: number | null;
   onFeeModified?: () => void;
   /** Used to seed assign-from-catalog rows (hostel vs transport hint). */
   residencyType?: string | null;
+  classSection?: string | null;
+  /** Preloaded from details-bundle (only source — no client refetch to avoid stale overwrite). */
+  initialFeeBreakdown?: AdminStudentFeeBreakdownResult | null;
+  /** Parent is still loading breakdown after profile shell. */
+  feeBreakdownPending?: boolean;
 };
 
 export const FeesBreakdown = ({
@@ -69,8 +77,12 @@ export const FeesBreakdown = ({
   discountFeeHeadKey,
   discountFeeHeadLabel,
   discountRemarks,
+  discountFixedAmount,
   onFeeModified,
   residencyType,
+  classSection = null,
+  initialFeeBreakdown = null,
+  feeBreakdownPending = false,
 }: Props) => {
   const receiptRef = useRef<HTMLDivElement>(null);
   const [isGeneratingReceipt, setIsGeneratingReceipt] = useState(false);
@@ -83,7 +95,7 @@ export const FeesBreakdown = ({
     amount: number;
     splitIntoTwoInstallments?: boolean;
   } | null>(null);
-  const [headsLoading, setHeadsLoading] = useState(false);
+  const headsLoading = feeBreakdownPending && !initialFeeBreakdown?.dueHeads?.length;
   const [deletingExtraId, setDeletingExtraId] = useState<string | null>(null);
   const [baseHeadBusyKey, setBaseHeadBusyKey] = useState<string | null>(null);
   const [editBaseHead, setEditBaseHead] = useState<{
@@ -94,6 +106,7 @@ export const FeesBreakdown = ({
   } | null>(null);
   const [editBaseError, setEditBaseError] = useState("");
   const [baseStructureMutating, setBaseStructureMutating] = useState(false);
+  const [feeHeadOptionsForDiscount, setFeeHeadOptionsForDiscount] = useState<FeeHeadOption[]>([]);
   const [headCards, setHeadCards] = useState<
     Array<{
       key: string;
@@ -133,72 +146,6 @@ export const FeesBreakdown = ({
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
-  const splitHostelOrMessIntoTwoInstallments = <
-    T extends {
-      key: string;
-      label: string;
-      amount: number;
-      paid: number;
-      due: number;
-      extraFeeId?: string;
-      canDeleteExtra?: boolean;
-      splitIntoTwoInstallments?: boolean;
-      headType?: string;
-    }
-  >(
-    heads: T[]
-  ): Array<T & { sourceKey?: string; extraFeeFullAmount?: number; extraFeeNameForEdit?: string }> => {
-    const out: Array<T & { sourceKey?: string; extraFeeFullAmount?: number; extraFeeNameForEdit?: string }> = [];
-    for (const h of heads) {
-      if (
-        !shouldSplitFeeHeadIntoTwoInstallments(h.label, {
-          splitIntoTwoInstallments: h.splitIntoTwoInstallments,
-        })
-      ) {
-        out.push(h);
-        continue;
-      }
-
-      const total = Number(h.amount) || 0;
-      const paidTotal = Math.max(Number(h.paid) || 0, 0);
-      const firstAmount = Math.round((total / 2) * 100) / 100;
-      const secondAmount = Math.round((total - firstAmount) * 100) / 100;
-
-      const firstPaid = Math.min(paidTotal, firstAmount);
-      const secondPaid = Math.min(Math.max(paidTotal - firstAmount, 0), secondAmount);
-      const firstDue = Math.max(firstAmount - firstPaid, 0);
-      const secondDue = Math.max(secondAmount - secondPaid, 0);
-
-      const baseName = (h.label || "").trim();
-      const meta = {
-        extraFeeFullAmount: total,
-        extraFeeNameForEdit: baseName,
-      };
-
-      out.push({
-        ...h,
-        ...meta,
-        key: `${h.key}::INST1`,
-        sourceKey: h.key,
-        label: `${baseName} (1st Installment)`,
-        amount: firstAmount,
-        paid: firstPaid,
-        due: firstDue,
-      });
-      out.push({
-        ...h,
-        ...meta,
-        key: `${h.key}::INST2`,
-        sourceKey: h.key,
-        label: `${baseName} (2nd Installment)`,
-        amount: secondAmount,
-        paid: secondPaid,
-        due: secondDue,
-      });
-    }
-    return out;
-  };
-
   // Calculate breakdown by fee type from payments
   const feeBreakdown = new Map<string, { amount: number; paidAmount: number }>();
   const resolveDisplayAmount = (payment: { amount: number; feeTypeAmount?: number }) => {
@@ -229,60 +176,49 @@ export const FeesBreakdown = ({
 
   // Calculate payment percentage
   const paidPercentage = totalFee > 0 ? (amountPaid / totalFee) * 100 : 0;
-  const discountAmount = Math.max(baseTotalFee - totalFee, 0);
-  const displayTotalAmount = headsTotalAmount ?? totalFee;
-  const displayRemainingAmount = headsRemainingAmount ?? remainingFee;
+  const discountAmount =
+    typeof discountFixedAmount === "number" && discountFixedAmount > 0
+      ? discountFixedAmount
+      : storedDiscountRupeeAmount(baseTotalFee, totalFee, discountFixedAmount);
+  /** Use stored fee totals (authoritative); head sum is for cards only. */
+  const displayTotalAmount = totalFee > 0 ? totalFee : (headsTotalAmount ?? 0);
+  const displayRemainingAmount = remainingFee >= 0 ? remainingFee : (headsRemainingAmount ?? 0);
+
+  const applyBreakdownData = (data: AdminStudentFeeBreakdownResult) => {
+    const dueHeads = Array.isArray(data?.dueHeads) ? data.dueHeads : [];
+    const normalized = dueHeads.map((h) => ({
+      key: String(h.key),
+      label: String(h.label || "Fee Head"),
+      amount: Number(h.snapshotAmount) || 0,
+      paid: Math.max((Number(h.snapshotAmount) || 0) - (Number(h.dueBefore) || 0), 0),
+      due: Number(h.dueBefore) || 0,
+      extraFeeId: h.headType === "EXTRA_FEE" ? h.extraFeeId : undefined,
+      canDeleteExtra: h.headType === "EXTRA_FEE" ? Boolean(h.canDeleteOnStudentProfile) : false,
+      headType: h.headType,
+      splitIntoTwoInstallments:
+        h.headType === "EXTRA_FEE" ? Boolean(h.splitIntoTwoInstallments) : undefined,
+    }));
+    setFeeHeadOptionsForDiscount(
+      normalized.map((h) => ({
+        key: h.key,
+        label: h.label,
+      }))
+    );
+    setHeadCards(splitFeeHeadsForDisplay(normalized));
+    setHeadsTotalAmount(
+      Number(data?.totalAmount) ||
+        normalized.reduce((s: number, h: { amount: number }) => s + h.amount, 0)
+    );
+    setHeadsRemainingAmount(
+      Number(data?.remainingFee) ||
+        normalized.reduce((s: number, h: { due: number }) => s + h.due, 0)
+    );
+  };
 
   useEffect(() => {
-    let cancelled = false;
-    const loadHeads = async () => {
-      try {
-        setHeadsLoading(true);
-        const res = await fetch(`/api/fees/admin/breakdown?studentId=${encodeURIComponent(studentId)}`, {
-          credentials: "include",
-          cache: "no-store",
-        });
-        const data = await res.json();
-        if (!res.ok) return;
-        if (cancelled) return;
-
-        const dueHeads = Array.isArray(data?.dueHeads) ? data.dueHeads : [];
-        const normalized = dueHeads.map((h: Record<string, unknown>) => ({
-          key: String(h.key),
-          label: String(h.label || "Fee Head"),
-          amount: Number(h.snapshotAmount) || 0,
-          paid: Math.max((Number(h.snapshotAmount) || 0) - (Number(h.dueBefore) || 0), 0),
-          due: Number(h.dueBefore) || 0,
-          extraFeeId: typeof h.extraFeeId === "string" ? h.extraFeeId : undefined,
-          canDeleteExtra: Boolean(h.canDeleteOnStudentProfile),
-          headType: typeof h.headType === "string" ? h.headType : undefined,
-          splitIntoTwoInstallments:
-            h.headType === "EXTRA_FEE" ? Boolean(h.splitIntoTwoInstallments) : undefined,
-        }));
-        setHeadCards(splitHostelOrMessIntoTwoInstallments(normalized));
-        setHeadsTotalAmount(
-          Number(data?.totalAmount) ||
-            normalized.reduce((s: number, h: { amount: number }) => s + h.amount, 0)
-        );
-        setHeadsRemainingAmount(
-          Number(data?.remainingFee) ||
-            normalized.reduce((s: number, h: { due: number }) => s + h.due, 0)
-        );
-      } catch {
-        if (!cancelled) {
-          setHeadCards([]);
-          setHeadsTotalAmount(null);
-          setHeadsRemainingAmount(null);
-        }
-      } finally {
-        if (!cancelled) setHeadsLoading(false);
-      }
-    };
-    loadHeads();
-    return () => {
-      cancelled = true;
-    };
-  }, [studentId, amountPaid, remainingFee, totalFee]);
+    if (!initialFeeBreakdown?.dueHeads?.length) return;
+    applyBreakdownData(initialFeeBreakdown);
+  }, [initialFeeBreakdown, studentId]);
 
   const handleDownloadReceipt = async () => {
     try {
@@ -1028,15 +964,11 @@ export const FeesBreakdown = ({
           studentId={studentId}
           currentTotalFee={baseTotalFee}
           currentDiscountPercent={discountPercent}
-          feeHeadOptions={headCards.map(
-            (h): FeeHeadOption => ({
-              key: h.key,
-              label: h.label,
-            })
-          )}
+          feeHeadOptions={feeHeadOptionsForDiscount}
           initialDiscountFeeHeadKey={discountFeeHeadKey ?? null}
           initialDiscountFeeHeadLabel={discountFeeHeadLabel ?? null}
           initialDiscountRemarks={discountRemarks ?? null}
+          initialDiscountFixedAmount={discountFixedAmount ?? null}
           onClose={() => setShowModifyFee(false)}
           onSuccess={() => {
             setShowModifyFee(false);
@@ -1050,6 +982,8 @@ export const FeesBreakdown = ({
           studentId={studentId}
           studentName={studentName ?? "Student"}
           classDisplayName={classDisplayName ?? "-"}
+          classId={classId}
+          classSection={classSection}
           residencyType={residencyType}
           onClose={() => setShowAssignFeeHeadsCatalog(false)}
           onSuccess={() => {

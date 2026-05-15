@@ -1,6 +1,35 @@
-
+import { AsyncLocalStorage } from "async_hooks";
 import { PrismaClient } from "@prisma/client";
 import { bumpRedisCacheVersion, getRedisCacheVersion, isRedisEnabled, redisGet, redisSet } from "@/lib/redis";
+
+/** Bulk writes (e.g. recalculate all fees) bump Redis once at the end, not per row. */
+const deferredInvalidation = new AsyncLocalStorage<{ active: boolean }>();
+
+export function isDeferredCacheInvalidation(): boolean {
+  return deferredInvalidation.getStore()?.active === true;
+}
+
+/**
+ * School-wide bulk jobs (recalculate fees): hit Postgres directly, one cache bump at end.
+ * Avoids hundreds of Redis round-trips and connection pool starvation.
+ */
+export async function runWithDeferredCacheInvalidation<T>(fn: () => Promise<T>): Promise<T> {
+  return deferredInvalidation.run({ active: true }, async () => {
+    try {
+      return await fn();
+    } finally {
+      clearLocalCache();
+      if (isRedisEnabled()) {
+        try {
+          await bumpRedisCacheVersion();
+          console.info("[Redis] INVALIDATE (deferred bulk write)");
+        } catch (error) {
+          console.warn("[Redis] Deferred cache bump failed (DB writes already committed).", error);
+        }
+      }
+    }
+  });
+}
 
 // Prefer DATABASE_URL (port 6543, transaction pooler) for runtime - better for serverless and avoids
 // connection resets. Use DIRECT_URL only for migrations (schema directUrl).
@@ -113,7 +142,15 @@ const createPrismaWithRedis = () => {
   return client.$extends({
     query: {
       async $allOperations({ model, operation, args, query }) {
-        if (!isRedisEnabled() || !model) {
+        if (!model) {
+          return query(args);
+        }
+
+        if (isDeferredCacheInvalidation()) {
+          return query(args);
+        }
+
+        if (!isRedisEnabled()) {
           return query(args);
         }
 

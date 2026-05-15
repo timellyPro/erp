@@ -32,9 +32,38 @@ type DataTableProps<T> = {
   scrollableWide?: boolean;
   /** Pin the first column while scrolling horizontally (pair with scrollableWide). */
   stickyFirstColumn?: boolean;
+  /** Pin the last column while scrolling horizontally (e.g. actions on the right). */
+  stickyLastColumn?: boolean;
+  /** Extra classes on the scroll viewport (e.g. max-h + overflow-auto for in-table vertical scroll). */
+  scrollAreaClassName?: string;
   /** Tighter footer row inside the same card (no extra bordered box). */
   paginationInline?: boolean;
 };
+
+function stickyColumnClass(
+  index: number,
+  lastIndex: number,
+  opts: {
+    scrollableWide: boolean;
+    stickyFirstColumn: boolean;
+    stickyLastColumn: boolean;
+    header?: boolean;
+  }
+): string {
+  const { scrollableWide, stickyFirstColumn, stickyLastColumn, header } = opts;
+  if (!scrollableWide) return "";
+  const z = header ? "z-20" : "z-10";
+  const bg = header
+    ? "bg-white/[0.06] backdrop-blur-xl"
+    : "bg-transparent group-hover:bg-white/[0.04] backdrop-blur-md";
+  if (stickyFirstColumn && index === 0) {
+    return `sticky left-0 ${z} border-r border-white/10 ${bg}`;
+  }
+  if (stickyLastColumn && index === lastIndex) {
+    return `sticky right-0 ${z} border-l border-white/10 ${bg}`;
+  }
+  return "";
+}
 
 const ALIGN_CLASS = {
   left: "text-left",
@@ -64,8 +93,17 @@ function DataTable<T>({
   pagination,
   scrollableWide = false,
   stickyFirstColumn = false,
+  stickyLastColumn = false,
+  scrollAreaClassName = "",
   paginationInline = false,
 }: DataTableProps<T>) {
+  const lastColIndex = columns.length - 1;
+  const scrollViewportClass = scrollAreaClassName.trim()
+    ? scrollAreaClassName
+    : scrollableWide
+      ? "relative z-0 scroll-smooth overflow-x-scroll pb-3 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.35)_rgba(255,255,255,0.08)] [&::-webkit-scrollbar]:h-2.5 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-white/[0.08] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/30 hover:[&::-webkit-scrollbar-thumb]:bg-white/45"
+      : "overflow-x-auto";
+  const stickyHeader = Boolean(scrollAreaClassName.trim());
   const canPaginate =
     Boolean(pagination) &&
     (pagination?.totalPages ?? 1) > 1 &&
@@ -121,13 +159,7 @@ function DataTable<T>({
           </div>
         )}
 
-        <div
-          className={`w-full min-w-0 max-w-full overscroll-x-contain ${
-            scrollableWide
-              ? "relative z-0 scroll-smooth overflow-x-scroll pb-3 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.35)_rgba(255,255,255,0.08)] [&::-webkit-scrollbar]:h-2.5 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-white/[0.08] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/30 hover:[&::-webkit-scrollbar-thumb]:bg-white/45"
-              : "overflow-x-auto"
-          }`}
-        >
+        <div className={`w-full min-w-0 max-w-full overscroll-contain ${scrollViewportClass}`}>
           <table
             className={`${
               scrollableWide ? "w-max min-w-full table-auto" : "w-full table-fixed"
@@ -137,7 +169,9 @@ function DataTable<T>({
             {caption && <caption className="sr-only">{caption}</caption>}
 
             <thead
-              className={`bg-white/5 border-b border-white/10 ${theadClassName}`}
+              className={`bg-white/5 border-b border-white/10 ${
+                stickyHeader ? "sticky top-0 z-30 backdrop-blur-md" : ""
+              } ${theadClassName}`}
             >
               <tr>
                 {columns.map((col, i) => (
@@ -146,11 +180,12 @@ function DataTable<T>({
                     scope="col"
                     className={`px-3 md:px-4 lg:px-6 py-3 md:py-4 text-[11px] md:text-xs font-semibold text-gray-400 uppercase tracking-wider ${
                       ALIGN_CLASS[col.align ?? "left"]
-                    } ${
-                      scrollableWide && stickyFirstColumn && i === 0
-                        ? "sticky left-0 z-20 border-r border-white/10 bg-white/[0.08] backdrop-blur-md"
-                        : ""
-                    } ${thClassName}`}
+                    } ${stickyColumnClass(i, lastColIndex, {
+                      scrollableWide,
+                      stickyFirstColumn,
+                      stickyLastColumn,
+                      header: true,
+                    })} ${thClassName}`}
                   >
                     {col.header}
                   </th>
@@ -194,11 +229,11 @@ function DataTable<T>({
                         key={colIndex}
                         className={`px-3 md:px-4 lg:px-6 py-3 md:py-4 text-sm text-white ${
                           scrollableWide ? "align-top whitespace-normal" : "truncate"
-                        } ${ALIGN_CLASS[col.align ?? "left"]} ${
-                          scrollableWide && stickyFirstColumn && colIndex === 0
-                            ? "sticky left-0 z-10 border-r border-white/10 bg-zinc-950/95 backdrop-blur-sm shadow-[4px_0_14px_rgba(0,0,0,0.35)] group-hover:bg-zinc-900/95"
-                            : ""
-                        } ${tdClassName}`}
+                        } ${ALIGN_CLASS[col.align ?? "left"]} ${stickyColumnClass(colIndex, lastColIndex, {
+                          scrollableWide,
+                          stickyFirstColumn,
+                          stickyLastColumn,
+                        })} ${tdClassName}`}
                       >
                         {renderCell(col, row, rowIndex)}
                       </td>

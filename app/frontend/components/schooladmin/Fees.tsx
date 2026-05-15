@@ -44,34 +44,52 @@ export default function FeesTab({ section }: FeesTabProps) {
   const [structures, setStructures] = useState<FeeStructure[]>([]);
   const [extraFees, setExtraFees] = useState<ExtraFee[]>([]);
   const [loading, setLoading] = useState(true);
-  const [recalcBusy, setRecalcBusy] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [sumRes, clsRes, stuRes, structRes, extraRes] = await Promise.all([
-        fetch("/api/fees/summary", { credentials: "include" }),
-        fetch("/api/class/list", { credentials: "include" }),
-        fetch("/api/student/list", { credentials: "include" }),
-        fetch("/api/fees/structure", { credentials: "include" }),
-        fetch("/api/fees/extra", { credentials: "include" }),
-      ]);
-      const [sumData, clsData, stuData, structData, extraData] = await Promise.all([
-        sumRes.json(),
-        clsRes.json(),
-        stuRes.json(),
-        structRes.json(),
-        extraRes.json(),
-      ]);
+      const [summary, classesList, studentsList, structuresList, extraFeesList] =
+        await Promise.allSettled([
+          fetch("/api/fees/summary", { credentials: "include" }).then(async (r) => ({
+            ok: r.ok,
+            data: await r.json(),
+          })),
+          fetch("/api/class/list", { credentials: "include" }).then(async (r) => ({
+            ok: r.ok,
+            data: await r.json(),
+          })),
+          fetch("/api/student/list", { credentials: "include" }).then(async (r) => ({
+            ok: r.ok,
+            data: await r.json(),
+          })),
+          fetch("/api/fees/structure", { credentials: "include" }).then(async (r) => ({
+            ok: r.ok,
+            data: await r.json(),
+          })),
+          fetch("/api/fees/extra", { credentials: "include" }).then(async (r) => ({
+            ok: r.ok,
+            data: await r.json(),
+          })),
+        ]);
 
-      if (sumRes.ok) {
-        setFees(sumData.fees || []);
-        setStats(sumData.stats || null);
+      if (summary.status === "fulfilled" && summary.value.ok) {
+        setFees(summary.value.data.fees || []);
+        setStats(summary.value.data.stats || null);
       }
-      if (clsRes.ok) setClasses(clsData.classes || []);
-      if (stuRes.ok) setStudents(stuData.students || []);
-      if (structRes.ok) setStructures(structData.structures || []);
-      if (extraRes.ok) setExtraFees(Array.isArray(extraData?.extraFees) ? extraData.extraFees : []);
+      if (classesList.status === "fulfilled" && classesList.value.ok) {
+        setClasses(classesList.value.data.classes || []);
+      }
+      if (studentsList.status === "fulfilled" && studentsList.value.ok) {
+        setStudents(studentsList.value.data.students || []);
+      }
+      if (structuresList.status === "fulfilled" && structuresList.value.ok) {
+        setStructures(structuresList.value.data.structures || []);
+      }
+      if (extraFeesList.status === "fulfilled" && extraFeesList.value.ok) {
+        setExtraFees(
+          Array.isArray(extraFeesList.value.data?.extraFees) ? extraFeesList.value.data.extraFees : []
+        );
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -94,43 +112,10 @@ export default function FeesTab({ section }: FeesTabProps) {
     })();
   }, [router, fetchData]);
 
-  const recalculateAllStudentFees = useCallback(async () => {
-    if (
-      !confirm(
-        "Recalculate fee totals for every student in your school from the current class structures and extra fees?\n\nThis fixes stored totals after removing duplicate hostel/mess rows. Recorded payments and discounts are kept."
-      )
-    ) {
-      return;
-    }
-    setRecalcBusy(true);
-    try {
-      const res = await fetch("/api/fees/recalculate-student-fees", {
-        method: "POST",
-        credentials: "include",
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        alert(typeof data.message === "string" ? data.message : "Recalculate failed");
-        return;
-      }
-      await fetchData();
-      try {
-        router.refresh();
-      } catch {
-        /* noop */
-      }
-      alert(`Updated ${typeof data.updatedStudents === "number" ? data.updatedStudents : ""} student fee records.`);
-    } catch {
-      alert("Recalculate failed");
-    } finally {
-      setRecalcBusy(false);
-    }
-  }, [router, fetchData]);
-
   if (loading) {
     return (
       <div className="min-h-screen p-4 flex items-center justify-center">
-        <Spinner/>
+        <Spinner />
       </div>
     );
   }
@@ -148,26 +133,6 @@ export default function FeesTab({ section }: FeesTabProps) {
         {(section === undefined || section === "overview") && (
           <div id="fees-section-overview" className="scroll-mt-28 space-y-6">
             <FeeStatCards stats={stats} />
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur sm:p-5">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold text-white">Stored totals out of date?</h3>
-                  <p className="mt-1 max-w-2xl text-xs leading-relaxed text-gray-400">
-                    After removing duplicate hostel/mess extra fees, totals in the database may still reflect old sums.
-                    Recalculate once so the overview matches the current fee catalog (payments and discounts are not
-                    changed).
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  disabled={recalcBusy}
-                  onClick={() => void recalculateAllStudentFees()}
-                  className="shrink-0 rounded-xl border border-amber-500/35 bg-amber-500/15 px-4 py-2.5 text-sm font-semibold text-amber-100 hover:bg-amber-500/25 disabled:opacity-50"
-                >
-                  {recalcBusy ? "Recalculating…" : "Recalculate all student fees"}
-                </button>
-              </div>
-            </div>
             <AdmissionFeeDayReport />
           </div>
         )}
@@ -203,6 +168,8 @@ export default function FeesTab({ section }: FeesTabProps) {
                     <HostelMessFeesPanel
                       classes={classes}
                       extraFees={extraFees}
+                      schoolResidencyHeadName="Hostel Fee"
+                      classHeadName="Mess Fee"
                       onSuccess={reloadAfterMutation}
                     />
                     <ExtraFeeHeadTemplatesPanel onSuccess={reloadAfterMutation} />

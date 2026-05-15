@@ -57,7 +57,9 @@ export const EditExtraFeeModal = ({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: name.trim(),
-          amount: feeAmount,
+          ...(splitIntoTwoInstallments
+            ? { combinedInstallmentTotal: feeAmount }
+            : { amount: feeAmount }),
           splitIntoTwoInstallments,
         }),
       });
@@ -81,8 +83,8 @@ export const EditExtraFeeModal = ({
         <div className="p-6">
           <h2 className="text-2xl font-bold text-white mb-2">Edit extra fee</h2>
           <p className="text-gray-400 text-sm mb-6">
-            Update the name or amount. Totals on affected student fee records adjust when the amount changes. Two
-            installments only changes how this head appears on the fee breakdown (50% + 50%).
+            Update the name or amount. Totals on affected student fee records adjust when the amount changes. Enabling
+            two installments creates separate 1st and 2nd rows in the database (50% + 50%), each with its own balance.
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -135,10 +137,9 @@ export const EditExtraFeeModal = ({
                 onChange={(e) => setSplitIntoTwoInstallments(e.target.checked)}
               />
               <span>
-                <span className="font-medium text-white">Show as two installments</span>
+                <span className="font-medium text-white">Two installments (50% + 50%)</span>
                 <span className="mt-0.5 block text-xs text-white/50">
-                  Splits this fee into 1st and 2nd installment cards (50% each) on the student profile, like hostel
-                  fee.
+                  Saves two fee heads in the database so each installment can be paid and edited separately.
                 </span>
               </span>
             </label>

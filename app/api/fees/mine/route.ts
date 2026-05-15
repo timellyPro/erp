@@ -5,7 +5,7 @@ import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
-import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 
 export async function GET() {
@@ -86,7 +86,7 @@ export async function GET() {
     });
     const residency = fee.student.residencyType ?? "Day Scholar";
     const extraFees = extraFeesRaw
-      .filter((ef) => extraFeeAppliesToStudentResidency(ef.residencyScope, residency))
+      .filter((ef) => extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, residency))
       .filter((ef) => !(isStudentRte(residency) && isTuitionNamedExtraFee(ef.name)));
 
     const payments = await prisma.payment.findMany({

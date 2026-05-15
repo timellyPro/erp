@@ -2,7 +2,13 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
-import { extraFeeAppliesToStudentResidency, parseExtraFeeResidencyScopeBody } from "@/lib/extraFeeResidencyScope";
+import {
+  extraFeeAppliesToStudent,
+  parseExtraFeeResidencyScopeBody,
+  suggestedResidencyScopeForExtraFeeName,
+} from "@/lib/extraFeeResidencyScope";
+import { createExtraFeeRows, migrateUnsplitLumpExtraFees, type ExtraFeeCreatePayload } from "@/lib/extraFeeInstallmentDb";
+import { isUnsplitLumpExtraFee } from "@/lib/extraFeeInstallments";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -49,10 +55,44 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
 
-    const extraFees = await prisma.extraFee.findMany({
+    const { searchParams } = new URL(req.url);
+    const runMaintenance = searchParams.get("maintenance") === "1";
+
+    let extraFees = await prisma.extraFee.findMany({
       where: { schoolId },
       orderBy: { createdAt: "desc" },
     });
+
+    if (runMaintenance) {
+      const lumps = extraFees.filter((ef) =>
+        isUnsplitLumpExtraFee({
+          name: ef.name,
+          splitIntoTwoInstallments: Boolean(ef.splitIntoTwoInstallments),
+        })
+      );
+      if (lumps.length > 0) {
+        await migrateUnsplitLumpExtraFees(
+          prisma,
+          lumps.map((ef) => ({
+            id: ef.id,
+            schoolId: ef.schoolId,
+            name: ef.name,
+            amount: ef.amount,
+            targetType: ef.targetType,
+            targetClassId: ef.targetClassId,
+            targetSection: ef.targetSection,
+            targetStudentId: ef.targetStudentId,
+            residencyScope: ef.residencyScope,
+            splitIntoTwoInstallments: Boolean(ef.splitIntoTwoInstallments),
+          }))
+        );
+        extraFees = await prisma.extraFee.findMany({
+          where: { schoolId },
+          orderBy: { createdAt: "desc" },
+        });
+      }
+    }
+
     return NextResponse.json({ extraFees });
   } catch (error: any) {
     console.error("Extra fees GET error:", error);
@@ -92,7 +132,11 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-    const residencyScope = parsedScope;
+    let residencyScope = parsedScope;
+    const suggested = suggestedResidencyScopeForExtraFeeName(String(name).trim());
+    if (parsedScope === "ALL" && suggested !== "ALL") {
+      residencyScope = suggested;
+    }
 
     if (!name || typeof amount !== "number" || amount <= 0 || !targetType) {
       return NextResponse.json(
@@ -119,18 +163,21 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "targetStudentId required when targetType is STUDENT" }, { status: 400 });
     }
 
-    const extraFee = await prisma.extraFee.create({
-      data: {
-        schoolId,
-        name: String(name).trim(),
-        amount: Number(amount),
-        targetType,
-        targetClassId: targetClassId || null,
-        targetSection: targetSection || null,
-        targetStudentId: targetStudentId || null,
-        residencyScope,
-        splitIntoTwoInstallments,
-      },
+    const payload: ExtraFeeCreatePayload = {
+      schoolId,
+      name: String(name).trim(),
+      amount: Number(amount),
+      targetType,
+      targetClassId: targetClassId || null,
+      targetSection: targetSection || null,
+      targetStudentId: targetStudentId || null,
+      residencyScope,
+      splitIntoTwoInstallments,
+    };
+
+    const { ids, totalAmount } = await createExtraFeeRows(prisma, payload);
+    const extraFee = await prisma.extraFee.findFirst({
+      where: { id: ids[0] },
     });
 
     const studentWhere =
@@ -150,22 +197,24 @@ export async function POST(req: Request) {
         select: { id: true, residencyType: true },
       });
       const eligibleStudentIds = students
-        .filter((s) => extraFeeAppliesToStudentResidency(residencyScope, s.residencyType))
+        .filter((s) =>
+          extraFeeAppliesToStudent({ name: String(name).trim(), residencyScope }, s.residencyType)
+        )
         .map((s) => s.id);
 
       if (eligibleStudentIds.length > 0) {
         await prisma.studentFee.updateMany({
           where: { studentId: { in: eligibleStudentIds } },
           data: {
-            totalFee: { increment: amount },
-            finalFee: { increment: amount },
-            remainingFee: { increment: amount },
+            totalFee: { increment: totalAmount },
+            finalFee: { increment: totalAmount },
+            remainingFee: { increment: totalAmount },
           },
         });
       }
     }
 
-    return NextResponse.json({ extraFee }, { status: 201 });
+    return NextResponse.json({ extraFee, extraFeeIds: ids }, { status: 201 });
   } catch (error: any) {
     console.error("Extra fee POST error:", error);
     return NextResponse.json(
