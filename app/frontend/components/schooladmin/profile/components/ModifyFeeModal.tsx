@@ -17,6 +17,7 @@ type Props = {
   initialDiscountFeeHeadKey?: string | null;
   initialDiscountFeeHeadLabel?: string | null;
   initialDiscountRemarks?: string | null;
+  initialDiscountFixedAmount?: number | null;
   onClose: () => void;
   onSuccess: () => void;
 };
@@ -29,11 +30,16 @@ export const ModifyFeeModal = ({
   initialDiscountFeeHeadKey,
   initialDiscountFeeHeadLabel,
   initialDiscountRemarks,
+  initialDiscountFixedAmount,
   onClose,
   onSuccess,
 }: Props) => {
   const [totalFee, setTotalFee] = useState<string>(String(currentTotalFee));
-  const initialDiscountAmount = (currentTotalFee * (currentDiscountPercent / 100)).toFixed(2);
+  const initialDiscountAmount = (
+    typeof initialDiscountFixedAmount === "number" && initialDiscountFixedAmount > 0
+      ? initialDiscountFixedAmount
+      : currentTotalFee * (currentDiscountPercent / 100)
+  ).toFixed(2);
   const [discountAmount, setDiscountAmount] = useState<string>(initialDiscountAmount);
   const [discountHeadKey, setDiscountHeadKey] = useState<string>(initialDiscountFeeHeadKey?.trim() ?? "");
   const [remarks, setRemarks] = useState<string>(initialDiscountRemarks ?? "");
@@ -103,6 +109,7 @@ export const ModifyFeeModal = ({
         body: JSON.stringify({
           totalFee: feeAmount,
           discountPercent: calculatedDiscountPercent,
+          discountFixedAmount: hasDiscount ? discountAmt : null,
           ...(hasDiscount
             ? {
                 discountFeeHeadKey: discountHeadKey.trim(),

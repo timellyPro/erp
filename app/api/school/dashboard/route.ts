@@ -3,7 +3,9 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { purgeExpiredNewsFeeds } from "@/lib/newsfeedRetention";
-import { paymentTypeExportLabel } from "@/lib/feePaymentGateway";
+import { buildSchoolDashboardCollection } from "@/lib/buildSchoolDashboardCollection";
+import { resolveSchoolAdminSchoolId } from "@/lib/resolveSchoolAdminSchoolId";
+import { FEE_COLLECTION_PAYMENT_WHERE, todayYmdLocal } from "@/lib/schoolDashboardCollection";
 
 declare const globalThis: {
   schoolDashboardPurgeLastRunAt?: number;
@@ -15,45 +17,26 @@ function maybePurgeExpiredNewsFeeds() {
   const intervalMs = 10 * 60 * 1000;
   if (now - lastRun < intervalMs) return;
   globalThis.schoolDashboardPurgeLastRunAt = now;
-  // Run in background so dashboard response is not blocked by maintenance.
   purgeExpiredNewsFeeds().catch((error) => {
     console.warn("Newsfeed purge skipped due to error:", error);
   });
 }
 
-function toDate(value: unknown): Date | null {
-  if (!value) return null;
-  if (value instanceof Date) return value;
-  if (typeof value === "string" || typeof value === "number") {
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
-  }
-  return null;
+function formatTimeAgo(date: Date): string {
+  const d = new Date(date);
+  const seconds = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (seconds < 60) return "Just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} mins ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} hours ago`;
+  if (seconds < 604800) return `${Math.floor(seconds / 86400)} days ago`;
+  return d.toLocaleDateString();
 }
 
-function paymentMethodBucket(gateway: string | null | undefined): {
-  key: string;
-  label: string;
-} {
-  const g = String(gateway ?? "").trim().toUpperCase();
-  if (!g || g === "OFFLINE" || g === "CASH" || g === "OFFLINE_CASH") {
-    return { key: "CASH", label: "Cash" };
-  }
-  if (g === "HYPERPG" || g === "ONLINE" || g === "OFFLINE_ONLINE") {
-    return { key: "ONLINE", label: "Online" };
-  }
-  return {
-    key: g,
-    label: paymentTypeExportLabel(gateway) || "Others",
-  };
-}
-
-function parseIsoDateOnly(raw: string | null): Date | null {
-  if (!raw) return null;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
-  const parsed = new Date(`${raw}T00:00:00.000Z`);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed;
+function formatCurrency(n: number) {
+  if (n >= 10000000) return `₹${(n / 10000000).toFixed(1)}Cr`;
+  if (n >= 100000) return `₹${(n / 100000).toFixed(1)}L`;
+  if (n >= 1000) return `₹${(n / 1000).toFixed(1)}K`;
+  return `₹${Math.round(n)}`;
 }
 
 export async function GET(request: Request) {
@@ -72,105 +55,46 @@ export async function GET(request: Request) {
   }
 
   try {
-    let schoolId = session.user.schoolId;
-
-    if (!schoolId) {
-      const adminSchool = await prisma.school.findFirst({
-        where: { admins: { some: { id: session.user.id } } },
-        select: { id: true, isActive: true },
-      });
-      if (!adminSchool) {
-        return NextResponse.json(
-          { message: "School not found in session" },
-          { status: 400 }
-        );
-      }
-      if (adminSchool.isActive === false) {
-        return NextResponse.json(
-          { message: "Your school's Timelly access is deactivated. Please contact Timelly support." },
-          { status: 403 }
-        );
-      }
-      schoolId = adminSchool.id;
-    } else {
-      const school = await prisma.school.findUnique({
-        where: { id: schoolId },
-        select: { id: true, isActive: true },
-      });
-      if (!school) {
-        return NextResponse.json(
-          { message: "School not found" },
-          { status: 400 }
-        );
-      }
-      if (school.isActive === false) {
-        return NextResponse.json(
-          { message: "Your school's Timelly access is deactivated. Please contact Timelly support." },
-          { status: 403 }
-        );
-      }
+    const ctx = await resolveSchoolAdminSchoolId(session);
+    if ("error" in ctx) {
+      return NextResponse.json({ message: ctx.error }, { status: ctx.status });
     }
+    const schoolId = ctx.schoolId;
 
     maybePurgeExpiredNewsFeeds();
 
     const now = new Date();
-    const url = new URL(request.url);
-    const requestedDate = parseIsoDateOnly(url.searchParams.get("date"));
+    const dateParam = new URL(request.url).searchParams.get("date")?.trim() || todayYmdLocal();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const startOfWeek = new Date(now);
-    startOfWeek.setDate(now.getDate() - 7);
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const todayEnd = new Date(todayStart);
     todayEnd.setDate(todayEnd.getDate() + 1);
-    const collectionStart = requestedDate
-      ? new Date(
-          requestedDate.getUTCFullYear(),
-          requestedDate.getUTCMonth(),
-          requestedDate.getUTCDate()
-        )
-      : todayStart;
-    const collectionEnd = new Date(collectionStart);
-    collectionEnd.setDate(collectionEnd.getDate() + 1);
 
-    // Parallel fetches for dashboard data
     const [
       classCount,
       studentCount,
       teacherCount,
-      eventsUpcoming,
+      classCountLastMonth,
+      studentCountLastMonth,
+      teacherCountLastMonth,
       feeSummary,
       todayAttendance,
       leaves,
       newsFeeds,
       recentPayments,
-      todayPayments,
+      collection,
     ] = await Promise.all([
       prisma.class.count({ where: { schoolId } }),
       prisma.student.count({ where: { schoolId } }),
+      prisma.user.count({ where: { schoolId, role: "TEACHER" } }),
+      prisma.class.count({ where: { schoolId, createdAt: { lt: startOfMonth } } }),
+      prisma.student.count({ where: { schoolId, createdAt: { lt: startOfMonth } } }),
       prisma.user.count({
-        where: {
-          schoolId,
-          role: "TEACHER",
-        },
-      }),
-      prisma.event.findMany({
-        where: {
-          schoolId,
-          eventDate: { gte: todayStart },
-        },
-        select: {
-          id: true,
-          title: true,
-          eventDate: true,
-          _count: { select: { registrations: true } },
-        },
-        orderBy: { eventDate: "asc" },
-        take: 5,
+        where: { schoolId, role: "TEACHER", createdAt: { lt: startOfMonth } },
       }),
       prisma.studentFee.aggregate({
         where: { student: { schoolId } },
-        _sum: { amountPaid: true, finalFee: true, remainingFee: true },
-        _count: true,
+        _sum: { amountPaid: true, finalFee: true },
       }),
       prisma.attendance.groupBy({
         by: ["status"],
@@ -181,69 +105,45 @@ export async function GET(request: Request) {
         _count: true,
       }),
       prisma.leaveRequest.findMany({
-        where: { schoolId },
-        include: {
-          teacher: { select: { id: true, name: true, subject: true } },
+        where: { schoolId, status: { in: ["APPROVED", "PENDING"] } },
+        select: {
+          id: true,
+          leaveType: true,
+          status: true,
+          fromDate: true,
+          toDate: true,
+          createdAt: true,
+          teacher: { select: { name: true, subject: true } },
         },
         orderBy: { createdAt: "desc" },
-        take: 10,
+        take: 8,
       }),
       prisma.newsFeed.findMany({
         where: { schoolId },
-        include: { createdBy: { select: { id: true, name: true } } },
+        select: {
+          id: true,
+          title: true,
+          description: true,
+          createdAt: true,
+          createdBy: { select: { name: true } },
+        },
         orderBy: { createdAt: "desc" },
         take: 5,
       }),
       prisma.payment.findMany({
         where: {
           student: { schoolId },
-          status: "SUCCESS",
+          ...FEE_COLLECTION_PAYMENT_WHERE,
         },
         select: {
           amount: true,
           createdAt: true,
-          student: {
-            select: { user: { select: { name: true } } },
-          },
+          student: { select: { user: { select: { name: true } } } },
         },
         orderBy: { createdAt: "desc" },
-        take: 10,
+        take: 8,
       }),
-      prisma.payment.findMany({
-        where: {
-          student: { schoolId },
-          status: "SUCCESS",
-          purpose: "FEES",
-          createdAt: { gte: collectionStart, lt: collectionEnd },
-        },
-        select: {
-          amount: true,
-          gateway: true,
-        },
-      }),
-    ]);
-
-    // Class count change (this month)
-    const [classCountLastMonth, studentCountLastMonth, teacherCountLastMonth] = await Promise.all([
-      prisma.class.count({
-        where: {
-          schoolId,
-          createdAt: { lt: startOfMonth },
-        },
-      }),
-      prisma.student.count({
-        where: {
-          schoolId,
-          createdAt: { lt: startOfMonth },
-        },
-      }),
-      prisma.user.count({
-        where: {
-          schoolId,
-          role: "TEACHER",
-          createdAt: { lt: startOfMonth },
-        },
-      }),
+      buildSchoolDashboardCollection(schoolId, dateParam),
     ]);
 
     const totalPaid = feeSummary._sum.amountPaid ?? 0;
@@ -263,70 +163,19 @@ export async function GET(request: Request) {
     const totalToday = present + absent + late;
     const overallPct = totalToday > 0 ? ((present + late) / totalToday) * 100 : 0;
 
-    const formatCurrency = (n: number) => {
-      if (n >= 10000000) return `₹${(n / 10000000).toFixed(1)}Cr`;
-      if (n >= 100000) return `₹${(n / 100000).toFixed(1)}L`;
-      if (n >= 1000) return `₹${(n / 1000).toFixed(1)}K`;
-      return `₹${Math.round(n)}`;
-    };
-
-    const todayCollectionByMethodMap = new Map<
-      string,
-      { key: string; label: string; amount: number; count: number }
-    >();
-    let todayCollectionTotal = 0;
-    for (const payment of todayPayments) {
-      const amount = Number(payment.amount ?? 0);
-      if (!Number.isFinite(amount) || amount <= 0) continue;
-      const bucket = paymentMethodBucket(payment.gateway);
-      const existing = todayCollectionByMethodMap.get(bucket.key);
-      if (existing) {
-        existing.amount += amount;
-        existing.count += 1;
-      } else {
-        todayCollectionByMethodMap.set(bucket.key, {
-          key: bucket.key,
-          label: bucket.label,
-          amount,
-          count: 1,
-        });
-      }
-      todayCollectionTotal += amount;
-    }
-
-    const todayCollectionByMethod = Array.from(todayCollectionByMethodMap.values()).sort((a, b) => {
-      const priority = (key: string) => (key === "CASH" ? 0 : key === "ONLINE" ? 1 : 2);
-      const byPriority = priority(a.key) - priority(b.key);
-      if (byPriority !== 0) return byPriority;
-      return b.amount - a.amount;
-    });
-
-    const workshops = eventsUpcoming.map((e) => {
-      const eventDate = toDate(e.eventDate);
-      return {
-      id: e.id,
-      title: e.title,
-      date: eventDate ? eventDate.toISOString().slice(0, 10) : null,
-      participants: e._count.registrations,
-      status: eventDate && eventDate <= new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) ? "Confirmed" : "Scheduled",
-    };
-    });
-
-    const teachersOnLeave = leaves
-      .filter((l) => l.status === "APPROVED" || l.status === "PENDING")
-      .slice(0, 5)
-      .map((l) => ({
-        id: l.id,
-        name: l.teacher.name,
-        subject: l.teacher.subject ?? "-",
-        leaveType: l.leaveType,
-        status: l.status,
-        fromDate: l.fromDate,
-        toDate: l.toDate,
-        days: Math.ceil(
+    const teachersOnLeave = leaves.slice(0, 5).map((l) => ({
+      id: l.id,
+      name: l.teacher.name,
+      subject: l.teacher.subject ?? "-",
+      leaveType: l.leaveType,
+      status: l.status,
+      fromDate: l.fromDate,
+      toDate: l.toDate,
+      days:
+        Math.ceil(
           (new Date(l.toDate).getTime() - new Date(l.fromDate).getTime()) / (24 * 60 * 60 * 1000)
         ) + 1,
-      }));
+    }));
 
     const recentActivities: Array<{
       type: string;
@@ -367,15 +216,6 @@ export async function GET(request: Request) {
     });
 
     recentActivities.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    const activities = recentActivities.slice(0, 5);
-
-    const latestNews = newsFeeds.map((n) => ({
-      id: n.id,
-      title: n.title,
-      description: n.description,
-      postedBy: n.createdBy?.name ?? "Admin",
-      createdAt: n.createdAt,
-    }));
 
     return NextResponse.json({
       stats: {
@@ -385,18 +225,13 @@ export async function GET(request: Request) {
         totalStudentsChange: studentCount - studentCountLastMonth,
         totalTeachers: teacherCount,
         totalTeachersChange: teacherCount - teacherCountLastMonth,
-        upcomingWorkshops: eventsUpcoming.length,
-        workshopsThisWeek: eventsUpcoming.filter(
-          (e) => {
-            const eventDate = toDate(e.eventDate);
-            return eventDate !== null && eventDate <= new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-          }
-        ).length,
+        upcomingWorkshops: 0,
+        workshopsThisWeek: 0,
         feesCollected: formatCurrency(totalPaid),
         feesCollectedRaw: totalPaid,
         feesCollectedPct: collectedPct,
-        todayCollectionTotal: formatCurrency(todayCollectionTotal),
-        todayCollectionTotalRaw: todayCollectionTotal,
+        todayCollectionTotal: collection.todayCollectionTotal,
+        todayCollectionTotalRaw: collection.todayCollectionTotalRaw,
       },
       attendance: {
         present,
@@ -408,51 +243,44 @@ export async function GET(request: Request) {
         absentPct: totalToday > 0 ? ((absent / totalToday) * 100).toFixed(1) : "0",
         latePct: totalToday > 0 ? ((late / totalToday) * 100).toFixed(1) : "0",
       },
-      workshops,
-      todayCollectionByMethod: todayCollectionByMethod.map((m) => ({
-        key: m.key,
-        label: m.label,
-        amount: Math.round(m.amount * 100) / 100,
-        formattedAmount: `₹${Math.round(m.amount).toLocaleString("en-IN")}`,
-        count: m.count,
-      })),
-      collectionDate: collectionStart.toISOString().slice(0, 10),
+      workshops: [],
+      todayCollectionByMethod: collection.todayCollectionByMethod,
+      collectionDate: collection.collectionDate,
       teachersOnLeave,
-      recentActivities: activities,
-      latestNews,
+      recentActivities: recentActivities.slice(0, 5),
+      latestNews: newsFeeds.map((n) => ({
+        id: n.id,
+        title: n.title,
+        description: n.description,
+        postedBy: n.createdBy?.name ?? "Admin",
+        createdAt: n.createdAt,
+      })),
     });
   } catch (error: unknown) {
     console.error("School dashboard error:", error);
-    
-    // Handle database connection errors
+
     const err = error as { code?: string; message?: string; name?: string };
-    if (err?.code === "P1001" || err?.message?.includes("Can't reach database server") || err?.name === "PrismaClientInitializationError") {
+    if (
+      err?.code === "P1001" ||
+      err?.message?.includes("Can't reach database server") ||
+      err?.name === "PrismaClientInitializationError"
+    ) {
       return NextResponse.json(
         { message: "Database connection failed. Please check your database configuration." },
         { status: 503 }
       );
     }
-    
+
     if (err?.message?.includes("statement timeout") || err?.message?.includes("Connection terminated")) {
       return NextResponse.json(
         { message: "Database request timed out. Please try again." },
         { status: 408 }
       );
     }
-    
+
     return NextResponse.json(
       { message: error instanceof Error ? error.message : "Internal server error" },
       { status: 500 }
     );
   }
-}
-
-function formatTimeAgo(date: Date): string {
-  const d = new Date(date);
-  const seconds = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (seconds < 60) return "Just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} mins ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)} hours ago`;
-  if (seconds < 604800) return `${Math.floor(seconds / 86400)} days ago`;
-  return d.toLocaleDateString();
 }

@@ -4,8 +4,9 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
-import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
-import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import { rollupOrphanExtraFeeAllocations } from "@/lib/rollupOrphanExtraFeeAllocations";
+import { discountedSnapshotDueForHead, studentFeeDiscountFromRecord } from "@/lib/studentFeeHeadDiscount";
+import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 import { canonicalizeGatewayForStorage } from "@/lib/feePaymentGateway";
 
@@ -133,7 +134,16 @@ export async function POST(req: Request) {
         amount: Number(c.amount) || 0,
       }));
 
-    const structMult = structureMultiplierAfterDiscount(fee.discountPercent);
+    const discount = studentFeeDiscountFromRecord(
+      {
+        discountPercent: fee.discountPercent,
+        totalFee: fee.totalFee,
+        finalFee: fee.finalFee,
+        discountFeeHeadKey: (fee as { discountFeeHeadKey?: string | null }).discountFeeHeadKey,
+        discountFeeHeadLabel: (fee as { discountFeeHeadLabel?: string | null }).discountFeeHeadLabel,
+      },
+      baseComponents
+    );
 
     const classId = student.class?.id ?? null;
     const classSection = student.class?.section ?? null;
@@ -155,7 +165,7 @@ export async function POST(req: Request) {
     const residency = student.residencyType ?? "Day Scholar";
     const rte = isStudentRte(residency);
     const extraFees = extraFeesRaw
-      .filter((ef) => extraFeeAppliesToStudentResidency(ef.residencyScope, residency))
+      .filter((ef) => extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, residency))
       .filter((ef) => !(rte && isTuitionNamedExtraFee(ef.name)));
 
     type Head =
@@ -164,23 +174,29 @@ export async function POST(req: Request) {
 
     const allHeads: Head[] = [];
     baseComponents.forEach((c, idx) => {
+      const key = `BASE:${idx}`;
+      const preDue = rte ? 0 : Number(c.amount) || 0;
       allHeads.push({
-        key: `BASE:${idx}`,
+        key,
         headType: "BASE_COMPONENT",
         componentIndex: idx,
         componentName: c.name,
-        snapshotDue: rte ? 0 : c.amount * structMult,
+        snapshotDue: discountedSnapshotDueForHead(key, preDue, discount),
       });
     });
     for (const ef of extraFees) {
+      const key = `EXTRA:${ef.id}`;
+      const preDue = Number(ef.amount) || 0;
       allHeads.push({
-        key: `EXTRA:${ef.id}`,
+        key,
         headType: "EXTRA_FEE",
         extraFeeId: ef.id,
         extraFeeName: ef.name,
-        snapshotDue: Number(ef.amount) || 0,
+        snapshotDue: discountedSnapshotDueForHead(key, preDue, discount),
       });
     }
+
+    const extraFeesById = new Map(extraFeesRaw.map((ef) => [ef.id, { id: ef.id, name: ef.name }]));
 
     const getHeadKey = (h: SelectedHead) => {
       if (h.headType === "BASE_COMPONENT") return `BASE:${h.componentIndex}`;
@@ -226,6 +242,15 @@ export async function POST(req: Request) {
     redistributeBaseMinusOneAllocations(
       netPaidByHead,
       allHeads.map((h) => ({ key: h.key, snapshotDue: h.snapshotDue }))
+    );
+    rollupOrphanExtraFeeAllocations(
+      netPaidByHead,
+      allHeads.map((h) => ({
+        key: h.key,
+        label: h.headType === "EXTRA_FEE" ? h.extraFeeName : h.componentName,
+        extraFeeId: h.headType === "EXTRA_FEE" ? h.extraFeeId : undefined,
+      })),
+      extraFeesById
     );
 
     const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);

@@ -12,25 +12,17 @@ import DataTable from "../../common/TableLayout";
 import SearchInput from "../../common/SearchInput";
 import AdmissionReceiptTemplate, { type AdmissionReceiptData } from "../../pdf/AdmissionReceiptTemplate";
 import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
-import { normalizeExtraFeeResidencyScope } from "@/lib/extraFeeResidencyScope";
+import { loadAssignFeeCatalog } from "@/lib/loadAssignFeeCatalog";
 import { studentDetailsFeesUrlForPathname } from "../../schooladmin/fees/studentDetailsNav";
+import {
+  formatClassOptionLabel,
+  gradeSoughtFromClassName,
+  type ApplicationGrade,
+} from "@/lib/gradeFromClassName";
 
 type Gender = "MALE" | "FEMALE";
 type BoardingType = "SEMI_RESIDENTIAL" | "REGULAR_BOARDER";
-type Grade =
-  | "LKG"
-  | "UKG"
-  | "GRADE_1"
-  | "GRADE_2"
-  | "GRADE_3"
-  | "GRADE_4"
-  | "GRADE_5"
-  | "GRADE_6"
-  | "GRADE_7"
-  | "GRADE_8"
-  | "GRADE_9"
-  | "GRADE_10"
-  | "GRADE_11";
+type Grade = ApplicationGrade;
 
 type AdmissionRow = {
   id: string;
@@ -98,23 +90,6 @@ function sanitizeMoneyInput(raw: string): string {
   const intPart = cleaned.slice(0, dot).replace(/\D/g, "");
   const frac = cleaned.slice(dot + 1).replace(/\D/g, "").slice(0, 2);
   return frac.length > 0 ? `${intPart}.${frac}` : `${intPart}.`;
-}
-
-function formatCatalogExtraScope(
-  x: { targetType?: string | null; targetClassId?: string | null; targetSection?: string | null },
-  classById: Map<string, string>
-): string {
-  const t = String(x.targetType ?? "");
-  if (t === "SCHOOL") return "School-wide";
-  const classLabel = x.targetClassId ? classById.get(String(x.targetClassId)) : undefined;
-  if (t === "CLASS") return classLabel ? `Class ${classLabel}` : "Class-specific";
-  if (t === "SECTION") {
-    const sec = x.targetSection ? String(x.targetSection) : "";
-    if (classLabel && sec) return `${classLabel} · section ${sec}`;
-    if (classLabel) return `${classLabel} · section`;
-    return "Section-specific";
-  }
-  return t || "—";
 }
 
 type FormState = {
@@ -331,8 +306,6 @@ export default function TeacherAdmissionTab() {
   const [deleting, setDeleting] = useState(false);
 
   const [classes, setClasses] = useState<{ id: string; name: string; section: string | null }[]>([]);
-  const [selectedClassName, setSelectedClassName] = useState("");
-  const [selectedSection, setSelectedSection] = useState("");
   const [schoolName, setSchoolName] = useState("");
   const [schoolAddress, setSchoolAddress] = useState("");
   const [schoolLogo, setSchoolLogo] = useState<string | null>(null);
@@ -367,6 +340,7 @@ export default function TeacherAdmissionTab() {
   const [editingExistingFeeAmount, setEditingExistingFeeAmount] = useState("");
   const [editingExistingFeeSplit, setEditingExistingFeeSplit] = useState(false);
   const [dbFeeHeadOptions, setDbFeeHeadOptions] = useState<FeeHeadOption[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
   const [classBaseFeeTotal, setClassBaseFeeTotal] = useState<number | null>(null);
 
   const buildAdmissionExportQuery = useCallback(
@@ -428,109 +402,32 @@ export default function TeacherAdmissionTab() {
       setExistingStudentExtras([]);
       setDbFeeHeadOptions([]);
       setClassBaseFeeTotal(null);
+      setCatalogLoading(true);
 
       try {
-        const [extrasRes, templatesRes, structureRes] = await Promise.all([
-          fetch("/api/fees/extra", { credentials: "include", cache: "no-store" }),
-          fetch("/api/fees/extra-head-templates", { credentials: "include", cache: "no-store" }),
-          row.classId
-            ? fetch(`/api/fees/structure?classId=${encodeURIComponent(row.classId)}`, {
-                credentials: "include",
-                cache: "no-store",
-              })
-            : Promise.resolve(null),
-        ]);
-
-        let templateHeads: FeeHeadOption[] = [];
-        if (templatesRes.ok) {
-          const tplJson = await templatesRes.json().catch(() => ({}));
-          const tplList = Array.isArray(tplJson?.templates) ? tplJson.templates : [];
-          templateHeads = tplList
-            .map((x: { id?: string; name?: string; amount?: number; splitIntoTwoInstallments?: boolean }): FeeHeadOption | null => {
-              const id = String(x.id ?? "");
-              const name = String(x.name ?? "").trim();
-              const amount = Number(x.amount ?? 0);
-              if (!id || !name || !Number.isFinite(amount) || amount <= 0) return null;
-              return {
-                key: `template:${id}`,
-                name,
-                amount,
-                selected: false,
-                scopeLabel: "Custom saved head",
-                residencyScope: normalizeExtraFeeResidencyScope("ALL"),
-                splitIntoTwoInstallments: Boolean(x.splitIntoTwoInstallments),
-              };
-            })
-            .filter((h: FeeHeadOption | null): h is FeeHeadOption => h !== null);
-        }
-
-        let catalogHeads: FeeHeadOption[] = [];
-        if (extrasRes.ok) {
-          const extrasJson = await extrasRes.json().catch(() => ({}));
-          const allExtras = Array.isArray(extrasJson?.extraFees) ? extrasJson.extraFees : [];
-          const studentExtras = allExtras
-            .filter((x: any) => x?.targetType === "STUDENT" && x?.targetStudentId === row.studentId)
-            .map((x: any) => ({
-              id: String(x.id),
-              name: String(x.name ?? "Extra Fee"),
-              amount: Number(x.amount ?? 0),
-              splitIntoTwoInstallments: Boolean(x.splitIntoTwoInstallments),
-            }));
-          setExistingStudentExtras(studentExtras);
-
-          const classById = new Map(classes.map((c) => [c.id, `${c.name}${c.section ? `-${c.section}` : ""}`]));
-          const catalogExtras = allExtras.filter((x: { targetType?: string }) =>
-            ["SCHOOL", "CLASS", "SECTION"].includes(String(x?.targetType ?? ""))
-          );
-          catalogHeads = catalogExtras
-            .map((x: Record<string, unknown>): FeeHeadOption | null => {
-              const id = String(x.id ?? "");
-              const name = String(x.name ?? "").trim();
-              const amount = Number(x.amount ?? 0);
-              if (!id || !name || !Number.isFinite(amount) || amount <= 0) return null;
-              return {
-                key: id,
-                name,
-                amount,
-                selected: false,
-                scopeLabel: formatCatalogExtraScope(
-                  {
-                    targetType: x.targetType as string | null,
-                    targetClassId: x.targetClassId as string | null,
-                    targetSection: x.targetSection as string | null,
-                  },
-                  classById
-                ),
-                residencyScope: normalizeExtraFeeResidencyScope(x.residencyScope),
-                splitIntoTwoInstallments: Boolean(x.splitIntoTwoInstallments),
-              };
-            })
-            .filter((h: FeeHeadOption | null): h is FeeHeadOption => h !== null);
-        }
-
-        setDbFeeHeadOptions(
-          [...templateHeads, ...catalogHeads].sort(
-            (a: FeeHeadOption, b: FeeHeadOption) =>
-              a.name.localeCompare(b.name) || a.scopeLabel.localeCompare(b.scopeLabel)
-          )
-        );
-
-        if (structureRes && structureRes.ok) {
-          const structureJson = await structureRes.json().catch(() => ({}));
-          const first = Array.isArray(structureJson?.structures) ? structureJson.structures[0] : null;
-          const components = Array.isArray(first?.components) ? first.components : [];
-          const total = components.reduce((sum: number, c: any) => sum + (Number(c?.amount) || 0), 0);
-          setClassBaseFeeTotal(total);
-        }
+        const catalog = await loadAssignFeeCatalog({
+          studentId: row.studentId,
+          classId: row.classId ?? row.class?.id ?? null,
+          section: row.class?.section ?? null,
+          residencyType: row.residencyType,
+        });
+        setExistingStudentExtras(catalog.existingStudentExtras);
+        setDbFeeHeadOptions(catalog.dbFeeHeadOptions as FeeHeadOption[]);
+        setClassBaseFeeTotal(catalog.classBaseFeeTotal);
       } catch {
-        // Keep modal usable even if preview fetch fails.
+        // Keep modal usable even if catalog fetch fails.
+      } finally {
+        setCatalogLoading(false);
       }
     },
-    [seededFeeRowsForResidency, classes]
+    [seededFeeRowsForResidency]
   );
 
   const addAssignFeeRow = () => {
-    setFeeAssignRows((prev) => [...prev, { id: `row-${Date.now()}-${Math.random()}`, name: "", amount: "" }]);
+    setFeeAssignRows((prev) => [
+      ...prev,
+      { id: `row-${Date.now()}-${Math.random()}`, name: "", amount: "", splitIntoTwoInstallments: false },
+    ]);
   };
 
   const addSelectedDbHeadsToRows = () => {
@@ -938,65 +835,138 @@ export default function TeacherAdmissionTab() {
       .catch(() => setClasses([]));
   }, []);
 
-  const classNameOptions = useMemo(() => {
-    const namesFromDb = Array.from(new Set(classes.map((c) => c.name).filter(Boolean)));
-    const sortedDb = [...namesFromDb].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-    const dbLower = new Set(sortedDb.map((n) => n.trim().toLowerCase()));
-    const syntheticGrades = GRADES.filter((g) => !dbLower.has(g.label.trim().toLowerCase())).map((g) => g.label);
+  /** Only classes from `/api/class/list` — no hardcoded Grade 1…11 list. */
+  const classOptions = useMemo(() => {
+    const sorted = [...classes].sort(
+      (a, b) =>
+        a.name.localeCompare(b.name, undefined, { numeric: true }) ||
+        String(a.section ?? "").localeCompare(String(b.section ?? ""), undefined, { numeric: true })
+    );
     return [
       { label: "Unassigned", value: "" },
-      ...sortedDb.map((n) => ({ label: n, value: n })),
-      ...syntheticGrades.map((label) => ({ label, value: label })),
+      ...sorted.map((c) => ({
+        label: formatClassOptionLabel(c.name, c.section),
+        value: c.id,
+      })),
     ];
   }, [classes]);
 
-  const sectionOptions = useMemo(() => {
-    if (!selectedClassName) return [{ label: "Select class first", value: "" }];
-    const sections = Array.from(
-      new Set(
-        classes
-          .filter((c) => c.name === selectedClassName)
-          .map((c) => c.section)
-          .filter((s): s is string => Boolean(s && String(s).trim()))
-      )
-    );
-    if (sections.length === 0) return [{ label: "No sections", value: "" }];
-    return [{ label: "Select Section", value: "" }, ...sections.map((s) => ({ label: s, value: s }))];
-  }, [classes, selectedClassName]);
-
-  useEffect(() => {
-    if (!selectedClassName) {
-      setForm((p) => ({ ...p, classId: "" }));
-      setSelectedSection("");
-      return;
-    }
-
-    const candidates = classes.filter(
-      (c) => c.name.trim().toLowerCase() === selectedClassName.trim().toLowerCase()
-    );
-    if (candidates.length === 0) {
-      const g = GRADES.find(
-        (x) => x.label.trim().toLowerCase() === selectedClassName.trim().toLowerCase()
-      );
-      if (g) {
-        setForm((p) => ({ ...p, classId: "", gradeSought: g.value }));
+  const onClassIdChange = useCallback(
+    (classId: string) => {
+      if (!classId) {
+        setForm((p) => ({ ...p, classId: "" }));
+        return;
       }
-      setSelectedSection("");
-      return;
-    }
+      const row = classes.find((c) => c.id === classId);
+      setForm((p) => ({
+        ...p,
+        classId,
+        gradeSought: row ? gradeSoughtFromClassName(row.name) : p.gradeSought,
+      }));
+    },
+    [classes]
+  );
 
-    if (candidates.length === 1) {
-      setForm((p) => ({ ...p, classId: candidates[0].id }));
-      setSelectedSection(candidates[0].section ?? "");
-      return;
-    }
-
-    const match = candidates.find((c) => (c.section ?? "") === selectedSection);
-    setForm((p) => ({ ...p, classId: match?.id ?? "" }));
-  }, [classes, selectedClassName, selectedSection]);
+  const renderAdmissionActions = useCallback(
+    (r: AdmissionRow) => {
+      const busy = workflowBusyId === r.id;
+      const enrolled = Boolean(r.studentId);
+      const openPay = (feeType: FeeType) => {
+        setPaymentForm({ paymentMode: "OFFLINE", paymentMethod: "CASH", referenceNo: "", remarks: "" });
+        setPaymentDialog({ row: r, feeType });
+      };
+      return (
+        <div className="flex flex-wrap items-center gap-1 w-[10.5rem]">
+          {Number(r.applicationFee ?? 0) > 0 &&
+            (r.applicationFeePaid ? (
+              <button
+                type="button"
+                onClick={() => printFeeReceipt(r, "APPLICATION")}
+                className="inline-flex items-center justify-center rounded-md border border-lime-400/25 bg-lime-400/10 p-1.5 text-lime-300 hover:bg-lime-400/20"
+                title="Print application fee receipt"
+              >
+                <Printer size={13} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => openPay("APPLICATION")}
+                className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-amber-200 hover:bg-amber-500/20"
+                title="Pay application fee"
+              >
+                App
+              </button>
+            ))}
+          {Number(r.admissionFee ?? 0) > 0 &&
+            (r.admissionFeePaid ? (
+              <button
+                type="button"
+                onClick={() => printFeeReceipt(r, "ADMISSION")}
+                className="inline-flex items-center justify-center rounded-md border border-lime-400/25 bg-lime-400/10 p-1.5 text-lime-300 hover:bg-lime-400/20"
+                title="Print admission fee receipt"
+              >
+                <Printer size={13} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => openPay("ADMISSION")}
+                className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-amber-200 hover:bg-amber-500/20"
+                title="Pay admission fee"
+              >
+                Adm
+              </button>
+            ))}
+          {!enrolled && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => enrollFromRow(r)}
+              className="inline-flex items-center gap-1 px-1.5 py-1 rounded-lg text-[9px] font-semibold bg-lime-400/20 border border-lime-400/35 text-lime-200 hover:bg-lime-400/30 disabled:opacity-50"
+              title="Approve to create the student"
+            >
+              {busy ? <Loader2 size={12} className="animate-spin" /> : <UserPlus size={12} />}
+              {busy ? "…" : "Approve"}
+            </button>
+          )}
+          {enrolled && (
+            <button
+              type="button"
+              onClick={() => openAssignFeesDialog(r)}
+              className="inline-flex items-center gap-1 px-1.5 py-1 rounded-lg text-[9px] font-semibold bg-sky-500/20 border border-sky-500/35 text-sky-100 hover:bg-sky-500/30"
+              title="Assign extra fees"
+            >
+              <IndianRupee size={12} />
+              Fees
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => router.push(`?tab=admission&view=add&editId=${r.id}`)}
+            className="p-1.5 rounded-lg bg-white/5 border border-white/10 text-white/70 hover:bg-white/10"
+            title={enrolled ? "View / edit application" : "Edit application"}
+          >
+            <Pencil size={14} />
+          </button>
+          {!enrolled && (
+            <button
+              type="button"
+              onClick={() => setDeleteRow(r)}
+              className="p-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 hover:bg-red-500/20"
+              title="Delete application"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
+        </div>
+      );
+    },
+    [router, printFeeReceipt, enrollFromRow, workflowBusyId]
+  );
 
   const tableColumns: any[] = useMemo(
     () => [
+      { header: "Actions", render: renderAdmissionActions },
       {
         header: "Application no.",
         render: (r: AdmissionRow) => (
@@ -1010,27 +980,18 @@ export default function TeacherAdmissionTab() {
         ),
       },
       {
-        header: "Class (applied for)",
+        header: "Class",
         render: (r: AdmissionRow) => (
           <span className="text-sm text-white/70">{classLabel(r)}</span>
         ),
       },
       {
-        header: "Grade sought",
-        render: (r: AdmissionRow) => (
-          <span className="text-sm text-white/70">{formatGradeLabel(r.gradeSought)}</span>
-        ),
-      },
-      {
         header: "Boarding",
         render: (r: AdmissionRow) => (
-          <span className="text-sm text-white/70">{formatBoardingLabel(r.boardingType)}</span>
-        ),
-      },
-      {
-        header: "Residency",
-        render: (r: AdmissionRow) => (
-          <span className="text-sm text-white/70">{displayResidencyType(r.residencyType)}</span>
+          <div className="text-xs text-white/70 leading-snug">
+            <div>{formatBoardingLabel(r.boardingType)}</div>
+            <div className="text-white/50">{displayResidencyType(r.residencyType)}</div>
+          </div>
         ),
       },
       {
@@ -1043,22 +1004,15 @@ export default function TeacherAdmissionTab() {
         ),
       },
       {
-        header: "Aadhar",
+        header: "Fees",
         render: (r: AdmissionRow) => (
-          <span className="text-xs font-mono text-white/60">{r.aadharNo || "—"}</span>
+          <span className="text-xs text-white/65 whitespace-nowrap">
+            App {formatInrCell(r.applicationFee)} · Adm {formatInrCell(r.admissionFee)}
+          </span>
         ),
       },
       {
-        header: "Fees (record)",
-        render: (r: AdmissionRow) => (
-          <div className="text-xs text-white/65 leading-relaxed">
-            <div>App: {formatInrCell(r.applicationFee)}</div>
-            <div>Adm: {formatInrCell(r.admissionFee)}</div>
-          </div>
-        ),
-      },
-      {
-        header: "Application status",
+        header: "Status",
         render: (r: AdmissionRow) => {
           if (r.studentId) {
             return (
@@ -1083,110 +1037,16 @@ export default function TeacherAdmissionTab() {
           );
         },
       },
-      { header: "Applied on", render: (r: AdmissionRow) => <span className="text-sm text-white/60">{new Date(r.createdAt).toLocaleDateString()}</span> },
       {
-        header: "Actions",
-        render: (r: AdmissionRow) => {
-          const busy = workflowBusyId === r.id;
-          const enrolled = Boolean(r.studentId);
-          const wf = r.workflowStatus ?? "PENDING";
-          const openPay = (feeType: FeeType) => {
-            setPaymentForm({ paymentMode: "OFFLINE", paymentMethod: "CASH", referenceNo: "", remarks: "" });
-            setPaymentDialog({ row: r, feeType });
-          };
-          return (
-            <div className="flex flex-col gap-2 items-start min-w-[220px]">
-              <div className="flex flex-wrap items-center gap-1">
-                {Number(r.applicationFee ?? 0) > 0 &&
-                  (r.applicationFeePaid ? (
-                    <button
-                      type="button"
-                      onClick={() => printFeeReceipt(r, "APPLICATION")}
-                      className="inline-flex items-center justify-center rounded-md border border-lime-400/25 bg-lime-400/10 p-1.5 text-lime-300 hover:bg-lime-400/20"
-                      title="Print application fee receipt"
-                    >
-                      <Printer size={13} />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => openPay("APPLICATION")}
-                      className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-amber-200 hover:bg-amber-500/20"
-                      title="Pay application fee"
-                    >
-                      Pay app
-                    </button>
-                  ))}
-                {Number(r.admissionFee ?? 0) > 0 &&
-                  (r.admissionFeePaid ? (
-                    <button
-                      type="button"
-                      onClick={() => printFeeReceipt(r, "ADMISSION")}
-                      className="inline-flex items-center justify-center rounded-md border border-lime-400/25 bg-lime-400/10 p-1.5 text-lime-300 hover:bg-lime-400/20"
-                      title="Print admission fee receipt"
-                    >
-                      <Printer size={13} />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => openPay("ADMISSION")}
-                      className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-amber-200 hover:bg-amber-500/20"
-                      title="Pay admission fee"
-                    >
-                      Pay adm
-                    </button>
-                  ))}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {!enrolled && (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => enrollFromRow(r)}
-                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold bg-lime-400/20 border border-lime-400/35 text-lime-200 hover:bg-lime-400/30 disabled:opacity-50"
-                    title="Approve to create the student"
-                  >
-                    {busy ? <Loader2 size={12} className="animate-spin" /> : <UserPlus size={12} />}
-                    {busy ? "Approving..." : "Approve"}
-                  </button>
-                )}
-                {enrolled && (
-                  <button
-                    type="button"
-                    onClick={() => openAssignFeesDialog(r)}
-                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold bg-sky-500/20 border border-sky-500/35 text-sky-100 hover:bg-sky-500/30"
-                    title="Assign extra fees like transport / hostel"
-                  >
-                    <IndianRupee size={12} />
-                    Assign fees
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => router.push(`?tab=admission&view=add&editId=${r.id}`)}
-                  className="p-2 rounded-lg bg-white/5 border border-white/10 text-white/70 hover:bg-white/10"
-                  title={enrolled ? "View / edit application" : "Edit application"}
-                >
-                  <Pencil size={14} />
-                </button>
-                {!enrolled && (
-                  <button
-                    type="button"
-                    onClick={() => setDeleteRow(r)}
-                    className="p-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 hover:bg-red-500/20"
-                    title="Delete application"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        },
+        header: "Applied",
+        render: (r: AdmissionRow) => (
+          <span className="text-sm text-white/60 whitespace-nowrap">
+            {new Date(r.createdAt).toLocaleDateString()}
+          </span>
+        ),
       },
     ],
-    [router, schoolName, schoolAddress, printFeeReceipt, patchWorkflow, enrollFromRow, workflowBusyId]
+    [renderAdmissionActions]
   );
 
   useEffect(() => {
@@ -1283,13 +1143,6 @@ export default function TeacherAdmissionTab() {
           emergencyMotherNo: a.emergencyMotherNo ?? "",
           emergencyGuardianNo: a.emergencyGuardianNo ?? "",
         });
-        if (a.class?.name) {
-          setSelectedClassName(a.class.name);
-          setSelectedSection(a.class?.section ?? "");
-        } else {
-          setSelectedClassName("");
-          setSelectedSection("");
-        }
       })
       .catch((e) => {
         if (!active) return;
@@ -1390,6 +1243,15 @@ export default function TeacherAdmissionTab() {
     }
   };
 
+  const handleSaveClick = async () => {
+    try {
+      await submit();
+      if (editId) router.push("?tab=admission&view=all");
+    } catch {
+      // Error message already set on the form; do not leave edit view on failed save.
+    }
+  };
+
   return (
     <>
       <PageHeader
@@ -1431,22 +1293,6 @@ export default function TeacherAdmissionTab() {
                       Cancel Edit
                     </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await submit();
-                        if (editId) router.push("?tab=admission&view=all");
-                      } catch {
-                        // Error message already set on the form; do not leave edit view on failed save.
-                      }
-                    }}
-                    disabled={submitting}
-                    className="px-4 py-2 rounded-xl bg-lime-400 text-black font-semibold hover:bg-lime-500 disabled:opacity-60 flex items-center gap-2"
-                  >
-                    {submitting ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                    {submitting ? "Saving..." : editId ? "Update" : "Save"}
-                  </button>
                 </div>
               </div>
 
@@ -1493,22 +1339,15 @@ export default function TeacherAdmissionTab() {
                 />
                 <Select
                   label="Class"
-                  value={selectedClassName}
-                  onChange={(v) => setSelectedClassName(v)}
-                  options={classNameOptions}
+                  value={form.classId}
+                  onChange={onClassIdChange}
+                  options={
+                    classOptions.length > 1
+                      ? classOptions
+                      : [{ label: classes.length === 0 ? "No classes in school" : "Unassigned", value: "" }]
+                  }
                 />
               </div>
-
-              {selectedClassName && (
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <Select
-                    label="Section"
-                    value={selectedSection}
-                    onChange={(v) => setSelectedSection(v)}
-                    options={sectionOptions}
-                  />
-                </div>
-              )}
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <InputField
@@ -1625,6 +1464,18 @@ export default function TeacherAdmissionTab() {
                   <InputField label="Aadhar Number" value={form.motherAadharNo} onChange={(v) => setForm((p) => ({ ...p, motherAadharNo: v }))} />
                   <InputField label="Email ID" value={form.motherEmail} onChange={(v) => setForm((p) => ({ ...p, motherEmail: v }))} />
                 </div>
+              </div>
+
+              <div className="flex justify-end pt-4 border-t border-white/10">
+                <button
+                  type="button"
+                  onClick={handleSaveClick}
+                  disabled={submitting}
+                  className="px-4 py-2 rounded-xl bg-lime-400 text-black font-semibold hover:bg-lime-500 disabled:opacity-60 flex items-center justify-center gap-2"
+                >
+                  {submitting ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                  {submitting ? "Saving..." : editId ? "Update" : "Save"}
+                </button>
               </div>
             </div>
 
@@ -1799,9 +1650,11 @@ export default function TeacherAdmissionTab() {
                   container={false}
                   rounded={false}
                   scrollableWide
+                  stickyFirstColumn
+                  scrollAreaClassName="relative z-0 max-h-[min(70vh,720px)] overflow-auto scroll-smooth pb-3 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.35)_rgba(255,255,255,0.08)] [&::-webkit-scrollbar]:h-2.5 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-white/[0.08] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/30 hover:[&::-webkit-scrollbar-thumb]:bg-white/45"
                   caption="Admission applications for this school"
                   tableTitle="Applications"
-                  tableSubtitle="Admission applications only — not the Students tab. Scroll sideways if needed."
+                  tableSubtitle="Actions stay fixed on the left. Scroll inside the table for other columns."
                   containerClassName="max-w-full"
                   emptyText="No admission applications match your filters."
                   paginationInline
@@ -2176,7 +2029,12 @@ export default function TeacherAdmissionTab() {
                   Custom heads saved under <span className="text-white/70">Fees → Add extra fees</span>, plus school /
                   class / section extras from that page. Select and add to this student, or enter custom rows below.
                 </p>
-                {dbFeeHeadOptions.length === 0 ? (
+                {catalogLoading ? (
+                  <div className="flex items-center justify-center gap-2 py-4 text-xs text-white/60">
+                    <Loader2 size={16} className="animate-spin text-lime-300" />
+                    Loading fee heads…
+                  </div>
+                ) : dbFeeHeadOptions.length === 0 ? (
                   <p className="text-xs text-white/45 py-1">
                     No heads yet. Under <span className="text-white/70">Fees → Add extra fees</span>, add{" "}
                     <span className="text-white/70">Custom fee heads</span> or scoped extras (school / class / section),
@@ -2232,7 +2090,8 @@ export default function TeacherAdmissionTab() {
 
               <div className="space-y-2">
                 {feeAssignRows.map((row) => (
-                  <div key={row.id} className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_160px_90px]">
+                  <div key={row.id} className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_160px_90px]">
                     <input
                       type="text"
                       value={row.name}
@@ -2265,6 +2124,22 @@ export default function TeacherAdmissionTab() {
                     >
                       Remove
                     </button>
+                    </div>
+                    <label className="flex cursor-pointer items-center gap-2 text-xs text-white/70">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-white/20"
+                        checked={Boolean(row.splitIntoTwoInstallments)}
+                        onChange={(e) =>
+                          setFeeAssignRows((prev) =>
+                            prev.map((x) =>
+                              x.id === row.id ? { ...x, splitIntoTwoInstallments: e.target.checked } : x
+                            )
+                          )
+                        }
+                      />
+                      Two installments (50% + 50%) - separate rows in database
+                    </label>
                   </div>
                 ))}
               </div>

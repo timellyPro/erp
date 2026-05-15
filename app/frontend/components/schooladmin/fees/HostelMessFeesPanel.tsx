@@ -4,9 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import SelectInput from "../../common/SelectInput";
 import PrimaryButton from "../../common/PrimaryButton";
 import type { Class, ExtraFee } from "./types";
-
-const HOSTEL_NAME = "Hostel Fee";
-const MESS_NAME = "Mess Fee";
+import { findInstallmentPair, isUnsplitLumpExtraFee } from "@/lib/extraFeeInstallments";
 
 const inputClass =
   "w-full min-h-[44px] rounded-xl border border-white/10 bg-[#0F172A]/50 px-4 py-2.5 text-sm text-gray-200 placeholder:text-white/35 focus:border-lime-400/60 focus:outline-none focus:ring-1 focus:ring-lime-400/30";
@@ -20,47 +18,104 @@ function scopeLabel(scope: string | null | undefined): string {
   return "All students";
 }
 
+function normName(name: string) {
+  return name.trim().toLowerCase();
+}
+
+type CatalogHead = {
+  pair: { first: ExtraFee; second: ExtraFee } | null;
+  lump: ExtraFee | null;
+  single: ExtraFee | null;
+};
+
+function resolveCatalogHead(
+  fees: ExtraFee[],
+  baseName: string,
+  match: (e: ExtraFee) => boolean
+): CatalogHead {
+  const pair = findInstallmentPair(fees, baseName, match);
+  if (pair) return { pair, lump: null, single: null };
+  const lump =
+    fees.find(
+      (e) =>
+        match(e) &&
+        isUnsplitLumpExtraFee({
+          name: e.name,
+          splitIntoTwoInstallments: Boolean(e.splitIntoTwoInstallments),
+        })
+    ) ?? null;
+  if (lump) return { pair: null, lump, single: null };
+  const single =
+    fees.find((e) => match(e) && normName(e.name) === normName(baseName)) ?? null;
+  return { pair: null, lump: null, single };
+}
+
+function combinedAmount(head: CatalogHead): number {
+  if (head.pair) return (Number(head.pair.first.amount) || 0) + (Number(head.pair.second.amount) || 0);
+  if (head.lump) return Number(head.lump.amount) || 0;
+  if (head.single) return Number(head.single.amount) || 0;
+  return 0;
+}
+
+function patchTargetId(head: CatalogHead): string | null {
+  if (head.pair) return head.pair.first.id;
+  if (head.lump) return head.lump.id;
+  if (head.single) return head.single.id;
+  return null;
+}
+
 interface HostelMessFeesPanelProps {
   classes: Class[];
   extraFees: ExtraFee[];
+  /** School-wide residency-scoped head (from your fee catalog). */
+  schoolResidencyHeadName: string;
+  /** Per-class head (from your fee catalog). */
+  classHeadName: string;
   onSuccess: () => void;
 }
 
-export default function HostelMessFeesPanel({ classes, extraFees, onSuccess }: HostelMessFeesPanelProps) {
-  const existingSchoolHostel = useMemo(
+export default function HostelMessFeesPanel({
+  classes,
+  extraFees,
+  schoolResidencyHeadName,
+  classHeadName,
+  onSuccess,
+}: HostelMessFeesPanelProps) {
+  const schoolHead = useMemo(
     () =>
-      extraFees.find(
-        (e) =>
-          e.targetType === "SCHOOL" && e.name.trim().toLowerCase() === HOSTEL_NAME.toLowerCase()
-      ) ?? null,
-    [extraFees]
+      resolveCatalogHead(extraFees, schoolResidencyHeadName, (e) => e.targetType === "SCHOOL"),
+    [extraFees, schoolResidencyHeadName]
   );
 
-  const [hostelAmount, setHostelAmount] = useState("");
-  const [hostelSaving, setHostelSaving] = useState(false);
+  const [schoolAmount, setSchoolAmount] = useState("");
+  const [schoolSaving, setSchoolSaving] = useState(false);
 
   useEffect(() => {
-    if (existingSchoolHostel) setHostelAmount(String(existingSchoolHostel.amount));
-    else setHostelAmount("");
-  }, [existingSchoolHostel?.id, existingSchoolHostel?.amount]);
+    const total = combinedAmount(schoolHead);
+    setSchoolAmount(total > 0 ? String(total) : "");
+  }, [schoolHead]);
 
-  const saveHostel = async () => {
-    const amt = Number(hostelAmount);
+  const saveSchoolHead = async () => {
+    const amt = Number(schoolAmount);
     if (!Number.isFinite(amt) || amt <= 0) {
-      alert("Enter a valid hostel fee amount (₹)");
+      alert("Enter a valid amount (₹)");
       return;
     }
-    setHostelSaving(true);
+    setSchoolSaving(true);
     try {
-      if (existingSchoolHostel) {
-        const res = await fetch(`/api/fees/extra/${existingSchoolHostel.id}`, {
+      const targetId = patchTargetId(schoolHead);
+      if (targetId) {
+        const res = await fetch(`/api/fees/extra/${targetId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ amount: amt, splitIntoTwoInstallments: true }),
+          body: JSON.stringify({
+            combinedInstallmentTotal: amt,
+            splitIntoTwoInstallments: true,
+          }),
         });
         const data = await res.json();
         if (!res.ok) {
-          alert(data.message || "Failed to update hostel fee");
+          alert(data.message || "Failed to update fee");
           return;
         }
       } else {
@@ -68,7 +123,7 @@ export default function HostelMessFeesPanel({ classes, extraFees, onSuccess }: H
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            name: HOSTEL_NAME,
+            name: schoolResidencyHeadName,
             amount: amt,
             targetType: "SCHOOL",
             residencyScope: "HOSTELLER",
@@ -77,56 +132,70 @@ export default function HostelMessFeesPanel({ classes, extraFees, onSuccess }: H
         });
         const data = await res.json();
         if (!res.ok) {
-          alert(data.message || "Failed to save hostel fee");
+          alert(data.message || "Failed to save fee");
           return;
         }
       }
       onSuccess();
     } finally {
-      setHostelSaving(false);
+      setSchoolSaving(false);
     }
   };
-
-  const messForClass = (classId: string) =>
-    extraFees.find(
-      (e) =>
-        e.targetType === "CLASS" &&
-        e.targetClassId === classId &&
-        e.name.trim().toLowerCase() === MESS_NAME.toLowerCase()
-    );
 
   const [messClassId, setMessClassId] = useState("");
   const [messAmount, setMessAmount] = useState("");
   const [messSaving, setMessSaving] = useState(false);
 
-  const existingMess = messClassId ? messForClass(messClassId) : null;
+  const classHead = useMemo(() => {
+    if (!messClassId) return null;
+    return resolveCatalogHead(
+      extraFees,
+      classHeadName,
+      (e) => e.targetType === "CLASS" && e.targetClassId === messClassId
+    );
+  }, [extraFees, classHeadName, messClassId]);
 
   useEffect(() => {
-    if (existingMess) setMessAmount(String(existingMess.amount));
-    else setMessAmount("");
-  }, [messClassId, existingMess?.id, existingMess?.amount]);
+    if (!classHead) {
+      setMessAmount("");
+      return;
+    }
+    const total = combinedAmount(classHead);
+    setMessAmount(total > 0 ? String(total) : "");
+  }, [classHead]);
 
-  const saveMess = async () => {
+  const saveClassHead = async () => {
     if (!messClassId) {
-      alert("Select a class for mess fee");
+      alert("Select a class");
       return;
     }
     const amt = Number(messAmount);
     if (!Number.isFinite(amt) || amt <= 0) {
-      alert("Enter a valid mess fee amount (₹)");
+      alert("Enter a valid amount (₹)");
       return;
     }
     setMessSaving(true);
     try {
-      if (existingMess) {
-        const res = await fetch(`/api/fees/extra/${existingMess.id}`, {
+      const head =
+        classHead ??
+        resolveCatalogHead(
+          extraFees,
+          classHeadName,
+          (e) => e.targetType === "CLASS" && e.targetClassId === messClassId
+        );
+      const targetId = patchTargetId(head);
+      if (targetId) {
+        const res = await fetch(`/api/fees/extra/${targetId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ amount: amt, splitIntoTwoInstallments: true }),
+          body: JSON.stringify({
+            combinedInstallmentTotal: amt,
+            splitIntoTwoInstallments: true,
+          }),
         });
         const data = await res.json();
         if (!res.ok) {
-          alert(data.message || "Failed to update mess fee");
+          alert(data.message || "Failed to update fee");
           return;
         }
       } else {
@@ -134,17 +203,17 @@ export default function HostelMessFeesPanel({ classes, extraFees, onSuccess }: H
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            name: MESS_NAME,
+            name: classHeadName,
             amount: amt,
             targetType: "CLASS",
             targetClassId: messClassId,
-            residencyScope: "ALL",
+            residencyScope: "DAY_SCHOLAR",
             splitIntoTwoInstallments: true,
           }),
         });
         const data = await res.json();
         if (!res.ok) {
-          alert(data.message || "Failed to save mess fee");
+          alert(data.message || "Failed to save fee");
           return;
         }
       }
@@ -154,48 +223,57 @@ export default function HostelMessFeesPanel({ classes, extraFees, onSuccess }: H
     }
   };
 
+  const schoolScopeMismatch =
+    schoolHead.lump &&
+    schoolHead.lump.residencyScope?.toUpperCase() !== "HOSTELLER" &&
+    !schoolHead.pair;
+
   return (
     <section className="rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur sm:p-6">
       <header className="mb-6 border-b border-white/10 pb-5">
-        <h3 className="text-lg font-semibold tracking-tight text-white">Hostel and mess fees</h3>
+        <h3 className="text-lg font-semibold tracking-tight text-white">School & class catalog amounts</h3>
         <p className="mt-2 max-w-3xl text-sm leading-relaxed text-white/55">
-          Hostel is one school-wide amount, billed only as a fee head for students marked{" "}
-          <span className="font-medium text-white/75">Hostel</span> (residency). Mess is set per class and appears as a head for
-          everyone in that class.
+          Quick entry for two common catalog heads. When &quot;two installments&quot; is enabled on the template,
+          amounts are saved as <span className="font-medium text-white/75">two separate rows</span> (50% + 50%) so each
+          installment can be paid and edited independently.
         </p>
       </header>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:items-stretch lg:gap-8">
         <div className="flex min-h-0 flex-col rounded-xl border border-white/10 bg-black/20 p-5 sm:p-6">
           <div className="min-h-[4.5rem] border-b border-white/5 pb-4">
-            <h4 className="text-base font-semibold text-white">School hostel fee</h4>
-            <p className="mt-1 text-xs leading-snug text-white/50">Hostel students only · one amount for the whole school</p>
+            <h4 className="text-base font-semibold text-white">{schoolResidencyHeadName}</h4>
+            <p className="mt-1 text-xs leading-snug text-white/50">School-wide · hostellers only</p>
           </div>
           <div className="flex flex-1 flex-col gap-4 pt-5">
-            {existingSchoolHostel && existingSchoolHostel.residencyScope?.toUpperCase() !== "HOSTELLER" && (
+            {schoolScopeMismatch && (
               <p className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100/95">
-                This head is not limited to hostellers yet ({scopeLabel(existingSchoolHostel.residencyScope)}). Remove
-                it in the catalog and save again here to charge hostellers only.
+                This head is not limited to hostellers yet ({scopeLabel(schoolHead.lump?.residencyScope)}).
+              </p>
+            )}
+            {schoolHead.pair && (
+              <p className="text-xs text-white/45">
+                In DB: {schoolHead.pair.first.name} · {schoolHead.pair.second.name}
               </p>
             )}
             <div className="flex-1">
-              <label className={labelClass} htmlFor="hostel-fee-amount">
-                Amount (₹)
+              <label className={labelClass} htmlFor="school-residency-fee-amount">
+                Combined amount (₹)
               </label>
               <input
-                id="hostel-fee-amount"
+                id="school-residency-fee-amount"
                 type="number"
-                value={hostelAmount}
-                onChange={(e) => setHostelAmount(e.target.value)}
+                value={schoolAmount}
+                onChange={(e) => setSchoolAmount(e.target.value)}
                 className={inputClass}
                 placeholder="e.g. 50000"
               />
             </div>
             <div className="mt-auto w-full pt-2">
               <PrimaryButton
-                title={hostelSaving ? "Saving…" : existingSchoolHostel ? "Update hostel fee" : "Save hostel fee"}
-                loading={hostelSaving}
-                onClick={saveHostel}
+                title={schoolSaving ? "Saving…" : patchTargetId(schoolHead) ? "Update" : "Save"}
+                loading={schoolSaving}
+                onClick={saveSchoolHead}
               />
             </div>
           </div>
@@ -203,30 +281,33 @@ export default function HostelMessFeesPanel({ classes, extraFees, onSuccess }: H
 
         <div className="flex min-h-0 flex-col rounded-xl border border-white/10 bg-black/20 p-5 sm:p-6">
           <div className="min-h-[4.5rem] border-b border-white/5 pb-4">
-            <h4 className="text-base font-semibold text-white">Mess fee (by class)</h4>
-            <p className="mt-1 text-xs leading-snug text-white/50">All students in the selected class</p>
+            <h4 className="text-base font-semibold text-white">{classHeadName}</h4>
+            <p className="mt-1 text-xs leading-snug text-white/50">Per class</p>
           </div>
           <div className="flex flex-1 flex-col gap-4 pt-5">
-            <div>
-              <SelectInput
-                label="Class"
-                value={messClassId}
-                onChange={setMessClassId}
-                options={[
-                  { label: "Select class", value: "" },
-                  ...classes.map((c) => ({
-                    label: `${c.name}${c.section ? `-${c.section}` : ""}`,
-                    value: c.id,
-                  })),
-                ]}
-              />
-            </div>
+            <SelectInput
+              label="Class"
+              value={messClassId}
+              onChange={setMessClassId}
+              options={[
+                { label: "Select class", value: "" },
+                ...classes.map((c) => ({
+                  label: `${c.name}${c.section ? `-${c.section}` : ""}`,
+                  value: c.id,
+                })),
+              ]}
+            />
+            {classHead?.pair && (
+              <p className="text-xs text-white/45">
+                In DB: {classHead.pair.first.name} · {classHead.pair.second.name}
+              </p>
+            )}
             <div className="flex-1">
-              <label className={labelClass} htmlFor="mess-fee-amount">
-                Mess amount (₹)
+              <label className={labelClass} htmlFor="class-extra-fee-amount">
+                Combined amount (₹)
               </label>
               <input
-                id="mess-fee-amount"
+                id="class-extra-fee-amount"
                 type="number"
                 value={messAmount}
                 onChange={(e) => setMessAmount(e.target.value)}
@@ -237,9 +318,9 @@ export default function HostelMessFeesPanel({ classes, extraFees, onSuccess }: H
             </div>
             <div className="mt-auto w-full pt-2">
               <PrimaryButton
-                title={messSaving ? "Saving…" : existingMess ? "Update mess fee for class" : "Save mess fee for class"}
+                title={messSaving ? "Saving…" : classHead && patchTargetId(classHead) ? "Update" : "Save"}
                 loading={messSaving}
-                onClick={saveMess}
+                onClick={saveClassHead}
               />
             </div>
           </div>

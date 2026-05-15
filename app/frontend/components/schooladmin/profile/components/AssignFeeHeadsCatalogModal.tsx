@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, X } from "lucide-react";
-import { normalizeExtraFeeResidencyScope } from "@/lib/extraFeeResidencyScope";
+import { loadAssignFeeCatalog } from "@/lib/loadAssignFeeCatalog";
 import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
 
 type FeeAssignRow = {
@@ -30,23 +30,6 @@ function sanitizeMoneyInput(raw: string): string {
   const intPart = cleaned.slice(0, dot).replace(/\D/g, "");
   const frac = cleaned.slice(dot + 1).replace(/\D/g, "").slice(0, 2);
   return frac.length > 0 ? `${intPart}.${frac}` : `${intPart}.`;
-}
-
-function formatCatalogExtraScope(
-  x: { targetType?: string | null; targetClassId?: string | null; targetSection?: string | null },
-  classById: Map<string, string>
-): string {
-  const t = String(x.targetType ?? "");
-  if (t === "SCHOOL") return "School-wide";
-  const classLabel = x.targetClassId ? classById.get(String(x.targetClassId)) : undefined;
-  if (t === "CLASS") return classLabel ? `Class ${classLabel}` : "Class-specific";
-  if (t === "SECTION") {
-    const sec = x.targetSection ? String(x.targetSection) : "";
-    if (classLabel && sec) return `${classLabel} · section ${sec}`;
-    if (classLabel) return `${classLabel} · section`;
-    return "Section-specific";
-  }
-  return t || "—";
 }
 
 function normalizeResidencyType(value: string | null | undefined): string {
@@ -78,6 +61,8 @@ type Props = {
   studentId: string;
   studentName: string;
   classDisplayName: string;
+  classId?: string | null;
+  classSection?: string | null;
   residencyType?: string | null;
   onClose: () => void;
   onSuccess: () => void;
@@ -87,6 +72,8 @@ export function AssignFeeHeadsCatalogModal({
   studentId,
   studentName,
   classDisplayName,
+  classId = null,
+  classSection = null,
   residencyType,
   onClose,
   onSuccess,
@@ -101,86 +88,19 @@ export function AssignFeeHeadsCatalogModal({
     setLoadingCatalog(true);
     setAssignFeeError(null);
     try {
-      const [extrasRes, templatesRes, classesRes] = await Promise.all([
-        fetch("/api/fees/extra", { credentials: "include", cache: "no-store" }),
-        fetch("/api/fees/extra-head-templates", { credentials: "include", cache: "no-store" }),
-        fetch("/api/class/list", { credentials: "include", cache: "no-store" }),
-      ]);
-
-      const classesJson = classesRes.ok ? await classesRes.json().catch(() => ({})) : {};
-      const classList = Array.isArray(classesJson?.classes) ? classesJson.classes : [];
-      const classById = new Map<string, string>();
-      for (const c of classList as { id?: string; name?: string; section?: string | null }[]) {
-        classById.set(String(c.id ?? ""), `${c.name ?? ""}${c.section ? `-${c.section}` : ""}`);
-      }
-
-      let templateHeads: FeeHeadOption[] = [];
-      if (templatesRes.ok) {
-        const tplJson = await templatesRes.json().catch(() => ({}));
-        const tplList = Array.isArray(tplJson?.templates) ? tplJson.templates : [];
-        templateHeads = tplList
-          .map((x: { id?: string; name?: string; amount?: number; splitIntoTwoInstallments?: boolean }): FeeHeadOption | null => {
-            const id = String(x.id ?? "");
-            const name = String(x.name ?? "").trim();
-            const amount = Number(x.amount ?? 0);
-            if (!id || !name || !Number.isFinite(amount) || amount <= 0) return null;
-            return {
-              key: `template:${id}`,
-              name,
-              amount,
-              selected: false,
-              scopeLabel: "Custom saved head",
-              residencyScope: normalizeExtraFeeResidencyScope("ALL"),
-              splitIntoTwoInstallments: Boolean(x.splitIntoTwoInstallments),
-            };
-          })
-          .filter((h: FeeHeadOption | null): h is FeeHeadOption => h !== null);
-      }
-
-      let catalogHeads: FeeHeadOption[] = [];
-      if (extrasRes.ok) {
-        const extrasJson = await extrasRes.json().catch(() => ({}));
-        const allExtras = Array.isArray(extrasJson?.extraFees) ? extrasJson.extraFees : [];
-        const catalogExtras = allExtras.filter((x: { targetType?: string }) =>
-          ["SCHOOL", "CLASS", "SECTION"].includes(String(x?.targetType ?? ""))
-        );
-        catalogHeads = catalogExtras
-          .map((x: Record<string, unknown>): FeeHeadOption | null => {
-            const id = String(x.id ?? "");
-            const name = String(x.name ?? "").trim();
-            const amount = Number(x.amount ?? 0);
-            if (!id || !name || !Number.isFinite(amount) || amount <= 0) return null;
-            return {
-              key: id,
-              name,
-              amount,
-              selected: false,
-              scopeLabel: formatCatalogExtraScope(
-                {
-                  targetType: x.targetType as string | null,
-                  targetClassId: x.targetClassId as string | null,
-                  targetSection: x.targetSection as string | null,
-                },
-                classById
-              ),
-              residencyScope: normalizeExtraFeeResidencyScope(x.residencyScope),
-              splitIntoTwoInstallments: Boolean(x.splitIntoTwoInstallments),
-            };
-          })
-          .filter((h: FeeHeadOption | null): h is FeeHeadOption => h !== null);
-      }
-
-      setDbFeeHeadOptions(
-        [...templateHeads, ...catalogHeads].sort(
-          (a, b) => a.name.localeCompare(b.name) || a.scopeLabel.localeCompare(b.scopeLabel)
-        )
-      );
+      const catalog = await loadAssignFeeCatalog({
+        studentId,
+        classId,
+        section: classSection,
+        residencyType,
+      });
+      setDbFeeHeadOptions(catalog.dbFeeHeadOptions as FeeHeadOption[]);
     } catch {
       setDbFeeHeadOptions([]);
     } finally {
       setLoadingCatalog(false);
     }
-  }, []);
+  }, [studentId, residencyType, classId, classSection]);
 
   useEffect(() => {
     void loadCatalog();

@@ -5,7 +5,7 @@ import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
 import type { Prisma } from "@prisma/client";
-import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 
 const hyperpgBaseUrl = process.env.HYPERPG_BASE_URL || "https://sandbox.hyperpg.in";
@@ -183,7 +183,7 @@ export async function POST(req: Request) {
       const residency = student.residencyType ?? "Day Scholar";
       const rte = isStudentRte(residency);
       const extraFees = extraFeesRaw
-        .filter((ef) => extraFeeAppliesToStudentResidency(ef.residencyScope, residency))
+        .filter((ef) => extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, residency))
         .filter((ef) => !(rte && isTuitionNamedExtraFee(ef.name)));
 
       const getHeadKey = (h: SelectedHead) => {

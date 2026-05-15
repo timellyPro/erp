@@ -1,6 +1,6 @@
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
-import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 
 export type FeeDueColumnGroup = {
@@ -88,7 +88,8 @@ function applicableExtrasForDueReport(
   includeSchoolWideExtras: boolean
 ): ExtraFeeLite[] {
   return extraFees.filter((ef) => {
-    if (!extraFeeAppliesToStudentResidency(ef.residencyScope, opts.studentResidency)) return false;
+    if (!extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, opts.studentResidency))
+      return false;
     if (isStudentRte(opts.studentResidency) && isTuitionNamedExtraFee(ef.name)) return false;
     if (ef.targetType === "SCHOOL") return includeSchoolWideExtras;
     return extraFeeApplies(ef, opts);
@@ -100,7 +101,7 @@ function extraFeeAppliesToStudentForRoster(
   st: StudentFeeDueInput,
   includeSchoolWideExtras: boolean
 ): boolean {
-  if (!extraFeeAppliesToStudentResidency(ef.residencyScope, st.category)) return false;
+  if (!extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, st.category)) return false;
   if (isStudentRte(st.category) && isTuitionNamedExtraFee(ef.name)) return false;
   if (ef.targetType === "SCHOOL") return includeSchoolWideExtras;
   return extraFeeApplies(ef, { classId: st.classId, section: st.section, studentId: st.studentId });

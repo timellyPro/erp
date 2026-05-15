@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import { patchExtraFeeWithInstallmentSupport } from "@/lib/extraFeeInstallmentDb";
 import { Prisma } from "@prisma/client";
 
 const STUDENT_FEE_UPDATE_CHUNK = 200;
@@ -33,7 +34,6 @@ async function applyStudentFeeDelta(studentIds: string[], delta: number) {
   if (studentIds.length === 0 || delta === 0) return;
   for (let i = 0; i < studentIds.length; i += STUDENT_FEE_UPDATE_CHUNK) {
     const ids = studentIds.slice(i, i + STUDENT_FEE_UPDATE_CHUNK);
-    // Keep remainingFee non-negative while applying +/- delta in bulk.
     await prisma.$executeRaw(
       Prisma.sql`
         UPDATE "StudentFee"
@@ -45,6 +45,33 @@ async function applyStudentFeeDelta(studentIds: string[], delta: number) {
       `
     );
   }
+}
+
+async function eligibleStudentIdsForExtra(
+  extraFee: {
+    targetType: string;
+    targetClassId: string | null;
+    targetSection: string | null;
+    targetStudentId: string | null;
+    residencyScope: string;
+  },
+  schoolId: string
+) {
+  const studentWhere = getStudentWhere(
+    extraFee.targetType,
+    extraFee.targetClassId,
+    extraFee.targetSection,
+    extraFee.targetStudentId,
+    schoolId
+  );
+  if (!studentWhere) return [];
+  const students = await prisma.student.findMany({
+    where: studentWhere,
+    select: { id: true, residencyType: true },
+  });
+  return students
+    .filter((s) => extraFeeAppliesToStudentResidency(extraFee.residencyScope, s.residencyType))
+    .map((s) => s.id);
 }
 
 export async function PATCH(
@@ -80,46 +107,55 @@ export async function PATCH(
     }
 
     const body = await req.json();
-    const { name, amount, splitIntoTwoInstallments } = body;
+    console.log("\n========== EXTRA FEE PATCH ==========");
+    console.log("Fee ID:", id);
+    console.log("Current DB row:", {
+      name: extraFee.name,
+      amount: extraFee.amount,
+      splitIntoTwoInstallments: extraFee.splitIntoTwoInstallments,
+      targetType: extraFee.targetType,
+    });
+    console.log("Request body:", body);
+    console.log("====================================\n");
 
-    const updates: Record<string, string | number | boolean> = {};
-    if (name !== undefined) updates.name = String(name).trim();
-    if (amount !== undefined && typeof amount === "number" && amount > 0)
-      updates.amount = amount;
-    if (splitIntoTwoInstallments !== undefined) {
-      updates.splitIntoTwoInstallments = Boolean(splitIntoTwoInstallments);
-    }
+    const result = await patchExtraFeeWithInstallmentSupport(prisma, extraFee, {
+      name: body.name,
+      amount: body.amount,
+      splitIntoTwoInstallments: body.splitIntoTwoInstallments,
+      combinedInstallmentTotal: body.combinedInstallmentTotal,
+    });
 
-    if (Object.keys(updates).length === 0) {
+    if (result === "no_changes") {
+      console.log("[ExtraFee Installments] PATCH result: no changes\n");
       return NextResponse.json({ extraFee });
     }
 
-    const studentWhere = getStudentWhere(
-      extraFee.targetType,
-      extraFee.targetClassId,
-      extraFee.targetSection,
-      extraFee.targetStudentId,
-      schoolId
-    );
-
-    const updated = await prisma.extraFee.update({
-      where: { id },
-      data: updates,
-    });
-
-    if (studentWhere && updates.amount !== undefined) {
-      const delta = (updates.amount as number) - extraFee.amount;
-      const students = await prisma.student.findMany({
-        where: studentWhere,
-        select: { id: true, residencyType: true },
+    if (result.studentFeeDelta !== 0) {
+      const eligibleIds = await eligibleStudentIdsForExtra(extraFee, schoolId);
+      await applyStudentFeeDelta(eligibleIds, result.studentFeeDelta);
+      console.log("[ExtraFee Installments] Student fee totals adjusted:", {
+        studentCount: eligibleIds.length,
+        delta: result.studentFeeDelta,
       });
-      const eligibleIds = students
-        .filter((s) => extraFeeAppliesToStudentResidency(extraFee.residencyScope, s.residencyType))
-        .map((s) => s.id);
-      await applyStudentFeeDelta(eligibleIds, delta);
     }
 
-    return NextResponse.json({ extraFee: updated });
+    console.log("\n========== EXTRA FEE PATCH RESULT ==========");
+    console.log("Action:", result.migrated ? "SPLIT (1 row → 2 rows)" : result.splitApplied ? "UPDATED PAIR" : "SINGLE ROW");
+    console.log("Row IDs now:", result.extraFeeIds);
+    console.log("migrated:", result.migrated, "| splitApplied:", result.splitApplied);
+    if (result.migrated) {
+      console.log("✓ Old lump was replaced by two installment rows in the database.");
+    } else if (result.splitApplied) {
+      console.log("✓ Both installment rows were updated together.");
+    }
+    console.log("============================================\n");
+
+    return NextResponse.json({
+      extraFee: result.extraFee,
+      extraFeeIds: result.extraFeeIds,
+      splitApplied: result.splitApplied,
+      migrated: result.migrated,
+    });
   } catch (error: unknown) {
     const err = error as { message?: string };
     console.error("Extra fee PATCH error:", error);
@@ -162,24 +198,8 @@ export async function DELETE(
       );
     }
 
-    const studentWhere = getStudentWhere(
-      extraFee.targetType,
-      extraFee.targetClassId,
-      extraFee.targetSection,
-      extraFee.targetStudentId,
-      schoolId
-    );
-
-    if (studentWhere) {
-      const students = await prisma.student.findMany({
-        where: studentWhere,
-        select: { id: true, residencyType: true },
-      });
-      const eligibleIds = students
-        .filter((s) => extraFeeAppliesToStudentResidency(extraFee.residencyScope, s.residencyType))
-        .map((s) => s.id);
-      await applyStudentFeeDelta(eligibleIds, -extraFee.amount);
-    }
+    const eligibleIds = await eligibleStudentIdsForExtra(extraFee, schoolId);
+    await applyStudentFeeDelta(eligibleIds, -extraFee.amount);
     await prisma.extraFee.delete({ where: { id } });
 
     return NextResponse.json({ success: true });

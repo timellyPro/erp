@@ -5,7 +5,7 @@ import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
-import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 
 export async function GET() {
@@ -254,7 +254,8 @@ export async function GET() {
 
       const residency = fee.student.residencyType ?? "Day Scholar";
       const applicableExtraFees = extraFees.filter((ef) => {
-        if (!extraFeeAppliesToStudentResidency(ef.residencyScope, residency)) return false;
+        if (!extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, residency))
+          return false;
         if (isStudentRte(residency) && isTuitionNamedExtraFee(ef.name)) return false;
         if (ef.targetType === "SCHOOL") return true;
         if (ef.targetType === "CLASS") return !!classId && ef.targetClassId === classId;
