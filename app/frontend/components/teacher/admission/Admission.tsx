@@ -817,16 +817,25 @@ export default function TeacherAdmissionTab() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || "Enrollment failed");
+      const studentId = typeof data?.studentId === "string" ? data.studentId : null;
       setMessageTone("success");
-      setMessage(data?.message || "Student created successfully");
-      setReloadKey((k) => k + 1);
+      setMessage(
+        studentId
+          ? "Student created successfully. Opening student profile…"
+          : data?.message || "Student created successfully"
+      );
+      if (studentId) {
+        router.push(studentDetailsFeesUrlForPathname(pathname, studentId));
+      } else {
+        setReloadKey((k) => k + 1);
+      }
     } catch (e) {
       setMessageTone("error");
       setMessage(e instanceof Error ? e.message : "Enrollment failed");
     } finally {
       setWorkflowBusyId(null);
     }
-  }, []);
+  }, [pathname, router]);
 
   useEffect(() => {
     fetch("/api/class/list")
@@ -1246,7 +1255,7 @@ export default function TeacherAdmissionTab() {
   const handleSaveClick = async () => {
     try {
       await submit();
-      if (editId) router.push("?tab=admission&view=all");
+      router.push("?tab=admission&view=all");
     } catch {
       // Error message already set on the form; do not leave edit view on failed save.
     }
