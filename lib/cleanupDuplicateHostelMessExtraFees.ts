@@ -313,7 +313,7 @@ async function fetchHostelMessRows(
  * lump + class installment pair with the same total).
  */
 export async function cleanupDuplicateHostelMessExtraFees(
-  db: CleanupDb & Pick<typeof prisma, "extraFee">,
+  db: CleanupDb & Pick<typeof prisma, "extraFee" | "student">,
   schoolId: string
 ): Promise<boolean> {
   const rows = await fetchHostelMessRows(db, schoolId);
@@ -354,6 +354,13 @@ export async function cleanupDuplicateHostelMessExtraFees(
     changed = true;
   }
 
+  if ((await removeStudentScopedHostelWhenSchoolWideExists(db, schoolId)) > 0) {
+    changed = true;
+  }
+  if ((await removeStudentScopedMessWhenClassMessExists(db, schoolId)) > 0) {
+    changed = true;
+  }
+
   return changed;
 }
 
@@ -387,6 +394,103 @@ export async function removeStudentScopedHostelWhenSchoolWideExists(
     removed += 1;
   }
   return removed;
+}
+
+/**
+ * Per-student mess rows from bulk import duplicate class-level mess (admission / fee structure).
+ * Merge payments into the class installment pair when possible, then delete the student row.
+ */
+export async function removeStudentScopedMessWhenClassMessExists(
+  db: CleanupDb & Pick<typeof prisma, "extraFee" | "student">,
+  schoolId: string
+): Promise<number> {
+  const rows = (await fetchHostelMessRows(db, schoolId)).filter((f) => isMessCategoryExtraFeeName(f.name));
+
+  const classIdsWithMess = new Set<string>();
+  const classMessByClassId = new Map<string, HostelMessCleanupRow[]>();
+  for (const f of rows) {
+    if (f.targetType === "CLASS" && f.targetClassId) {
+      classIdsWithMess.add(f.targetClassId);
+      const list = classMessByClassId.get(f.targetClassId) ?? [];
+      list.push(f);
+      classMessByClassId.set(f.targetClassId, list);
+    }
+  }
+  if (classIdsWithMess.size === 0) return 0;
+
+  const studentMess = rows.filter((f) => f.targetType === "STUDENT" && f.targetStudentId);
+  if (studentMess.length === 0) return 0;
+
+  const students = await db.student.findMany({
+    where: { schoolId, classId: { in: [...classIdsWithMess] } },
+    select: { id: true, classId: true },
+  });
+  const classIdByStudent = new Map(
+    students.filter((s) => s.classId).map((s) => [s.id, s.classId as string])
+  );
+
+  let removed = 0;
+  for (const dup of studentMess) {
+    const studentId = dup.targetStudentId;
+    if (!studentId) continue;
+    const classId = classIdByStudent.get(studentId);
+    if (!classId || !classIdsWithMess.has(classId)) continue;
+
+    const classMess = classMessByClassId.get(classId) ?? [];
+    const canonicalBase = canonicalExtraFeeBaseName(dup.name) || "Mess Fee";
+    const idx = installmentIndexFromName(dup.name);
+
+    if (idx) {
+      const keeper = pickBestInstallment(classMess, idx, canonicalBase);
+      if (keeper) {
+        await mergeDuplicateExtraFeeIntoKeeper(db, dup.id, keeper.id);
+        removed += 1;
+        continue;
+      }
+    }
+
+    const keeper1 = pickBestInstallment(classMess, 1, canonicalBase);
+    const keeper2 = pickBestInstallment(classMess, 2, canonicalBase);
+    if (!idx && keeper1 && keeper2 && isUnsplitLumpExtraFee(dup)) {
+      await deleteLumpKeepingInstallmentPair(
+        db,
+        dup.id,
+        keeper1.id,
+        keeper2.id,
+        Number(keeper1.amount) || 0
+      );
+      removed += 1;
+      continue;
+    }
+
+    const fallbackKeeper = keeper1 ?? keeper2 ?? classMess[0];
+    if (fallbackKeeper) {
+      await mergeDuplicateExtraFeeIntoKeeper(db, dup.id, fallbackKeeper.id);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+/** Rows that {@link removeStudentScopedMessWhenClassMessExists} would remove. */
+export async function countStudentScopedMessWhenClassMessExists(
+  db: Pick<typeof prisma, "extraFee" | "student">,
+  schoolId: string
+): Promise<number> {
+  const rows = (await fetchHostelMessRows(db, schoolId)).filter((f) => isMessCategoryExtraFeeName(f.name));
+  const classIdsWithMess = new Set(
+    rows.filter((f) => f.targetType === "CLASS" && f.targetClassId).map((f) => f.targetClassId as string)
+  );
+  if (classIdsWithMess.size === 0) return 0;
+
+  const students = await db.student.findMany({
+    where: { schoolId, classId: { in: [...classIdsWithMess] } },
+    select: { id: true },
+  });
+  const studentIds = new Set(students.map((s) => s.id));
+  return rows.filter(
+    (f) => f.targetType === "STUDENT" && f.targetStudentId && studentIds.has(f.targetStudentId)
+  ).length;
 }
 
 /** Count per-student hostel rows that would be removed when school-wide pair exists. */

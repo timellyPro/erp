@@ -7,7 +7,12 @@ import {
   discountedSnapshotDueForHead,
   studentFeeDiscountFromRecord,
 } from "@/lib/studentFeeHeadDiscount";
-import { shouldOmitLegacySplitHostelMessExtraForBreakdown } from "@/lib/studentTuitionFromStructure";
+import {
+  computeStudentTuitionParts,
+  finalFeeFromStructureAndExtras,
+  shouldOmitLegacySplitHostelMessExtraForBreakdown,
+  upsertStudentFeeFromStructure,
+} from "@/lib/studentTuitionFromStructure";
 import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 import { isInstallmentFeeName, isUnsplitLumpExtraFee } from "@/lib/extraFeeInstallments";
@@ -353,12 +358,54 @@ export async function computeAdminStudentFeeBreakdown(
   const totalDueBefore = dueHeads.reduce((s, h) => s + h.dueBefore, 0);
   const totalAmount = dueHeads.reduce((s, h) => s + h.snapshotAmount, 0);
 
+  let amountPaid = fee.amountPaid;
+  let finalFee = fee.finalFee;
+  let remainingFee = totalDueBefore;
+
+  const tuitionParts = await computeStudentTuitionParts(prisma, {
+    schoolId,
+    classId,
+    section: classSection,
+    studentId: student.id,
+    residencyType: residency,
+  });
+  const expectedFinal = finalFeeFromStructureAndExtras(
+    tuitionParts.base,
+    tuitionParts.extrasTotal,
+    fee.discountPercent
+  );
+
+  /** Stale StudentFee rows (e.g. after removing bulk mess extras) — realign stored totals with structure. */
+  if (
+    Math.abs(finalFee - expectedFinal) > 0.02 ||
+    Math.abs(fee.totalFee - tuitionParts.totalFee) > 0.02
+  ) {
+    await upsertStudentFeeFromStructure(prisma, {
+      schoolId,
+      studentId: student.id,
+      classId,
+      section: classSection,
+      discountPercent: fee.discountPercent,
+      amountPaid: fee.amountPaid,
+      residencyType: residency,
+    });
+    const synced = await prisma.studentFee.findUnique({
+      where: { studentId: student.id },
+      select: { finalFee: true, amountPaid: true, remainingFee: true },
+    });
+    if (synced) {
+      finalFee = synced.finalFee;
+      amountPaid = synced.amountPaid;
+      remainingFee = Math.max(0, synced.remainingFee);
+    }
+  }
+
   return {
     studentId: student.id,
-    remainingFee: totalDueBefore,
+    remainingFee,
     totalAmount,
-    amountPaid: fee.amountPaid,
-    finalFee: fee.finalFee,
+    amountPaid,
+    finalFee,
     dueHeads,
   };
 }

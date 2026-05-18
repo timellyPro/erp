@@ -143,7 +143,7 @@ export default function FeesTab({ section }: FeesTabProps) {
               section === undefined
                 ? "grid grid-cols-1 gap-4 xl:grid-cols-2 xl:gap-6"
                 : section === "add-extra-fees"
-                  ? "mx-auto w-full max-w-4xl"
+                  ? "mx-auto w-full max-w-6xl"
                   : "mx-auto w-full max-w-3xl"
             }
           >

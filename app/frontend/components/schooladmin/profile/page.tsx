@@ -460,11 +460,11 @@ function StudentDetailsPageContent() {
                 <FeesBreakdown
                   studentId={detail.student.id}
                   classId={detail.student.class?.id ?? null}
-                  totalFee={detail.fee.totalFee}
-                  baseTotalFee={detail.fee.baseTotalFee}
+                  totalFee={feeBreakdown?.totalAmount ?? detail.fee.totalFee}
+                  baseTotalFee={feeBreakdown?.totalAmount ?? detail.fee.baseTotalFee}
                   discountPercent={detail.fee.discountPercent}
-                  amountPaid={detail.fee.amountPaid}
-                  remainingFee={detail.fee.remainingFee}
+                  amountPaid={feeBreakdown?.amountPaid ?? detail.fee.amountPaid}
+                  remainingFee={feeBreakdown?.remainingFee ?? detail.fee.remainingFee}
                   payments={detail.payments}
                   studentName={detail.student.name}
                   admissionNumber={detail.student.admissionNumber}
