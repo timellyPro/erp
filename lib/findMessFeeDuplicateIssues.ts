@@ -23,7 +23,18 @@ type ExtraFeeLike = {
   splitIntoTwoInstallments?: boolean | undefined;
 };
 
+type NormalizedExtraFeeLike = Omit<ExtraFeeLike, "residencyScope"> & {
+  residencyScope: string | null;
+};
+
 type ClassRef = { id: string; name: string; section: string | null };
+
+function normalizeExtraFees(extraFees: ExtraFeeLike[]): NormalizedExtraFeeLike[] {
+  return extraFees.map((e) => ({
+    ...e,
+    residencyScope: e.residencyScope ?? null,
+  }));
+}
 
 function classLabelFromId(classes: ClassRef[], classId: string | null): string {
   if (!classId) return "—";
@@ -37,7 +48,8 @@ export function findMessFeeDuplicateIssues(
   classes: ClassRef[]
 ): MessDuplicateIssue[] {
   const issues: MessDuplicateIssue[] = [];
-  const messFees = extraFees.filter((e) => isMessCategoryExtraFeeName(e.name));
+  const normalized = normalizeExtraFees(extraFees);
+  const messFees = normalized.filter((e) => isMessCategoryExtraFeeName(e.name));
 
   const classIdsWithClassMess = new Set(
     messFees
@@ -59,7 +71,7 @@ export function findMessFeeDuplicateIssues(
 
   for (const ef of messFees) {
     if (
-      shouldOmitLegacySplitHostelMessExtraForBreakdown(ef, extraFees, {
+      shouldOmitLegacySplitHostelMessExtraForBreakdown(ef, normalized, {
         classId: ef.targetClassId,
         residencyType: null,
       })
