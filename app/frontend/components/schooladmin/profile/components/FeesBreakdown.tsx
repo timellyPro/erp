@@ -174,15 +174,25 @@ export const FeesBreakdown = ({
     }
   }
 
-  // Calculate payment percentage
-  const paidPercentage = totalFee > 0 ? (amountPaid / totalFee) * 100 : 0;
   const discountAmount =
     typeof discountFixedAmount === "number" && discountFixedAmount > 0
       ? discountFixedAmount
       : storedDiscountRupeeAmount(baseTotalFee, totalFee, discountFixedAmount);
-  /** Use stored fee totals (authoritative); head sum is for cards only. */
-  const displayTotalAmount = totalFee > 0 ? totalFee : (headsTotalAmount ?? 0);
-  const displayRemainingAmount = remainingFee >= 0 ? remainingFee : (headsRemainingAmount ?? 0);
+  /** Prefer breakdown head sum when loaded — stored StudentFee can be stale after bulk extra cleanup. */
+  const displayTotalAmount =
+    headsTotalAmount != null && headsTotalAmount > 0
+      ? headsTotalAmount
+      : totalFee > 0
+        ? totalFee
+        : 0;
+  const displayRemainingAmount =
+    headsRemainingAmount != null && headsRemainingAmount >= 0
+      ? headsRemainingAmount
+      : remainingFee >= 0
+        ? remainingFee
+        : 0;
+  const paidPercentage =
+    displayTotalAmount > 0 ? (amountPaid / displayTotalAmount) * 100 : 0;
 
   const applyBreakdownData = (data: AdminStudentFeeBreakdownResult) => {
     const dueHeads = Array.isArray(data?.dueHeads) ? data.dueHeads : [];
@@ -215,10 +225,22 @@ export const FeesBreakdown = ({
     );
   };
 
+  const feeSyncNotifiedRef = useRef(false);
+
   useEffect(() => {
     if (!initialFeeBreakdown?.dueHeads?.length) return;
     applyBreakdownData(initialFeeBreakdown);
-  }, [initialFeeBreakdown, studentId]);
+    const syncedTotal = Number(initialFeeBreakdown.totalAmount) || 0;
+    if (
+      !feeSyncNotifiedRef.current &&
+      syncedTotal > 0 &&
+      Math.abs(syncedTotal - totalFee) > 0.02 &&
+      onFeeModified
+    ) {
+      feeSyncNotifiedRef.current = true;
+      onFeeModified();
+    }
+  }, [initialFeeBreakdown, studentId, totalFee, onFeeModified]);
 
   const handleDownloadReceipt = async () => {
     try {
