@@ -54,8 +54,8 @@ export async function GET(req: Request) {
 
     const result = await computeAdminStudentFeeBreakdown(schoolId, studentId, {
       migrateLumps: !skipMigrate,
-      /** Deletes duplicate hostel/mess ExtraFee rows in DB — not UI-only hiding. */
-      cleanupHostelMessDuplicates: true,
+      /** Deletes duplicate hostel/mess ExtraFee rows in DB — skip on read-only fast path. */
+      cleanupHostelMessDuplicates: !skipMigrate,
     });
     return NextResponse.json(result, { status: 200 });
   } catch (error: unknown) {

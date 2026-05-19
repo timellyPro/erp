@@ -69,6 +69,8 @@ export type SplittableFeeHead = {
   key: string;
   label: string;
   amount: number;
+  /** Pre-discount face value; defaults to amount when omitted. */
+  gross?: number;
   paid: number;
   due: number;
   splitIntoTwoInstallments?: boolean;
@@ -118,9 +120,12 @@ export function splitFeeHeadsForDisplay<T extends SplittableFeeHead>(
     }
 
     const total = Number(h.amount) || 0;
+    const grossTotal = Number(h.gross ?? h.amount) || 0;
     const paidTotal = Math.max(Number(h.paid) || 0, 0);
     const firstAmount = Math.round((total / 2) * 100) / 100;
     const secondAmount = Math.round((total - firstAmount) * 100) / 100;
+    const firstGross = Math.round((grossTotal / 2) * 100) / 100;
+    const secondGross = Math.round((grossTotal - firstGross) * 100) / 100;
 
     const firstPaid = Math.min(paidTotal, firstAmount);
     const secondPaid = Math.min(Math.max(paidTotal - firstAmount, 0), secondAmount);
@@ -140,6 +145,7 @@ export function splitFeeHeadsForDisplay<T extends SplittableFeeHead>(
       sourceKey: h.key,
       label: `${base} - 1st Installment`,
       amount: firstAmount,
+      gross: firstGross,
       paid: firstPaid,
       due: firstDue,
     });
@@ -150,6 +156,7 @@ export function splitFeeHeadsForDisplay<T extends SplittableFeeHead>(
       sourceKey: h.key,
       label: `${base} - 2nd Installment`,
       amount: secondAmount,
+      gross: secondGross,
       paid: secondPaid,
       due: secondDue,
     });

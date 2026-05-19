@@ -7,12 +7,12 @@ import {
   discountedSnapshotDueForHead,
   studentFeeDiscountFromRecord,
 } from "@/lib/studentFeeHeadDiscount";
-import {
-  computeStudentTuitionParts,
-  finalFeeFromStructureAndExtras,
-  shouldOmitLegacySplitHostelMessExtraForBreakdown,
-  upsertStudentFeeFromStructure,
-} from "@/lib/studentTuitionFromStructure";
+import { roundRupee } from "@/lib/formatRupee";
+
+function roundMoney(n: number): number {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+import { shouldOmitLegacySplitHostelMessExtraForBreakdown } from "@/lib/studentTuitionFromStructure";
 import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 import { isInstallmentFeeName, isUnsplitLumpExtraFee } from "@/lib/extraFeeInstallments";
@@ -66,6 +66,8 @@ export type AdminFeeBreakdownDueHead =
       key: string;
       headType: "BASE_COMPONENT";
       label: string;
+      /** Pre-discount face value for this head. */
+      grossAmount: number;
       snapshotAmount: number;
       dueBefore: number;
     }
@@ -73,6 +75,7 @@ export type AdminFeeBreakdownDueHead =
       key: string;
       headType: "EXTRA_FEE";
       label: string;
+      grossAmount: number;
       snapshotAmount: number;
       dueBefore: number;
       extraFeeId: string;
@@ -90,11 +93,12 @@ export type AdminStudentFeeBreakdownResult = {
 };
 
 type InternalHead =
-  | { key: string; headType: "BASE_COMPONENT"; label: string; snapshotDue: number }
+  | { key: string; headType: "BASE_COMPONENT"; label: string; grossDue: number; snapshotDue: number }
   | {
       key: string;
       headType: "EXTRA_FEE";
       label: string;
+      grossDue: number;
       snapshotDue: number;
       extraFeeId: string;
       canDeleteOnStudentProfile: boolean;
@@ -131,6 +135,7 @@ export async function computeAdminStudentFeeBreakdown(
       amountPaid: true,
       finalFee: true,
       totalFee: true,
+      remainingFee: true,
       discountPercent: true,
       discountFeeHeadKey: true,
       discountFeeHeadLabel: true,
@@ -261,6 +266,7 @@ export async function computeAdminStudentFeeBreakdown(
         key,
         headType: "BASE_COMPONENT",
         label: c.name,
+        grossDue: preDue,
         snapshotDue: discountedSnapshotDueForHead(key, preDue, discount),
       };
     }),
@@ -271,6 +277,7 @@ export async function computeAdminStudentFeeBreakdown(
         key,
         headType: "EXTRA_FEE",
         label: formatFeeHeadDisplayLabel(ef.name),
+        grossDue: preDue,
         snapshotDue: discountedSnapshotDueForHead(key, preDue, discount),
         extraFeeId: ef.id,
         canDeleteOnStudentProfile: ef.targetType === "STUDENT" && ef.targetStudentId === student.id,
@@ -331,15 +338,18 @@ export async function computeAdminStudentFeeBreakdown(
   const dueHeads: AdminFeeBreakdownDueHead[] = allHeads.map((h) => {
     const paidAlloc = netPaidByHead.get(h.key) ?? 0;
     const paidLegacy = totalSnapshotDue > 0 ? legacyPaidTotal * (h.snapshotDue / totalSnapshotDue) : 0;
-    const paidBefore = Math.max(paidAlloc + paidLegacy, 0);
-    const dueBefore = Math.max(h.snapshotDue - paidBefore, 0);
+    const paidBefore = roundMoney(Math.max(paidAlloc + paidLegacy, 0));
+    const dueBefore = roundMoney(Math.max(h.snapshotDue - paidBefore, 0));
+    const grossAmount = roundMoney(h.grossDue);
+    const snapshotAmount = roundMoney(h.snapshotDue);
 
     if (h.headType === "BASE_COMPONENT") {
       return {
         key: h.key,
         headType: "BASE_COMPONENT",
         label: h.label,
-        snapshotAmount: h.snapshotDue,
+        grossAmount,
+        snapshotAmount,
         dueBefore,
       };
     }
@@ -347,7 +357,8 @@ export async function computeAdminStudentFeeBreakdown(
       key: h.key,
       headType: "EXTRA_FEE",
       label: h.label,
-      snapshotAmount: h.snapshotDue,
+      grossAmount,
+      snapshotAmount,
       dueBefore,
       extraFeeId: h.extraFeeId,
       canDeleteOnStudentProfile: h.canDeleteOnStudentProfile,
@@ -355,54 +366,38 @@ export async function computeAdminStudentFeeBreakdown(
     };
   });
 
-  const totalDueBefore = dueHeads.reduce((s, h) => s + h.dueBefore, 0);
-  const totalAmount = dueHeads.reduce((s, h) => s + h.snapshotAmount, 0);
+  const totalDueBefore = roundMoney(dueHeads.reduce((s, h) => s + h.dueBefore, 0));
+  const totalAmount = roundMoney(dueHeads.reduce((s, h) => s + h.snapshotAmount, 0));
 
   let amountPaid = fee.amountPaid;
   let finalFee = fee.finalFee;
   let remainingFee = totalDueBefore;
 
-  const tuitionParts = await computeStudentTuitionParts(prisma, {
-    schoolId,
-    classId,
-    section: classSection,
-    studentId: student.id,
-    residencyType: residency,
-  });
-  const expectedFinal = finalFeeFromStructureAndExtras(
-    tuitionParts.base,
-    tuitionParts.extrasTotal,
-    fee.discountPercent
-  );
+  const expectedFinal = totalAmount;
+  const expectedTotalFee = roundMoney(dueHeads.reduce((s, h) => s + h.grossAmount, 0));
 
-  /** Stale StudentFee rows (e.g. after removing bulk mess extras) — realign stored totals with structure. */
+  remainingFee = totalDueBefore;
+  finalFee = expectedFinal;
+
+  /** Realign stored totals from fee heads (per-head discounts stay correct; avoids float noise in remainingFee). */
   if (
-    Math.abs(finalFee - expectedFinal) > 0.02 ||
-    Math.abs(fee.totalFee - tuitionParts.totalFee) > 0.02
+    Math.abs(fee.totalFee - expectedTotalFee) > 0.02 ||
+    Math.abs(fee.finalFee - expectedFinal) > 0.02 ||
+    Math.abs(fee.remainingFee - totalDueBefore) > 0.02
   ) {
-    await upsertStudentFeeFromStructure(prisma, {
-      schoolId,
-      studentId: student.id,
-      classId,
-      section: classSection,
-      discountPercent: fee.discountPercent,
-      amountPaid: fee.amountPaid,
-      residencyType: residency,
-    });
-    const synced = await prisma.studentFee.findUnique({
+    await prisma.studentFee.update({
       where: { studentId: student.id },
-      select: { finalFee: true, amountPaid: true, remainingFee: true },
+      data: {
+        totalFee: expectedTotalFee,
+        finalFee: expectedFinal,
+        remainingFee: totalDueBefore,
+      },
     });
-    if (synced) {
-      finalFee = synced.finalFee;
-      amountPaid = synced.amountPaid;
-      remainingFee = Math.max(0, synced.remainingFee);
-    }
   }
 
   return {
     studentId: student.id,
-    remainingFee,
+    remainingFee: roundRupee(remainingFee),
     totalAmount,
     amountPaid,
     finalFee,
