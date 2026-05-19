@@ -461,7 +461,7 @@ function StudentDetailsPageContent() {
                   studentId={detail.student.id}
                   classId={detail.student.class?.id ?? null}
                   totalFee={feeBreakdown?.totalAmount ?? detail.fee.totalFee}
-                  baseTotalFee={feeBreakdown?.totalAmount ?? detail.fee.baseTotalFee}
+                  baseTotalFee={detail.fee.baseTotalFee}
                   discountPercent={detail.fee.discountPercent}
                   amountPaid={feeBreakdown?.amountPaid ?? detail.fee.amountPaid}
                   remainingFee={feeBreakdown?.remainingFee ?? detail.fee.remainingFee}
@@ -567,7 +567,8 @@ function StudentFeesPaymentModal({
     rowsIn: Array<{
       key: string;
       label: string;
-      totalAmount: number;
+      grossAmount: number;
+      snapshotAmount: number;
       paidAmount: number;
       dueBefore: number;
       splitIntoTwoInstallments?: boolean;
@@ -577,33 +578,41 @@ function StudentFeesPaymentModal({
       rowsIn.map((r) => ({
         key: r.key,
         label: r.label,
-        amount: r.totalAmount,
+        amount: r.snapshotAmount,
+        gross: r.grossAmount,
         paid: r.paidAmount,
         due: r.dueBefore,
         splitIntoTwoInstallments: r.splitIntoTwoInstallments,
       }))
-    ).map((h) => ({
+    ).map((h) => {
+      const gross = Math.round((Number(h.gross ?? h.amount) || 0) * 100) / 100;
+      const net = Math.round((Number(h.amount) || 0) * 100) / 100;
+      return {
       key: h.key,
       sourceKey: h.sourceKey,
       label: h.label,
-      totalAmount: h.amount,
-      paidAmount: h.paid,
-      discountAmount: 0,
-      dueBefore: h.due,
+      totalAmount: gross,
+      paidAmount: Math.round((Number(h.paid) || 0) * 100) / 100,
+      discountAmount: Math.max(0, Math.round((gross - net) * 100) / 100),
+      dueBefore: Math.round((Number(h.due) || 0) * 100) / 100,
       payAmount: "",
       payEntireHead: false,
       splitIntoTwoInstallments: h.splitIntoTwoInstallments,
-    }));
+    };
+    });
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
       try {
-        const res = await fetch(`/api/fees/admin/breakdown?studentId=${encodeURIComponent(studentId)}`, {
-          credentials: "include",
-          cache: "no-store",
-        });
+        const res = await fetch(
+          `/api/fees/admin/breakdown?studentId=${encodeURIComponent(studentId)}&fast=1`,
+          {
+            credentials: "include",
+            cache: "no-store",
+          }
+        );
         const data = await res.json();
         if (!res.ok) {
           throw new Error(data?.message || "Failed to load fee heads");
@@ -615,21 +624,26 @@ function StudentFeesPaymentModal({
               key: string;
               label: string;
               dueBefore: number;
+              grossAmount?: number;
               snapshotAmount?: number;
               headType?: string;
               splitIntoTwoInstallments?: boolean;
-            }) => ({
-              key: h.key,
-              label: h.label || "Fee Head",
-              totalAmount: Number(h.snapshotAmount) || 0,
-              paidAmount: Math.max((Number(h.snapshotAmount) || 0) - (Number(h.dueBefore) || 0), 0),
-              discountAmount: 0,
-              dueBefore: Number(h.dueBefore) || 0,
-              payAmount: "",
-              payEntireHead: false,
-              splitIntoTwoInstallments:
-                h.headType === "EXTRA_FEE" ? Boolean(h.splitIntoTwoInstallments) : undefined,
-            })
+            }) => {
+              const snapshotAmount = Math.round((Number(h.snapshotAmount) || 0) * 100) / 100;
+              const grossAmount =
+                Math.round((Number(h.grossAmount ?? h.snapshotAmount) || 0) * 100) / 100;
+              const dueBefore = Math.round((Number(h.dueBefore) || 0) * 100) / 100;
+              return {
+                key: h.key,
+                label: h.label || "Fee Head",
+                grossAmount,
+                snapshotAmount,
+                paidAmount: Math.max(snapshotAmount - dueBefore, 0),
+                dueBefore,
+                splitIntoTwoInstallments:
+                  h.headType === "EXTRA_FEE" ? Boolean(h.splitIntoTwoInstallments) : undefined,
+              };
+            }
           );
           setRows(mapDueRowsForPayment(mappedRows));
               setPaymentDate(new Date().toISOString().slice(0, 10));
@@ -691,6 +705,10 @@ function StudentFeesPaymentModal({
     },
     { totalAmount: 0, discountAmount: 0, paidAmount: 0, balance: 0 }
   );
+  totals.totalAmount = Math.round(totals.totalAmount * 100) / 100;
+  totals.discountAmount = Math.round(totals.discountAmount * 100) / 100;
+  totals.paidAmount = Math.round(totals.paidAmount * 100) / 100;
+  totals.balance = Math.round(totals.balance * 100) / 100;
 
   const continueToPayment = () => {
     setError(null);
@@ -831,10 +849,10 @@ function StudentFeesPaymentModal({
                   {rows.map((r) => (
                     <tr key={r.key} className="border-t border-white/5">
                       <td className="px-3 py-2 text-white">{r.label}</td>
-                      <td className="px-3 py-2 text-white">₹{r.totalAmount.toLocaleString("en-IN")}</td>
-                      <td className="px-3 py-2 text-cyan-300">₹{r.discountAmount.toLocaleString("en-IN")}</td>
-                      <td className="px-3 py-2 text-lime-300">₹{r.paidAmount.toLocaleString("en-IN")}</td>
-                      <td className="px-3 py-2 text-amber-300">₹{r.dueBefore.toLocaleString("en-IN")}</td>
+                      <td className="px-3 py-2 text-white">₹{Math.round(r.totalAmount).toLocaleString("en-IN")}</td>
+                      <td className="px-3 py-2 text-cyan-300">₹{Math.round(r.discountAmount).toLocaleString("en-IN")}</td>
+                      <td className="px-3 py-2 text-lime-300">₹{Math.round(r.paidAmount).toLocaleString("en-IN")}</td>
+                      <td className="px-3 py-2 text-amber-300">₹{Math.round(r.dueBefore).toLocaleString("en-IN")}</td>
                       <td className="px-2 py-2 text-center align-middle">
                         <input
                           type="checkbox"
@@ -861,10 +879,10 @@ function StudentFeesPaymentModal({
                   ))}
                   <tr className="border-t border-white/10 bg-white/5 font-semibold">
                     <td className="px-3 py-2 text-white">Total</td>
-                    <td className="px-3 py-2 text-white">₹{totals.totalAmount.toLocaleString("en-IN")}</td>
-                    <td className="px-3 py-2 text-cyan-300">₹{totals.discountAmount.toLocaleString("en-IN")}</td>
-                    <td className="px-3 py-2 text-lime-300">₹{totals.paidAmount.toLocaleString("en-IN")}</td>
-                    <td className="px-3 py-2 text-amber-300">₹{totals.balance.toLocaleString("en-IN")}</td>
+                    <td className="px-3 py-2 text-white">₹{Math.round(totals.totalAmount).toLocaleString("en-IN")}</td>
+                    <td className="px-3 py-2 text-cyan-300">₹{Math.round(totals.discountAmount).toLocaleString("en-IN")}</td>
+                    <td className="px-3 py-2 text-lime-300">₹{Math.round(totals.paidAmount).toLocaleString("en-IN")}</td>
+                    <td className="px-3 py-2 text-amber-300">₹{Math.round(totals.balance).toLocaleString("en-IN")}</td>
                     <td className="px-2 py-2" />
                     <td className="px-3 py-2 text-blue-300">₹{total.toLocaleString("en-IN")}</td>
                   </tr>

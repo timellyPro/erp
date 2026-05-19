@@ -9,6 +9,7 @@ import { AssignFeeHeadsCatalogModal } from "./AssignFeeHeadsCatalogModal";
 import { EditExtraFeeModal } from "./EditExtraFeeModal";
 import { splitFeeHeadsForDisplay } from "@/lib/feeHeadInstallmentDisplay";
 import { storedDiscountRupeeAmount } from "@/lib/studentFeeHeadDiscount";
+import { formatRupee, roundRupee } from "@/lib/formatRupee";
 import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
 
 function baseComponentIndexFromHead(head: {
@@ -186,43 +187,50 @@ export const FeesBreakdown = ({
         ? totalFee
         : 0;
   const displayRemainingAmount =
-    headsRemainingAmount != null && headsRemainingAmount >= 0
-      ? headsRemainingAmount
-      : remainingFee >= 0
-        ? remainingFee
-        : 0;
+    headCards.length > 0
+      ? roundRupee(headCards.reduce((s, h) => s + h.due, 0))
+      : headsRemainingAmount != null && headsRemainingAmount >= 0
+        ? roundRupee(headsRemainingAmount)
+        : roundRupee(Math.max(0, displayTotalAmount - amountPaid));
   const paidPercentage =
     displayTotalAmount > 0 ? (amountPaid / displayTotalAmount) * 100 : 0;
 
   const applyBreakdownData = (data: AdminStudentFeeBreakdownResult) => {
     const dueHeads = Array.isArray(data?.dueHeads) ? data.dueHeads : [];
-    const normalized = dueHeads.map((h) => ({
+    const normalized = dueHeads.map((h) => {
+      const amount = Math.round((Number(h.snapshotAmount) || 0) * 100) / 100;
+      const gross =
+        Math.round((Number(h.grossAmount ?? h.snapshotAmount) || 0) * 100) / 100;
+      const due = Math.round((Number(h.dueBefore) || 0) * 100) / 100;
+      return {
       key: String(h.key),
       label: String(h.label || "Fee Head"),
-      amount: Number(h.snapshotAmount) || 0,
-      paid: Math.max((Number(h.snapshotAmount) || 0) - (Number(h.dueBefore) || 0), 0),
-      due: Number(h.dueBefore) || 0,
+      amount,
+      gross,
+      paid: Math.max(amount - due, 0),
+      due,
       extraFeeId: h.headType === "EXTRA_FEE" ? h.extraFeeId : undefined,
       canDeleteExtra: h.headType === "EXTRA_FEE" ? Boolean(h.canDeleteOnStudentProfile) : false,
       headType: h.headType,
       splitIntoTwoInstallments:
         h.headType === "EXTRA_FEE" ? Boolean(h.splitIntoTwoInstallments) : undefined,
-    }));
+    };
+    });
     setFeeHeadOptionsForDiscount(
       normalized.map((h) => ({
         key: h.key,
         label: h.label,
       }))
     );
-    setHeadCards(splitFeeHeadsForDisplay(normalized));
+    const splitHeads = splitFeeHeadsForDisplay(normalized);
+    setHeadCards(splitHeads);
     setHeadsTotalAmount(
-      Number(data?.totalAmount) ||
-        normalized.reduce((s: number, h: { amount: number }) => s + h.amount, 0)
+      roundRupee(
+        Number(data?.totalAmount) ||
+          splitHeads.reduce((s: number, h: { amount: number }) => s + h.amount, 0)
+      )
     );
-    setHeadsRemainingAmount(
-      Number(data?.remainingFee) ||
-        normalized.reduce((s: number, h: { due: number }) => s + h.due, 0)
-    );
+    setHeadsRemainingAmount(roundRupee(splitHeads.reduce((s: number, h: { due: number }) => s + h.due, 0)));
   };
 
   const feeSyncNotifiedRef = useRef(false);
@@ -501,12 +509,12 @@ export const FeesBreakdown = ({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
         <div className="bg-amber-400/10 border border-amber-400/20 rounded-xl p-4">
           <p className="text-xs text-amber-300/70 uppercase tracking-widest font-bold">Total Fees (All Heads)</p>
-          <p className="text-2xl font-bold text-white mt-2">₹{displayTotalAmount.toLocaleString("en-IN")}</p>
+          <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(displayTotalAmount)}</p>
           <p className="text-xs text-amber-300 mt-1 font-semibold">
-            Pre-discount (structure + extras): ₹{baseTotalFee.toLocaleString("en-IN")}
+            Pre-discount (structure + extras): ₹{formatRupee(baseTotalFee)}
           </p>
           <p className="text-xs text-amber-300 mt-1 font-semibold">
-            Discount: ₹{discountAmount.toLocaleString("en-IN")}
+            Discount: ₹{formatRupee(discountAmount)}
           </p>
           {(discountFeeHeadLabel?.trim() ||
             discountRemarks?.trim() ||
@@ -537,13 +545,13 @@ export const FeesBreakdown = ({
 
         <div className="bg-lime-400/10 border border-lime-400/20 rounded-xl p-4">
           <p className="text-xs text-lime-300/70 uppercase tracking-widest font-bold">Amount Paid</p>
-          <p className="text-2xl font-bold text-white mt-2">₹{amountPaid.toLocaleString("en-IN")}</p>
+          <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(amountPaid)}</p>
           <p className="text-xs text-lime-400 mt-1 font-semibold">{Math.round(paidPercentage)}% Paid</p>
         </div>
 
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4">
           <p className="text-xs text-red-300/70 uppercase tracking-widest font-bold">Remaining / Due</p>
-          <p className="text-2xl font-bold text-white mt-2">₹{displayRemainingAmount.toLocaleString("en-IN")}</p>
+          <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(displayRemainingAmount)}</p>
           <p className="text-xs text-red-400 mt-1 font-semibold">
             {Math.round(100 - paidPercentage)}% Pending
           </p>
@@ -712,12 +720,12 @@ export const FeesBreakdown = ({
                     ) : null}
                   </div>
                 </div>
-                <p className="text-lg font-bold text-white">₹{h.amount.toLocaleString("en-IN")}</p>
+                <p className="text-lg font-bold text-white">₹{formatRupee(h.amount)}</p>
                 <p className="text-xs text-lime-400 mt-auto">
-                  Paid: ₹{h.paid.toLocaleString("en-IN")}
+                  Paid: ₹{formatRupee(h.paid)}
                 </p>
                 <p className="text-xs text-red-400">
-                  Remaining: ₹{h.due.toLocaleString("en-IN")}
+                  Remaining: ₹{formatRupee(h.due)}
                 </p>
                 {h.due > 0 ? (
                   <button
@@ -870,15 +878,15 @@ export const FeesBreakdown = ({
             <div className="grid grid-cols-3 gap-4 mb-6">
               <div>
                 <p className="text-gray-600 text-sm">Total Fees</p>
-                <p className="text-2xl font-bold">₹{totalFee.toLocaleString("en-IN")}</p>
+                <p className="text-2xl font-bold">₹{formatRupee(totalFee)}</p>
               </div>
               <div>
                 <p className="text-gray-600 text-sm">Amount Paid</p>
-                <p className="text-2xl font-bold text-green-600">₹{amountPaid.toLocaleString("en-IN")}</p>
+                <p className="text-2xl font-bold text-green-600">₹{formatRupee(amountPaid)}</p>
               </div>
               <div>
                 <p className="text-gray-600 text-sm">Amount Due</p>
-                <p className="text-2xl font-bold text-red-600">₹{remainingFee.toLocaleString("en-IN")}</p>
+                <p className="text-2xl font-bold text-red-600">₹{formatRupee(displayRemainingAmount)}</p>
               </div>
             </div>
             <div className="bg-gray-100 p-3 rounded">
