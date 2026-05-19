@@ -9,7 +9,11 @@ import SelectInput from "../../common/SelectInput";
 import type { Class, FeeRecord } from "./types";
 import { schoolAdminStudentDetailsFeesUrl } from "./studentDetailsNav";
 import InlinePagination from "../schooladmincomponents/InlinePagination";
-import { appendDayReportSheet, formatDdMmYyyyFromYmdInput } from "@/lib/feeDayReportExcel";
+import {
+  appendDayReportSheet,
+  drawFeeDayReportPdf,
+  formatDdMmYyyyFromYmdInput,
+} from "@/lib/feeDayReportExcel";
 
 const PAGE_SIZE = 20;
 
@@ -526,13 +530,12 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
       return;
     }
 
-    await drawPrettyPdf({
+    await drawFeeDayReportPdf({
       filename: `${baseName}.pdf`,
-      title: "Fee Collection Report",
-      subtitle: `${getReportPeriodLabel(reportPeriod)} | ${headerDateLabel}`,
-      rows,
-      schoolName: school?.name || "School",
-      schoolAddress: [school?.address, school?.location, school?.affiliationLine].filter(Boolean).join(", "),
+      school,
+      reportTitle: dayReportTitle,
+      headerDateLabel,
+      transactions: filteredTx,
       logoUrl: school?.logoUrl || null,
     });
   };
