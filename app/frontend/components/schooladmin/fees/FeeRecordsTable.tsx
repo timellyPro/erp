@@ -14,6 +14,7 @@ import {
   drawFeeDayReportPdf,
   formatDdMmYyyyFromYmdInput,
 } from "@/lib/feeDayReportExcel";
+import { formatRupee, roundRupee } from "@/lib/formatRupee";
 
 const PAGE_SIZE = 20;
 
@@ -74,20 +75,20 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
         ? `${f.student.class.name}${f.student.class.section ? `-${f.student.class.section}` : ""}`
         : "-";
       const status = f.remainingFee <= 0 ? "Paid" : "Pending";
-      const discountAmount = Math.max((f.totalFee || 0) - (f.finalFee || 0), 0);
+      const discountAmount = roundRupee(Math.max((f.totalFee || 0) - (f.finalFee || 0), 0));
       return {
         "Student Name": f.student.user?.name || "-",
         "Admission Email": f.student.user?.email || "-",
         Class: classLabel,
         "Fee Type": f.feeTypes
-          ? `${f.feeTypes}${typeof f.feeTypeDueAmount === "number" ? ` (₹${f.feeTypeDueAmount.toLocaleString()})` : ""}`
+          ? `${f.feeTypes}${typeof f.feeTypeDueAmount === "number" ? ` (₹${formatRupee(f.feeTypeDueAmount)})` : ""}`
           : "-",
-        "Total Fee": f.totalFee,
-        "Discount %": f.discountPercent,
+        "Total Fee": roundRupee(f.totalFee),
+        "Discount %": roundRupee(f.discountPercent),
         "Discount Amount": discountAmount,
-        "Final Fee": f.finalFee,
-        Paid: f.amountPaid,
-        Pending: f.remainingFee,
+        "Final Fee": roundRupee(f.finalFee),
+        Paid: roundRupee(f.amountPaid),
+        Pending: roundRupee(f.remainingFee),
         Status: status,
       };
     });
@@ -224,23 +225,40 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
 
     const logoData = logoUrl ? await loadImageAsDataUrl(logoUrl) : null;
 
-    const drawPageFrame = (isFirstPage: boolean) => {
-      doc.setFillColor(250, 251, 255);
+    const logoFormat = logoData?.startsWith("data:image/jpeg")
+      ? "JPEG"
+      : logoData?.startsWith("data:image/webp")
+        ? "WEBP"
+        : "PNG";
+
+    const paintWhitePage = () => {
+      doc.setFillColor(255, 255, 255);
       doc.rect(0, 0, pageWidth, pageHeight, "F");
+      doc.setTextColor(0, 0, 0);
+    };
+    paintWhitePage();
+
+    const drawPageFrame = (isFirstPage: boolean) => {
       if (isFirstPage) {
         const schoolAddressText = (schoolAddress || "Address not available").replace(/\s+/g, " ").trim();
-        const maxAddressWidth = pageWidth - margin * 2 - 30;
+        const logoSize = 18;
+        const headerTop = 6;
+        if (logoData) {
+          try {
+            doc.addImage(logoData, logoFormat, margin, headerTop, logoSize, logoSize);
+          } catch {
+            // Ignore invalid image format gracefully.
+          }
+        }
+
+        const maxAddressWidth = pageWidth - margin * 2 - (logoData ? logoSize + 8 : 0);
         const addressLines = (doc.splitTextToSize(
           schoolAddressText,
           Math.max(80, maxAddressWidth)
         ) as string[]) || ["Address not available"];
         const visibleAddressLines = addressLines.slice(0, 2);
-        const dynamicTopBandHeight = 34 + Math.max(0, visibleAddressLines.length - 1) * 5;
 
-        doc.setFillColor(22, 40, 72);
-        doc.rect(0, 0, pageWidth, dynamicTopBandHeight, "F");
-
-        doc.setTextColor(255, 255, 255);
+        doc.setTextColor(0, 0, 0);
         doc.setFont("helvetica", "bold");
         doc.setFontSize(16);
         doc.text(schoolName || "School", pageWidth / 2, 12, { align: "center" });
@@ -257,26 +275,9 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
           doc.text(subtitle, pageWidth / 2, titleY + 6, { align: "center" });
         }
 
-        if (logoData) {
-          try {
-            doc.addImage(logoData, "PNG", margin, 6, 18, 18);
-          } catch {
-            // Ignore invalid image format gracefully.
-          }
-        }
-      }
-
-      if (logoData) {
-        try {
-          doc.addImage(logoData, "PNG", pageWidth / 2 - 22, pageHeight / 2 - 22, 44, 44);
-        } catch {
-          // Ignore invalid image format gracefully.
-        }
-      } else {
-        doc.setTextColor(226, 232, 242);
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(16);
-        doc.text((schoolName || "SCHOOL").toUpperCase(), pageWidth / 2, pageHeight / 2 + 2, { align: "center" });
+        const bandBottom = titleY + (subtitle ? 10 : 6);
+        doc.setDrawColor(180, 180, 180);
+        doc.line(margin, bandBottom, pageWidth - margin, bandBottom);
       }
 
       const tableY = isFirstPage ? 44 : 10;
@@ -350,6 +351,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
 
       if (y + dynamicRowHeight > pageHeight - 14) {
         doc.addPage();
+        paintWhitePage();
         y = drawPageFrame(false);
         doc.setFont("helvetica", "normal");
         doc.setFontSize(8.2);
@@ -366,7 +368,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
         const rawValue = row[header];
         const displayValue =
           typeof rawValue === "number"
-            ? rawValue.toLocaleString("en-IN")
+            ? roundRupee(rawValue).toLocaleString("en-IN")
             : String(rawValue ?? "-");
         const width = columnWidths[idx];
 
@@ -515,7 +517,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
           : t.feeTypeName || "-",
       "Payment Method": t.gateway || "-",
       "UTR / Ref": t.transactionId || t.hyperpgTxnId || "-",
-      Amount: t.amount ?? 0,
+      Amount: roundRupee(t.amount ?? 0),
     }));
 
     if (exportFormat === "xlsx") {
@@ -798,27 +800,28 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
                   <span className="text-gray-400">Fee Type</span>
                   <span className="text-right text-gray-300">
                     {f.feeTypes
-                      ? `${f.feeTypes}${typeof f.feeTypeDueAmount === "number" ? ` (₹${f.feeTypeDueAmount.toLocaleString()})` : ""}`
+                      ? `${f.feeTypes}${typeof f.feeTypeDueAmount === "number" ? ` (₹${formatRupee(f.feeTypeDueAmount)})` : ""}`
                       : "-"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-gray-400">Total</span>
-                  <span className="text-white">₹{f.finalFee.toLocaleString()}</span>
+                  <span className="text-white">₹{formatRupee(f.finalFee)}</span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-gray-400">Discount</span>
                   <span className="text-cyan-300">
-                    {f.discountPercent}% (₹{Math.max((f.totalFee || 0) - (f.finalFee || 0), 0).toLocaleString()})
+                    {roundRupee(f.discountPercent)}% (₹
+                    {formatRupee(Math.max((f.totalFee || 0) - (f.finalFee || 0), 0))})
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-gray-400">Paid</span>
-                  <span className="text-emerald-400">₹{f.amountPaid.toLocaleString()}</span>
+                  <span className="text-emerald-400">₹{formatRupee(f.amountPaid)}</span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-gray-400">Pending</span>
-                  <span className="text-amber-400">₹{f.remainingFee.toLocaleString()}</span>
+                  <span className="text-amber-400">₹{formatRupee(f.remainingFee)}</span>
                 </div>
                 <div className="pt-1">
                   <span
@@ -868,15 +871,16 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
                 </td>
                 <td className="py-3 text-gray-300">
                   {f.feeTypes
-                    ? `${f.feeTypes}${typeof f.feeTypeDueAmount === "number" ? ` (₹${f.feeTypeDueAmount.toLocaleString()})` : ""}`
+                    ? `${f.feeTypes}${typeof f.feeTypeDueAmount === "number" ? ` (₹${formatRupee(f.feeTypeDueAmount)})` : ""}`
                     : "-"}
                 </td>
-                <td className="py-3">₹{f.finalFee.toLocaleString()}</td>
+                <td className="py-3">₹{formatRupee(f.finalFee)}</td>
                 <td className="py-3 text-cyan-300">
-                  {f.discountPercent}% (₹{Math.max((f.totalFee || 0) - (f.finalFee || 0), 0).toLocaleString()})
+                  {roundRupee(f.discountPercent)}% (₹
+                  {formatRupee(Math.max((f.totalFee || 0) - (f.finalFee || 0), 0))})
                 </td>
-                <td className="py-3 text-emerald-400">₹{f.amountPaid.toLocaleString()}</td>
-                <td className="py-3 text-amber-400">₹{f.remainingFee.toLocaleString()}</td>
+                <td className="py-3 text-emerald-400">₹{formatRupee(f.amountPaid)}</td>
+                <td className="py-3 text-amber-400">₹{formatRupee(f.remainingFee)}</td>
                 <td className="py-3">
                   <span
                     className={`px-2 py-1 rounded text-xs ${

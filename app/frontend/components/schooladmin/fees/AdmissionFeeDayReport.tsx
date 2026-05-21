@@ -146,35 +146,34 @@ async function exportAdmissionFeeReportPdf(
   const contentW = W - m * 2;
   let page = 1;
 
-  const ink = { slate: [15, 23, 42] as [number, number, number], teal: [13, 148, 136] as [number, number, number] };
-  const paper = [248, 250, 252] as [number, number, number];
   const line = [226, 232, 240] as [number, number, number];
   const text = [30, 41, 59] as [number, number, number];
   const muted = [100, 116, 139] as [number, number, number];
 
   const drawPageBackground = () => {
-    doc.setFillColor(...paper);
+    doc.setFillColor(255, 255, 255);
     doc.rect(0, 0, W, H, "F");
   };
 
   const periodLabel = `${formatReportYmd(data.from)} – ${formatReportYmd(data.to)}`;
 
   const drawHeroHeader = () => {
-    doc.setFillColor(...ink.slate);
+    doc.setFillColor(255, 255, 255);
     doc.rect(0, 0, W, 38, "F");
-    doc.setFillColor(...ink.teal);
-    doc.rect(0, 38, W, 1.8, "F");
+    doc.setDrawColor(...line);
+    doc.line(m, 38, W - m, 38);
 
-    const titleX = logoDataUrl ? m + 22 : m;
+    const logoSize = 16;
     if (logoDataUrl) {
       const fmt = logoDataUrl.includes("image/png") ? "PNG" : "JPEG";
       try {
-        doc.addImage(logoDataUrl, fmt, m, 10, 16, 16);
+        doc.addImage(logoDataUrl, fmt, m, 10, logoSize, logoSize);
       } catch {
         /* ignore */
       }
     }
-    doc.setTextColor(255, 255, 255);
+    const titleX = logoDataUrl ? m + logoSize + 4 : m;
+    doc.setTextColor(0, 0, 0);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
     doc.text(school.name, titleX, 15);
@@ -182,7 +181,7 @@ async function exportAdmissionFeeReportPdf(
     doc.text("Admission Fee Collection Report", titleX, 25);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
-    doc.setTextColor(180, 200, 220);
+    doc.setTextColor(...muted);
     const viewLabel = groupMode === "day" ? "Date-wise summary" : "Month-wise summary";
     doc.text(periodLabel, W - m, 14, { align: "right" });
     doc.text(viewLabel, W - m, 21, { align: "right" });
@@ -196,15 +195,17 @@ async function exportAdmissionFeeReportPdf(
   };
 
   const drawContinuationHeader = () => {
-    doc.setFillColor(...ink.slate);
+    doc.setFillColor(255, 255, 255);
     doc.rect(0, 0, W, 14, "F");
-    doc.setTextColor(255, 255, 255);
+    doc.setDrawColor(...line);
+    doc.line(m, 14, W - m, 14);
+    doc.setTextColor(0, 0, 0);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(10);
     doc.text(`${school.name} · Admission fees`, m, 9);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
-    doc.setTextColor(200, 210, 220);
+    doc.setTextColor(...muted);
     doc.text(`${periodLabel} · page ${page}`, W - m, 9, { align: "right" });
   };
 
@@ -255,7 +256,7 @@ async function exportAdmissionFeeReportPdf(
     doc.setTextColor(...muted);
     doc.text(title, x + 5, cy + 8);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(...(accent ? ink.teal : text));
+    doc.setTextColor(...text);
     let vy = cy + 15;
     lines.forEach((line, li) => {
       doc.setFontSize(li === 0 ? (accent ? 14 : 12) : 8.5);
@@ -389,15 +390,15 @@ async function exportAdmissionFeeReportPdf(
   const sumRowH = 8;
 
   const drawSummaryHeader = () => {
-    doc.setFillColor(...ink.slate);
-    doc.roundedRect(m, y, contentW, sumHeaderH, 1.2, 1.2, "F");
-    doc.setTextColor(255, 255, 255);
+    doc.setDrawColor(...line);
+    doc.setFillColor(255, 255, 255);
+    doc.roundedRect(m, y, contentW, sumHeaderH, 1.2, 1.2, "FD");
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8.5);
     sumHeaders.forEach((label, i) => {
       writeCell([label], sumXs[i]!, sumWidths[i]!, y, sumHeaderH, sumAligns[i]!, {
         bold: true,
-        color: [255, 255, 255],
+        color: text,
         fontSize: 8.5,
       });
     });
@@ -424,7 +425,7 @@ async function exportAdmissionFeeReportPdf(
       y,
       sumRowH,
       "right",
-      { bold: true, color: ink.teal }
+      { bold: true, color: text }
     );
     y += sumRowH;
   });
@@ -446,15 +447,14 @@ async function exportAdmissionFeeReportPdf(
     const detailHeaderH = 9;
 
     const drawDetailHeader = () => {
-      doc.setFillColor(236, 253, 245);
-      doc.setDrawColor(...ink.teal);
-      doc.setLineWidth(0.35);
+      doc.setFillColor(255, 255, 255);
+      doc.setDrawColor(...line);
+      doc.setLineWidth(0.25);
       doc.roundedRect(m, y, contentW, detailHeaderH, 1.2, 1.2, "FD");
-      doc.setLineWidth(0.2);
       dHeaders.forEach((label, i) => {
         writeCell([label], dXs[i]!, dWidths[i]!, y, detailHeaderH, dAligns[i]!, {
           bold: true,
-          color: [15, 80, 70],
+          color: text,
           fontSize: 7.8,
         });
       });
@@ -504,7 +504,7 @@ async function exportAdmissionFeeReportPdf(
         y,
         rowHeight,
         "right",
-        { bold: true, color: ink.teal, fontSize: 7.5 }
+        { bold: true, color: text, fontSize: 7.5 }
       );
       writeCell(paidLines, dXs[4]!, dWidths[4]!, y, rowHeight, "left", { fontSize: 7.2 });
       writeCell(
@@ -527,6 +527,14 @@ async function exportAdmissionFeeReportPdf(
     doc.text("No paid admission fees in this range.", m, y);
     y += 8;
   }
+
+  ensureSpace(14);
+  y += 8;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(0, 0, 0);
+  doc.text("Signature of Director", m, y);
+  doc.text("Signature of Cashier", W - m, y, { align: "right" });
 
   stampFooter();
   doc.save(`admission-fee-report-${data.from}-to-${data.to}.pdf`);

@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import { feeReportColumnFromGateway, type FeeReportColumn } from "@/lib/feePaymentGateway";
+import { roundRupee } from "@/lib/formatRupee";
 
 export type DayReportSchool = {
   name?: string | null;
@@ -116,13 +117,13 @@ function pushSummarySection(
 ) {
   const headRow = Array(TABLE_COLS).fill("");
   headRow[SUMMARY_LABEL_COL] = title;
-  headRow[SUMMARY_AMOUNT_COL] = Math.round(total * 100) / 100;
+  headRow[SUMMARY_AMOUNT_COL] = roundRupee(total);
   rows.push(padRow(headRow));
 
   for (const head of headLabels) {
     const r = Array(TABLE_COLS).fill("");
     r[SUMMARY_LABEL_COL] = head;
-    r[SUMMARY_AMOUNT_COL] = Math.round(getAmount(head) * 100) / 100;
+    r[SUMMARY_AMOUNT_COL] = roundRupee(getAmount(head));
     rows.push(padRow(r));
   }
 }
@@ -205,7 +206,7 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
         className: classCompact(tx.student?.class || null),
         feeType: feeTypeDisplay(feeName),
         cashOnline: cashOnlineCell(gateway),
-        amount: Math.round(amt * 100) / 100,
+        amount: roundRupee(amt),
         utr: utrForRow(gateway, tx.transactionId, tx.hyperpgTxnId),
       });
     }
@@ -229,11 +230,17 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
     detailRows,
     headLabels,
     summary,
-    cashTotal: Math.round(cashTotal * 100) / 100,
-    onlineTotal: Math.round(onlineTotal * 100) / 100,
-    otherTotal: Math.round(otherTotal * 100) / 100,
-    totalCollection: Math.round(totalCollection * 100) / 100,
+    cashTotal: roundRupee(cashTotal),
+    onlineTotal: roundRupee(onlineTotal),
+    otherTotal: roundRupee(otherTotal),
+    totalCollection: roundRupee(totalCollection),
   };
+}
+
+function imageFormatFromDataUrl(dataUrl: string): "PNG" | "JPEG" | "WEBP" {
+  if (dataUrl.startsWith("data:image/jpeg") || dataUrl.startsWith("data:image/jpg")) return "JPEG";
+  if (dataUrl.startsWith("data:image/webp")) return "WEBP";
+  return "PNG";
 }
 
 async function loadLogoDataUrl(url: string | null | undefined): Promise<string | null> {
@@ -269,6 +276,13 @@ export async function drawFeeDayReportPdf(args: {
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 10;
+
+  const paintWhitePage = () => {
+    doc.setFillColor(255, 255, 255);
+    doc.rect(0, 0, pageWidth, pageHeight, "F");
+    doc.setTextColor(0, 0, 0);
+  };
+  paintWhitePage();
   const contentW = pageWidth - margin * 2;
   const schoolName = (args.school?.name || "School").trim();
   const addr = [args.school?.address, args.school?.location, args.school?.affiliationLine]
@@ -298,37 +312,51 @@ export async function drawFeeDayReportPdf(args: {
   const logoData = await loadLogoDataUrl(args.logoUrl);
 
   const drawHeader = () => {
-    doc.setFillColor(22, 40, 72);
-    doc.rect(0, 0, pageWidth, 32, "F");
-    doc.setTextColor(255, 255, 255);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(14);
-    doc.text(schoolName, pageWidth / 2, 10, { align: "center" });
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8);
-    const addrLines = doc.splitTextToSize(addr || "", contentW - 20) as string[];
-    doc.text(addrLines.slice(0, 2), pageWidth / 2, 16, { align: "center" });
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(11);
-    doc.text(args.reportTitle, margin, 24);
-    doc.setFont("helvetica", "normal");
-    doc.text(args.headerDateLabel, pageWidth - margin, 24, { align: "right" });
-    if (logoData) {
+    const logoSize = 18;
+    const headerTop = 6;
+    const logoFmt = logoData ? imageFormatFromDataUrl(logoData) : null;
+    if (logoData && logoFmt) {
       try {
-        doc.addImage(logoData, "PNG", margin, 4, 14, 14);
+        doc.addImage(logoData, logoFmt, margin, headerTop, logoSize, logoSize);
+        doc.addImage(
+          logoData,
+          logoFmt,
+          pageWidth - margin - logoSize,
+          headerTop,
+          logoSize,
+          logoSize
+        );
       } catch {
-        /* ignore */
+        /* ignore invalid image */
       }
     }
-    return 40;
+
+    const textInset = logoData ? margin + logoSize + 5 : margin;
+    const textWidth = contentW - (logoData ? logoSize + 5 : 0);
+
+    doc.setTextColor(0, 0, 0);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(14);
+    doc.text(schoolName, pageWidth / 2, 11, { align: "center" });
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    const addrLines = doc.splitTextToSize(addr || "", Math.max(60, textWidth)) as string[];
+    doc.text(addrLines.slice(0, 2), pageWidth / 2, 17, { align: "center" });
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.text(args.reportTitle, textInset, 26);
+    doc.setFont("helvetica", "normal");
+    doc.text(args.headerDateLabel, pageWidth - margin, 26, { align: "right" });
+
+    doc.setDrawColor(180, 180, 180);
+    doc.line(margin, 30, pageWidth - margin, 30);
+    return 38;
   };
 
   const TABLE_HEADER_H = 9;
   const ROW_H = 6;
 
   const drawTableHeader = (y: number) => {
-    doc.setFillColor(230, 236, 248);
-    doc.rect(margin, y, contentW, TABLE_HEADER_H, "F");
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8);
     doc.setTextColor(30, 41, 59);
@@ -351,7 +379,7 @@ export async function drawFeeDayReportPdf(args: {
     const amountX = pageWidth - margin;
     let y = startY + 4;
     const lineH = 5;
-    const fmt = (n: number) => n.toLocaleString("en-IN");
+    const fmt = (n: number) => roundRupee(n).toLocaleString("en-IN");
 
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
@@ -402,13 +430,10 @@ export async function drawFeeDayReportPdf(args: {
   for (let i = 0; i < model.detailRows.length; i++) {
     if (y + ROW_H > pageHeight - summaryBlockH - 8) {
       doc.addPage();
+      paintWhitePage();
       y = drawTableHeader(10);
       doc.setFont("helvetica", "normal");
       doc.setFontSize(7.2);
-    }
-    if (i % 2 === 0) {
-      doc.setFillColor(248, 250, 252);
-      doc.rect(margin, y, contentW, ROW_H, "F");
     }
     const row = model.detailRows[i];
     let x = margin + 1;
@@ -426,7 +451,8 @@ export async function drawFeeDayReportPdf(args: {
     ];
     values.forEach((val, idx) => {
       const w = colWidths[idx];
-      const text = typeof val === "number" ? val.toLocaleString("en-IN") : String(val);
+      const text =
+        typeof val === "number" ? roundRupee(val).toLocaleString("en-IN") : String(val);
       if (idx === values.length - 2) doc.text(text, x + w - 1, textY, { align: "right" });
       else doc.text(doc.splitTextToSize(text, w - 2)[0] || "-", x + 1, textY);
       x += w;
@@ -436,6 +462,7 @@ export async function drawFeeDayReportPdf(args: {
 
   if (y + summaryBlockH > pageHeight - 10) {
     doc.addPage();
+    paintWhitePage();
     y = 14;
   } else {
     y += 4;
