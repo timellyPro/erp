@@ -50,6 +50,8 @@ export const studentApplicationDetailSelect = {
   pinCode: true,
   parentName: true,
   motherName: true,
+  motherAadharNo: true,
+  motherEmail: true,
   parentOccupation: true,
   officeAddress: true,
   parentPhone: true,
