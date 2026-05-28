@@ -1234,6 +1234,8 @@ model StudentApplication {
   // Parent Details
   parentName       String
   motherName       String?
+  motherAadharNo   String?
+  motherEmail      String?
   parentOccupation String
   officeAddress    String
   parentPhone      String
