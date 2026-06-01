@@ -6,6 +6,8 @@ import FeePaymentReceiptTemplate, {
 import { printFromElement } from "@/lib/pdfUtils";
 import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
 
+type PaymentFeeAllocationLine = { name: string; amount: number };
+
 type PaymentRow = {
   id: string;
   amount: number;
@@ -15,7 +17,77 @@ type PaymentRow = {
   transactionId: string | null;
   feeTypeName?: string;
   feeTypeAmount?: number;
+  feeAllocations?: PaymentFeeAllocationLine[];
 };
+
+/** One table row per fee head (split payments are not grouped). */
+type TransactionDisplayRow = {
+  rowKey: string;
+  paymentId: string;
+  amount: number;
+  status: string;
+  method: string;
+  createdAt: string;
+  transactionId: string | null;
+  feeTypeName: string;
+  sourcePayment: PaymentRow;
+};
+
+function paymentFeeTypeLines(payment: PaymentRow): PaymentFeeAllocationLine[] {
+  if (payment.feeAllocations && payment.feeAllocations.length > 0) {
+    return payment.feeAllocations;
+  }
+  if (payment.feeTypeName) {
+    return [
+      {
+        name: payment.feeTypeName,
+        amount: payment.feeTypeAmount ?? payment.amount,
+      },
+    ];
+  }
+  return [];
+}
+
+/** One table row per fee head on each payment (never merge multiple heads into one row). */
+function paymentsToTransactionRows(payments: PaymentRow[]): TransactionDisplayRow[] {
+  const rows: TransactionDisplayRow[] = [];
+
+  for (const payment of payments) {
+    const lines = paymentFeeTypeLines(payment);
+    const base = {
+      paymentId: payment.id,
+      status: payment.status,
+      method: payment.method,
+      createdAt: payment.createdAt,
+      transactionId: payment.transactionId,
+      sourcePayment: payment,
+    };
+
+    if (lines.length === 0) {
+      rows.push({
+        ...base,
+        rowKey: payment.id,
+        amount: payment.amount,
+        feeTypeName: payment.feeTypeName || "-",
+      });
+      continue;
+    }
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!;
+      rows.push({
+        ...base,
+        rowKey: lines.length === 1 ? payment.id : `${payment.id}:${i}:${line.name}`,
+        amount: line.amount,
+        feeTypeName: line.name,
+      });
+    }
+  }
+
+  return rows.sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+}
 
 type Props = {
   fee?: {
@@ -40,7 +112,7 @@ type Props = {
 };
 
 function isSyntheticPaymentId(id: string) {
-  return id === "admission-fee" || id === "application-fee" || id === "legacy-paid-adjustment";
+  return id === "admission-fee" || id === "application-fee";
 }
 
 function isSuccessStatus(status: string) {
@@ -207,17 +279,6 @@ export const FeeTransactions = ({
     };
   }, []);
 
-  const resolveDisplayAmount = (payment: { amount: number; feeTypeAmount?: number }) => {
-    const typeAmount = payment.feeTypeAmount;
-    if (typeof typeAmount !== "number" || !Number.isFinite(typeAmount) || typeAmount <= 0) {
-      return payment.amount;
-    }
-    if (payment.amount >= 1 && typeAmount < 1) {
-      return payment.amount;
-    }
-    return typeAmount;
-  };
-
   const hasFee = fee && (fee.totalFee > 0 || fee.amountPaid > 0 || fee.remainingFee > 0);
 
   const basePayments = payments && payments.length > 0 ? [...payments] : [];
@@ -248,29 +309,7 @@ export const FeeTransactions = ({
     });
   }
 
-  const successfulPaymentTotal = basePayments.reduce((sum, p) => {
-    if (!isSuccessStatus(p.status)) return sum;
-    return sum + resolveDisplayAmount(p);
-  }, 0);
-  const feePaidTotal = fee?.amountPaid ?? 0;
-  const legacyGapAmount = Math.max(Math.round((feePaidTotal - successfulPaymentTotal) * 100) / 100, 0);
-
-  if (legacyGapAmount > 0.01) {
-    basePayments.push({
-      id: "legacy-paid-adjustment",
-      amount: legacyGapAmount,
-      status: "SUCCESS",
-      method: "SYSTEM",
-      createdAt: studentCreatedAt || new Date().toISOString(),
-      transactionId: "AUTO-ADJUSTMENT",
-      feeTypeName: "Previous Payment Adjustment",
-      feeTypeAmount: legacyGapAmount,
-    });
-  }
-
-  const activePayments = [...basePayments].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+  const transactionRows = paymentsToTransactionRows(basePayments);
 
   const openEdit = (p: PaymentRow) => {
     setEditing(p);
@@ -422,7 +461,7 @@ export const FeeTransactions = ({
 
   const totalPaid = hasFee ? fee!.amountPaid : 0;
   const total = hasFee ? fee!.amountPaid + fee!.remainingFee : 0;
-  const hasAny = hasFee || activePayments.length > 0;
+  const hasAny = hasFee || transactionRows.length > 0;
 
   const simplifyFeeHeadName = (value?: string) => {
     const raw = String(value || "").trim();
@@ -440,38 +479,27 @@ export const FeeTransactions = ({
     return cleaned || raw;
   };
 
-  const buildReceiptDataFromPayments = (selectedPayments: (typeof activePayments), createdAt: string) => {
-    const groupedLines = Array.from(
-      selectedPayments.reduce((map, p) => {
-        const key = simplifyFeeHeadName(p.feeTypeName || "Fee payment");
-        const existing = map.get(key);
-        const amount = resolveDisplayAmount(p);
-        const currentRef = p.transactionId?.trim() && p.transactionId !== "N/A" ? p.transactionId.trim() : "-";
-        if (existing) {
-          existing.amount += amount;
-          if (existing.paymentMethod !== formatPaymentMethod(p.method)) {
-            existing.paymentMethod = "MIXED";
-          }
-          if (existing.utrNo !== currentRef) {
-            existing.utrNo = existing.utrNo === "-" ? currentRef : "MULTIPLE";
-          }
-        } else {
-          map.set(key, {
-            description: key,
-            amount,
-            paymentMethod: formatPaymentMethod(p.method),
-            utrNo: currentRef,
-          });
-        }
-        return map;
-      }, new Map<string, { description: string; amount: number; paymentMethod: string; utrNo: string }>())
-    ).map(([, v]) => v);
+  const buildReceiptDataFromTransactionRows = (
+    selectedRows: TransactionDisplayRow[],
+    createdAt: string
+  ) => {
+    const groupedLines = selectedRows.map((row) => {
+      const currentRef =
+        row.transactionId?.trim() && row.transactionId !== "N/A" ? row.transactionId.trim() : "-";
+      return {
+        description: simplifyFeeHeadName(row.feeTypeName),
+        amount: row.amount,
+        paymentMethod: formatPaymentMethod(row.method),
+        utrNo: currentRef,
+      };
+    });
     const finalTotal = groupedLines.reduce((s, l) => s + l.amount, 0);
     const now = new Date();
     const startYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
     const receiptTitle =
-      selectedPayments.length === 1 &&
-      (selectedPayments[0].id === "admission-fee" || selectedPayments[0].id === "application-fee")
+      selectedRows.length === 1 &&
+      (selectedRows[0].paymentId === "admission-fee" ||
+        selectedRows[0].paymentId === "application-fee")
         ? "Admission Receipt"
         : "Fee Receipt";
     return {
@@ -494,14 +522,14 @@ export const FeeTransactions = ({
     } satisfies FeePaymentReceiptData;
   };
 
-  const handlePrintReceipt = (payment: (typeof activePayments)[0]) => {
+  const handlePrintReceipt = (row: TransactionDisplayRow) => {
     if (!studentId.trim()) {
       alert("Missing student. Reload the page and try again.");
       return;
     }
-    const data = buildReceiptDataFromPayments([payment], payment.createdAt);
+    const data = buildReceiptDataFromTransactionRows([row], row.createdAt);
 
-    setPrintingId(payment.id);
+    setPrintingId(row.rowKey);
     setReceiptData(data);
 
     setTimeout(async () => {
@@ -524,12 +552,12 @@ export const FeeTransactions = ({
   };
 
   const printSelectedReceipts = () => {
-    const selectedPayments = activePayments.filter((p) => selectedReceiptIds.includes(p.id));
-    if (selectedPayments.length === 0) {
+    const selectedRows = transactionRows.filter((r) => selectedReceiptIds.includes(r.rowKey));
+    if (selectedRows.length === 0) {
       alert("Select at least one transaction to print.");
       return;
     }
-    const data = buildReceiptDataFromPayments(selectedPayments, new Date().toISOString());
+    const data = buildReceiptDataFromTransactionRows(selectedRows, new Date().toISOString());
     setPrintingId("bulk");
     setReceiptData(data);
     setTimeout(async () => {
@@ -596,51 +624,52 @@ export const FeeTransactions = ({
               </tr>
             </thead>
             <tbody className="text-sm">
-              {activePayments.map((p) => {
-                const synthetic = isSyntheticPaymentId(p.id);
+              {transactionRows.map((row) => {
+                const payment = row.sourcePayment;
+                const synthetic = isSyntheticPaymentId(row.paymentId);
                 const canEditRow = Boolean(studentId.trim());
                 return (
                   <tr
-                    key={p.id}
+                    key={row.rowKey}
                     className="border-b border-white/5 last:border-0 hover:bg-white/[0.02] transition-colors"
                   >
                     <td className="py-4 sm:py-5">
                       <input
                         type="checkbox"
-                        checked={selectedReceiptIds.includes(p.id)}
-                        onChange={() => toggleReceiptSelection(p.id)}
+                        checked={selectedReceiptIds.includes(row.rowKey)}
+                        onChange={() => toggleReceiptSelection(row.rowKey)}
                         className="h-4 w-4 rounded border-white/30 accent-lime-500"
-                        aria-label={`Select ${p.feeTypeName || "transaction"} for receipt print`}
+                        aria-label={`Select ${row.feeTypeName} for receipt print`}
                       />
                     </td>
                     <td className="py-4 sm:py-5 text-gray-400 whitespace-nowrap">
-                      {new Date(p.createdAt).toISOString().slice(0, 10)}
+                      {new Date(row.createdAt).toISOString().slice(0, 10)}
                     </td>
                     <td className="py-4 sm:py-5 font-bold text-gray-100">
-                      {p.id === "legacy-paid-adjustment" ? "Opening balance adjustment" : "Fee payment"}
+                      Fee payment
                     </td>
-                    <td className="py-4 sm:py-5 text-gray-400">{p.feeTypeName || "-"}</td>
-                    <td className="py-4 sm:py-5 text-gray-300">{formatPaymentMethod(p.method)}</td>
+                    <td className="py-4 sm:py-5 text-gray-300">{row.feeTypeName}</td>
+                    <td className="py-4 sm:py-5 text-gray-300">{formatPaymentMethod(row.method)}</td>
                     <td className="py-4 sm:py-5 text-gray-400">
-                      {p.transactionId && p.transactionId.trim() && p.transactionId !== "N/A"
-                        ? p.transactionId
+                      {row.transactionId && row.transactionId.trim() && row.transactionId !== "N/A"
+                        ? row.transactionId
                         : "-"}
                     </td>
                     <td className="py-4 sm:py-5">
                       <span className="bg-lime-400/20 text-lime-400 text-[10px] font-bold px-3 py-1 rounded-full uppercase">
-                        {p.status || "Paid"}
+                        {row.status || "Paid"}
                       </span>
                     </td>
                     <td className="py-4 sm:py-5 text-right font-bold text-white whitespace-nowrap">
-                      ₹{resolveDisplayAmount(p).toLocaleString("en-IN")}
+                      ₹{row.amount.toLocaleString("en-IN")}
                     </td>
                     <td className="py-4 sm:py-5 text-center">
                       <button
                         type="button"
-                        onClick={() => handlePrintReceipt(p)}
-                        disabled={printingId === p.id}
+                        onClick={() => handlePrintReceipt(row)}
+                        disabled={printingId === row.rowKey}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-lime-500/20 hover:bg-lime-500/30 disabled:bg-gray-600 disabled:cursor-not-allowed text-lime-300 disabled:text-gray-500 rounded-lg text-xs font-semibold transition-colors"
-                        title="Print receipt — same layout as admission receipt (two copies on one page)"
+                        title="Print receipt for this fee line"
                       >
                         <Printer className="w-3.5 h-3.5 shrink-0" />
                         <span>Print</span>
@@ -650,13 +679,13 @@ export const FeeTransactions = ({
                       <div className="flex justify-end gap-2 flex-nowrap shrink-0">
                         <button
                           type="button"
-                          onClick={() => openEdit(p)}
+                          onClick={() => openEdit(payment)}
                           disabled={!canEditRow}
                           className="inline-flex shrink-0 items-center justify-center gap-1 rounded-lg border border-lime-500/40 bg-lime-500/15 px-2.5 py-2 text-xs font-semibold text-lime-300 hover:bg-lime-500/25 disabled:cursor-not-allowed disabled:opacity-40"
                           title={
                             synthetic
                               ? "Edit amount stored on student (admission / application fee)"
-                              : "Edit transaction"
+                              : "Edit payment record (full receipt)"
                           }
                           aria-label="Edit"
                         >
@@ -665,13 +694,13 @@ export const FeeTransactions = ({
                         </button>
                         <button
                           type="button"
-                          onClick={() => confirmDelete(p)}
-                          disabled={!canEditRow || deletingId === p.id}
+                          onClick={() => confirmDelete(payment)}
+                          disabled={!canEditRow || deletingId === row.paymentId}
                           className="inline-flex shrink-0 items-center justify-center gap-1 rounded-lg border border-rose-400/50 bg-rose-500/20 px-2.5 py-2 text-xs font-semibold text-rose-200 hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-40"
                           title={
                             synthetic
                               ? "Remove this fee from the student profile"
-                              : "Delete transaction"
+                              : "Delete payment record (all lines on this receipt)"
                           }
                           aria-label="Delete"
                         >
