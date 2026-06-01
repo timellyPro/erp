@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Download, Zap, Settings, PlusCircle, Trash2, Pencil, X, Tag, AlertCircle } from "lucide-react";
 import { generatePDF } from "@/lib/pdfUtils";
 import { ModifyFeeModal, DISCOUNT_HEAD_OVERALL_KEY, type FeeHeadOption } from "./ModifyFeeModal";
@@ -46,6 +46,7 @@ type Props = {
     status: string;
     feeTypeName?: string;
     feeTypeAmount?: number;
+    feeAllocations?: Array<{ name: string; amount: number }>;
     createdAt: string;
   }>;
   discountFeeHeadKey?: string | null;
@@ -147,33 +148,41 @@ export const FeesBreakdown = ({
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
-  // Calculate breakdown by fee type from payments
+  // Paid-by-type from payments (PDF fallback only; table uses headCards / paymentProgressRows).
   const feeBreakdown = new Map<string, { amount: number; paidAmount: number }>();
-  const resolveDisplayAmount = (payment: { amount: number; feeTypeAmount?: number }) => {
-    const typeAmount = payment.feeTypeAmount;
-    if (typeof typeAmount !== "number" || !Number.isFinite(typeAmount) || typeAmount <= 0) {
-      return payment.amount;
-    }
-    // Ignore tiny paise-level values that can appear from gateway-side noise.
-    if (payment.amount >= 1 && typeAmount < 1) {
-      return payment.amount;
-    }
-    return typeAmount;
-  };
-
-  // Aggregate payment amounts by fee type
   for (const payment of payments) {
-    const feeType = payment.feeTypeName || "Other Fees";
-    const paidAmount = resolveDisplayAmount(payment);
+    const lines =
+      payment.feeAllocations && payment.feeAllocations.length > 0
+        ? payment.feeAllocations
+        : payment.feeTypeName
+          ? [{ name: payment.feeTypeName, amount: payment.feeTypeAmount ?? payment.amount }]
+          : [];
 
-    if (!feeBreakdown.has(feeType)) {
-      feeBreakdown.set(feeType, { amount: paidAmount, paidAmount });
-    } else {
-      const existing = feeBreakdown.get(feeType)!;
-      existing.amount += paidAmount;
-      existing.paidAmount += paidAmount;
+    for (const line of lines) {
+      const feeType = line.name || "Other Fees";
+      const paidAmount = line.amount;
+      if (!feeBreakdown.has(feeType)) {
+        feeBreakdown.set(feeType, { amount: paidAmount, paidAmount });
+      } else {
+        const existing = feeBreakdown.get(feeType)!;
+        existing.amount += paidAmount;
+        existing.paidAmount += paidAmount;
+      }
     }
   }
+
+  /** All fee heads with amount / paid / due — matches cards above and every allocation. */
+  const paymentProgressRows = useMemo(
+    () =>
+      headCards.map((h) => ({
+        key: h.key,
+        feeType: h.label,
+        amount: h.amount,
+        paid: h.paid,
+        due: h.due,
+      })),
+    [headCards]
+  );
 
   const discountAmount =
     typeof discountFixedAmount === "number" && discountFixedAmount > 0
@@ -770,8 +779,10 @@ export const FeesBreakdown = ({
         </div>
       </div>
 
-      {/* Fee Type Breakdown Table */}
-      {feeBreakdown.size > 0 ? (
+      {/* Fee head progress — one row per configured fee head */}
+      {headsLoading ? (
+        <div className="text-center py-8 text-gray-500 text-sm">Loading fee breakdown…</div>
+      ) : paymentProgressRows.length > 0 ? (
         <div className="overflow-x-auto -mx-1 sm:mx-0 overscroll-x-contain touch-pan-x pb-1">
           <table className="w-full text-left min-w-[480px] sm:min-w-0">
             <thead>
@@ -784,23 +795,22 @@ export const FeesBreakdown = ({
               </tr>
             </thead>
             <tbody className="text-sm">
-              {Array.from(feeBreakdown.entries()).map(([feeType, data]) => {
-                const remaining = data.amount - data.paidAmount;
-                const percentage = data.amount > 0 ? (data.paidAmount / data.amount) * 100 : 0;
+              {paymentProgressRows.map((row) => {
+                const percentage = row.amount > 0 ? (row.paid / row.amount) * 100 : 0;
                 return (
                   <tr
-                    key={feeType}
+                    key={row.key}
                     className="border-b border-white/5 last:border-0 hover:bg-white/[0.02] transition-colors"
                   >
-                    <td className="py-4 sm:py-5 font-semibold text-gray-100">{feeType}</td>
+                    <td className="py-4 sm:py-5 font-semibold text-gray-100">{row.feeType}</td>
                     <td className="py-4 sm:py-5 text-right text-gray-400">
-                      ₹{data.amount.toLocaleString("en-IN")}
+                      ₹{row.amount.toLocaleString("en-IN")}
                     </td>
                     <td className="py-4 sm:py-5 text-right font-semibold text-lime-400">
-                      ₹{data.paidAmount.toLocaleString("en-IN")}
+                      ₹{row.paid.toLocaleString("en-IN")}
                     </td>
                     <td className="py-4 sm:py-5 text-right text-gray-400">
-                      ₹{remaining.toLocaleString("en-IN")}
+                      ₹{row.due.toLocaleString("en-IN")}
                     </td>
                     <td className="py-4 sm:py-5 text-right">
                       <span className={`${percentage >= 100 ? "text-lime-400" : "text-amber-400"} font-semibold`}>
@@ -810,6 +820,27 @@ export const FeesBreakdown = ({
                   </tr>
                 );
               })}
+            </tbody>
+          </table>
+        </div>
+      ) : feeBreakdown.size > 0 ? (
+        <div className="overflow-x-auto -mx-1 sm:mx-0 overscroll-x-contain touch-pan-x pb-1">
+          <table className="w-full text-left min-w-[480px] sm:min-w-0">
+            <thead>
+              <tr className="text-[11px] text-gray-400 font-bold tracking-wider uppercase border-b border-white/5">
+                <th className="pb-4 font-medium">Fee Type</th>
+                <th className="pb-4 font-medium text-right">Paid</th>
+              </tr>
+            </thead>
+            <tbody className="text-sm">
+              {Array.from(feeBreakdown.entries()).map(([feeType, data]) => (
+                <tr key={feeType} className="border-b border-white/5 last:border-0">
+                  <td className="py-4 font-semibold text-gray-100">{feeType}</td>
+                  <td className="py-4 text-right font-semibold text-lime-400">
+                    ₹{data.paidAmount.toLocaleString("en-IN")}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

@@ -13,6 +13,7 @@ import {
   appendDayReportSheet,
   drawFeeDayReportPdf,
   formatDdMmYyyyFromYmdInput,
+  formatStudentClassForReport,
 } from "@/lib/feeDayReportExcel";
 import { formatRupee, roundRupee } from "@/lib/formatRupee";
 
@@ -466,9 +467,22 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     const txData = await txRes.json().catch(() => ({}));
     const schoolPayload = await schoolRes.json().catch(() => ({}));
     const school = schoolPayload?.school as
-      | { name?: string; address?: string; location?: string; affiliationLine?: string; logoUrl?: string | null }
+      | {
+          name?: string;
+          address?: string;
+          location?: string;
+          affiliationLine?: string;
+          logoUrl?: string | null;
+          admins?: Array<{ photoUrl?: string | null }>;
+        }
       | null
       | undefined;
+    const reportLogoUrl =
+      (typeof school?.logoUrl === "string" && school.logoUrl.trim()) ||
+      (Array.isArray(school?.admins) && typeof school.admins[0]?.photoUrl === "string"
+        ? school.admins[0].photoUrl.trim()
+        : "") ||
+      null;
 
     const transactions: Array<{
       id: string;
@@ -508,9 +522,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
       Date: new Date(t.createdAt).toLocaleDateString("en-GB"),
       "Student Name": t.student?.user?.name || "-",
       "Admission No": t.student?.admissionNumber || "-",
-      Class: t.student?.class
-        ? `${t.student.class.name || ""}${t.student.class.section ? `-${t.student.class.section}` : ""}`
-        : "-",
+      Class: formatStudentClassForReport(t.student?.class ?? null),
       "Fee Head":
         Array.isArray(t.feeAllocations) && t.feeAllocations.length
           ? t.feeAllocations.map((a) => a.name).join(", ")
@@ -538,7 +550,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
       reportTitle: dayReportTitle,
       headerDateLabel,
       transactions: filteredTx,
-      logoUrl: school?.logoUrl || null,
+      logoUrl: reportLogoUrl,
     });
   };
 
