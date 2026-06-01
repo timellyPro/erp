@@ -63,6 +63,7 @@ type StudentDetail = {
     transactionId: string | null;
     feeTypeName?: string;
     feeTypeAmount?: number;
+    feeAllocations?: Array<{ name: string; amount: number }>;
   }>;
   attendanceTrends: Array<{ month: string; present: number; total: number; pct: number }>;
   academicPerformance: Array<{ subject: string; score: number }>;
