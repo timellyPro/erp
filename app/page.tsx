@@ -1,10 +1,10 @@
 "use client";
 
-import { useSession, signOut } from "next-auth/react";
+import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ROUTES } from "@/app/frontend/constants/routes";
-import { hasSuperAdminBrowserSession } from "@/lib/superAdminBrowserSession";
+import { shouldForceSuperAdminRelogin } from "@/lib/superAdminBrowserSession";
 import Spinner from "./frontend/components/common/Spinner";
 import LoginForm from "./frontend/auth/LoginForm";
 
@@ -17,8 +17,7 @@ export default function Home() {
     // Only redirect if we have a confirmed authenticated status with a valid role
     // Never redirect to /unauthorized from home page
     if (status === "authenticated" && session?.user?.role && !hasRedirected) {
-      if (session.user.role === "SUPERADMIN" && !hasSuperAdminBrowserSession()) {
-        void signOut({ redirect: false });
+      if (session.user.role === "SUPERADMIN" && shouldForceSuperAdminRelogin()) {
         return;
       }
 
