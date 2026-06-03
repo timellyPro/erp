@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, Suspense } from "react";
-import { signOut, useSession } from "next-auth/react";
+import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { ROUTES } from "@/app/frontend/constants/routes";
 import LoginForm from "@/components/auth/LoginForm";
-import { hasSuperAdminBrowserSession } from "@/lib/superAdminBrowserSession";
-
+import { shouldForceSuperAdminRelogin } from "@/lib/superAdminBrowserSession";
 export default function LoginPage() {
   const router = useRouter();
   const { data: session, status } = useSession();
@@ -16,13 +15,12 @@ export default function LoginPage() {
 
     const role = session.user.role;
 
-    if (role === "SUPERADMIN" && !hasSuperAdminBrowserSession()) {
-      void signOut({ redirect: false });
+    // Stale cookie: SuperAdminSessionGuard will sign out; stay on login until then.
+    if (role === "SUPERADMIN" && shouldForceSuperAdminRelogin()) {
       return;
     }
 
-    switch (role) {
-      case "SUPERADMIN":
+    switch (role) {      case "SUPERADMIN":
         router.replace(ROUTES.SUPERADMIN);
         break;
       case "SCHOOLADMIN":
