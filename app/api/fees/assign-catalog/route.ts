@@ -20,6 +20,8 @@ function canManage(role: string | null | undefined) {
   return role === "SCHOOLADMIN" || role === "SUPERADMIN" || role === "TEACHER";
 }
 
+const catalogMemCache = new Map<string, { freshUntil: number; value: unknown }>();
+
 /** One fast payload for Assign Fees modals (no lump migration, filtered extras). */
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -40,6 +42,13 @@ export async function GET(req: Request) {
     const studentId = (searchParams.get("studentId") ?? "").trim();
     let classId = (searchParams.get("classId") ?? "").trim();
     let section = (searchParams.get("section") ?? "").trim() || null;
+    const skipClasses = searchParams.get("skipClasses") === "1";
+
+    const memKey = `${schoolId}:${studentId}:${classId}:${section ?? ""}:${skipClasses}`;
+    const memHit = catalogMemCache.get(memKey);
+    if (memHit && Date.now() < memHit.freshUntil) {
+      return NextResponse.json(memHit.value, { status: 200 });
+    }
 
     if (studentId && !classId) {
       const student = await prisma.student.findFirst({
@@ -56,11 +65,13 @@ export async function GET(req: Request) {
     }
 
     const catalogOr: Array<Record<string, unknown>> = [{ targetType: "SCHOOL" }];
-    if (classId) {
+    if (classId && section) {
       catalogOr.push(
         { targetType: "CLASS", targetClassId: classId },
-        { targetType: "SECTION", targetClassId: classId }
+        { targetType: "SECTION", targetClassId: classId, targetSection: section }
       );
+    } else if (classId) {
+      catalogOr.push({ targetType: "CLASS", targetClassId: classId });
     }
 
     const extraWhere = {
@@ -86,12 +97,15 @@ export async function GET(req: Request) {
         where: extraWhere,
         orderBy: { createdAt: "desc" },
         select: extraFeeSelect,
+        take: 500,
       }),
-      prisma.class.findMany({
-        where: { schoolId },
-        select: { id: true, name: true, section: true },
-        orderBy: [{ name: "asc" }, { section: "asc" }],
-      }),
+      skipClasses
+        ? Promise.resolve([] as Array<{ id: string; name: string; section: string | null }>)
+        : prisma.class.findMany({
+            where: { schoolId },
+            select: { id: true, name: true, section: true },
+            orderBy: [{ name: "asc" }, { section: "asc" }],
+          }),
       classId
         ? prisma.classFeeStructure.findUnique({
             where: { classId },
@@ -123,7 +137,7 @@ export async function GET(req: Request) {
       classBaseFeeTotal = total > 0 ? total : null;
     }
 
-    return NextResponse.json({
+    const payload = {
       templates,
       catalogExtras,
       existingStudentExtras,
@@ -131,7 +145,9 @@ export async function GET(req: Request) {
       classes,
       resolvedClassId: classId || null,
       resolvedSection: section,
-    });
+    };
+    catalogMemCache.set(memKey, { value: payload, freshUntil: Date.now() + 20_000 });
+    return NextResponse.json(payload, { status: 200 });
   } catch (error: unknown) {
     console.error("assign-catalog GET error:", error);
     const message = error instanceof Error ? error.message : "Internal server error";

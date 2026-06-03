@@ -22,6 +22,9 @@ import SchoolAdminSettingsTab from "../../components/schooladmin/Settings";
 import SchoolAdminTeacherTab from "../../components/schooladmin/TeachersTab";
 import SchoolAdminCircularsTab from "../../components/schooladmin/circularTab";
 import AdmissionTab from "../../components/teacher/admission/Admission";
+import { fetchSchoolDashboard } from "@/lib/loadSchoolDashboard";
+import { warmSchoolFeesPage } from "@/lib/loadSchoolFeesPage";
+import { todayYmdLocal } from "@/lib/schoolDashboardCollection";
 
 function SchoolAdminContent() {
   const { data: session } = useSession();
@@ -68,6 +71,13 @@ function SchoolAdminContent() {
       cancelled = true;
     };
   }, [session?.user?.name]);
+
+  useEffect(() => {
+    const sid = session?.user?.schoolId;
+    if (!sid) return;
+    void fetchSchoolDashboard(todayYmdLocal(), { schoolId: sid, revalidate: true }).catch(() => {});
+    warmSchoolFeesPage(sid);
+  }, [session?.user?.schoolId]);
 
   useEffect(() => {
     if (tab === "fees") {

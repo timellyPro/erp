@@ -72,14 +72,14 @@ enum TeacherAuditCategory {
 model User {
   id       String  @id @default(cuid())
   name     String?
-  email    String? @unique
+  email    String?
   password String? // hashed
 
   role            Role
-  allowedFeatures String[]       @default([]) // granular access: e.g. ["marks-entry", "attendance-mark"]
+  allowedFeatures String[] @default([]) // granular access: e.g. ["marks-entry", "attendance-mark"]
   // Tenant (School)
   schoolId        String?
-  school          School?        @relation(fields: [schoolId], references: [id])
+  school          School?  @relation(fields: [schoolId], references: [id])
 
   // Teacher-specific fields
   mobile          String? // teacher mobile
@@ -143,6 +143,7 @@ model User {
 
   teacherSchools School[] @relation("SchoolTeacher")
 
+  @@unique([schoolId, email])
 }
 
 model Notification {
@@ -210,6 +211,8 @@ model LeaveRequest {
   @@index([schoolId])
   @@index([status])
   @@index([fromDate, toDate])
+  @@index([schoolId, status, fromDate])
+  @@index([schoolId, teacherId, fromDate])
 }
 
 model School {
@@ -242,21 +245,21 @@ model School {
   // SaaS / billing configuration
   // PARENT_SUBSCRIPTION -> each parent subscribes individually
   // SCHOOL_PAID         -> school has paid centrally; parents get access without subscription
-  billingMode               String                @default("PARENT_SUBSCRIPTION")
-  parentSubscriptionAmount  Float?
-  parentSubscriptionTrialDays Int?               @default(0)
+  billingMode                 String @default("PARENT_SUBSCRIPTION")
+  parentSubscriptionAmount    Float?
+  parentSubscriptionTrialDays Int?   @default(0)
 
-  parentSubscriptions   ParentSubscription[]
+  parentSubscriptions ParentSubscription[]
 
   createdAt DateTime @default(now())
 
-  users              User[]
-  settings           SchoolSettings?
-  classFeeStructures ClassFeeStructure[]
-  extraFees               ExtraFee[]
-  extraFeeHeadTemplates   ExtraFeeHeadTemplate[]
-  pettyCashExpenses  PettyCashExpense[]
-  studentApplications StudentApplication[]
+  users                 User[]
+  settings              SchoolSettings?
+  classFeeStructures    ClassFeeStructure[]
+  extraFees             ExtraFee[]
+  extraFeeHeadTemplates ExtraFeeHeadTemplate[]
+  pettyCashExpenses     PettyCashExpense[]
+  studentApplications   StudentApplication[]
 }
 
 model SchoolSettings {
@@ -272,8 +275,8 @@ model SchoolSettings {
 
   // Tenant payment credentials - payments go to school's account. Fallback to global env if not set.
 
-  hyperpgMerchantId  String?
-  hyperpgApiKey      String?
+  hyperpgMerchantId String?
+  hyperpgApiKey     String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -294,7 +297,7 @@ model Circular {
   school          School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   importanceLevel String   @default("Medium") // High, Medium, Low
   recipients      String[] @default([]) // all, teachers, parents, students, staff
-  classId         String?  // optional: target specific class
+  classId         String? // optional: target specific class
   targetClass     Class?   @relation("CircularTargetClass", fields: [classId], references: [id], onDelete: SetNull)
   publishStatus   String   @default("DRAFT") // PUBLISHED, DRAFT
   createdAt       DateTime @default(now())
@@ -303,6 +306,7 @@ model Circular {
   @@index([schoolId])
   @@index([publishStatus])
   @@index([date])
+  @@index([schoolId, publishStatus, date])
 }
 
 model StudentLeaveRequest {
@@ -325,6 +329,8 @@ model StudentLeaveRequest {
   @@index([studentId])
   @@index([schoolId])
   @@index([status])
+  @@index([schoolId, status, fromDate])
+  @@index([schoolId, studentId, fromDate])
 }
 
 model Class {
@@ -338,16 +344,16 @@ model Class {
   teacherId String?
   teacher   User?   @relation("TeacherClass", fields: [teacherId], references: [id])
 
-  students     Student[]
-  attendances  Attendance[]
-  marks        Mark[]
-  events       Event[]
-  homeworks    Homework[]
+  students            Student[]
+  attendances         Attendance[]
+  marks               Mark[]
+  events              Event[]
+  homeworks           Homework[]
   studentApplications StudentApplication[]
 
   examTerms         ExamTerm[]
   feeStructure      ClassFeeStructure?
-  circularsTargeted Circular[] @relation("CircularTargetClass")
+  circularsTargeted Circular[]         @relation("CircularTargetClass")
 
   createdAt DateTime @default(now())
 }
@@ -425,18 +431,18 @@ model Student {
   id String @id @default(cuid())
 
   // User relation (user.email = admission number for login)
-  userId        String         @unique
-  user          User           @relation(fields: [userId], references: [id])
+  userId   String @unique
+  user     User   @relation(fields: [userId], references: [id])
   //library
   // School & Class
-  schoolId      String
-  school        School         @relation(fields: [schoolId], references: [id])
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id])
 
   classId String?
   class   Class?  @relation(fields: [classId], references: [id])
 
   // Student Details - admissionNumber is unique and used as login (User.email)
-  admissionNumber String   @unique
+  admissionNumber String
   fatherName      String
   motherName      String?
   occupation      String?
@@ -472,11 +478,13 @@ model Student {
   // Parent SaaS subscription entries for this student/parent
   subscriptions ParentSubscription[]
 
-  createdAt              DateTime                @default(now())
+  createdAt DateTime @default(now())
 
   application StudentApplication?
 
   @@unique([schoolId, aadhaarNo])
+  @@unique([schoolId, admissionNumber])
+  @@index([schoolId, createdAt])
 }
 
 // =====================
@@ -562,7 +570,7 @@ model Mark {
   totalMarks  Float
   grade       String? // "A+", "A", "B+", "B", "C", "D", "F"
   suggestions String? @db.Text // Teacher's comments/suggestions
-  examType    String?  // e.g. "TERM 1", "HALF YEARLY" (always CAPS)
+  examType    String? // e.g. "TERM 1", "HALF YEARLY" (always CAPS)
 
   // Relations
   studentId String
@@ -578,13 +586,14 @@ model Mark {
   updatedAt DateTime @updatedAt
 
   @@index([studentId])
+  @@index([studentId, createdAt])
   @@index([classId])
   @@index([examType])
 }
 
 model ExamType {
-  id       String @id @default(cuid())
-  name     String // stored in CAPS only
+  id   String @id @default(cuid())
+  name String // stored in CAPS only
 
   schoolId String
   school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
@@ -596,8 +605,8 @@ model ExamType {
 }
 
 model ExamSubject {
-  id       String @id @default(cuid())
-  name     String // stored in CAPS only
+  id   String @id @default(cuid())
+  name String // stored in CAPS only
 
   schoolId String
   school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
@@ -623,7 +632,7 @@ model Event {
   additionalInfo String?   @db.Text
   photo          String? // URL or file path
   eventDate      DateTime?
-  maxSeats       Int?      // null = unlimited
+  maxSeats       Int? // null = unlimited
   amount         Float     @default(0) // Workshop/event fee (0 = free)
 
   // Relations
@@ -675,12 +684,12 @@ model NewsFeed {
   id          String   @id @default(cuid())
   title       String
   description String   @db.Text
-  photo       String?  // URL - first/main image
+  photo       String? // URL - first/main image
   photos      String[] @default([]) // multiple images
   likes       Int      @default(0)
   // Relations
   schoolId    String
-  school      School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  school      School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
 
   createdById String
   createdBy   User   @relation("NewsFeedCreator", fields: [createdById], references: [id], onDelete: Cascade)
@@ -692,6 +701,7 @@ model NewsFeed {
 
   @@index([schoolId])
   @@index([createdById])
+  @@index([schoolId, createdAt])
 }
 
 model NewsFeedLike {
@@ -739,6 +749,7 @@ model Homework {
   @@index([classId])
   @@index([teacherId])
   @@index([schoolId])
+  @@index([schoolId, classId, dueDate])
 }
 
 model HomeworkSubmission {
@@ -816,6 +827,7 @@ model Certificate {
   updatedAt DateTime @updatedAt
 
   @@index([studentId])
+  @@index([studentId, issuedDate])
   @@index([templateId])
   @@index([schoolId])
   @@index([eventId])
@@ -908,6 +920,8 @@ model Appointment {
   @@index([teacherId])
   @@index([schoolId])
   @@index([status])
+  @@index([schoolId, status, requestedAt])
+  @@index([schoolId, teacherId, status])
 }
 
 model ChatMessage {
@@ -939,11 +953,15 @@ model StudentFee {
   discountPercent Float @default(0)
   finalFee        Float // totalFee after applying discount
 
-  /** Fee head key (e.g. BASE:0, EXTRA:<id>) the discount is documented against; see admin breakdown. */
+  /**
+   * Fee head key (e.g. BASE:0, EXTRA:<id>) the discount is documented against; see admin breakdown.
+   */
   discountFeeHeadKey   String?
   discountFeeHeadLabel String?
-  /** Approval authority / notes for the discount. */
-  discountRemarks String? @db.Text
+  /**
+   * Approval authority / notes for the discount.
+   */
+  discountRemarks      String? @db.Text
 
   amountPaid   Float @default(0)
   remainingFee Float
@@ -971,17 +989,17 @@ model ClassFeeStructure {
 
 // Extra fees: uniform, bus, or any custom - applied to class, section, or student
 model ExtraFee {
-  id              String  @id @default(cuid())
-  schoolId        String
-  school          School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  name            String // e.g. "Uniform Fee", "Bus Fee", "Library Fee"
-  amount          Float
-  targetType      String // SCHOOL | CLASS | SECTION | STUDENT
-  targetClassId   String?
-  targetSection   String?
-  targetStudentId String?
+  id                       String  @id @default(cuid())
+  schoolId                 String
+  school                   School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name                     String // e.g. "Uniform Fee", "Bus Fee", "Library Fee"
+  amount                   Float
+  targetType               String // SCHOOL | CLASS | SECTION | STUDENT
+  targetClassId            String?
+  targetSection            String?
+  targetStudentId          String?
   // ALL | HOSTELLER | DAY_SCHOLAR — who is charged this head (default ALL).
-  residencyScope  String  @default("ALL")
+  residencyScope           String  @default("ALL")
   /// When true, student fee UI shows this head as two 50/50 installments (like hostel/mess).
   splitIntoTwoInstallments Boolean @default(false)
 
@@ -995,15 +1013,15 @@ model ExtraFee {
 
 /// Reusable fee head (title + amount) for picking in Admission → Assign Fees. Does not post to student balances until assigned.
 model ExtraFeeHeadTemplate {
-  id        String   @id @default(cuid())
-  schoolId  String
-  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  name      String
-  amount    Float
+  id                       String   @id @default(cuid())
+  schoolId                 String
+  school                   School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name                     String
+  amount                   Float
   /// When true, assigning this template creates an extra fee shown as two 50/50 installments in student UI.
-  splitIntoTwoInstallments Boolean @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  splitIntoTwoInstallments Boolean  @default(false)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 
   @@index([schoolId])
 }
@@ -1017,19 +1035,19 @@ model PettyCashExpense {
   // Auto-incremented per school (1,2,3...)
   voucherNo Int
 
-  itemName       String
-  headOfAccount  String?
-  paymentType    String? // CASH | ONLINE
-  amount         Float
-  expenseDate    DateTime @db.Date
-  description    String?  @db.Text
+  itemName      String
+  headOfAccount String?
+  paymentType   String? // CASH | ONLINE
+  amount        Float
+  expenseDate   DateTime @db.Date
+  description   String?  @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([schoolId, voucherNo])
   @@index([schoolId])
   @@index([expenseDate])
-  @@unique([schoolId, voucherNo])
 }
 
 model Payment {
@@ -1042,16 +1060,13 @@ model Payment {
 
   gateway String @default("HYPERPG") // HYPERPG (Razorpay/Juspay deprecated)
 
-
-
-
-  hyperpgOrderId String? // HyperPG order id from session response
-  hyperpgTxnId   String? // HyperPG txn_id from order status
+  hyperpgOrderId         String? // HyperPG order id from session response
+  hyperpgTxnId           String? // HyperPG txn_id from order status
   // Gateway order status tracking (from Order Status API / webhooks)
   hyperpgStatus          String?
   hyperpgStatusId        Int?
-  hyperpgRefunded        Boolean @default(false)
-  hyperpgAmountRefunded  Float   @default(0)
+  hyperpgRefunded        Boolean   @default(false)
+  hyperpgAmountRefunded  Float     @default(0)
   hyperpgEffectiveAmount Float?
   hyperpgLastUpdatedAt   DateTime?
 
@@ -1066,12 +1081,13 @@ model Payment {
 
   feeAllocations PaymentFeeAllocation[]
 
-  refunds Refund[]
+  refunds       Refund[]
   subscriptions ParentSubscription[]
 
   createdAt DateTime @default(now())
 
   @@index([studentId])
+  @@index([studentId, createdAt])
 }
 
 // Tracks how a payment amount was distributed across individual fee "heads"
@@ -1106,6 +1122,7 @@ model PaymentFeeAllocation {
   createdAt DateTime @default(now())
 
   @@index([paymentId])
+  @@index([paymentId, allocationType])
   @@index([studentId, headType])
   @@index([componentIndex])
   @@index([extraFeeId])
@@ -1118,16 +1135,16 @@ model ParentSubscription {
   student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   schoolId String
-  school   School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
 
-  status    SubscriptionStatus @default(ACTIVE)
-  isTrial   Boolean            @default(false)
-  startedAt DateTime           @default(now())
-  trialEndsAt       DateTime?
-  currentPeriodEnd  DateTime
+  status           SubscriptionStatus @default(ACTIVE)
+  isTrial          Boolean            @default(false)
+  startedAt        DateTime           @default(now())
+  trialEndsAt      DateTime?
+  currentPeriodEnd DateTime
 
-  amount   Float   @default(0)
-  currency String  @default("INR")
+  amount   Float  @default(0)
+  currency String @default("INR")
 
   paymentId String?
   payment   Payment? @relation(fields: [paymentId], references: [id])
@@ -1168,7 +1185,7 @@ model StudentApplication {
   id String @id @default(uuid())
 
   schoolId String
-  school   School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
 
   classId String?
   class   Class?  @relation(fields: [classId], references: [id], onDelete: SetNull)
@@ -1182,19 +1199,19 @@ model StudentApplication {
   student   Student? @relation(fields: [studentId], references: [id], onDelete: SetNull)
 
   // Admission Details
-  applicationNo String  @unique
-  fedenaNo      String? @unique
-  admissionNo   String? @unique
+  applicationNo String
+  fedenaNo      String?
+  admissionNo   String?
 
-  gradeSought  Grade
-  boardingType BoardingType
-  residencyType String @default("Day Scholar")
+  gradeSought   Grade
+  boardingType  BoardingType
+  residencyType String       @default("Day Scholar")
 
   // Fees (for bulk upload compatibility)
-  totalFee         Float?
-  discountPercent  Float?
-  applicationFee   Float? // record-only; no payment gateway
-  admissionFee     Float?
+  totalFee                    Float?
+  discountPercent             Float?
+  applicationFee              Float? // record-only; no payment gateway
+  admissionFee                Float?
   applicationFeePaid          Boolean   @default(false)
   applicationFeePaidAt        DateTime?
   applicationFeePaymentMode   String?
@@ -1205,17 +1222,17 @@ model StudentApplication {
   admissionFeePaymentMethod   String?
 
   // Optional identifiers (for bulk upload compatibility)
-  rollNo String?
+  rollNo    String?
   penNumber String?
   apaarId   String?
 
   // Personal Info
-  firstName     String
-  middleName    String?
-  lastName      String
-  gender        Gender
-  dateOfBirth   DateTime
-  aadharNo      String
+  firstName   String
+  middleName  String?
+  lastName    String
+  gender      Gender
+  dateOfBirth DateTime
+  aadharNo    String
 
   firstLanguage   String
   nationality     String
@@ -1240,7 +1257,7 @@ model StudentApplication {
   officeAddress    String
   parentPhone      String
   parentEmail      String
-  parentAadharNo   String @unique
+  parentAadharNo   String
   parentWhatsapp   String
   bankAccountNo    String
 
@@ -1259,6 +1276,11 @@ model StudentApplication {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([schoolId, aadharNo])
+  @@unique([schoolId, applicationNo])
+  @@unique([schoolId, fedenaNo])
+  @@unique([schoolId, admissionNo])
+  @@unique([schoolId, parentAadharNo])
   @@index([schoolId])
   @@index([classId])
   @@index([studentId])
@@ -1267,7 +1289,6 @@ model StudentApplication {
   @@index([residencyType])
   @@index([workflowStatus])
   @@index([createdAt])
-  @@unique([schoolId, aadharNo])
 }
 
 // ENUMS

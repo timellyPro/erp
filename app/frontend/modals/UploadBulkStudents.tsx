@@ -66,7 +66,7 @@ export default function UploadCSVModal({ classId, onClose, onSuccess }: any) {
 
       /* ================= 2.FETCH UNASSIGNED STUDENTS (FIX) ================= */
 
-      const studentsRes = await fetch("/api/student/list", { credentials: "include" });
+      const studentsRes = await fetch("/api/student/list?all=1&take=10000", { credentials: "include" });
       const studentsData = await studentsRes.json();
 
       if (!studentsRes.ok || !Array.isArray(studentsData.students)) {

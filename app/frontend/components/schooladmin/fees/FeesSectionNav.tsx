@@ -3,11 +3,12 @@
 import { LayoutList } from "lucide-react";
 import { motion } from "framer-motion";
 import { usePathname, useRouter } from "next/navigation";
+import { prefetchFeesSection } from "@/lib/loadSchoolFeesPage";
+import type { FeesSection } from "@/lib/feesPageRequirements";
 
 const FEES_SECTIONS: { slug: string; label: string }[] = [
   { slug: "", label: "Overview / Summary" },
   { slug: "fees-records", label: "Fees Records" },
-  { slug: "voucher", label: "Voucher" },
   { slug: "petty-cash", label: "Petty Cash" },
   { slug: "offline-payment", label: "Offline Payment Entry" },
   { slug: "add-extra-fees", label: "Add Extra Fees" },
@@ -16,7 +17,11 @@ const FEES_SECTIONS: { slug: string; label: string }[] = [
   { slug: "transactions", label: "Transactions & Refunds" },
 ];
 
-export default function FeesSectionNav() {
+type FeesSectionNavProps = {
+  schoolId?: string | null;
+};
+
+export default function FeesSectionNav({ schoolId }: FeesSectionNavProps) {
   const router = useRouter();
   const pathname = usePathname();
 
@@ -56,6 +61,12 @@ export default function FeesSectionNav() {
             <motion.button
               key={slug || "overview"}
               type="button"
+              onMouseEnter={() => {
+                if (schoolId) prefetchFeesSection(schoolId, (slug || "overview") as FeesSection);
+              }}
+              onFocus={() => {
+                if (schoolId) prefetchFeesSection(schoolId, (slug || "overview") as FeesSection);
+              }}
               onClick={() => goTo(slug)}
               initial={{ opacity: 0, y: 6, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}

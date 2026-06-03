@@ -8,76 +8,22 @@ import { CollectionStatCard } from "./components/CollectionStatCard";
 import { Users, GraduationCap, UserCheck, Wallet } from "lucide-react";
 import { todayYmdLocal } from "@/lib/schoolDashboardCollection";
 import { loadSchoolDashboardCollection } from "@/lib/loadSchoolDashboardCollection";
+import {
+  fetchSchoolDashboard,
+  peekSchoolDashboard,
+  peekSchoolDashboardAny,
+  type SchoolDashboardPayload,
+} from "@/lib/loadSchoolDashboard";
 import Spinner from "../../common/Spinner";
 import { useRouter } from "next/navigation";
 import { ROUTES } from "@/app/frontend/constants/routes";
 import { useSession } from "next-auth/react";
 
-type DashboardData = {
-  stats: {
-    totalClasses: number;
-    totalClassesChange: number;
-    totalStudents: number;
-    totalStudentsChange: number;
-    totalTeachers: number;
-    totalTeachersChange: number;
-    upcomingWorkshops: number;
-    workshopsThisWeek: number;
-    feesCollected: string;
-    feesCollectedPct: number;
-    todayCollectionTotal: string;
-    todayCollectionTotalRaw: number;
-  };
-  attendance: {
-    present: number;
-    absent: number;
-    late: number;
-    total: number;
-    overallRate: number;
-    presentPct: string;
-    absentPct: string;
-    latePct: string;
-  };
-  workshops: Array<{
-    id: string;
-    title: string;
-    date?: string;
-    participants: number;
-    status: string;
-  }>;
-  todayCollectionByMethod: Array<{
-    key: string;
-    label: string;
-    amount: number;
-    formattedAmount: string;
-    count: number;
-  }>;
-  teachersOnLeave: Array<{
-    id: string;
-    name: string;
-    subject: string;
-    leaveType: string;
-    status: string;
-    days: number;
-  }>;
-  recentActivities: Array<{
-    type: string;
-    title: string;
-    subtitle: string;
-    meta: string;
-  }>;
-  latestNews: Array<{
-    id: string;
-    title: string;
-    description: string;
-    postedBy: string;
-    createdAt: string;
-  }>;
-};
-
 export default function Dashboard() {
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const today = todayYmdLocal();
+  const initialCached = peekSchoolDashboardAny(today);
+  const [data, setData] = useState<SchoolDashboardPayload | null>(initialCached);
+  const [loading, setLoading] = useState(!initialCached);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const [selectedCollectionDate, setSelectedCollectionDate] = useState(() => todayYmdLocal());
@@ -90,62 +36,57 @@ export default function Dashboard() {
     return n ? (n.split(" ")[0] ?? "School") : "School";
   }, [session?.user?.name]);
 
+  const schoolId = session?.user?.schoolId ?? null;
+
+  useEffect(() => {
+    const cached =
+      (schoolId ? peekSchoolDashboard(schoolId, today) : null) ?? peekSchoolDashboardAny(today);
+    if (cached) {
+      setData(cached);
+      setLoading(false);
+      lastFetchedCollectionDateRef.current = today;
+    }
+  }, [schoolId, today]);
+
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
-    setLoading(true);
+    const hadCache = Boolean(data);
+    if (!hadCache) setLoading(true);
+
     (async () => {
       try {
-        const dashboardRes = await fetch(
-          `/api/school/dashboard?date=${encodeURIComponent(todayYmdLocal())}`,
-          {
-            credentials: "include",
-            cache: "no-store",
-            signal: controller.signal,
-          }
-        );
-
-        if (!dashboardRes.ok) {
-          const errorData = await dashboardRes.json().catch(() => ({}));
-          const errorMessage =
-            errorData.message || dashboardRes.statusText || "Failed to load dashboard";
-          console.error("Dashboard API error:", errorMessage, "Status:", dashboardRes.status);
-          if (!cancelled) {
-            setError(errorMessage);
-            setData(null);
-          }
-          return;
-        }
-        const json = await dashboardRes.json();
+        const json = await fetchSchoolDashboard(today, {
+          schoolId,
+          signal: controller.signal,
+          revalidate: true,
+        });
         if (!cancelled) {
           setData(json);
           setError(null);
-          lastFetchedCollectionDateRef.current = todayYmdLocal();
+          lastFetchedCollectionDateRef.current = today;
         }
       } catch (err) {
+        if (cancelled) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("Dashboard fetch error:", err);
-        if (!cancelled) {
-          const message =
-            err instanceof DOMException && err.name === "AbortError"
-              ? "Dashboard request timed out. Please try again."
-              : err instanceof Error
-                ? err.message
-                : "Unable to load dashboard data";
+        const message =
+          err instanceof Error ? err.message : "Unable to load dashboard data";
+        if (!hadCache && !data) {
           setError(message);
           setData(null);
         }
       } finally {
-        clearTimeout(timeout);
         if (!cancelled) setLoading(false);
       }
     })();
+
     return () => {
       cancelled = true;
-      clearTimeout(timeout);
       controller.abort();
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per mount; cache supplies instant UI
+  }, [schoolId]);
 
   const fetchCollectionForDate = useCallback(async (dateYmd: string) => {
     if (dateYmd === lastFetchedCollectionDateRef.current) return;
@@ -363,9 +304,17 @@ export default function Dashboard() {
           <p className="text-red-300/80 text-sm">{error}</p>
           <button
             onClick={() => {
-              setLoading(true);
               setError(null);
-              window.location.reload();
+              setLoading(!data);
+              void fetchSchoolDashboard(today, { schoolId, revalidate: true })
+                .then((json) => {
+                  setData(json);
+                  setLoading(false);
+                })
+                .catch((err) => {
+                  setError(err instanceof Error ? err.message : "Unable to load dashboard");
+                  setLoading(false);
+                });
             }}
             className="mt-4 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg transition-colors"
           >

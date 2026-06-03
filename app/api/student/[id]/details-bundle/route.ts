@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
-import { buildStudentDetailsTabPayload } from "@/lib/buildStudentDetailsTabPayload";
+import {
+  buildStudentDetailsShellPayload,
+  buildStudentDetailsTabExtras,
+  buildStudentDetailsTabPayload,
+} from "@/lib/buildStudentDetailsTabPayload";
 import { computeAdminStudentFeeBreakdown } from "@/lib/computeAdminStudentFeeBreakdown";
 
 type RouteParams =
@@ -31,6 +35,7 @@ async function loadFeeBreakdownSafe(schoolId: string, studentId: string) {
       computeAdminStudentFeeBreakdown(schoolId, studentId, {
         migrateLumps: false,
         cleanupHostelMessDuplicates: false,
+        reconcileTotals: false,
       }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), BREAKDOWN_TIMEOUT_MS)),
     ]);
@@ -39,11 +44,15 @@ async function loadFeeBreakdownSafe(schoolId: string, studentId: string) {
   }
 }
 
-/** One request for student details tab: profile payload + fee breakdown (no lump migration on read). */
+/** Student details tab API — shell (fast), extras (deferred), or full bundle. */
 export async function GET(req: Request, context: RouteParams) {
   const resolved = "then" in context.params ? await context.params : context.params;
   const id = resolved.id;
-  const profileOnly = new URL(req.url).searchParams.get("profileOnly") === "1";
+  const url = new URL(req.url);
+  const shellOnly = url.searchParams.get("shell") === "1";
+  const extrasOnly = url.searchParams.get("extras") === "1";
+  const profileOnly = url.searchParams.get("profileOnly") === "1";
+  const fast = url.searchParams.get("fast") === "1";
 
   const session = await getServerSession(authOptions);
   if (!session?.user) {
@@ -63,8 +72,40 @@ export async function GET(req: Request, context: RouteParams) {
 
   try {
     const schoolId = await resolveSchoolId(session);
-
     const resolvedSchoolId = schoolId ?? null;
+
+    if (extrasOnly) {
+      const extras = await buildStudentDetailsTabExtras(id);
+      return NextResponse.json(extras, { status: 200 });
+    }
+
+    const withBreakdown = url.searchParams.get("breakdown") === "1";
+
+    if (shellOnly || (fast && !profileOnly)) {
+      if (shellOnly && withBreakdown && resolvedSchoolId) {
+        const [shell, feeBreakdown] = await Promise.all([
+          buildStudentDetailsShellPayload(id, resolvedSchoolId),
+          loadFeeBreakdownSafe(resolvedSchoolId, id),
+        ]);
+        if (!shell) {
+          return NextResponse.json({ message: "Student not found" }, { status: 404 });
+        }
+        return NextResponse.json({ ...shell, feeBreakdown }, { status: 200 });
+      }
+
+      const shell = await buildStudentDetailsShellPayload(id, resolvedSchoolId);
+      if (!shell) {
+        return NextResponse.json({ message: "Student not found" }, { status: 404 });
+      }
+      if (shellOnly) {
+        return NextResponse.json({ ...shell, feeBreakdown: null }, { status: 200 });
+      }
+      const feeBreakdown = resolvedSchoolId
+        ? await loadFeeBreakdownSafe(resolvedSchoolId, id)
+        : null;
+      return NextResponse.json({ ...shell, feeBreakdown }, { status: 200 });
+    }
+
     const detail = await buildStudentDetailsTabPayload(id, resolvedSchoolId);
     if (!detail) {
       return NextResponse.json({ message: "Student not found" }, { status: 404 });

@@ -334,7 +334,7 @@ export async function POST(req: Request) {
 
             if (existingStudent) {
               let existingUser = await tx.user.findUnique({
-                where: { email: userEmail },
+                where: { schoolId_email: { schoolId, email: userEmail } },
                 select: { id: true },
               });
               if (existingUser && existingUser.id !== existingStudent.userId) {
@@ -342,7 +342,7 @@ export async function POST(req: Request) {
                 do {
                   userEmail = `${nameLocalPart}.${counter}@${schoolDomain}`;
                   existingUser = await tx.user.findUnique({
-                    where: { email: userEmail },
+                    where: { schoolId_email: { schoolId, email: userEmail } },
                     select: { id: true },
                   });
                   counter++;
@@ -434,7 +434,7 @@ export async function POST(req: Request) {
               updatedSettings = settings;
               admissionNumber = `${settings.admissionPrefix}/${year}/${rowTimellyId}`;
               const existingAdmission = await tx.student.findUnique({
-                where: { admissionNumber },
+                where: { schoolId_admissionNumber: { schoolId, admissionNumber } },
                 select: { id: true },
               });
               if (existingAdmission) {
@@ -455,7 +455,7 @@ export async function POST(req: Request) {
               admissionNumber = `${candidate.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
 
               const existingAdmission = await tx.student.findUnique({
-                where: { admissionNumber },
+                where: { schoolId_admissionNumber: { schoolId, admissionNumber } },
                 select: { id: true },
               });
 
@@ -469,7 +469,9 @@ export async function POST(req: Request) {
                   )}`;
                   const fallbackAdmissionNo = `${candidate.admissionPrefix}/${year}/${token}`;
                   const fallbackExists = await tx.student.findUnique({
-                    where: { admissionNumber: fallbackAdmissionNo },
+                    where: {
+                      schoolId_admissionNumber: { schoolId, admissionNumber: fallbackAdmissionNo },
+                    },
                     select: { id: true },
                   });
                   if (!fallbackExists) {
@@ -492,7 +494,7 @@ export async function POST(req: Request) {
               : String(nextNum);
 
             let existingUser = await tx.user.findUnique({
-              where: { email: userEmail },
+                    where: { schoolId_email: { schoolId, email: userEmail } },
               select: { id: true },
             });
             if (existingUser) {
@@ -500,7 +502,7 @@ export async function POST(req: Request) {
               do {
                 userEmail = `${nameLocalPart}.${counter}@${schoolDomain}`;
                 existingUser = await tx.user.findUnique({
-                  where: { email: userEmail },
+                  where: { schoolId_email: { schoolId, email: userEmail } },
                   select: { id: true },
                 });
                 counter++;

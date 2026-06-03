@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "async_hooks";
 import { PrismaClient } from "@prisma/client";
-import { bumpRedisCacheVersion, getRedisCacheVersion, isRedisEnabled, redisGet, redisSet } from "@/lib/redis";
+import { bumpTenantCacheVersion } from "@/lib/redis";
 
 /** Bulk writes (e.g. recalculate all fees) bump Redis once at the end, not per row. */
 const deferredInvalidation = new AsyncLocalStorage<{ active: boolean }>();
@@ -19,14 +19,8 @@ export async function runWithDeferredCacheInvalidation<T>(fn: () => Promise<T>):
       return await fn();
     } finally {
       clearLocalCache();
-      if (isRedisEnabled()) {
-        try {
-          await bumpRedisCacheVersion();
-          console.info("[Redis] INVALIDATE (deferred bulk write)");
-        } catch (error) {
-          console.warn("[Redis] Deferred cache bump failed (DB writes already committed).", error);
-        }
-      }
+      // Endpoint-level caches use tenant-scoped versions; callers should bump the tenant once
+      // after bulk jobs complete (see `bumpTenantCacheVersion`).
     }
   });
 }
@@ -70,7 +64,6 @@ const prismaClientSingleton = () => {
   });
 };
 
-const READ_OPERATIONS = new Set(["findUnique", "findFirst", "findMany", "count", "aggregate", "groupBy"]);
 const WRITE_OPERATIONS = new Set(["create", "createMany", "update", "updateMany", "upsert", "delete", "deleteMany"]);
 const localCacheEnabled = (process.env.LOCAL_QUERY_CACHE_ENABLED || "true").toLowerCase() !== "false";
 const localCacheTtlMs = Number(process.env.LOCAL_QUERY_CACHE_TTL_MS || "4000");
@@ -82,30 +75,8 @@ type LocalCacheEntry = {
 
 const localQueryCache = new Map<string, LocalCacheEntry>();
 
-function stableStringify(value: unknown): string {
-  if (value === null || value === undefined) return String(value);
-  if (typeof value === "bigint") return value.toString();
-  if (value instanceof Date) return value.toISOString();
-  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(",")}]`;
-  if (typeof value === "object") {
-    const obj = value as Record<string, unknown>;
-    const keys = Object.keys(obj).sort();
-    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(obj[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function isReadOperation(operation: string) {
-  return READ_OPERATIONS.has(operation);
-}
-
 function isWriteOperation(operation: string) {
   return WRITE_OPERATIONS.has(operation);
-}
-
-function getCacheKey(model: string | undefined, operation: string, args: unknown, version: number) {
-  const modelName = model ?? "raw";
-  return `prisma:${modelName}:${operation}:v${version}:${stableStringify(args)}`;
 }
 
 function getLocalCachedValue(cacheKey: string) {
@@ -133,78 +104,51 @@ function clearLocalCache() {
 }
 
 declare const globalThis: {
-  prismaGlobal?: ReturnType<typeof createPrismaWithRedis>;
+  prismaGlobal?: ReturnType<typeof createPrisma>;
 } & typeof global;
 
-const createPrismaWithRedis = () => {
+const createPrisma = () => {
   const client = prismaClientSingleton();
 
   return client.$extends({
     query: {
-      async $allOperations({ model, operation, args, query }) {
-        if (!model) {
-          return query(args);
-        }
-
-        if (isDeferredCacheInvalidation()) {
-          return query(args);
-        }
-
-        if (!isRedisEnabled()) {
-          return query(args);
-        }
-
-        if (isReadOperation(operation)) {
-          const version = await getRedisCacheVersion();
-          const cacheKey = getCacheKey(model, operation, args, version);
-          const localCached = getLocalCachedValue(cacheKey);
-          if (localCached !== null) {
-            console.info(`[LocalCache] HIT ${model}.${operation}`);
-            return localCached;
+      async $allOperations({ operation, args, model, query }) {
+        const start = performance.now();
+        try {
+          return await query(args);
+        } finally {
+          const ms = performance.now() - start;
+          const slowMs = Number(process.env.PRISMA_SLOW_QUERY_MS || "50");
+          if (ms >= slowMs) {
+            console.warn("prisma_slow_query", {
+              model,
+              operation,
+              ms: Math.round(ms),
+            });
           }
 
-          try {
-            const cached = await redisGet(cacheKey);
-            if (cached !== null) {
-              console.info(`[Redis] HIT ${model}.${operation}`);
-              setLocalCachedValue(cacheKey, cached);
-              return cached;
+          if (!isDeferredCacheInvalidation() && isWriteOperation(operation)) {
+            clearLocalCache();
+            const a = args as any;
+            const schoolId =
+              typeof a?.data?.schoolId === "string"
+                ? a.data.schoolId
+                : typeof a?.where?.schoolId === "string"
+                  ? a.where.schoolId
+                  : null;
+            if (schoolId) {
+              bumpTenantCacheVersion(schoolId).catch(() => {
+                // ignore cache invalidation errors; DB write already committed
+              });
             }
-            console.info(`[Redis] MISS ${model}.${operation}`);
-          } catch (error) {
-            console.warn(`[Redis] Read failed for ${model}.${operation}. Falling back to DB.`, error);
           }
-
-          const result = await query(args);
-          setLocalCachedValue(cacheKey, result);
-
-          try {
-            const stored = await redisSet(cacheKey, result, 300);
-            if (stored) {
-              console.info(`[Redis] SET ${model}.${operation}`);
-            }
-          } catch (error) {
-            console.warn(`[Redis] Write failed for ${model}.${operation}.`, error);
-          }
-
-          return result;
         }
-
-        const result = await query(args);
-
-        if (isWriteOperation(operation)) {
-          clearLocalCache();
-          await bumpRedisCacheVersion();
-          console.info(`[Redis] INVALIDATE ${model}.${operation}`);
-        }
-
-        return result;
       },
     },
   });
 };
 
-let prisma: ReturnType<typeof createPrismaWithRedis> = globalThis.prismaGlobal ?? createPrismaWithRedis();
+let prisma: ReturnType<typeof createPrisma> = globalThis.prismaGlobal ?? createPrisma();
 
 // Next.js dev HMR can keep a Prisma singleton from before `prisma generate`; new models are then undefined.
 const delegate = prisma as unknown as { extraFeeHeadTemplate?: { create?: unknown } };
@@ -212,7 +156,7 @@ if (
   process.env.NODE_ENV === "development" &&
   typeof delegate.extraFeeHeadTemplate?.create !== "function"
 ) {
-  prisma = createPrismaWithRedis();
+  prisma = createPrisma();
 }
 
 globalThis.prismaGlobal = prisma;

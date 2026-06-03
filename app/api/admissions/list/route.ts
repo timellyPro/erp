@@ -10,6 +10,11 @@ import {
   admissionWorkflowByIds,
   studentApplicationHasWorkflowColumn,
 } from "@/lib/admissionsListQuery";
+import {
+  admissionsListCacheKey,
+  getAdmissionsListCached,
+  setAdmissionsListCached,
+} from "@/lib/admissionsListServerCache";
 
 function parseIntSafe(value: string | null, fallback: number) {
   const n = value ? Number.parseInt(value, 10) : NaN;
@@ -92,9 +97,16 @@ export async function GET(req: Request) {
 
     const skip = (page - 1) * pageSize;
 
+    const cacheKey = admissionsListCacheKey(schoolId, searchParams.toString());
+    const cached = getAdmissionsListCached(cacheKey);
+    if (cached) {
+      return NextResponse.json(cached, { status: 200 });
+    }
+
     const hasWorkflowColumn = await studentApplicationHasWorkflowColumn();
 
     const useRawIdPipeline = phase === "pending" || phase === "upcoming";
+    const skipWorkflowLookup = !useRawIdPipeline;
 
     if (useRawIdPipeline) {
       const whereSql = admissionListWhereSql({
@@ -116,7 +128,9 @@ export async function GET(req: Request) {
       ]);
 
       if (ids.length === 0) {
-        return NextResponse.json({ applications: [], total, page, pageSize }, { status: 200 });
+        const emptyPayload = { applications: [], total, page, pageSize };
+        setAdmissionsListCached(cacheKey, emptyPayload);
+        return NextResponse.json(emptyPayload, { status: 200 });
       }
 
       const [rows, wfMap] = await Promise.all([
@@ -139,7 +153,9 @@ export async function GET(req: Request) {
         })
         .filter(Boolean);
 
-      return NextResponse.json({ applications, total, page, pageSize }, { status: 200 });
+      const payload = { applications, total, page, pageSize };
+      setAdmissionsListCached(cacheKey, payload);
+      return NextResponse.json(payload, { status: 200 });
     }
 
     const where: Record<string, unknown> = { schoolId };
@@ -180,15 +196,23 @@ export async function GET(req: Request) {
       }),
     ]);
 
-    const ids = rows.map((r) => r.id);
-    const wfMap = await admissionWorkflowByIds(ids, hasWorkflowColumn);
-    const applications = rows.map((r) => ({
-      ...r,
-      workflowStatus:
-        wfMap.get(r.id) ?? (r.studentId ? "APPROVED" : "PENDING"),
-    }));
+    const applications = skipWorkflowLookup
+      ? rows.map((r) => ({
+          ...r,
+          workflowStatus: r.studentId ? "APPROVED" : "PENDING",
+        }))
+      : await (async () => {
+          const ids = rows.map((r) => r.id);
+          const wfMap = await admissionWorkflowByIds(ids, hasWorkflowColumn);
+          return rows.map((r) => ({
+            ...r,
+            workflowStatus: wfMap.get(r.id) ?? (r.studentId ? "APPROVED" : "PENDING"),
+          }));
+        })();
 
-    return NextResponse.json({ applications, total, page, pageSize }, { status: 200 });
+    const payload = { applications, total, page, pageSize };
+    setAdmissionsListCached(cacheKey, payload);
+    return NextResponse.json(payload, { status: 200 });
   } catch (e: unknown) {
     const err = e as { message?: string; statusCode?: number };
     return NextResponse.json(

@@ -9,20 +9,14 @@ import {
   normalizeExtraFeeResidencyScope,
   suggestedResidencyScopeForExtraFeeName,
 } from "@/lib/extraFeeResidencyScope";
+import {
+  assignCatalogCacheKey,
+  getAssignCatalogCache,
+  setAssignCatalogCache,
+  type AssignFeeCatalogResult,
+} from "@/lib/assignFeeCatalogCache";
 
-export type AssignFeeCatalogResult = {
-  dbFeeHeadOptions: CatalogFeeHeadOption[];
-  existingStudentExtras: Array<{
-    id: string;
-    name: string;
-    amount: number;
-    splitIntoTwoInstallments: boolean;
-  }>;
-  classBaseFeeTotal: number | null;
-  classRows: ClassRow[];
-  resolvedClassId: string | null;
-  resolvedSection: string | null;
-};
+export type { AssignFeeCatalogResult } from "@/lib/assignFeeCatalogCache";
 
 type CatalogApiExtra = {
   id: string;
@@ -35,6 +29,8 @@ type CatalogApiExtra = {
   residencyScope?: string | null;
   splitIntoTwoInstallments?: boolean;
 };
+
+const inflight = new Map<string, Promise<AssignFeeCatalogResult>>();
 
 function formatCatalogExtraScope(
   x: { targetType?: string | null; targetClassId?: string | null; targetSection?: string | null },
@@ -53,29 +49,16 @@ function formatCatalogExtraScope(
   return t || "—";
 }
 
-/** Single request for assign-fees picker data (replaces /extra + /templates + /student + /structure). */
-export async function loadAssignFeeCatalog(params: {
-  studentId: string;
-  classId?: string | null;
-  section?: string | null;
-  residencyType?: string | null;
-}): Promise<AssignFeeCatalogResult> {
-  const qs = new URLSearchParams();
-  qs.set("studentId", params.studentId);
-  if (params.classId?.trim()) qs.set("classId", params.classId.trim());
-  if (params.section?.trim()) qs.set("section", params.section.trim());
-
-  const res = await fetch(`/api/fees/assign-catalog?${qs.toString()}`, {
-    credentials: "include",
-    cache: "no-store",
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error((data as { message?: string })?.message || "Failed to load fee catalog");
+function mapCatalogResponse(
+  data: Record<string, unknown>,
+  params: {
+    classId?: string | null;
+    section?: string | null;
+    residencyType?: string | null;
   }
-
+): AssignFeeCatalogResult {
   const classRows: ClassRow[] = Array.isArray(data.classes)
-    ? data.classes.map((c: { id: string; name: string; section?: string | null }) => ({
+    ? (data.classes as { id: string; name: string; section?: string | null }[]).map((c) => ({
         id: String(c.id),
         name: String(c.name ?? ""),
         section: c.section ?? null,
@@ -149,4 +132,57 @@ export async function loadAssignFeeCatalog(params: {
     resolvedClassId,
     resolvedSection,
   };
+}
+
+/** Single request for assign-fees picker; uses memory + session cache for instant reopen. */
+export async function loadAssignFeeCatalog(params: {
+  studentId: string;
+  classId?: string | null;
+  section?: string | null;
+  residencyType?: string | null;
+  classRows?: ClassRow[];
+  force?: boolean;
+}): Promise<AssignFeeCatalogResult> {
+  const cacheKey = assignCatalogCacheKey(params);
+  if (!params.force) {
+    const cached = getAssignCatalogCache(cacheKey);
+    if (cached) return cached;
+  }
+
+  const running = inflight.get(cacheKey);
+  if (running) return running;
+
+  const run = (async (): Promise<AssignFeeCatalogResult> => {
+    const qs = new URLSearchParams();
+    qs.set("studentId", params.studentId);
+    if (params.classId?.trim()) qs.set("classId", params.classId.trim());
+    if (params.section?.trim()) qs.set("section", params.section.trim());
+    if (params.classRows?.length) qs.set("skipClasses", "1");
+
+    const res = await fetch(`/api/fees/assign-catalog?${qs.toString()}`, {
+      credentials: "include",
+      cache: "no-store",
+    });
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!res.ok) {
+      throw new Error((data.message as string) || "Failed to load fee catalog");
+    }
+
+    const mapped = mapCatalogResponse(
+      {
+        ...data,
+        classes: params.classRows?.length ? params.classRows : data.classes,
+      },
+      params
+    );
+    setAssignCatalogCache(cacheKey, mapped);
+    return mapped;
+  })();
+
+  inflight.set(cacheKey, run);
+  try {
+    return await run;
+  } finally {
+    inflight.delete(cacheKey);
+  }
 }

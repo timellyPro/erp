@@ -9,6 +9,10 @@ import {
 } from "@/lib/extraFeeResidencyScope";
 import { createExtraFeeRows, migrateUnsplitLumpExtraFees, type ExtraFeeCreatePayload } from "@/lib/extraFeeInstallmentDb";
 import { isUnsplitLumpExtraFee } from "@/lib/extraFeeInstallments";
+import {
+  getSchoolDashboardServerCached,
+  setSchoolDashboardServerCached,
+} from "@/lib/schoolDashboardServerCache";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -58,6 +62,14 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const runMaintenance = searchParams.get("maintenance") === "1";
 
+    if (!runMaintenance) {
+      const memKey = `fees:extra:${schoolId}`;
+      const cached = getSchoolDashboardServerCached<{ extraFees: unknown[] }>(memKey);
+      if (cached) {
+        return NextResponse.json(cached, { status: 200 });
+      }
+    }
+
     let extraFees = await prisma.extraFee.findMany({
       where: { schoolId },
       orderBy: { createdAt: "desc" },
@@ -93,7 +105,11 @@ export async function GET(req: Request) {
       }
     }
 
-    return NextResponse.json({ extraFees });
+    const payload = { extraFees };
+    if (!runMaintenance) {
+      setSchoolDashboardServerCached(`fees:extra:${schoolId}`, payload, 30_000);
+    }
+    return NextResponse.json(payload);
   } catch (error: any) {
     console.error("Extra fees GET error:", error);
     return NextResponse.json(

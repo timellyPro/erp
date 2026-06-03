@@ -3,6 +3,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import {
+  getSchoolDashboardServerCached,
+  setSchoolDashboardServerCached,
+} from "@/lib/schoolDashboardServerCache";
 
 /**
  * GET /api/fees/transactions
@@ -32,14 +36,22 @@ export async function GET(req: Request) {
     /** Fee-report exports need a high cap; default list views stay small. */
     const limit = Math.min(Math.max(rawLimit, 1), forFeeReport ? 25000 : 200);
 
+    if (!forFeeReport && !studentId) {
+      const memKey = `fees:transactions:${schoolId}:${limit}`;
+      const cached = getSchoolDashboardServerCached<{ transactions: unknown[] }>(memKey);
+      if (cached && Array.isArray(cached.transactions) && cached.transactions.length > 0) {
+        return NextResponse.json(cached, { status: 200 });
+      }
+    }
+
     const where: {
       student: { schoolId: string; id?: string };
       status: { in: string[] };
-      eventRegistrationId: null;
+      purpose: string;
     } = {
       student: { schoolId },
       status: { in: ["SUCCESS", "COMPLETED"] },
-      eventRegistrationId: null,
+      purpose: "FEES",
     };
     if (studentId) {
       where.student.id = studentId;
@@ -165,7 +177,11 @@ export async function GET(req: Request) {
       };
     });
 
-    return NextResponse.json({ transactions }, { status: 200 });
+    const payload = { transactions };
+    if (!forFeeReport && !studentId && transactions.length > 0) {
+      setSchoolDashboardServerCached(`fees:transactions:${schoolId}:${limit}`, payload, 20_000);
+    }
+    return NextResponse.json(payload, { status: 200 });
   } catch (error: unknown) {
     console.error("Transactions error:", error);
     return NextResponse.json(

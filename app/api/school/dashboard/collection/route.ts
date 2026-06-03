@@ -3,6 +3,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import { buildSchoolDashboardCollection } from "@/lib/buildSchoolDashboardCollection";
 import { resolveSchoolAdminSchoolId } from "@/lib/resolveSchoolAdminSchoolId";
+import {
+  getSchoolDashboardServerCached,
+  setSchoolDashboardServerCached,
+} from "@/lib/schoolDashboardServerCache";
 
 /** Fast day collection only — used when calendar date changes (no full dashboard reload). */
 export async function GET(request: Request) {
@@ -23,7 +27,14 @@ export async function GET(request: Request) {
     }
 
     const date = new URL(request.url).searchParams.get("date")?.trim() || undefined;
+    const cacheKey = `dashboard:collection:${ctx.schoolId}:${date ?? "today"}`;
+    const cached = getSchoolDashboardServerCached(cacheKey);
+    if (cached) {
+      return NextResponse.json(cached, { status: 200 });
+    }
+
     const payload = await buildSchoolDashboardCollection(ctx.schoolId, date);
+    setSchoolDashboardServerCached(cacheKey, payload, 20_000);
     return NextResponse.json(payload, { status: 200 });
   } catch (error: unknown) {
     console.error("Dashboard collection error:", error);

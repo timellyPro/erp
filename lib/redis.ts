@@ -11,8 +11,9 @@ const redisEnabled = redisFeatureFlag && Boolean(redisUrl && redisToken);
 
 let redisDisabledUntil = 0;
 let redisFailureCount = 0;
-let localCacheVersion = 0;
-let lastVersionReadAt = 0;
+let localGlobalVersion = 0;
+let lastGlobalVersionReadAt = 0;
+const tenantVersionLocal = new Map<string, { v: number; readAt: number }>();
 const ISO_DATETIME_REGEX =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -73,41 +74,68 @@ function reviveDates<T>(value: T): T {
   return value;
 }
 
+/**
+ * Legacy global versioning kept for backwards compatibility.
+ * Prefer tenant-scoped caching (`getTenantCacheVersion` / `bumpTenantCacheVersion`).
+ */
 export async function getRedisCacheVersion(): Promise<number> {
-  if (!isRedisEnabled()) return localCacheVersion;
-
+  if (!isRedisEnabled()) return localGlobalVersion;
   const now = Date.now();
-  if (now - lastVersionReadAt < redisVersionSyncMs) {
-    return localCacheVersion;
-  }
-
+  if (now - lastGlobalVersionReadAt < redisVersionSyncMs) return localGlobalVersion;
   try {
-    const rawVersion = await withTimeout(
-      redis!.get<number>("cache:global:version"),
-      redisTimeoutMs
-    );
+    const rawVersion = await withTimeout(redis!.get<number>("cache:global:version"), redisTimeoutMs);
     const parsed = typeof rawVersion === "number" && Number.isFinite(rawVersion) ? rawVersion : 0;
-    localCacheVersion = parsed;
-    lastVersionReadAt = now;
+    localGlobalVersion = parsed;
+    lastGlobalVersionReadAt = now;
     markRedisSuccess();
     return parsed;
   } catch (error) {
-    markRedisFailure("Version read", error);
-    return localCacheVersion;
+    markRedisFailure("Global version read", error);
+    return localGlobalVersion;
   }
 }
 
 export async function bumpRedisCacheVersion() {
-  localCacheVersion += 1;
-  lastVersionReadAt = Date.now();
+  localGlobalVersion += 1;
+  lastGlobalVersionReadAt = Date.now();
   if (!isRedisEnabled()) return;
-
   try {
     await withTimeout(redis!.incr("cache:global:version"), redisTimeoutMs);
     markRedisSuccess();
-    console.info("[Redis] Cache version bumped after write operation.");
   } catch (error) {
-    markRedisFailure("Version bump", error);
+    markRedisFailure("Global version bump", error);
+  }
+}
+
+export async function getTenantCacheVersion(tenantId: string): Promise<number> {
+  const key = `cache:tenant:${tenantId}:version`;
+  const local = tenantVersionLocal.get(tenantId);
+  const now = Date.now();
+  if (!isRedisEnabled()) return local?.v ?? 0;
+  if (local && now - local.readAt < redisVersionSyncMs) return local.v;
+  try {
+    const rawVersion = await withTimeout(redis!.get<number>(key), redisTimeoutMs);
+    const parsed = typeof rawVersion === "number" && Number.isFinite(rawVersion) ? rawVersion : 0;
+    tenantVersionLocal.set(tenantId, { v: parsed, readAt: now });
+    markRedisSuccess();
+    return parsed;
+  } catch (error) {
+    markRedisFailure("Tenant version read", error);
+    return local?.v ?? 0;
+  }
+}
+
+export async function bumpTenantCacheVersion(tenantId: string) {
+  const key = `cache:tenant:${tenantId}:version`;
+  const now = Date.now();
+  const local = tenantVersionLocal.get(tenantId);
+  tenantVersionLocal.set(tenantId, { v: (local?.v ?? 0) + 1, readAt: now });
+  if (!isRedisEnabled()) return;
+  try {
+    await withTimeout(redis!.incr(key), redisTimeoutMs);
+    markRedisSuccess();
+  } catch (error) {
+    markRedisFailure("Tenant version bump", error);
   }
 }
 
@@ -118,7 +146,8 @@ export async function redisGet(key: string) {
     markRedisSuccess();
     return reviveDates(value);
   } catch (error) {
-    markRedisFailure(`GET ${key}`, error);
+    // Avoid logging keys (may contain identifiers / search terms).
+    markRedisFailure("GET", error);
     return null;
   }
 }
@@ -130,7 +159,7 @@ export async function redisSet(key: string, value: unknown, ttlSeconds: number) 
     markRedisSuccess();
     return true;
   } catch (error) {
-    markRedisFailure(`SET ${key}`, error);
+    markRedisFailure("SET", error);
     return false;
   }
 }

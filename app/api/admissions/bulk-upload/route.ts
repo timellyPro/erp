@@ -282,7 +282,7 @@ export async function POST(req: Request) {
             updated = current;
             admissionNumber = `${updated.admissionPrefix}/${year}/${timellyId}`;
             const existingAdmission = await tx.student.findUnique({
-              where: { admissionNumber },
+              where: { schoolId_admissionNumber: { schoolId, admissionNumber } },
               select: { id: true },
             });
             if (existingAdmission) {
@@ -299,7 +299,7 @@ export async function POST(req: Request) {
             admissionNumber = `${candidate.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
 
             const existingAdmission = await tx.student.findUnique({
-              where: { admissionNumber },
+              where: { schoolId_admissionNumber: { schoolId, admissionNumber } },
               select: { id: true },
             });
             if (existingAdmission) {
@@ -310,7 +310,9 @@ export async function POST(req: Request) {
                 )}`;
                 const fallbackAdmissionNo = `${candidate.admissionPrefix}/${year}/${token}`;
                 const fallbackExists = await tx.student.findUnique({
-                  where: { admissionNumber: fallbackAdmissionNo },
+                  where: {
+                    schoolId_admissionNumber: { schoolId, admissionNumber: fallbackAdmissionNo },
+                  },
                   select: { id: true },
                 });
                 if (!fallbackExists) {
@@ -327,7 +329,12 @@ export async function POST(req: Request) {
           const local = emailLocalPartFromFullName(name);
           let userEmail = email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : `${local}@${schoolDomain}`;
           let counter = 1;
-          while (await tx.user.findUnique({ where: { email: userEmail }, select: { id: true } })) {
+          while (
+            await tx.user.findUnique({
+              where: { schoolId_email: { schoolId, email: userEmail } },
+              select: { id: true },
+            })
+          ) {
             userEmail = `${local}.${counter}@${schoolDomain}`;
             counter++;
             if (counter > 1000) throw new Error("Unable to generate unique email");

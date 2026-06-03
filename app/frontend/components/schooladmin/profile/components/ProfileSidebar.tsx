@@ -37,6 +37,8 @@ type Props = {
   residencyType?: string;
   onSaved?: () => void;
   onOpenFees?: () => void;
+  /** Warm fee breakdown before the user opens the fees sheet. */
+  onFeesHover?: () => void;
 };
 
 export const ProfileSidebar = ({
@@ -52,6 +54,7 @@ export const ProfileSidebar = ({
   residencyType = "Day Scholar",
   onSaved,
   onOpenFees,
+  onFeesHover,
 }: Props) => {
   const normalizedAddress = formatStoredAddressForDisplay(student.address || "");
 
@@ -177,6 +180,8 @@ export const ProfileSidebar = ({
             <button
               type="button"
               onClick={onOpenFees}
+              onMouseEnter={onFeesHover}
+              onFocus={onFeesHover}
               className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-blue-500/40 bg-blue-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-blue-300 hover:bg-blue-500/25"
               title="Open fees sheet"
             >

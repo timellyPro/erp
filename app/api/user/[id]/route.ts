@@ -121,7 +121,7 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
     // Check if new email is unique (if changing email)
     if (email && email !== user.email) {
       const existingUser = await prisma.user.findUnique({
-        where: { email },
+        where: { schoolId_email: { schoolId: user.schoolId!, email } },
       });
       if (existingUser) {
         return NextResponse.json(

@@ -13,6 +13,7 @@ import {
   StudentRow,
 } from "./types";
 import { mergeStudentAfterEdit, toStudentForm } from "./utils";
+import { fetchAllStudents as fetchAllStudentsPaginated } from "@/lib/fetchAllStudents";
 
 type Props = {
   classes?: ClassItem[];
@@ -331,11 +332,11 @@ export default function useStudentPage({ classes, reload }: Props) {
   const fetchAllStudents = async (options?: { silent?: boolean }) => {
     if (!options?.silent) setAllLoading(true);
     try {
-      // Avoid pulling huge datasets; fetch only most recent students.
-      const res = await fetch("/api/student/list?take=1000", { cache: "no-store", credentials: "include" });
-      const data: StudentsListResponse = await res.json();
-      if (!res.ok) return;
-      setAllStudents(data.students || []);
+      const rows = await fetchAllStudentsPaginated<StudentRow>(
+        { cache: "no-store", credentials: "include" },
+        { take: 100, maxPages: 50 }
+      );
+      setAllStudents(rows);
     } catch {
       // ignore
     } finally {
