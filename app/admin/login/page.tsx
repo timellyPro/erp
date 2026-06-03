@@ -1,34 +1,41 @@
 "use client";
 
 import { useEffect, Suspense } from "react";
-import { useSession } from "next-auth/react";
+import { signOut, useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { ROUTES } from "@/app/frontend/constants/routes";
 import LoginForm from "@/components/auth/LoginForm";
+import { hasSuperAdminBrowserSession } from "@/lib/superAdminBrowserSession";
 
 export default function LoginPage() {
   const router = useRouter();
   const { data: session, status } = useSession();
 
   useEffect(() => {
-    if (status === "authenticated" && session?.user) {
-      const role = session.user.role;
-      switch (role) {
-        case "SUPERADMIN":
-          router.replace(ROUTES.SUPERADMIN);
-          break;
-        case "SCHOOLADMIN":
-          router.replace(ROUTES.SCHOOLADMIN);
-          break;
-        case "TEACHER":
-          router.replace(ROUTES.TEACHER);
-          break;
-        case "STUDENT":
-          router.replace(ROUTES.PARENT);
-          break;
-        default:
-          router.replace(ROUTES.UNAUTHORIZED);
-      }
+    if (status !== "authenticated" || !session?.user) return;
+
+    const role = session.user.role;
+
+    if (role === "SUPERADMIN" && !hasSuperAdminBrowserSession()) {
+      void signOut({ redirect: false });
+      return;
+    }
+
+    switch (role) {
+      case "SUPERADMIN":
+        router.replace(ROUTES.SUPERADMIN);
+        break;
+      case "SCHOOLADMIN":
+        router.replace(ROUTES.SCHOOLADMIN);
+        break;
+      case "TEACHER":
+        router.replace(ROUTES.TEACHER);
+        break;
+      case "STUDENT":
+        router.replace(ROUTES.PARENT);
+        break;
+      default:
+        router.replace(ROUTES.UNAUTHORIZED);
     }
   }, [status, session, router]);
 

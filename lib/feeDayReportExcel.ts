@@ -461,7 +461,7 @@ export async function drawFeeDayReportPdf(args: {
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
-    doc.text("Signature of Director", margin, y);
+    doc.text("Signature of Chairman", margin, y);
     doc.text("Signature of Cashier", pageWidth - margin, y, { align: "right" });
     return y;
   };
@@ -627,7 +627,7 @@ export function appendDayReportSheet(
   push(padRow(totRow));
 
   push(Array(TABLE_COLS).fill(""));
-  push(["Signature of Director", "", "", "", "", "", "", "", "Signature of Cashier"]);
+  push(["Signature of Chairman", "", "", "", "", "", "", "", "Signature of Cashier"]);
 
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws["!merges"] = merges;

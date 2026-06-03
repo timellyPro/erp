@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { signIn } from "next-auth/react";
+import { signIn, getSession } from "next-auth/react";
+import { markSuperAdminBrowserSession } from "@/lib/superAdminBrowserSession";
 import { Mail, Lock, Eye, EyeOff, ArrowRight } from "lucide-react";
 const LOGO_SRC = "/timelylogo.webp";
 
@@ -44,6 +45,12 @@ export default function LoginForm() {
       setLoading(false);
       return;
     }
+
+    const session = await getSession();
+    if (session?.user?.role === "SUPERADMIN") {
+      markSuperAdminBrowserSession();
+    }
+
     setLoading(false);
   };
 

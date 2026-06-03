@@ -139,7 +139,7 @@ async function exportAdmissionFeeReportPdf(
   const school = await fetchSchoolMeta();
   const logoDataUrl = school.logoUrl ? await loadImageAsDataUrl(school.logoUrl) : null;
 
-  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const W = doc.internal.pageSize.getWidth();
   const H = doc.internal.pageSize.getHeight();
   const m = 12;
@@ -270,59 +270,43 @@ async function exportAdmissionFeeReportPdf(
 
   const kpiGap = 5;
   const kpiRowH = 26;
-  const topCardW = (contentW - kpiGap * 2) / 3;
+  const kpiCols = 2;
+  const kpiCardW = (contentW - kpiGap * (kpiCols - 1)) / kpiCols;
   const cardY = y;
-
-  drawKpiCard(m, cardY, topCardW, kpiRowH, "Applications (paid)", [String(data.totals.count)], false);
-  drawKpiCard(
-    m + topCardW + kpiGap,
-    cardY,
-    topCardW,
-    kpiRowH,
-    "Total collected",
-    [formatInrPdf(data.totals.amount)],
-    true
-  );
-  drawKpiCard(
-    m + (topCardW + kpiGap) * 2,
-    cardY,
-    topCardW,
-    kpiRowH,
-    "Reporting period",
-    [formatReportYmd(data.from), `to ${formatReportYmd(data.to)}`],
-    false
-  );
 
   const cash = data.totalsByChannel?.cash;
   const online = data.totalsByChannel?.online;
-  const channelRow: Array<{ title: string; lines: string[] }> = [];
+  const kpiCards: Array<{ title: string; lines: string[]; accent?: boolean }> = [
+    { title: "Applications (paid)", lines: [String(data.totals.count)] },
+    { title: "Total collected", lines: [formatInrPdf(data.totals.amount)], accent: true },
+    {
+      title: "Reporting period",
+      lines: [formatReportYmd(data.from), `to ${formatReportYmd(data.to)}`],
+    },
+  ];
   if (cash) {
-    channelRow.push({
+    kpiCards.push({
       title: "Cash collected",
       lines: [formatInrPdf(cash.amount), `${cash.count} application${cash.count === 1 ? "" : "s"}`],
     });
   }
   if (online) {
-    channelRow.push({
+    kpiCards.push({
       title: "Online collected",
       lines: [formatInrPdf(online.amount), `${online.count} application${online.count === 1 ? "" : "s"}`],
     });
   }
 
-  let kpiBlockH = kpiRowH;
-  if (channelRow.length > 0) {
-    const chY = cardY + kpiRowH + kpiGap;
-    const chW =
-      channelRow.length === 1
-        ? topCardW
-        : (contentW - kpiGap * (channelRow.length - 1)) / channelRow.length;
-    channelRow.forEach((card, i) => {
-      const x = m + i * (chW + kpiGap);
-      drawKpiCard(x, chY, chW, kpiRowH, card.title, card.lines, false);
-    });
-    kpiBlockH = kpiRowH * 2 + kpiGap;
-  }
+  const kpiRows = Math.ceil(kpiCards.length / kpiCols);
+  kpiCards.forEach((card, i) => {
+    const col = i % kpiCols;
+    const row = Math.floor(i / kpiCols);
+    const x = m + col * (kpiCardW + kpiGap);
+    const cy = cardY + row * (kpiRowH + kpiGap);
+    drawKpiCard(x, cy, kpiCardW, kpiRowH, card.title, card.lines, card.accent ?? false);
+  });
 
+  const kpiBlockH = kpiRows * kpiRowH + (kpiRows - 1) * kpiGap;
   y = cardY + kpiBlockH + 10;
 
   const padX = 3;
@@ -440,7 +424,7 @@ async function exportAdmissionFeeReportPdf(
     doc.text("Application detail", m, y);
     y += 7;
 
-    const dWidths = columnWidths(contentW, [12, 23, 14, 10, 17, 9, 15]);
+    const dWidths = columnWidths(contentW, [11, 24, 13, 9, 15, 8, 20]);
     const dXs = colStarts(dWidths);
     const dHeaders = ["App. no.", "Applicant", "Class / grade", "Fee", "Paid on", "Mode", "Method"];
     const dAligns: PdfAlign[] = ["left", "left", "left", "right", "left", "center", "left"];
@@ -533,7 +517,7 @@ async function exportAdmissionFeeReportPdf(
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(0, 0, 0);
-  doc.text("Signature of Director", m, y);
+  doc.text("Signature of Chairman", m, y);
   doc.text("Signature of Cashier", W - m, y, { align: "right" });
 
   stampFooter();
