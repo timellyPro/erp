@@ -43,7 +43,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Invalid email format" }, { status: 400 });
     }
 
-    const existingUser = await prisma.user.findUnique({
+    const existingUser = await prisma.user.findFirst({
       where: { email },
       select: { id: true },
     });

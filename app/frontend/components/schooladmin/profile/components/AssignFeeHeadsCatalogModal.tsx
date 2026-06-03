@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, X } from "lucide-react";
+import { peekAssignFeeCatalog } from "@/lib/assignFeeCatalogCache";
 import { loadAssignFeeCatalog } from "@/lib/loadAssignFeeCatalog";
+import { invalidateFeeBreakdownCache } from "@/lib/feeBreakdownClientCache";
+import { invalidateAssignCatalogCache } from "@/lib/assignFeeCatalogCache";
 import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
 
 type FeeAssignRow = {
@@ -85,18 +88,20 @@ export function AssignFeeHeadsCatalogModal({
   const [loadingCatalog, setLoadingCatalog] = useState(true);
 
   const loadCatalog = useCallback(async () => {
-    setLoadingCatalog(true);
     setAssignFeeError(null);
+    const params = { studentId, classId, section: classSection, residencyType };
+    const cached = peekAssignFeeCatalog(params);
+    if (cached) {
+      setDbFeeHeadOptions(cached.dbFeeHeadOptions as FeeHeadOption[]);
+      setLoadingCatalog(false);
+    } else {
+      setLoadingCatalog(true);
+    }
     try {
-      const catalog = await loadAssignFeeCatalog({
-        studentId,
-        classId,
-        section: classSection,
-        residencyType,
-      });
+      const catalog = await loadAssignFeeCatalog(params);
       setDbFeeHeadOptions(catalog.dbFeeHeadOptions as FeeHeadOption[]);
     } catch {
-      setDbFeeHeadOptions([]);
+      if (!cached) setDbFeeHeadOptions([]);
     } finally {
       setLoadingCatalog(false);
     }
@@ -144,23 +149,16 @@ export function AssignFeeHeadsCatalogModal({
     setAssigningFees(true);
     setAssignFeeError(null);
     try {
-      for (const row of cleaned) {
-        const res = await fetch("/api/fees/extra", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            name: row.name,
-            amount: row.amount,
-            targetType: "STUDENT",
-            targetStudentId: studentId,
-            residencyScope: row.residencyScope ?? "ALL",
-            splitIntoTwoInstallments: row.splitIntoTwoInstallments,
-          }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data?.message || `Failed to assign ${row.name}`);
-      }
+      const res = await fetch("/api/fees/extra/batch-assign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ studentId, fees: cleaned }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || "Failed to assign fees");
+      invalidateAssignCatalogCache(studentId);
+      invalidateFeeBreakdownCache(studentId);
       onSuccess();
       onClose();
     } catch (e) {

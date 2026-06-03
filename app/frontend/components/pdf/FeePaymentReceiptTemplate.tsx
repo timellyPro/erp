@@ -59,15 +59,14 @@ const SingleReceipt = ({ data }: { data: FeePaymentReceiptData }) => {
 
   return (
     <div
-      className="p-6 font-sans flex flex-col"
+      className="p-6 pb-12 font-sans flex flex-col"
       style={{
         width: "800px",
-        height: "510px",
+        minHeight: "510px",
         backgroundColor: "#ffffff",
         color: "#000000",
         position: "relative",
         boxSizing: "border-box",
-        overflow: "hidden",
       }}
     >
       <div

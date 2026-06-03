@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { requireSchoolId } from "@/lib/tenant";
+import { withRequestTiming } from "@/lib/requestTiming";
 import {
   buildFeeHeadAmountsByPaymentId,
   dominantFeeHead,
@@ -52,112 +54,116 @@ export async function GET(_req: Request, context: RouteParams) {
   }
 
   try {
-    let schoolId = session.user.schoolId;
-    if (!schoolId && isAdmin) {
-      const adminSchool = await prisma.school.findFirst({
-        where: { admins: { some: { id: session.user.id } } },
-        select: { id: true },
-      });
-      schoolId = adminSchool?.id ?? null;
+    const ctx =
+      isOwnStudent
+        ? ({ ok: true as const, schoolId: "__OWN_STUDENT__" } as const)
+        : await requireSchoolId(session);
+
+    if (!ctx.ok) {
+      return NextResponse.json({ message: ctx.message }, { status: ctx.status });
     }
 
-    const whereClause = schoolId ? { id, schoolId } : { id };
-    const student = await prisma.student.findFirst({
-      where: whereClause,
-      include: {
-        user: { select: { id: true, name: true, email: true, photoUrl: true } },
-        class: { select: { id: true, name: true, section: true } },
-        school: { select: { name: true } },
-        fee: true,
-        application: {
-          select: {
-            parentEmail: true,
-            officeAddress: true,
-            parentAadharNo: true,
-            parentWhatsapp: true,
-            bankAccountNo: true,
-            houseNo: true,
-            street: true,
-            city: true,
-            town: true,
-            state: true,
-            pinCode: true,
-            nationality: true,
-            languagesAtHome: true,
-            caste: true,
-            religion: true,
-            emergencyFatherNo: true,
-            emergencyMotherNo: true,
-            emergencyGuardianNo: true,
+    const schoolId = isOwnStudent ? null : ctx.schoolId;
+
+    return await withRequestTiming(
+      { route: "GET /api/student/[id]", schoolId: schoolId, userId: session.user.id },
+      async () => {
+        const student = await prisma.student.findFirst({
+          where: isOwnStudent ? { id } : { id, schoolId: schoolId! },
+          include: {
+            user: { select: { id: true, name: true, email: true, photoUrl: true } },
+            class: { select: { id: true, name: true, section: true } },
+            school: { select: { name: true } },
+            fee: { select: { totalFee: true, finalFee: true, amountPaid: true, remainingFee: true, discountPercent: true, updatedAt: true, createdAt: true } },
+            application: {
+              select: {
+                parentEmail: true,
+                officeAddress: true,
+                parentAadharNo: true,
+                parentWhatsapp: true,
+                bankAccountNo: true,
+                houseNo: true,
+                street: true,
+                city: true,
+                town: true,
+                state: true,
+                pinCode: true,
+                nationality: true,
+                languagesAtHome: true,
+                caste: true,
+                religion: true,
+                emergencyFatherNo: true,
+                emergencyMotherNo: true,
+                emergencyGuardianNo: true,
+              },
+            },
           },
-        },
-      },
-    });
+        });
 
-    if (!student) {
-      return NextResponse.json({ message: "Student not found" }, { status: 404 });
-    }
+        if (!student) {
+          return NextResponse.json({ message: "Student not found" }, { status: 404 });
+        }
 
-    // Some legacy rows may not have the StudentApplication relation linked via `studentId`.
-    // Fall back by Aadhaar within school so parent/mother contact still appears in profile.
-    const fallbackApplication =
-      student.application ??
-      (await prisma.studentApplication.findFirst({
-        where: {
-          schoolId: student.schoolId,
-          aadharNo: student.aadhaarNo,
-        },
-        select: {
-          emergencyMotherNo: true,
-        },
-        orderBy: { updatedAt: "desc" },
-      }));
-
-    const motherPhoneRaw = String(fallbackApplication?.emergencyMotherNo ?? "").trim();
-    const motherPhoneResolved =
-      !motherPhoneRaw || motherPhoneRaw === "-" || motherPhoneRaw === "—" ? "" : motherPhoneRaw;
-
-    const payments = await prisma.payment.findMany({
-      where: { studentId: id },
-      orderBy: { createdAt: "desc" },
-      take: 20,
-    });
-
-    // For each payment row, show which fee heads were allocated
-    // (e.g., Tuition, Lab, Uniform, etc.) by using PaymentFeeAllocation.
-    const paymentIds = payments.map((p) => p.id);
-    const paymentAllocations =
-      paymentIds.length > 0
-        ? await prisma.paymentFeeAllocation.findMany({
+        // Some legacy rows may not have the StudentApplication relation linked via `studentId`.
+        // Fall back by Aadhaar within school so parent/mother contact still appears in profile.
+        const fallbackApplication =
+          student.application ??
+          (await prisma.studentApplication.findFirst({
             where: {
-              paymentId: { in: paymentIds },
-              allocationType: "PAYMENT",
+              schoolId: student.schoolId,
+              aadharNo: student.aadhaarNo,
             },
             select: {
-              paymentId: true,
-              headType: true,
-              componentIndex: true,
-              componentName: true,
-              extraFeeId: true,
-              allocatedAmount: true,
+              emergencyMotherNo: true,
             },
-          })
-        : [];
-    const refundAllocations =
-      paymentIds.length > 0
-        ? await prisma.paymentFeeAllocation.findMany({
-            where: {
-              paymentId: { in: paymentIds },
-              allocationType: "REFUND",
-            },
-            select: {
-              paymentId: true,
-              headType: true,
-              componentIndex: true,
-              allocatedAmount: true,
-            },
-          })
-        : [];
+            orderBy: { updatedAt: "desc" },
+          }));
+
+        const motherPhoneRaw = String(fallbackApplication?.emergencyMotherNo ?? "").trim();
+        const motherPhoneResolved =
+          !motherPhoneRaw || motherPhoneRaw === "-" || motherPhoneRaw === "—" ? "" : motherPhoneRaw;
+
+        const payments = await prisma.payment.findMany({
+          where: { studentId: id },
+          orderBy: { createdAt: "desc" },
+          take: 20,
+        });
+
+        // For each payment row, show which fee heads were allocated
+        // (e.g., Tuition, Lab, Uniform, etc.) by using PaymentFeeAllocation.
+        const paymentIds = payments.map((p) => p.id);
+        const paymentAllocations =
+          paymentIds.length > 0
+            ? await prisma.paymentFeeAllocation.findMany({
+                where: {
+                  paymentId: { in: paymentIds },
+                  allocationType: "PAYMENT",
+                },
+                select: {
+                  paymentId: true,
+                  headType: true,
+                  componentIndex: true,
+                  componentName: true,
+                  extraFeeId: true,
+                  allocatedAmount: true,
+                },
+              })
+            : [];
+        const refundAllocations =
+          paymentIds.length > 0
+            ? await prisma.paymentFeeAllocation.findMany({
+                where: {
+                  paymentId: { in: paymentIds },
+                  allocationType: "REFUND",
+                },
+                select: {
+                  paymentId: true,
+                  headType: true,
+                  componentIndex: true,
+                  allocatedAmount: true,
+                },
+              })
+            : [];
 
     const extraFeeIds = Array.from(
       new Set(
@@ -189,26 +195,33 @@ export async function GET(_req: Request, context: RouteParams) {
         .filter((a) => a.headType === "BASE_COMPONENT" && a.componentIndex === -1)
         .reduce((s, a) => s + a.allocatedAmount, 0);
 
-    const attendances = await prisma.attendance.findMany({
-      where: { studentId: id },
-      orderBy: { date: "desc" },
-      take: 90,
-    });
+        const attendances = await prisma.attendance.findMany({
+          where: { studentId: id },
+          orderBy: { date: "desc" },
+          take: 90,
+          select: { date: true, status: true },
+        });
 
-    const marks = await prisma.mark.findMany({
-      where: { studentId: id },
-      include: { class: { select: { id: true, name: true } } },
-      orderBy: { createdAt: "desc" },
-    });
+        const marks = await prisma.mark.findMany({
+          where: { studentId: id },
+          orderBy: { createdAt: "desc" },
+          take: 200,
+          select: { subject: true, marks: true, totalMarks: true, createdAt: true, examType: true },
+        });
 
-    const certificates = await prisma.certificate.findMany({
-      where: { studentId: id },
-      include: {
-        template: { select: { name: true } },
-        issuedBy: { select: { name: true } },
-      },
-      orderBy: { issuedDate: "desc" },
-    });
+        const certificates = await prisma.certificate.findMany({
+          where: { studentId: id },
+          orderBy: { issuedDate: "desc" },
+          take: 100,
+          select: {
+            id: true,
+            title: true,
+            issuedDate: true,
+            certificateUrl: true,
+            template: { select: { name: true } },
+            issuedBy: { select: { name: true } },
+          },
+        });
 
     const dob = student.dob ? new Date(student.dob) : null;
     const age = dob
@@ -253,7 +266,7 @@ export async function GET(_req: Request, context: RouteParams) {
       score: v.total > 0 ? Math.round((v.marks / v.total) * 100) : 0,
     }));
 
-    return NextResponse.json({
+        return NextResponse.json({
       student: {
         id: student.id,
         name: student.user?.name ?? "",
@@ -352,6 +365,8 @@ export async function GET(_req: Request, context: RouteParams) {
         certificateUrl: c.certificateUrl ?? null,
       })),
     });
+      }
+    );
   } catch (error: unknown) {
     console.error("Student details error:", error);
     return NextResponse.json(

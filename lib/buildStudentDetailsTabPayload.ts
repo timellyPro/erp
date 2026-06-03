@@ -99,6 +99,14 @@ async function loadPaymentsWithFeeTypes(studentId: string) {
     where: { studentId },
     orderBy: { createdAt: "desc" },
     take: 20,
+    select: {
+      id: true,
+      amount: true,
+      status: true,
+      gateway: true,
+      createdAt: true,
+      transactionId: true,
+    },
   });
 
   const paymentIds = payments.map((p) => p.id);
@@ -180,69 +188,86 @@ async function loadPaymentsWithFeeTypes(studentId: string) {
   };
 }
 
-/** Tab payload for student profile (payments, attendance, marks, certificates). */
-export async function buildStudentDetailsTabPayload(
+export type StudentDetailsTabExtras = Pick<
+  StudentDetailsTabPayload,
+  "payments" | "attendanceTrends" | "academicPerformance" | "certificates"
+>;
+
+const studentDetailsInclude = {
+  user: { select: { id: true, name: true, email: true, photoUrl: true } },
+  class: { select: { id: true, name: true, section: true } },
+  school: { select: { name: true } },
+  fee: {
+    select: {
+      totalFee: true,
+      finalFee: true,
+      discountPercent: true,
+      amountPaid: true,
+      remainingFee: true,
+      discountFeeHeadKey: true,
+      discountFeeHeadLabel: true,
+      discountRemarks: true,
+    },
+  },
+  application: {
+    select: {
+      parentEmail: true,
+      officeAddress: true,
+      parentAadharNo: true,
+      parentWhatsapp: true,
+      bankAccountNo: true,
+      houseNo: true,
+      street: true,
+      city: true,
+      town: true,
+      state: true,
+      pinCode: true,
+      nationality: true,
+      languagesAtHome: true,
+      caste: true,
+      religion: true,
+      emergencyFatherNo: true,
+      emergencyMotherNo: true,
+      emergencyGuardianNo: true,
+    },
+  },
+} as const;
+
+/** Fast path: profile + fee summary only (one student query, no payments/marks/attendance). */
+export async function buildStudentDetailsShellPayload(
   studentId: string,
   schoolId: string | null
 ): Promise<StudentDetailsTabPayload | null> {
   const whereClause = schoolId ? { id: studentId, schoolId } : { id: studentId };
   const student = await prisma.student.findFirst({
     where: whereClause,
-    include: {
-      user: { select: { id: true, name: true, email: true, photoUrl: true } },
-      class: { select: { id: true, name: true, section: true } },
-      school: { select: { name: true } },
-      fee: {
-        select: {
-          totalFee: true,
-          finalFee: true,
-          discountPercent: true,
-          amountPaid: true,
-          remainingFee: true,
-          discountFeeHeadKey: true,
-          discountFeeHeadLabel: true,
-          discountRemarks: true,
-        },
-      },
-      application: {
-        select: {
-          parentEmail: true,
-          officeAddress: true,
-          parentAadharNo: true,
-          parentWhatsapp: true,
-          bankAccountNo: true,
-          houseNo: true,
-          street: true,
-          city: true,
-          town: true,
-          state: true,
-          pinCode: true,
-          nationality: true,
-          languagesAtHome: true,
-          caste: true,
-          religion: true,
-          emergencyFatherNo: true,
-          emergencyMotherNo: true,
-          emergencyGuardianNo: true,
-        },
-      },
-    },
+    include: studentDetailsInclude,
   });
-
   if (!student) return null;
 
   const fallbackApplication =
     student.application ??
-    (await prisma.studentApplication.findFirst({
-      where: { schoolId: student.schoolId, aadharNo: student.aadhaarNo },
+    (await prisma.studentApplication.findUnique({
+      where: { schoolId_aadharNo: { schoolId: student.schoolId, aadharNo: student.aadhaarNo } },
       select: { emergencyMotherNo: true },
-      orderBy: { updatedAt: "desc" },
     }));
 
   const motherPhoneRaw = String(fallbackApplication?.emergencyMotherNo ?? "").trim();
   const motherPhoneResolved =
     !motherPhoneRaw || motherPhoneRaw === "-" || motherPhoneRaw === "—" ? "" : motherPhoneRaw;
 
+  return mapStudentToTabPayload(student, motherPhoneResolved, student.fee?.amountPaid ?? 0, {
+    payments: [],
+    attendanceTrends: [],
+    academicPerformance: [],
+    certificates: [],
+  });
+}
+
+/** Deferred load: payments, attendance, marks, certificates. */
+export async function buildStudentDetailsTabExtras(
+  studentId: string
+): Promise<StudentDetailsTabExtras> {
   const [paymentsBundle, attendances, marks, certificates] = await Promise.all([
     loadPaymentsWithFeeTypes(studentId),
     prisma.attendance.findMany({
@@ -252,23 +277,23 @@ export async function buildStudentDetailsTabPayload(
     }),
     prisma.mark.findMany({
       where: { studentId },
-      include: { class: { select: { id: true, name: true } } },
       orderBy: { createdAt: "desc" },
+      take: 200,
+      select: { subject: true, marks: true, totalMarks: true, createdAt: true, examType: true },
     }),
     prisma.certificate.findMany({
       where: { studentId },
-      include: {
-        template: { select: { name: true } },
+      orderBy: { issuedDate: "desc" },
+      take: 100,
+      select: {
+        id: true,
+        title: true,
+        issuedDate: true,
+        certificateUrl: true,
         issuedBy: { select: { name: true } },
       },
-      orderBy: { issuedDate: "desc" },
     }),
   ]);
-
-  const dob = student.dob ? new Date(student.dob) : null;
-  const age = dob
-    ? Math.floor((Date.now() - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000))
-    : null;
 
   const attendanceByMonth = attendances.reduce(
     (acc, a) => {
@@ -308,7 +333,41 @@ export async function buildStudentDetailsTabPayload(
     score: v.total > 0 ? Math.round((v.marks / v.total) * 100) : 0,
   }));
 
-  const { tuitionPaidFromAllocations } = paymentsBundle;
+  return {
+    payments: paymentsBundle.payments,
+    attendanceTrends,
+    academicPerformance,
+    certificates: certificates.map((c) => ({
+      id: c.id,
+      title: c.title,
+      issuedDate:
+        c.issuedDate instanceof Date ? c.issuedDate.toISOString().slice(0, 10) : String(c.issuedDate),
+      issuedBy: c.issuedBy?.name ?? null,
+      certificateUrl: c.certificateUrl ?? null,
+    })),
+  };
+}
+
+type StudentDetailsCoreRow = NonNullable<
+  Awaited<
+    ReturnType<
+      typeof prisma.student.findFirst<{
+        include: typeof studentDetailsInclude;
+      }>
+    >
+  >
+>;
+
+function mapStudentToTabPayload(
+  student: StudentDetailsCoreRow,
+  motherPhoneResolved: string,
+  tuitionPaidFromAllocations: number,
+  extras: StudentDetailsTabExtras
+): StudentDetailsTabPayload {
+  const dob = student.dob ? new Date(student.dob) : null;
+  const age = dob
+    ? Math.floor((Date.now() - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000))
+    : null;
 
   return {
     student: {
@@ -386,16 +445,17 @@ export async function buildStudentDetailsTabPayload(
           discountRemarks: (student.fee as { discountRemarks?: string | null }).discountRemarks ?? null,
         }
       : null,
-    payments: paymentsBundle.payments,
-    attendanceTrends,
-    academicPerformance,
-    certificates: certificates.map((c) => ({
-      id: c.id,
-      title: c.title,
-      issuedDate:
-        c.issuedDate instanceof Date ? c.issuedDate.toISOString().slice(0, 10) : String(c.issuedDate),
-      issuedBy: c.issuedBy?.name ?? null,
-      certificateUrl: c.certificateUrl ?? null,
-    })),
+    ...extras,
   };
+}
+
+/** Tab payload for student profile (payments, attendance, marks, certificates). */
+export async function buildStudentDetailsTabPayload(
+  studentId: string,
+  schoolId: string | null
+): Promise<StudentDetailsTabPayload | null> {
+  const shell = await buildStudentDetailsShellPayload(studentId, schoolId);
+  if (!shell) return null;
+  const extras = await buildStudentDetailsTabExtras(studentId);
+  return { ...shell, ...extras };
 }

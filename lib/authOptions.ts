@@ -23,8 +23,25 @@ export const authOptions: NextAuthOptions = {
         }
 
         try {
-          const user = await prisma.user.findUnique({
+          // NOTE: email is no longer globally unique (tenant-scoped unique),
+          // so we cannot use `findUnique({ where: { email } })`.
+          // Until the login UI becomes school-aware, we accept the first match and
+          // hard-fail if there are duplicates across tenants.
+          const candidates = await prisma.user.findMany({
             where: { email: credentials.email },
+            take: 2,
+            select: { id: true },
+          });
+          if (candidates.length === 0) {
+            console.log("Auth: User not found for email:", credentials.email);
+            return null;
+          }
+          if (candidates.length > 1) {
+            throw new Error("Multiple accounts exist for this email. Please contact your administrator.");
+          }
+
+          const user = await prisma.user.findUnique({
+            where: { id: candidates[0].id },
             select: {
               id: true,
               name: true,

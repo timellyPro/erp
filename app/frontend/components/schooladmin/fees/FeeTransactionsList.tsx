@@ -6,21 +6,21 @@ import { RotateCcw, Search } from "lucide-react";
 import SelectInput from "../../common/SelectInput";
 import SearchInput from "../../common/SearchInput";
 import RefundModal, { type TransactionItem } from "./RefundModal";
-import type { Student } from "./types";
+import type { Class } from "./types";
 import { schoolAdminStudentDetailsFeesUrl } from "./studentDetailsNav";
 import InlinePagination from "../schooladmincomponents/InlinePagination";
+import {
+  fetchFeesTransactions,
+  peekFeesTransactions,
+  resolveFeesTransactionsCacheKey,
+} from "@/lib/feesTransactionsCache";
 
 const PAGE_SIZE = 20;
 
 interface FeeTransactionsListProps {
-  students: Student[];
+  schoolId: string | null;
+  classes: Class[];
   onSuccess: () => void;
-}
-
-interface ClassItem {
-  id: string;
-  name: string;
-  section: string | null;
 }
 
 interface ClassDetailStudent {
@@ -30,13 +30,17 @@ interface ClassDetailStudent {
   class?: { section?: string | null } | null;
 }
 
-export default function FeeTransactionsList({ students: _students, onSuccess }: FeeTransactionsListProps) {
+export default function FeeTransactionsList({
+  schoolId,
+  classes,
+  onSuccess,
+}: FeeTransactionsListProps) {
   const router = useRouter();
-  const [transactions, setTransactions] = useState<TransactionItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [classLoading, setClassLoading] = useState(false);
+  const cacheKey = resolveFeesTransactionsCacheKey(schoolId);
+  const initialTx = peekFeesTransactions(cacheKey);
+  const [transactions, setTransactions] = useState<TransactionItem[]>(initialTx ?? []);
+  const [loading, setLoading] = useState(initialTx === null);
   const [sectionLoading, setSectionLoading] = useState(false);
-  const [classes, setClasses] = useState<ClassItem[]>([]);
   const [selectedClassId, setSelectedClassId] = useState("");
   const [selectedSection, setSelectedSection] = useState("");
   const [selectedYear, setSelectedYear] = useState("");
@@ -44,40 +48,6 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
   const [classStudents, setClassStudents] = useState<ClassDetailStudent[]>([]);
   const [refundTarget, setRefundTarget] = useState<TransactionItem | null>(null);
   const [page, setPage] = useState(1);
-
-  const fetchTransactions = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/fees/transactions");
-      const data = await res.json();
-      if (res.ok) {
-        setTransactions(data.transactions || []);
-      } else {
-        setTransactions([]);
-      }
-    } catch {
-      setTransactions([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchClasses = async () => {
-    setClassLoading(true);
-    try {
-      const res = await fetch("/api/class/list");
-      const data = await res.json();
-      if (res.ok) {
-        setClasses(Array.isArray(data.classes) ? data.classes : []);
-      } else {
-        setClasses([]);
-      }
-    } catch {
-      setClasses([]);
-    } finally {
-      setClassLoading(false);
-    }
-  };
 
   const fetchClassDetails = async (classId: string) => {
     if (!classId) {
@@ -105,12 +75,32 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
   };
 
   useEffect(() => {
-    fetchClasses();
-  }, []);
+    const key = resolveFeesTransactionsCacheKey(schoolId);
+    const cached = peekFeesTransactions(key);
+    if (cached && cached.length > 0) {
+      setTransactions(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
 
-  useEffect(() => {
-    fetchTransactions();
-  }, []);
+    const controller = new AbortController();
+    void fetchFeesTransactions(schoolId, {
+      revalidate: !cached?.length,
+      signal: controller.signal,
+    })
+      .then((rows) => {
+        if (!controller.signal.aborted) setTransactions(rows);
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("Fee transactions load error:", err);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [schoolId]);
 
   useEffect(() => {
     fetchClassDetails(selectedClassId);
@@ -226,7 +216,6 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
               label="Class"
               value={selectedClassId}
               onChange={setSelectedClassId}
-              disabled={classLoading}
               options={[
                 { label: "All Classes", value: "" },
                 ...classes.map((c) => ({
@@ -426,7 +415,9 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
         transaction={refundTarget}
         onClose={() => setRefundTarget(null)}
         onSuccess={() => {
-          fetchTransactions();
+          if (schoolId) {
+            void fetchFeesTransactions(schoolId, { revalidate: true }).then(setTransactions);
+          }
           onSuccess();
         }}
       />

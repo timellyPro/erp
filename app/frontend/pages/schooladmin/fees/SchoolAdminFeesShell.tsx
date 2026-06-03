@@ -6,6 +6,7 @@ import RequiredRoles from "../../../auth/RequiredRoles";
 import AppLayout from "../../../AppLayout";
 import { SCHOOLADMIN_MENU_ITEMS } from "../../../constants/sidebar";
 import FeesTab from "../../../components/schooladmin/Fees";
+import { warmSchoolFeesPage } from "@/lib/loadSchoolFeesPage";
 
 type FeesSection =
   | "overview"
@@ -16,7 +17,6 @@ type FeesSection =
   | "transactions"
   | "fees-records"
   | "petty-cash"
-  | "voucher"
   | "student-fee-records";
 
 type SchoolAdminFeesShellProps = {
@@ -37,6 +37,11 @@ export default function SchoolAdminFeesShell({ section }: SchoolAdminFeesShellPr
     name: session?.user?.name ?? "School Admin",
     subtitle: "School Admin",
   });
+
+  useEffect(() => {
+    const sid = session?.user?.schoolId;
+    if (sid) warmSchoolFeesPage(sid);
+  }, [session?.user?.schoolId]);
 
   useEffect(() => {
     let cancelled = false;

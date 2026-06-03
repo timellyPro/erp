@@ -369,7 +369,7 @@ export async function POST(req: Request) {
         if (timellyId) {
           admissionNumber = `${settings.admissionPrefix}/${year}/${timellyId}`;
           const existingAdmission = await tx.student.findUnique({
-            where: { admissionNumber },
+            where: { schoolId_admissionNumber: { schoolId, admissionNumber } },
             select: { id: true },
           });
           if (existingAdmission) {
@@ -391,7 +391,7 @@ export async function POST(req: Request) {
             admissionNumber = `${updatedSettings.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
 
             const existingAdmission = await tx.student.findUnique({
-              where: { admissionNumber },
+              where: { schoolId_admissionNumber: { schoolId, admissionNumber } },
               select: { id: true },
             });
             if (!existingAdmission) {
@@ -424,7 +424,7 @@ export async function POST(req: Request) {
 
         // Check if email already exists and generate alternative if needed
         let existingUser = await tx.user.findUnique({
-          where: { email: userEmail },
+          where: { schoolId_email: { schoolId, email: userEmail } },
           select: { id: true },
         });
         if (existingUser) {
@@ -433,7 +433,7 @@ export async function POST(req: Request) {
           do {
             userEmail = `${nameLocal}.${counter}@${schoolDomain}`;
             existingUser = await tx.user.findUnique({
-              where: { email: userEmail },
+              where: { schoolId_email: { schoolId, email: userEmail } },
               select: { id: true },
             });
             counter++;

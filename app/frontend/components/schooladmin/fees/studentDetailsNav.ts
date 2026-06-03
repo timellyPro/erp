@@ -1,10 +1,14 @@
-function buildStudentDetailsFeesUrl(basePath: string, studentId: string) {
+function buildStudentDetailsUrl(basePath: string, studentId: string, focus?: "fees") {
   const p = new URLSearchParams({
     tab: "student-details",
     studentId,
-    focus: "fees",
   });
+  if (focus) p.set("focus", focus);
   return `${basePath}?${p.toString()}`;
+}
+
+function buildStudentDetailsFeesUrl(basePath: string, studentId: string) {
+  return buildStudentDetailsUrl(basePath, studentId, "fees");
 }
 
 /** School admin: open Student Details for a student and scroll to the fees block. */
@@ -27,4 +31,21 @@ export function studentDetailsFeesUrlForPathname(pathname: string | null, studen
     return teacherStudentDetailsFeesUrl(studentId);
   }
   return schoolAdminStudentDetailsFeesUrl(studentId);
+}
+
+/** Open Student Details tab for a student (no fees focus). */
+export function schoolAdminStudentDetailsUrl(studentId: string) {
+  return buildStudentDetailsUrl("/frontend/pages/schooladmin", studentId);
+}
+
+export function teacherStudentDetailsUrl(studentId: string) {
+  return buildStudentDetailsUrl("/frontend/pages/teacher", studentId);
+}
+
+export function studentDetailsUrlForPathname(pathname: string | null, studentId: string): string {
+  const p = pathname ?? "";
+  if (p.includes("/pages/teacher")) {
+    return teacherStudentDetailsUrl(studentId);
+  }
+  return schoolAdminStudentDetailsUrl(studentId);
 }

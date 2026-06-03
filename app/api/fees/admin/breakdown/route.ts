@@ -3,6 +3,13 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { computeAdminStudentFeeBreakdown } from "@/lib/computeAdminStudentFeeBreakdown";
+import { isRedisEnabled } from "@/lib/redis";
+import { tenantCacheKey, swrGet, swrSet } from "@/lib/tenantCache";
+
+const breakdownMemCache = new Map<
+  string,
+  { freshUntil: number; value: Awaited<ReturnType<typeof computeAdminStudentFeeBreakdown>> }
+>();
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -52,11 +59,45 @@ export async function GET(req: Request) {
       searchParams.get("skipMigrate") === "1" ||
       searchParams.get("fast") === "1";
 
+    const now = Date.now();
+    const memKey = `${schoolId}:${studentId}:fast`;
+    if (skipMigrate) {
+      const memHit = breakdownMemCache.get(memKey);
+      if (memHit && now < memHit.freshUntil) {
+        return NextResponse.json(memHit.value, { status: 200 });
+      }
+    }
+
+    const cacheableFastPath = skipMigrate && isRedisEnabled();
+    const cacheKey = cacheableFastPath
+      ? await tenantCacheKey(schoolId, "api", "fees:admin:breakdown", {
+          studentId,
+          fast: true,
+        })
+      : null;
+    if (cacheKey) {
+      const cached = await swrGet<Awaited<ReturnType<typeof computeAdminStudentFeeBreakdown>>>(cacheKey);
+      if (cached && now < cached.freshUntil) {
+        return NextResponse.json(cached.value, { status: 200 });
+      }
+    }
+
     const result = await computeAdminStudentFeeBreakdown(schoolId, studentId, {
       migrateLumps: !skipMigrate,
       /** Deletes duplicate hostel/mess ExtraFee rows in DB — skip on read-only fast path. */
       cleanupHostelMessDuplicates: !skipMigrate,
+      reconcileTotals: !skipMigrate,
     });
+    if (skipMigrate) {
+      breakdownMemCache.set(memKey, { value: result, freshUntil: now + 15_000 });
+    }
+    if (cacheKey) {
+      await swrSet(
+        cacheKey,
+        { value: result, freshUntil: now + 8_000, staleUntil: now + 20_000 },
+        20
+      );
+    }
     return NextResponse.json(result, { status: 200 });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Internal server error";

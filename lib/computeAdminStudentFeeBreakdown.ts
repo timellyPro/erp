@@ -109,9 +109,27 @@ type InternalHead =
 export async function computeAdminStudentFeeBreakdown(
   schoolId: string,
   studentId: string,
-  options?: { migrateLumps?: boolean; cleanupHostelMessDuplicates?: boolean }
+  options?: {
+    migrateLumps?: boolean;
+    cleanupHostelMessDuplicates?: boolean;
+    /** When false, skip realigning StudentFee totals on read (faster student-details switch). */
+    reconcileTotals?: boolean;
+  }
 ): Promise<AdminStudentFeeBreakdownResult> {
   const migrateLumps = options?.migrateLumps !== false;
+  const reconcileTotals = options?.reconcileTotals !== false;
+
+  type ExtraFeeBreakdownRow = {
+    id: string;
+    name: string;
+    amount: number;
+    targetType: string;
+    targetClassId: string | null;
+    targetSection: string | null;
+    targetStudentId: string | null;
+    residencyScope: string;
+    splitIntoTwoInstallments?: boolean;
+  };
 
   if (options?.cleanupHostelMessDuplicates === true) {
     await cleanupDuplicateHostelMessExtraFees(prisma, schoolId);
@@ -129,40 +147,8 @@ export async function computeAdminStudentFeeBreakdown(
     throw new Error("Student not found");
   }
 
-  const fee = await prisma.studentFee.findUnique({
-    where: { studentId: student.id },
-    select: {
-      amountPaid: true,
-      finalFee: true,
-      totalFee: true,
-      remainingFee: true,
-      discountPercent: true,
-      discountFeeHeadKey: true,
-      discountFeeHeadLabel: true,
-    },
-  });
-  if (!fee) {
-    throw new Error("Fee record not found for this student");
-  }
   const classId = student.class?.id ?? null;
   const classSection = student.class?.section ?? null;
-
-  const classFeeStructure = classId
-    ? await prisma.classFeeStructure.findUnique({
-        where: { classId },
-        select: { components: true },
-      })
-    : null;
-
-  const baseComps =
-    ((classFeeStructure?.components as Array<{ name: string; amount: number }> | null) ?? []).map(
-      (c) => ({
-        name: c.name,
-        amount: Number(c.amount) || 0,
-      })
-    );
-
-  const discount = studentFeeDiscountFromRecord(fee, baseComps);
 
   const extraFeeWhere = {
     schoolId,
@@ -187,34 +173,66 @@ export async function computeAdminStudentFeeBreakdown(
     residencyScope: true,
   } as const;
 
-  type ExtraFeeBreakdownRow = {
-    id: string;
-    name: string;
-    amount: number;
-    targetType: string;
-    targetClassId: string | null;
-    targetSection: string | null;
-    targetStudentId: string | null;
-    residencyScope: string;
-    splitIntoTwoInstallments?: boolean;
-  };
-
-  let extraFeesRaw: ExtraFeeBreakdownRow[];
-  try {
-    extraFeesRaw = await prisma.extraFee.findMany({
-      where: extraFeeWhere,
-      select: { ...extraFeeSelectBase, splitIntoTwoInstallments: true } as typeof extraFeeSelectBase & {
-        splitIntoTwoInstallments: true;
+  const [fee, classFeeStructure, extraFeesRawFirst, groupedAllocations] = await Promise.all([
+    prisma.studentFee.findUnique({
+      where: { studentId: student.id },
+      select: {
+        amountPaid: true,
+        finalFee: true,
+        totalFee: true,
+        remainingFee: true,
+        discountPercent: true,
+        discountFeeHeadKey: true,
+        discountFeeHeadLabel: true,
       },
-    });
-  } catch (e) {
-    if (!isUnknownExtraFeeSplitFieldError(e)) throw e;
-    const rows = await prisma.extraFee.findMany({
-      where: extraFeeWhere,
-      select: extraFeeSelectBase,
-    });
-    extraFeesRaw = rows.map((r) => ({ ...r, splitIntoTwoInstallments: false }));
+    }),
+    classId
+      ? prisma.classFeeStructure.findUnique({
+          where: { classId },
+          select: { components: true },
+        })
+      : Promise.resolve(null),
+    prisma.extraFee
+      .findMany({
+        where: extraFeeWhere,
+        select: { ...extraFeeSelectBase, splitIntoTwoInstallments: true } as typeof extraFeeSelectBase & {
+          splitIntoTwoInstallments: true;
+        },
+      })
+      .catch(async (e) => {
+        if (!isUnknownExtraFeeSplitFieldError(e)) throw e;
+        const rows = await prisma.extraFee.findMany({
+          where: extraFeeWhere,
+          select: extraFeeSelectBase,
+        });
+        return rows.map((r) => ({ ...r, splitIntoTwoInstallments: false }));
+      }),
+    prisma.paymentFeeAllocation.groupBy({
+      by: ["allocationType", "headType", "componentIndex", "extraFeeId"],
+      where: {
+        studentId: student.id,
+        allocationType: { in: ["PAYMENT", "REFUND"] },
+        payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+      },
+      _sum: { allocatedAmount: true },
+    }),
+  ]);
+
+  if (!fee) {
+    throw new Error("Fee record not found for this student");
   }
+
+  let extraFeesRaw = extraFeesRawFirst as ExtraFeeBreakdownRow[];
+
+  const baseComps =
+    ((classFeeStructure?.components as Array<{ name: string; amount: number }> | null) ?? []).map(
+      (c) => ({
+        name: c.name,
+        amount: Number(c.amount) || 0,
+      })
+    );
+
+  const discount = studentFeeDiscountFromRecord(fee, baseComps);
 
   if (migrateLumps) {
     const lumpsToMigrate = extraFeesRaw.filter((ef) =>
@@ -289,35 +307,12 @@ export async function computeAdminStudentFeeBreakdown(
 
   const extraFeesById = new Map(extraFeesRaw.map((ef) => [ef.id, { id: ef.id, name: ef.name }]));
 
-  const [paymentAllocations, refundAllocations] = await Promise.all([
-    prisma.paymentFeeAllocation.groupBy({
-      by: ["headType", "componentIndex", "extraFeeId"],
-      where: {
-        studentId: student.id,
-        allocationType: "PAYMENT",
-        payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
-      },
-      _sum: { allocatedAmount: true },
-    }),
-    prisma.paymentFeeAllocation.groupBy({
-      by: ["headType", "componentIndex", "extraFeeId"],
-      where: {
-        studentId: student.id,
-        allocationType: "REFUND",
-        payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
-      },
-      _sum: { allocatedAmount: true },
-    }),
-  ]);
-
   const netPaidByHead = new Map<string, number>();
-  for (const a of paymentAllocations) {
+  for (const a of groupedAllocations) {
     const key = a.headType === "BASE_COMPONENT" ? `BASE:${a.componentIndex}` : `EXTRA:${a.extraFeeId}`;
-    netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) + (a._sum.allocatedAmount ?? 0));
-  }
-  for (const a of refundAllocations) {
-    const key = a.headType === "BASE_COMPONENT" ? `BASE:${a.componentIndex}` : `EXTRA:${a.extraFeeId}`;
-    netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) - (a._sum.allocatedAmount ?? 0));
+    const amount = a._sum.allocatedAmount ?? 0;
+    const sign = a.allocationType === "REFUND" ? -1 : 1;
+    netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) + sign * amount);
   }
 
   redistributeBaseMinusOneAllocations(netPaidByHead, allHeads);
@@ -381,9 +376,10 @@ export async function computeAdminStudentFeeBreakdown(
 
   /** Realign stored totals from fee heads (per-head discounts stay correct; avoids float noise in remainingFee). */
   if (
-    Math.abs(fee.totalFee - expectedTotalFee) > 0.02 ||
-    Math.abs(fee.finalFee - expectedFinal) > 0.02 ||
-    Math.abs(fee.remainingFee - totalDueBefore) > 0.02
+    reconcileTotals &&
+    (Math.abs(fee.totalFee - expectedTotalFee) > 0.02 ||
+      Math.abs(fee.finalFee - expectedFinal) > 0.02 ||
+      Math.abs(fee.remainingFee - totalDueBefore) > 0.02)
   ) {
     await prisma.studentFee.update({
       where: { studentId: student.id },

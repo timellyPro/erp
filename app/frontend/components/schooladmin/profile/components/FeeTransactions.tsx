@@ -479,11 +479,50 @@ export const FeeTransactions = ({
     return cleaned || raw;
   };
 
+  type ReceiptLine = {
+    description: string;
+    amount: number;
+    paymentMethod: string;
+    utrNo: string;
+  };
+
+  /** Merge same fee head + same payment method; keep separate rows when method differs (e.g. Cash vs Online). */
+  const mergeReceiptLinesByDescription = (lines: ReceiptLine[]): ReceiptLine[] => {
+    const merged = new Map<
+      string,
+      { description: string; amount: number; paymentMethod: string; utrNos: Set<string> }
+    >();
+
+    for (const line of lines) {
+      const key = `${line.description}::${line.paymentMethod}`;
+      const existing = merged.get(key);
+      if (existing) {
+        existing.amount += line.amount;
+        if (line.utrNo && line.utrNo !== "-") existing.utrNos.add(line.utrNo);
+      } else {
+        merged.set(key, {
+          description: line.description,
+          amount: line.amount,
+          paymentMethod: line.paymentMethod,
+          utrNos: new Set(line.utrNo && line.utrNo !== "-" ? [line.utrNo] : []),
+        });
+      }
+    }
+
+    return Array.from(merged.values()).map(({ description, amount, paymentMethod, utrNos }) => ({
+      description,
+      amount,
+      paymentMethod,
+      utrNo:
+        utrNos.size === 0 ? "-" : utrNos.size === 1 ? [...utrNos][0]! : [...utrNos].join(", "),
+    }));
+  };
+
   const buildReceiptDataFromTransactionRows = (
     selectedRows: TransactionDisplayRow[],
     createdAt: string
   ) => {
-    const groupedLines = selectedRows.map((row) => {
+    const rawLines = selectedRows.map((row) => {
       const currentRef =
         row.transactionId?.trim() && row.transactionId !== "N/A" ? row.transactionId.trim() : "-";
       return {
@@ -493,6 +532,7 @@ export const FeeTransactions = ({
         utrNo: currentRef,
       };
     });
+    const groupedLines = mergeReceiptLinesByDescription(rawLines);
     const finalTotal = groupedLines.reduce((s, l) => s + l.amount, 0);
     const now = new Date();
     const startYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;

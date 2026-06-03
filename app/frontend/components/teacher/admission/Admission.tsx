@@ -12,8 +12,17 @@ import DataTable from "../../common/TableLayout";
 import SearchInput from "../../common/SearchInput";
 import AdmissionReceiptTemplate, { type AdmissionReceiptData } from "../../pdf/AdmissionReceiptTemplate";
 import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
+import {
+  invalidateAssignCatalogCache,
+  peekAssignFeeCatalog,
+} from "@/lib/assignFeeCatalogCache";
 import { loadAssignFeeCatalog } from "@/lib/loadAssignFeeCatalog";
-import { studentDetailsFeesUrlForPathname } from "../../schooladmin/fees/studentDetailsNav";
+import { invalidateFeeBreakdownCache } from "@/lib/feeBreakdownClientCache";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
+import {
+  studentDetailsFeesUrlForPathname,
+  studentDetailsUrlForPathname,
+} from "../../schooladmin/fees/studentDetailsNav";
 import {
   formatClassOptionLabel,
   gradeSoughtFromClassName,
@@ -290,6 +299,7 @@ export default function TeacherAdmissionTab() {
   const [totalPages, setTotalPages] = useState(1);
   const [applicationsCount, setApplicationsCount] = useState(0);
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 350);
   const [filters, setFilters] = useState<{ gradeSought: string; boardingType: string; from: string; to: string; classId: string }>({
     gradeSought: "",
     boardingType: "",
@@ -389,38 +399,84 @@ export default function TeacherAdmissionTab() {
     return [{ id: `seed-${now}`, name: "", amount: "" }];
   }, []);
 
+  const applyAssignCatalog = useCallback((catalog: Awaited<ReturnType<typeof loadAssignFeeCatalog>>) => {
+    setExistingStudentExtras(catalog.existingStudentExtras);
+    setDbFeeHeadOptions(catalog.dbFeeHeadOptions as FeeHeadOption[]);
+    setClassBaseFeeTotal(catalog.classBaseFeeTotal);
+  }, []);
+
+  const goToStudentDetails = useCallback(
+    (row: AdmissionRow) => {
+      if (!row.studentId) {
+        setMessageTone("error");
+        setMessage("Approve & enroll this application first to open Student Details.");
+        return;
+      }
+      router.push(studentDetailsUrlForPathname(pathname, row.studentId));
+    },
+    [pathname, router]
+  );
+
+  const warmAssignCatalog = useCallback(
+    (row: AdmissionRow) => {
+      if (!row.studentId) return;
+      const params = {
+        studentId: row.studentId,
+        classId: row.classId ?? row.class?.id ?? null,
+        section: row.class?.section ?? null,
+        residencyType: row.residencyType,
+      };
+      if (peekAssignFeeCatalog(params)) return;
+      const classRows = classes.map((c) => ({
+        id: c.id,
+        name: c.name,
+        section: c.section ?? null,
+      }));
+      void loadAssignFeeCatalog({ ...params, classRows }).catch(() => {});
+    },
+    [classes]
+  );
+
   const openAssignFeesDialog = useCallback(
-    async (row: AdmissionRow) => {
+    (row: AdmissionRow) => {
       if (!row.studentId) {
         setMessageTone("error");
         setMessage("Approve enrollment first, then assign student-specific fees.");
         return;
       }
+      const params = {
+        studentId: row.studentId,
+        classId: row.classId ?? row.class?.id ?? null,
+        section: row.class?.section ?? null,
+        residencyType: row.residencyType,
+      };
+      const classRows = classes.map((c) => ({
+        id: c.id,
+        name: c.name,
+        section: c.section ?? null,
+      }));
+
       setFeeAssignDialog(row);
       setFeeAssignRows(seededFeeRowsForResidency(row.residencyType));
       setAssignFeeError(null);
-      setExistingStudentExtras([]);
-      setDbFeeHeadOptions([]);
-      setClassBaseFeeTotal(null);
-      setCatalogLoading(true);
 
-      try {
-        const catalog = await loadAssignFeeCatalog({
-          studentId: row.studentId,
-          classId: row.classId ?? row.class?.id ?? null,
-          section: row.class?.section ?? null,
-          residencyType: row.residencyType,
-        });
-        setExistingStudentExtras(catalog.existingStudentExtras);
-        setDbFeeHeadOptions(catalog.dbFeeHeadOptions as FeeHeadOption[]);
-        setClassBaseFeeTotal(catalog.classBaseFeeTotal);
-      } catch {
-        // Keep modal usable even if catalog fetch fails.
-      } finally {
+      const cached = peekAssignFeeCatalog(params);
+      if (cached) {
+        applyAssignCatalog(cached);
         setCatalogLoading(false);
+      } else {
+        setExistingStudentExtras([]);
+        setDbFeeHeadOptions([]);
+        setClassBaseFeeTotal(null);
+        setCatalogLoading(true);
       }
+
+      void loadAssignFeeCatalog({ ...params, classRows })
+        .then(applyAssignCatalog)
+        .catch(() => {})
+        .finally(() => setCatalogLoading(false));
     },
-    [seededFeeRowsForResidency]
+    [applyAssignCatalog, classes, seededFeeRowsForResidency]
   );
 
   const addAssignFeeRow = () => {
@@ -514,23 +570,21 @@ export default function TeacherAdmissionTab() {
     setAssigningFees(true);
     setAssignFeeError(null);
     try {
-      for (const row of cleaned) {
-        const res = await fetch("/api/fees/extra", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: row.name,
-            amount: row.amount,
-            targetType: "STUDENT",
-            targetStudentId: feeAssignDialog.studentId,
-            residencyScope: row.residencyScope ?? "ALL",
-            splitIntoTwoInstallments: row.splitIntoTwoInstallments,
-          }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data?.message || `Failed to assign ${row.name}`);
-      }
+      const res = await fetch("/api/fees/extra/batch-assign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          studentId: feeAssignDialog.studentId,
+          fees: cleaned,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || "Failed to assign fees");
+
       const savedStudentId = feeAssignDialog.studentId;
+      invalidateAssignCatalogCache(savedStudentId);
+      invalidateFeeBreakdownCache(savedStudentId);
       setFeeAssignDialog(null);
       setFeeAssignRows([]);
       setMessageTone("success");
@@ -838,7 +892,7 @@ export default function TeacherAdmissionTab() {
   }, [pathname, router]);
 
   useEffect(() => {
-    fetch("/api/class/list")
+    fetch("/api/class/list?lite=1", { credentials: "include" })
       .then((res) => res.json())
       .then((d) => setClasses(Array.isArray(d?.classes) ? d.classes : []))
       .catch(() => setClasses([]));
@@ -941,6 +995,8 @@ export default function TeacherAdmissionTab() {
           {enrolled && (
             <button
               type="button"
+              onMouseEnter={() => warmAssignCatalog(r)}
+              onFocus={() => warmAssignCatalog(r)}
               onClick={() => openAssignFeesDialog(r)}
               className="inline-flex items-center gap-1 px-1.5 py-1 rounded-lg text-[9px] font-semibold bg-sky-500/20 border border-sky-500/35 text-sky-100 hover:bg-sky-500/30"
               title="Assign extra fees"
@@ -984,9 +1040,29 @@ export default function TeacherAdmissionTab() {
       },
       {
         header: "Applicant",
-        render: (r: AdmissionRow) => (
-          <span className="text-sm text-white/80">{`${r.firstName} ${r.lastName}`.trim()}</span>
-        ),
+        render: (r: AdmissionRow) => {
+          const name = `${r.firstName} ${r.lastName}`.trim() || "—";
+          const canOpen = Boolean(r.studentId);
+          return (
+            <button
+              type="button"
+              onDoubleClick={() => goToStudentDetails(r)}
+              disabled={!canOpen}
+              title={
+                canOpen
+                  ? "Double-click to open Student Details"
+                  : "Enroll this applicant first to open Student Details"
+              }
+              className={`text-left text-sm max-w-[14rem] truncate ${
+                canOpen
+                  ? "text-sky-200 hover:text-sky-100 hover:underline cursor-pointer"
+                  : "text-white/80 cursor-default"
+              }`}
+            >
+              {name}
+            </button>
+          );
+        },
       },
       {
         header: "Class",
@@ -1055,7 +1131,7 @@ export default function TeacherAdmissionTab() {
         ),
       },
     ],
-    [renderAdmissionActions]
+    [renderAdmissionActions, goToStudentDetails]
   );
 
   useEffect(() => {
@@ -1064,15 +1140,16 @@ export default function TeacherAdmissionTab() {
     params.set("page", String(page));
     params.set("pageSize", "10");
     if (listPhase !== "all") params.set("phase", listPhase);
-    if (search.trim()) params.set("search", search.trim());
+    if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim());
     if (filters.gradeSought) params.set("gradeSought", filters.gradeSought);
     if (filters.boardingType) params.set("boardingType", filters.boardingType);
     if (filters.classId) params.set("classId", filters.classId);
     if (filters.from) params.set("from", filters.from);
     if (filters.to) params.set("to", filters.to);
 
-    setLoading(true);
-    fetch(`/api/admissions/list?${params.toString()}`)
+    const hadRows = rows.length > 0;
+    if (!hadRows) setLoading(true);
+    fetch(`/api/admissions/list?${params.toString()}`, { credentials: "include" })
       .then((res) => res.json().then((d) => ({ ok: res.ok, d })))
       .then(({ ok, d }) => {
         if (!ok) throw new Error(d?.message || "Failed to load admissions");
@@ -1092,7 +1169,7 @@ export default function TeacherAdmissionTab() {
         setMessage(e instanceof Error ? e.message : "Failed to load admissions");
       })
       .finally(() => setLoading(false));
-  }, [view, page, search, filters.gradeSought, filters.boardingType, filters.classId, filters.from, filters.to, listPhase, reloadKey]);
+  }, [view, page, debouncedSearch, filters.gradeSought, filters.boardingType, filters.classId, filters.from, filters.to, listPhase, reloadKey, rows.length]);
 
   useEffect(() => {
     if (view !== "add" || !editId) return;
@@ -1681,7 +1758,23 @@ export default function TeacherAdmissionTab() {
                 rows.map((r) => (
                   <div key={r.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
                     <div className="text-white/45 text-[10px] font-semibold uppercase tracking-wide">App #{r.applicationNo}</div>
-                    <div className="text-white font-semibold mt-0.5">{`${r.firstName} ${r.lastName}`}</div>
+                    <button
+                      type="button"
+                      onDoubleClick={() => goToStudentDetails(r)}
+                      disabled={!r.studentId}
+                      title={
+                        r.studentId
+                          ? "Double-click to open Student Details"
+                          : "Enroll first to open Student Details"
+                      }
+                      className={`text-left font-semibold mt-0.5 ${
+                        r.studentId
+                          ? "text-sky-200 hover:underline cursor-pointer"
+                          : "text-white cursor-default"
+                      }`}
+                    >
+                      {`${r.firstName} ${r.lastName}`.trim()}
+                    </button>
                     <div className="text-white/50 text-xs mt-1">
                       {classLabel(r)} · {formatGradeLabel(r.gradeSought)} · {formatBoardingLabel(r.boardingType)}
                     </div>
@@ -1726,6 +1819,8 @@ export default function TeacherAdmissionTab() {
                       <div className="mt-2">
                         <button
                           type="button"
+                          onMouseEnter={() => warmAssignCatalog(r)}
+                          onFocus={() => warmAssignCatalog(r)}
                           onClick={() => openAssignFeesDialog(r)}
                           className="w-full px-3 py-2 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-200 text-xs inline-flex items-center justify-center gap-1"
                         >

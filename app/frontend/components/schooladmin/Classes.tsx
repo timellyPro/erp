@@ -81,7 +81,7 @@ export default function SchoolAdminClassesTab() {
     try {
       const [classesRes, studentsRes, teachersRes] = await Promise.all([
         fetch("/api/class/list", { method: "GET" }),
-        fetch("/api/student/list", { method: "GET" }),
+        fetch("/api/student/list?take=1&includeTotal=1", { method: "GET" }),
         fetch("/api/teacher/list", { method: "GET" }),
       ]);
 
@@ -98,9 +98,12 @@ export default function SchoolAdminClassesTab() {
       const rows: ApiClassRow[] = Array.isArray(classesData?.classes)
         ? classesData.classes
         : [];
-      const studentCount = Array.isArray(studentsData?.students)
-        ? studentsData.students.length
-        : 0;
+      const studentCount =
+        typeof studentsData?.total === "number"
+          ? studentsData.total
+          : Array.isArray(studentsData?.students)
+            ? studentsData.students.length
+            : 0;
       const teacherCount = Array.isArray(teachersData?.teachers)
         ? teachersData.teachers.length
         : 0;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { fetchAllStudents } from "@/lib/fetchAllStudents";
 
 export type TeacherClass = {
   id: string;
@@ -47,21 +48,19 @@ export function useTeacherClasses() {
       setState((prev) => ({ ...prev, loading: true, error: null }));
 
       try {
-        const [classRes, studentRes] = await Promise.all([
+        const [classRes, studentRows] = await Promise.all([
           fetch("/api/class/list"),
-          fetch("/api/student/list"),
+          fetchAllStudents<StudentRow>(undefined, { take: 100, maxPages: 50 }),
         ]);
 
         if (!classRes.ok) throw new Error("Failed to load classes.");
 
         const classData = await classRes.json();
-        const studentData = studentRes.ok ? await studentRes.json() : null;
-
         if (!isMounted) return;
 
         setState({
           classes: Array.isArray(classData?.classes) ? classData.classes : [],
-          students: Array.isArray(studentData?.students) ? studentData.students : [],
+          students: studentRows,
           loading: false,
           error: null,
         });

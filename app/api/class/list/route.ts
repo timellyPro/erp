@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import {
+  getSchoolDashboardServerCached,
+  setSchoolDashboardServerCached,
+} from "@/lib/schoolDashboardServerCache";
 
 async function resolveSchoolId(session: { user: { id: string; schoolId?: string | null; role: string } }) {
   let schoolId = session.user.schoolId;
@@ -29,7 +33,7 @@ async function resolveSchoolId(session: { user: { id: string; schoolId?: string 
   return schoolId;
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
 
@@ -56,6 +60,25 @@ export async function GET() {
     // if (session.user.role === "TEACHER") {
     //   where.teacherId = session.user.id;
     // }
+    const lite = new URL(req.url).searchParams.get("lite") === "1";
+
+    if (lite) {
+      const memKey = `class:list:lite:${schoolId}`;
+      const cached = getSchoolDashboardServerCached<{ classes: unknown[] }>(memKey);
+      if (cached) {
+        return NextResponse.json(cached, { status: 200 });
+      }
+
+      const classes = await prisma.class.findMany({
+        where,
+        select: { id: true, name: true, section: true },
+        orderBy: [{ name: "asc" }, { section: "asc" }],
+      });
+      const payload = { classes };
+      setSchoolDashboardServerCached(memKey, payload, 60_000);
+      return NextResponse.json(payload, { status: 200 });
+    }
+
     const classes = await prisma.class.findMany({
       where,
       include: {
@@ -70,7 +93,6 @@ export async function GET() {
         createdAt: "desc",
       },
     });
-    // Add teacherId to each class for frontend filtering
     const classesWithTeacherId = classes.map((c) => ({
       ...c,
       teacherId: c.teacher?.id || null,

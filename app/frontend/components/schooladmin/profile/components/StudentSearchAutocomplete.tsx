@@ -89,9 +89,16 @@ export const StudentSearchAutocomplete = ({
                 if (highlightedIndex >= 0) {
                     const student = filteredStudents[highlightedIndex];
                     onSelectStudent(student.id);
-                    onSearchChange(""); // Clear search
+                    onSearchChange("");
                     setShowDropdown(false);
                     setHighlightedIndex(-1);
+                } else if (searchQuery.trim()) {
+                    const q = searchQuery.trim().toLowerCase();
+                    const exact =
+                        students.find((s) => s.admissionNumber.toLowerCase() === q) ??
+                        students.find((s) => s.id.toLowerCase() === q);
+                    const pick = exact ?? filteredStudents[0];
+                    if (pick) handleSelectStudent(pick);
                 }
                 break;
             case "Escape":

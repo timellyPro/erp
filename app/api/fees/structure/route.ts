@@ -5,6 +5,10 @@ import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import { saveClassFeeStructureAndSyncStudents } from "@/lib/classFeeStructureApply";
 import { finalFeeFromStructureAndExtras, sumExtraFeesForStudent } from "@/lib/studentTuitionFromStructure";
+import {
+  getSchoolDashboardServerCached,
+  setSchoolDashboardServerCached,
+} from "@/lib/schoolDashboardServerCache";
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -26,6 +30,14 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const classId = searchParams.get("classId");
 
+    if (!classId) {
+      const memKey = `fees:structure:${schoolId}`;
+      const cached = getSchoolDashboardServerCached<{ structures: unknown[] }>(memKey);
+      if (cached) {
+        return NextResponse.json(cached, { status: 200 });
+      }
+    }
+
     const where: { schoolId: string; classId?: string } = { schoolId };
     if (classId) where.classId = classId;
 
@@ -34,7 +46,11 @@ export async function GET(req: Request) {
       include: { class: { select: { id: true, name: true, section: true } } },
     });
 
-    return NextResponse.json({ structures });
+    const payload = { structures };
+    if (!classId) {
+      setSchoolDashboardServerCached(`fees:structure:${schoolId}`, payload, 45_000);
+    }
+    return NextResponse.json(payload);
   } catch (error: any) {
     console.error("Fee structure GET error:", error);
     return NextResponse.json(

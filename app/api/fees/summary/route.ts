@@ -7,8 +7,14 @@ import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
 import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
+import { withRequestTiming } from "@/lib/requestTiming";
+import { tenantCacheKey, swrGet, swrSet } from "@/lib/tenantCache";
+import {
+  getSchoolDashboardServerCached,
+  setSchoolDashboardServerCached,
+} from "@/lib/schoolDashboardServerCache";
 
-export async function GET() {
+export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
 
   if (!session?.user) {
@@ -33,35 +39,137 @@ export async function GET() {
         { status: 400 }
       );
     }
-    const fees = await prisma.studentFee.findMany({
-      where: { student: { schoolId } },
-      include: {
-        student: {
-          select: {
-            id: true,
-            residencyType: true,
-            class: { select: { id: true, name: true, section: true } },
-            user: { select: { id: true, name: true, email: true } },
+    return await withRequestTiming(
+      { route: "GET /api/fees/summary", schoolId, userId: session.user.id },
+      async () => {
+        // Cursor pagination (by studentFee.studentId which is unique).
+        const { searchParams } = new URL(req.url);
+        const statsOnly = searchParams.get("statsOnly") === "1";
+
+        if (statsOnly) {
+          const memKey = `fees:summary:stats:${schoolId}`;
+          const memCached = getSchoolDashboardServerCached<{
+            fees: unknown[];
+            stats: unknown;
+            nextCursor: null;
+          }>(memKey);
+          if (memCached) {
+            return NextResponse.json(memCached, { status: 200 });
+          }
+
+          const [agg, pendingCount] = await Promise.all([
+            prisma.studentFee.aggregate({
+              where: { student: { schoolId } },
+              _sum: { totalFee: true, finalFee: true, amountPaid: true, remainingFee: true },
+              _count: { _all: true },
+            }),
+            prisma.studentFee.count({
+              where: { student: { schoolId }, remainingFee: { gt: 0.01 } },
+            }),
+          ]);
+
+          const stats = {
+            totalStudents: agg._count._all ?? 0,
+            totalFee: agg._sum.totalFee ?? 0,
+            totalCollected: agg._sum.amountPaid ?? 0,
+            totalDue: agg._sum.remainingFee ?? 0,
+            totalDiscount: Math.max(0, (agg._sum.totalFee ?? 0) - (agg._sum.finalFee ?? 0)),
+            pending: pendingCount,
+            paid: 0,
+          };
+
+          const payload = { fees: [] as unknown[], stats, nextCursor: null };
+          setSchoolDashboardServerCached(memKey, payload, 20_000);
+          return NextResponse.json(payload, { status: 200 });
+        }
+
+        const takeParam = searchParams.get("take");
+        const takeRaw = takeParam ? Number(takeParam) : 50;
+        const take = Math.min(100, Math.max(1, Number.isFinite(takeRaw) ? takeRaw : 50));
+        const cursor = searchParams.get("cursor")?.trim() || null;
+
+        const memPageKey = `fees:summary:page:${schoolId}:${take}:${cursor ?? "0"}`;
+        const memPage = getSchoolDashboardServerCached(memPageKey);
+        if (memPage) {
+          return NextResponse.json(memPage, { status: 200 });
+        }
+
+        const cacheKey = await tenantCacheKey(schoolId, "api", "fees:summary:page", { take, cursor });
+        const cached = await swrGet<{ fees: unknown[]; stats: unknown; nextCursor: string | null }>(cacheKey);
+        const now = Date.now();
+        if (cached && now < cached.freshUntil) {
+          return NextResponse.json({ ...(cached.value as any), cache: "fresh" }, { status: 200 });
+        }
+
+        const fees = await prisma.studentFee.findMany({
+          where: { student: { schoolId } },
+          include: {
+            student: {
+              select: {
+                id: true,
+                residencyType: true,
+                class: { select: { id: true, name: true, section: true } },
+                user: { select: { id: true, name: true, email: true } },
+              },
+            },
           },
+          orderBy: [{ updatedAt: "desc" }, { studentId: "desc" }],
+          take: take + 1,
+          ...(cursor ? { cursor: { studentId: cursor }, skip: 1 } : {}),
+        });
+
+        const hasNext = fees.length > take;
+        const pageFees = hasNext ? fees.slice(0, take) : fees;
+        const nextCursor = hasNext ? pageFees[pageFees.length - 1]?.studentId ?? null : null;
+
+        const studentIds = pageFees.map((f) => f.studentId);
+
+        const classIds = Array.from(
+          new Set(
+            pageFees
+              .map((f) => f.student.class?.id)
+              .filter((x): x is string => typeof x === "string" && x.length > 0)
+          )
+        );
+
+    const [structures, extraFees, latestPayments, agg] = await Promise.all([
+      prisma.classFeeStructure.findMany({
+        where: { classId: { in: classIds } },
+        select: { classId: true, components: true },
+      }),
+      prisma.extraFee.findMany({
+        where: { schoolId },
+        select: {
+          id: true,
+          name: true,
+          amount: true,
+          targetType: true,
+          targetClassId: true,
+          targetSection: true,
+          targetStudentId: true,
+          residencyScope: true,
         },
-      },
-      orderBy: { updatedAt: "desc" },
-    });
-
-    const studentIds = fees.map((f) => f.studentId);
-
-    const classIds = Array.from(
-      new Set(
-        fees
-          .map((f) => f.student.class?.id)
-          .filter((x): x is string => typeof x === "string" && x.length > 0)
-      )
-    );
-
-    const structures = await prisma.classFeeStructure.findMany({
-      where: { classId: { in: classIds } },
-      select: { classId: true, components: true },
-    });
+      }),
+      // Pick the fee-head that was allocated in the latest SUCCESS payment for each student.
+      // This keeps the UI to "only one" fee type (the last one they selected).
+      prisma.payment.findMany({
+        where: {
+          studentId: { in: studentIds },
+          status: "SUCCESS",
+          purpose: "FEES",
+        },
+        distinct: ["studentId"],
+        orderBy: [{ studentId: "asc" }, { createdAt: "desc" }],
+        select: { id: true, studentId: true },
+      }),
+      // Stats are computed for the full school, not just the current page.
+      // Keep this as a fast aggregate (single query).
+      prisma.studentFee.aggregate({
+        where: { student: { schoolId } },
+        _sum: { totalFee: true, finalFee: true, amountPaid: true, remainingFee: true },
+        _count: { _all: true },
+      }),
+    ]);
 
     const componentsByClassId = new Map<string, Array<{ name: string; amount: number }>>(
       structures.map((s) => [
@@ -72,33 +180,6 @@ export async function GET() {
         })),
       ])
     );
-
-    const extraFees = await prisma.extraFee.findMany({
-      where: { schoolId },
-      select: {
-        id: true,
-        name: true,
-        amount: true,
-        targetType: true,
-        targetClassId: true,
-        targetSection: true,
-        targetStudentId: true,
-        residencyScope: true,
-      },
-    });
-
-    // Pick the fee-head that was allocated in the latest SUCCESS payment for each student.
-    // This keeps the UI to "only one" fee type (the last one they selected).
-    const latestPayments = await prisma.payment.findMany({
-      where: {
-        studentId: { in: studentIds },
-        status: "SUCCESS",
-        purpose: "FEES",
-      },
-      distinct: ["studentId"],
-      orderBy: [{ studentId: "asc" }, { createdAt: "desc" }],
-      select: { id: true, studentId: true },
-    });
 
     const latestPaymentIdByStudentId = new Map(latestPayments.map((p) => [p.studentId, p.id]));
     const latestPaymentIds = Array.from(latestPaymentIdByStudentId.values());
@@ -237,7 +318,7 @@ export async function GET() {
       }
     }
 
-    const feesWithTypes = fees.map((fee) => {
+        const feesWithTypes = pageFees.map((fee) => {
       const studentId = fee.studentId;
       const classId = fee.student.class?.id ?? null;
       const classSection = fee.student.class?.section ?? null;
@@ -311,34 +392,25 @@ export async function GET() {
       };
     });
 
-    const stats = fees.reduce(
-      (acc, fee) => {
-        acc.totalStudents += 1;
-        const base = Number(fee.totalFee) || 0;
-        const final = Number(fee.finalFee) || 0;
-        acc.totalFee += base;
-        acc.totalDiscount += Math.max(0, base - final);
-        acc.totalCollected += fee.amountPaid;
-        acc.totalDue += fee.remainingFee;
-        if (fee.remainingFee <= 0) {
-          acc.paid += 1;
-        } else {
-          acc.pending += 1;
-        }
-        return acc;
-      },
-      {
-        totalStudents: 0,
-        paid: 0,
-        pending: 0,
-        totalFee: 0,
-        totalDiscount: 0,
-        totalCollected: 0,
-        totalDue: 0,
+        const stats = {
+          totalStudents: agg._count._all ?? 0,
+          totalFee: agg._sum.totalFee ?? 0,
+          totalCollected: agg._sum.amountPaid ?? 0,
+          totalDue: agg._sum.remainingFee ?? 0,
+          totalDiscount: Math.max(0, (agg._sum.totalFee ?? 0) - (agg._sum.finalFee ?? 0)),
+        };
+
+        const payload = { fees: feesWithTypes, stats, nextCursor };
+        setSchoolDashboardServerCached(memPageKey, payload, 15_000);
+        await swrSet(
+          cacheKey,
+          { value: payload, freshUntil: now + 5_000, staleUntil: now + 60_000 },
+          60
+        );
+
+        return NextResponse.json(payload, { status: 200 });
       }
     );
-
-    return NextResponse.json({ fees: feesWithTypes, stats }, { status: 200 });
   } catch (error: any) {
     console.error("Fee summary error:", error);
     return NextResponse.json(

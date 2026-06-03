@@ -184,12 +184,14 @@ export async function migrateUnsplitLumpExtraFee(
   return { firstId: first.id, secondId: second.id };
 }
 
+type ExtraFeeCreateDb = Pick<typeof prisma, "extraFee">;
+
 export async function createExtraFeeRows(
-  db: Pick<typeof prisma, "$transaction" | "extraFee">,
+  db: ExtraFeeCreateDb,
   payload: ExtraFeeCreatePayload
 ): Promise<{ ids: string[]; totalAmount: number }> {
   const rows = buildExtraFeeRowsToCreate(payload);
-  const created = await db.$transaction(rows.map((data) => db.extraFee.create({ data })));
+  const created = await Promise.all(rows.map((data) => db.extraFee.create({ data })));
   const totalAmount = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
 
   logExtraFeeInstallment(rows.length > 1 ? "POST created 2 installment rows" : "POST created 1 row", {

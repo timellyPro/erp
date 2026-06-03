@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AcademicPerformance } from "./components/AcademicPerformance";
 import { FeeTransactions } from "./components/FeeTransactions";
@@ -8,9 +8,20 @@ import { FeesBreakdown } from "./components/FeesBreakdown";
 import { ProfileSidebar } from "./components/ProfileSidebar";
 import { AttendanceTrends } from "./components/AttendanceTrends";
 import { Certificates } from "./components/Certificates";
-import { splitFeeHeadsForDisplay } from "@/lib/feeHeadInstallmentDisplay";
 import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
-import { loadStudentDetailsBundle } from "@/lib/loadStudentDetailsBundle";
+import {
+  invalidateStudentDetailsBundleCache,
+  loadStudentDetailsBundle,
+  peekStudentDetailsBundle,
+} from "@/lib/loadStudentDetailsBundle";
+import { dueHeadRowsFromBreakdown, type DueHeadRow } from "@/lib/feeBreakdownPaymentRows";
+import {
+  fetchFeeBreakdownFast,
+  getFeeBreakdownCached,
+  setFeeBreakdownCache,
+} from "@/lib/feeBreakdownClientCache";
+import { fetchAllStudents } from "@/lib/fetchAllStudents";
+import { readStudentListCache, writeStudentListCache } from "@/lib/studentListSessionCache";
 import { StudentSearchAutocomplete } from "./components/StudentSearchAutocomplete";
 import { Calendar, BookOpen, Activity, Clock, FileSpreadsheet, X } from "lucide-react";
 import BulkExtraFeeByTimellyModal from "./components/BulkExtraFeeByTimellyModal";
@@ -86,6 +97,111 @@ type StudentOption = {
   section: string | null;
 };
 
+/** List cache may hold fees-page rows (class object) or profile rows (classDisplay). */
+function normalizeStudentOption(raw: {
+  id: string;
+  name?: string;
+  admissionNumber?: string;
+  parentName?: string;
+  fatherName?: string;
+  classDisplay?: string;
+  classId?: string;
+  section?: string | null;
+  user?: { name?: string | null };
+  class?: { id: string; name: string; section: string | null } | null;
+}): StudentOption {
+  const classDisplay =
+    raw.classDisplay?.trim() ||
+    (raw.class
+      ? `${raw.class.name}${raw.class.section ? `-${raw.class.section}` : ""}`
+      : "-");
+  const dash = classDisplay.indexOf("-");
+  return {
+    id: raw.id,
+    name: raw.name?.trim() || raw.user?.name?.trim() || "Unknown",
+    admissionNumber: raw.admissionNumber ?? "",
+    parentName: raw.parentName?.trim() || raw.fatherName?.trim() || "-",
+    classDisplay,
+    classId: raw.classId ?? raw.class?.id ?? "",
+    section: raw.section ?? (dash > 0 ? classDisplay.slice(dash + 1) : raw.class?.section ?? null),
+  };
+}
+
+/** Instant UI while API loads — uses data already on the student list. */
+function buildPlaceholderDetail(st: StudentOption): StudentDetail {
+  const opt = normalizeStudentOption(st);
+  const dash = opt.classDisplay.indexOf("-");
+  const className = dash > 0 ? opt.classDisplay.slice(0, dash) : opt.classDisplay;
+  const section = dash > 0 ? opt.classDisplay.slice(dash + 1) : opt.section;
+  const parent = opt.parentName === "-" ? "" : opt.parentName;
+  return {
+    student: {
+      id: opt.id,
+      name: opt.name,
+      schoolName: "",
+      admissionNumber: opt.admissionNumber,
+      email: "",
+      photoUrl: null,
+      rollNo: "",
+      age: null,
+      address: "",
+      phone: "",
+      fatherName: parent,
+      motherName: "",
+      fatherPhone: "",
+      motherPhone: "",
+      residencyType: "Day Scholar",
+      gender: "",
+      applicationFee: null,
+      admissionFee: null,
+      class: opt.classId
+        ? {
+            id: opt.classId,
+            name: className,
+            section,
+            displayName: opt.classDisplay,
+          }
+        : null,
+    },
+    fee: null,
+    payments: [],
+    attendanceTrends: [],
+    academicPerformance: [],
+    certificates: [],
+  };
+}
+
+function buildPlaceholderById(studentId: string): StudentDetail {
+  return {
+    student: {
+      id: studentId,
+      name: "Loading…",
+      schoolName: "",
+      admissionNumber: "",
+      email: "",
+      photoUrl: null,
+      rollNo: "",
+      age: null,
+      address: "",
+      phone: "",
+      fatherName: "",
+      motherName: "",
+      fatherPhone: "",
+      motherPhone: "",
+      residencyType: "Day Scholar",
+      gender: "",
+      applicationFee: null,
+      admissionFee: null,
+      class: null,
+    },
+    fee: null,
+    payments: [],
+    attendanceTrends: [],
+    academicPerformance: [],
+    certificates: [],
+  };
+}
+
 function StudentDetailsPageContent() {
   const router = useRouter();
   const pathname = usePathname();
@@ -99,8 +215,10 @@ function StudentDetailsPageContent() {
   const [detail, setDetail] = useState<StudentDetail | null>(null);
   const [feeBreakdown, setFeeBreakdown] = useState<AdminStudentFeeBreakdownResult | null>(null);
   const [feeBreakdownPending, setFeeBreakdownPending] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [listLoading, setListLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
   const [searchQuery, setSearchQuery] = useState("");
   const [filterClass, setFilterClass] = useState("");
   const [filterSection, setFilterSection] = useState("");
@@ -109,16 +227,28 @@ function StudentDetailsPageContent() {
   const [feesModalOpen, setFeesModalOpen] = useState(false);
 
   useEffect(() => {
+    const cached = readStudentListCache<StudentOption>();
+    if (cached?.length) {
+      setStudents(cached.map((s) => normalizeStudentOption(s)));
+      setListLoading(false);
+    }
+
     let cancelled = false;
     (async () => {
       try {
-        const [studentsRes, classesRes] = await Promise.all([
-          fetch("/api/student/list", { credentials: "include" }),
+        const [studentsData, classesRes] = await Promise.all([
+          fetchAllStudents<{
+            id: string;
+            user?: { name?: string };
+            admissionNumber?: string;
+            fatherName?: string;
+            parentName?: string;
+            class?: { id: string; name: string; section: string | null };
+          }>({ credentials: "include" }, { take: 100, maxPages: 50 }),
           fetch("/api/class/list", { credentials: "include" }),
         ]);
-        if (!cancelled && studentsRes.ok) {
-          const d = await studentsRes.json();
-          const list: StudentOption[] = (d.students || []).map((s: { id: string; user?: { name?: string }; admissionNumber?: string; fatherName?: string; parentName?: string; class?: { id: string; name: string; section: string | null } }) => ({
+        if (!cancelled) {
+          const list: StudentOption[] = (studentsData || []).map((s) => ({
             id: s.id,
             name: s.user?.name ?? "Unknown",
             admissionNumber: s.admissionNumber ?? "",
@@ -128,13 +258,16 @@ function StudentDetailsPageContent() {
             section: s.class?.section ?? null,
           }));
           setStudents(list);
+          writeStudentListCache(list);
         }
         if (!cancelled && classesRes.ok) {
           const c = await classesRes.json();
           setClasses(c.classes ?? []);
         }
       } catch {
-        if (!cancelled) setStudents([]);
+        if (!cancelled && !cached?.length) setStudents([]);
+      } finally {
+        if (!cancelled) setListLoading(false);
       }
     })();
     return () => { cancelled = true; };
@@ -174,13 +307,51 @@ function StudentDetailsPageContent() {
     [syncStudentIdInUrl]
   );
 
+  const warmFeeBreakdown = useCallback(() => {
+    if (!selectedId) return;
+    const cached = getFeeBreakdownCached(selectedId);
+    if (cached) {
+      setFeeBreakdown(cached);
+      setFeeBreakdownPending(false);
+      return;
+    }
+    if (feeBreakdown) return;
+    void fetchFeeBreakdownFast(selectedId).then((breakdown) => {
+      if (breakdown) {
+        setFeeBreakdown(breakdown);
+        setFeeBreakdownPending(false);
+      }
+    });
+  }, [selectedId, feeBreakdown]);
+
   useLayoutEffect(() => {
-    if (loading || !detail || focusFromUrl !== "fees") return;
+    if (!detail || focusFromUrl !== "fees") return;
     document.getElementById("student-profile-fees-section")?.scrollIntoView({
       behavior: "instant",
       block: "start",
     });
-  }, [loading, detail, focusFromUrl]);
+  }, [detail, focusFromUrl]);
+
+  const applyDetailsBundle = useCallback(
+    (bundle: Awaited<ReturnType<typeof loadStudentDetailsBundle>>) => {
+      const { feeBreakdown: breakdown, ...rest } = bundle;
+      if (rest?.student) {
+        setDetail(rest);
+        setFeeBreakdown(breakdown ?? null);
+        if (breakdown && rest.student.id) setFeeBreakdownCache(rest.student.id, breakdown);
+      } else {
+        setDetail(null);
+        setFeeBreakdown(null);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (reloadKey === 0) return;
+    const id = selectedIdRef.current;
+    if (id) invalidateStudentDetailsBundleCache(id);
+  }, [reloadKey]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -188,47 +359,71 @@ function StudentDetailsPageContent() {
       setFeeBreakdown(null);
       return;
     }
+
+    const controller = new AbortController();
     let cancelled = false;
-    setLoading(true);
-    setDetail(null);
-    setFeeBreakdown(null);
-    setFeeBreakdownPending(true);
+
+    const cached = peekStudentDetailsBundle(selectedId);
+    if (cached) {
+      applyDetailsBundle(cached);
+      setFeeBreakdownPending(false);
+      return () => {
+        cancelled = true;
+        controller.abort();
+      };
+    }
+
+    const fromList = students.find((s) => s.id === selectedId);
+    setDetail(
+      fromList ? buildPlaceholderDetail(normalizeStudentOption(fromList)) : buildPlaceholderById(selectedId)
+    );
+
+    const cachedBreakdown = getFeeBreakdownCached(selectedId);
+    if (cachedBreakdown) {
+      setFeeBreakdown(cachedBreakdown);
+      setFeeBreakdownPending(false);
+    } else {
+      setFeeBreakdownPending(true);
+      void fetchFeeBreakdownFast(selectedId, { signal: controller.signal }).then((bd) => {
+        if (!cancelled && bd) setFeeBreakdown(bd);
+      });
+    }
+
     loadStudentDetailsBundle(selectedId, {
-      onProfileLoaded: (bundle) => {
+      signal: controller.signal,
+      onShellLoaded: (partial) => {
         if (cancelled) return;
-        const { feeBreakdown: _fb, ...rest } = bundle;
-        if (rest?.student) {
-          setDetail(rest);
-          setLoading(false);
+        const { feeBreakdown: bd, ...rest } = partial;
+        if (rest?.student) setDetail(rest);
+        if (bd) {
+          setFeeBreakdown(bd);
+          setFeeBreakdownPending(false);
+        }
+      },
+      onBreakdownLoaded: (bd) => {
+        if (!cancelled) {
+          setFeeBreakdown(bd);
+          setFeeBreakdownPending(false);
         }
       },
     })
       .then((bundle) => {
         if (cancelled) return;
-        const { feeBreakdown: breakdown, ...rest } = bundle;
-        if (rest?.student) {
-          setDetail(rest);
-          setFeeBreakdown(breakdown ?? null);
-        } else {
-          setDetail(null);
-          setFeeBreakdown(null);
-        }
+        applyDetailsBundle(bundle);
       })
       .catch((err) => {
-        if (!cancelled) {
-          setDetail(null);
-          setFeeBreakdown(null);
-          console.error("Student details error:", err);
-        }
+        if (cancelled || (err instanceof DOMException && err.name === "AbortError")) return;
+        console.error("Student details error:", err);
       })
       .finally(() => {
-        if (!cancelled) {
-          setLoading(false);
-          setFeeBreakdownPending(false);
-        }
+        if (!cancelled) setFeeBreakdownPending(false);
       });
-    return () => { cancelled = true; };
-  }, [selectedId, reloadKey]);
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [selectedId, reloadKey, applyDetailsBundle, students]);
 
   const filtered = students.filter((s) => {
     if (searchQuery) {
@@ -340,11 +535,11 @@ function StudentDetailsPageContent() {
         </div>
       </div>
 
-      {loading && (
-        <div className="text-center py-12 text-gray-400"><Spinner /></div>
+      {listLoading && students.length === 0 && (
+        <div className="text-center py-8 text-gray-400 text-sm">Loading student list…</div>
       )}
 
-      {!loading && detail && (
+      {detail && (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 sm:gap-6 md:gap-8 min-w-0">
           <div className="lg:col-span-1 min-w-0">
             <ProfileSidebar
@@ -372,7 +567,11 @@ function StudentDetailsPageContent() {
               gender={detail.student.gender ?? ""}
               residencyType={detail.student.residencyType ?? "Day Scholar"}
               onSaved={() => setReloadKey((k) => k + 1)}
-              onOpenFees={() => setFeesModalOpen(true)}
+              onOpenFees={() => {
+                warmFeeBreakdown();
+                setFeesModalOpen(true);
+              }}
+              onFeesHover={warmFeeBreakdown}
             />
           </div>
 
@@ -491,7 +690,7 @@ function StudentDetailsPageContent() {
         </div>
       )}
 
-      {!loading && !detail && selectedId && (
+      {!detail && selectedId && !listLoading && (
         <div className="text-center py-12 text-gray-400">Student not found.</div>
       )}
 
@@ -499,6 +698,8 @@ function StudentDetailsPageContent() {
         <StudentFeesPaymentModal
           studentId={detail.student.id}
           studentName={detail.student.name}
+          initialFeeBreakdown={feeBreakdown ?? getFeeBreakdownCached(detail.student.id)}
+          breakdownPending={feeBreakdownPending}
           onClose={() => setFeesModalOpen(false)}
           onSuccess={() => {
             setFeesModalOpen(false);
@@ -507,26 +708,12 @@ function StudentDetailsPageContent() {
         />
       ) : null}
 
-      {!loading && !selectedId && students.length === 0 && (
+      {!detail && !selectedId && !listLoading && students.length === 0 && (
         <div className="text-center py-12 text-gray-400">No students found.</div>
       )}
     </div>
   );
 }
-
-type DueHeadRow = {
-  key: string;
-  sourceKey?: string;
-  label: string;
-  totalAmount: number;
-  paidAmount: number;
-  discountAmount: number;
-  dueBefore: number;
-  payAmount: string;
-  /** User opted to pay the full balance for this fee head */
-  payEntireHead: boolean;
-  splitIntoTwoInstallments?: boolean;
-};
 
 function dueToPayInputString(due: number): string {
   if (!Number.isFinite(due) || due <= 0) return "";
@@ -547,16 +734,23 @@ function sanitizeMoneyInput(raw: string): string {
 function StudentFeesPaymentModal({
   studentId,
   studentName,
+  initialFeeBreakdown,
+  breakdownPending = false,
   onClose,
   onSuccess,
 }: {
   studentId: string;
   studentName: string;
+  initialFeeBreakdown?: AdminStudentFeeBreakdownResult | null;
+  breakdownPending?: boolean;
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const [rows, setRows] = useState<DueHeadRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const seedRows = dueHeadRowsFromBreakdown(
+    initialFeeBreakdown ?? getFeeBreakdownCached(studentId)
+  );
+  const [rows, setRows] = useState<DueHeadRow[]>(seedRows);
+  const [loading, setLoading] = useState(seedRows.length === 0 && breakdownPending);
   const [saving, setSaving] = useState(false);
   const [showPaymentStep, setShowPaymentStep] = useState(false);
   const [mode, setMode] = useState<"CASH" | "ONLINE" | "CHEQUE" | "DD" | "OTHERS">("CASH");
@@ -564,90 +758,35 @@ function StudentFeesPaymentModal({
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [error, setError] = useState<string | null>(null);
 
-  const mapDueRowsForPayment = (
-    rowsIn: Array<{
-      key: string;
-      label: string;
-      grossAmount: number;
-      snapshotAmount: number;
-      paidAmount: number;
-      dueBefore: number;
-      splitIntoTwoInstallments?: boolean;
-    }>
-  ): DueHeadRow[] =>
-    splitFeeHeadsForDisplay(
-      rowsIn.map((r) => ({
-        key: r.key,
-        label: r.label,
-        amount: r.snapshotAmount,
-        gross: r.grossAmount,
-        paid: r.paidAmount,
-        due: r.dueBefore,
-        splitIntoTwoInstallments: r.splitIntoTwoInstallments,
-      }))
-    ).map((h) => {
-      const gross = Math.round((Number(h.gross ?? h.amount) || 0) * 100) / 100;
-      const net = Math.round((Number(h.amount) || 0) * 100) / 100;
-      return {
-      key: h.key,
-      sourceKey: h.sourceKey,
-      label: h.label,
-      totalAmount: gross,
-      paidAmount: Math.round((Number(h.paid) || 0) * 100) / 100,
-      discountAmount: Math.max(0, Math.round((gross - net) * 100) / 100),
-      dueBefore: Math.round((Number(h.due) || 0) * 100) / 100,
-      payAmount: "",
-      payEntireHead: false,
-      splitIntoTwoInstallments: h.splitIntoTwoInstallments,
-    };
-    });
+  useEffect(() => {
+    const next = dueHeadRowsFromBreakdown(initialFeeBreakdown);
+    if (next.length > 0) {
+      setRows((prev) => {
+        const payByKey = new Map(prev.map((r) => [r.key, r.payAmount]));
+        const entireByKey = new Map(prev.map((r) => [r.key, r.payEntireHead]));
+        return next.map((r) => ({
+          ...r,
+          payAmount: payByKey.get(r.key) ?? r.payAmount,
+          payEntireHead: entireByKey.get(r.key) ?? r.payEntireHead,
+        }));
+      });
+      setLoading(false);
+    }
+  }, [initialFeeBreakdown]);
 
   useEffect(() => {
+    if (rows.length > 0) return;
+
     let cancelled = false;
     (async () => {
       setLoading(true);
       try {
-        const res = await fetch(
-          `/api/fees/admin/breakdown?studentId=${encodeURIComponent(studentId)}&fast=1`,
-          {
-            credentials: "include",
-            cache: "no-store",
-          }
-        );
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data?.message || "Failed to load fee heads");
-        }
-        const dueHeads = Array.isArray(data?.dueHeads) ? data.dueHeads : [];
-        if (!cancelled) {
-          const mappedRows = dueHeads.map(
-            (h: {
-              key: string;
-              label: string;
-              dueBefore: number;
-              grossAmount?: number;
-              snapshotAmount?: number;
-              headType?: string;
-              splitIntoTwoInstallments?: boolean;
-            }) => {
-              const snapshotAmount = Math.round((Number(h.snapshotAmount) || 0) * 100) / 100;
-              const grossAmount =
-                Math.round((Number(h.grossAmount ?? h.snapshotAmount) || 0) * 100) / 100;
-              const dueBefore = Math.round((Number(h.dueBefore) || 0) * 100) / 100;
-              return {
-                key: h.key,
-                label: h.label || "Fee Head",
-                grossAmount,
-                snapshotAmount,
-                paidAmount: Math.max(snapshotAmount - dueBefore, 0),
-                dueBefore,
-                splitIntoTwoInstallments:
-                  h.headType === "EXTRA_FEE" ? Boolean(h.splitIntoTwoInstallments) : undefined,
-              };
-            }
-          );
-          setRows(mapDueRowsForPayment(mappedRows));
-              setPaymentDate(new Date().toISOString().slice(0, 10));
+        const data = await fetchFeeBreakdownFast(studentId);
+        if (!cancelled && data) {
+          setRows(dueHeadRowsFromBreakdown(data));
+          setPaymentDate(new Date().toISOString().slice(0, 10));
+        } else if (!cancelled && !data) {
+          throw new Error("Failed to load fee heads");
         }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load fee heads");
@@ -658,7 +797,7 @@ function StudentFeesPaymentModal({
     return () => {
       cancelled = true;
     };
-  }, [studentId]);
+  }, [studentId, rows.length]);
 
   const setRowAmount = (key: string, value: string) => {
     setRows((prev) =>
@@ -827,7 +966,7 @@ function StudentFeesPaymentModal({
           </button>
         </div>
 
-        {loading ? (
+        {rows.length === 0 && loading ? (
           <div className="py-10 text-center text-white/70"><Spinner /></div>
         ) : (
           <>

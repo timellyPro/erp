@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { fetchAllStudents } from "@/lib/fetchAllStudents";
 
 export interface StudentWithRelations {
   id: string;
@@ -32,10 +33,11 @@ export function useStudents(): UseStudentsResult {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/student/list");
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Failed to fetch students");
-      setStudents(data.students ?? []);
+      const rows = await fetchAllStudents<StudentWithRelations>(undefined, {
+        take: 100,
+        maxPages: 50,
+      });
+      setStudents(rows);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to fetch students");
       setStudents([]);

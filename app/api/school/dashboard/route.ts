@@ -6,6 +6,10 @@ import { purgeExpiredNewsFeeds } from "@/lib/newsfeedRetention";
 import { buildSchoolDashboardCollection } from "@/lib/buildSchoolDashboardCollection";
 import { resolveSchoolAdminSchoolId } from "@/lib/resolveSchoolAdminSchoolId";
 import { FEE_COLLECTION_PAYMENT_WHERE, todayYmdLocal } from "@/lib/schoolDashboardCollection";
+import {
+  getSchoolDashboardServerCached,
+  setSchoolDashboardServerCached,
+} from "@/lib/schoolDashboardServerCache";
 
 declare const globalThis: {
   schoolDashboardPurgeLastRunAt?: number;
@@ -61,10 +65,16 @@ export async function GET(request: Request) {
     }
     const schoolId = ctx.schoolId;
 
+    const dateParam = new URL(request.url).searchParams.get("date")?.trim() || todayYmdLocal();
+    const cacheKey = `dashboard:${schoolId}:${dateParam}`;
+    const cachedPayload = getSchoolDashboardServerCached<Record<string, unknown>>(cacheKey);
+    if (cachedPayload) {
+      return NextResponse.json(cachedPayload, { status: 200 });
+    }
+
     maybePurgeExpiredNewsFeeds();
 
     const now = new Date();
-    const dateParam = new URL(request.url).searchParams.get("date")?.trim() || todayYmdLocal();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const todayEnd = new Date(todayStart);
@@ -141,7 +151,7 @@ export async function GET(request: Request) {
           student: { select: { user: { select: { name: true } } } },
         },
         orderBy: { createdAt: "desc" },
-        take: 8,
+        take: 5,
       }),
       buildSchoolDashboardCollection(schoolId, dateParam),
     ]);
@@ -217,7 +227,7 @@ export async function GET(request: Request) {
 
     recentActivities.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-    return NextResponse.json({
+    const payload = {
       stats: {
         totalClasses: classCount,
         totalClassesChange: classCount - classCountLastMonth,
@@ -255,7 +265,10 @@ export async function GET(request: Request) {
         postedBy: n.createdBy?.name ?? "Admin",
         createdAt: n.createdAt,
       })),
-    });
+    };
+
+    setSchoolDashboardServerCached(cacheKey, payload, 25_000);
+    return NextResponse.json(payload);
   } catch (error: unknown) {
     console.error("School dashboard error:", error);
 
