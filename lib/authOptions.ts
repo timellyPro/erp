@@ -137,6 +137,9 @@ export const authOptions: NextAuthOptions = {
       token.studentId = user.studentId;
       token.allowedFeatures = user.allowedFeatures ?? [];
       token.image = (user as { image?: string | null }).image ?? null;
+      if (user.role === "SUPERADMIN") {
+        token.sessionOnly = true;
+      }
       (token as any)._dbSyncAt = Date.now();
     }
 
