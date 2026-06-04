@@ -3,7 +3,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { runWithDeferredCacheInvalidation } from "@/lib/db";
-import { cleanupDuplicateHostelMessExtraFees } from "@/lib/cleanupDuplicateHostelMessExtraFees";
+import {
+  cleanupDuplicateHostelMessExtraFees,
+  repairIncompleteHostelMessInstallmentPairs,
+} from "@/lib/cleanupDuplicateHostelMessExtraFees";
 import {
   countMessDuplicateExtraFeeIds,
   findMessFeeDuplicateIssues,
@@ -110,9 +113,11 @@ export async function POST() {
     const beforeCount = countMessDuplicateExtraFeeIds(beforeIssues);
 
     let hostelMessCleaned = false;
+    let installmentPairsRepaired = 0;
     let studentsRecalculated = 0;
 
     await runWithDeferredCacheInvalidation(async () => {
+      installmentPairsRepaired = await repairIncompleteHostelMessInstallmentPairs(prisma, schoolId);
       hostelMessCleaned = await cleanupDuplicateHostelMessExtraFees(prisma, schoolId);
 
       const students = await prisma.student.findMany({
@@ -155,10 +160,11 @@ export async function POST() {
 
     return NextResponse.json({
       message:
-        beforeCount > 0 || hostelMessCleaned
-          ? "Duplicate mess fees removed and student totals recalculated"
+        beforeCount > 0 || hostelMessCleaned || installmentPairsRepaired > 0
+          ? "Mess fee rows repaired or duplicates removed; student totals recalculated"
           : "No duplicate mess fees found",
       removedDuplicateRows: Math.max(0, beforeCount - afterCount),
+      installmentPairsRepaired,
       hostelMessCleaned,
       studentsRecalculated,
       remainingIssues: afterIssues,

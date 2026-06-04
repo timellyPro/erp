@@ -1,10 +1,10 @@
-import { isInstallmentFeeName } from "@/lib/extraFeeInstallments";
+import { installmentIndexFromName, isInstallmentFeeName } from "@/lib/extraFeeInstallments";
 import { isMessCategoryExtraFeeName } from "@/lib/extraFeeResidencyScope";
 import { shouldOmitLegacySplitHostelMessExtraForBreakdown } from "@/lib/studentTuitionFromStructure";
 
 export type MessDuplicateIssue = {
   id: string;
-  kind: "student_bulk" | "legacy_row" | "too_many_rows";
+  kind: "student_bulk" | "legacy_row" | "too_many_rows" | "missing_installment";
   classId: string | null;
   classLabel: string;
   detail: string;
@@ -89,8 +89,21 @@ export function findMessFeeDuplicateIssues(
 
   for (const c of classes) {
     const rows = messFees.filter((e) => e.targetType === "CLASS" && e.targetClassId === c.id);
-    if (rows.length <= 2) continue;
     const installments = rows.filter((e) => isInstallmentFeeName(e.name));
+    const hasFirst = installments.some((e) => installmentIndexFromName(e.name) === 1);
+    const hasSecond = installments.some((e) => installmentIndexFromName(e.name) === 2);
+    if (installments.length > 0 && installments.length < 2 && (hasFirst !== hasSecond)) {
+      const missing = hasFirst ? "2nd" : "1st";
+      issues.push({
+        id: `missing-inst-${c.id}`,
+        kind: "missing_installment",
+        classId: c.id,
+        classLabel: `${c.name}${c.section ? `-${c.section}` : ""}`,
+        detail: `Mess fee ${missing} installment missing (only ${hasFirst ? "1st" : "2nd"} row in database)`,
+        extraFeeIds: installments.map((e) => e.id),
+      });
+    }
+    if (rows.length <= 2) continue;
     if (installments.length <= 2 && rows.length > 2) {
       issues.push({
         id: `many-${c.id}`,
