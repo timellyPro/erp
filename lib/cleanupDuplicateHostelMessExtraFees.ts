@@ -365,6 +365,64 @@ export async function cleanupDuplicateHostelMessExtraFees(
 }
 
 /**
+ * Create the missing 1st or 2nd hostel/mess installment when only one half exists for a scope.
+ */
+export async function repairIncompleteHostelMessInstallmentPairs(
+  db: Pick<typeof prisma, "extraFee">,
+  schoolId: string
+): Promise<number> {
+  const rows = await fetchHostelMessRows(db, schoolId);
+  if (rows.length === 0) return 0;
+
+  const scopeGroups = new Map<string, HostelMessCleanupRow[]>();
+  for (const f of rows) {
+    const category = isHostelCategoryExtraFeeName(f.name) ? "hostel" : "mess";
+    const key = `${category}|${scopeKey(f)}|${normName(canonicalExtraFeeBaseName(f.name))}`;
+    const list = scopeGroups.get(key) ?? [];
+    list.push(f);
+    scopeGroups.set(key, list);
+  }
+
+  let repaired = 0;
+  for (const [, group] of scopeGroups) {
+    const base = canonicalExtraFeeBaseName(group[0]?.name ?? "");
+    if (!base) continue;
+
+    const inst1Rows = group.filter((f) => installmentIndexFromName(f.name) === 1);
+    const inst2Rows = group.filter((f) => installmentIndexFromName(f.name) === 2);
+    const keeper1 = pickBestInstallment(inst1Rows, 1, base);
+    const keeper2 = pickBestInstallment(inst2Rows, 2, base);
+    if (keeper1 && keeper2) continue;
+
+    const template = keeper1 ?? keeper2;
+    if (!template) continue;
+
+    const missingIndex: 1 | 2 = keeper1 ? 2 : 1;
+    const [n1, n2] = buildInstallmentFeeNames(base);
+    const name = missingIndex === 1 ? n1 : n2;
+    const amount = Number(template.amount) || 0;
+    if (amount <= 0) continue;
+
+    await db.extraFee.create({
+      data: {
+        schoolId: template.schoolId,
+        name,
+        amount,
+        targetType: template.targetType,
+        targetClassId: template.targetClassId,
+        targetSection: template.targetSection,
+        targetStudentId: template.targetStudentId,
+        residencyScope: template.residencyScope,
+        splitIntoTwoInstallments: false,
+      },
+    });
+    repaired += 1;
+  }
+
+  return repaired;
+}
+
+/**
  * When a school-wide hostel installment pair exists, per-student hostel rows are duplicates
  * (accidental bulk assign on top of school-wide). Merge allocations into the school pair and delete.
  */
