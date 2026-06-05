@@ -11,6 +11,7 @@ const SECTIONS: { slug: string; label: string }[] = [
   { slug: "gender-enrollment", label: "Gender (class / section)" },
   { slug: "admission-comparison", label: "Admission comparison" },
   { slug: "fee-collection", label: "Fee collection" },
+  { slug: "student-credentials", label: "Student credentials" },
 ];
 
 function SectionPills() {
