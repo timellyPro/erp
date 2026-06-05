@@ -1,8 +1,13 @@
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import { canonicalExtraFeeBaseName } from "@/lib/extraFeeInstallments";
+import {
+  isHostelCategoryExtraFeeName,
+  isMessCategoryExtraFeeName,
+} from "@/lib/extraFeeResidencyScope";
 import { feeReportColumnFromGateway, type FeeReportColumn } from "@/lib/feePaymentGateway";
 import { roundRupee } from "@/lib/formatRupee";
+import { isTuitionNamedExtraFee } from "@/lib/studentRte";
 
 export type DayReportSchool = {
   name?: string | null;
@@ -28,6 +33,17 @@ export type DayReportTx = {
 };
 
 const TABLE_COLS = 9;
+
+/** Fixed Cash/Online summary rows (template order). */
+export const SUMMARY_BUCKET_LABELS = [
+  "Tuition Fee",
+  "Mess Fee",
+  "Hostel Fee",
+  "Transport Fee",
+  "other heads",
+] as const;
+
+export type SummaryBucketLabel = (typeof SUMMARY_BUCKET_LABELS)[number];
 
 type ModeTotals = { cash: number; online: number; otherMode: number };
 
@@ -71,10 +87,12 @@ export function formatStudentClassForReport(
   return n || s || "-";
 }
 
-/** Fee type column: same label as stored on the fee head / allocation (trimmed). */
+/** Fee type column — transport heads show as "Transport Fee" without kms/route suffix. */
 function feeTypeDisplay(name: string): string {
   const t = normalizeAccount(name);
-  return t === "Default" ? "—" : t;
+  if (t === "Default") return "—";
+  if (t.toLowerCase().includes("transport")) return "Transport Fee";
+  return t;
 }
 
 function cashOnlineCell(gateway?: string): string {
@@ -108,11 +126,29 @@ function allocationsForTx(tx: DayReportTx): Array<{ name: string; amount: number
     : [{ name: normalizeAccount(tx.feeTypeName), amount: Number(tx.amount || 0) }];
 }
 
-/** Sorted fee-head labels from the summary map (Default last). */
-function sortedFeeHeadLabels(summary: Map<string, ModeTotals>): string[] {
-  const keys = Array.from(summary.keys());
-  const rest = keys.filter((x) => x !== "Default").sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
-  return keys.includes("Default") ? [...rest, "Default"] : rest;
+/** Map any fee-head label into the fixed summary bucket. */
+export function feeHeadSummaryBucket(feeTypeName?: string): SummaryBucketLabel {
+  const raw = (feeTypeName || "").trim();
+  if (isTuitionNamedExtraFee(raw)) return "Tuition Fee";
+  if (isMessCategoryExtraFeeName(raw)) return "Mess Fee";
+  if (isHostelCategoryExtraFeeName(raw)) return "Hostel Fee";
+  const lower = raw.toLowerCase();
+  if (lower.includes("transport")) return "Transport Fee";
+  return "other heads";
+}
+
+function otherHeadsBucketTotal(summary: Map<SummaryBucketLabel, ModeTotals>): number {
+  const t = summary.get("other heads");
+  if (!t) return 0;
+  return t.cash + t.online + t.otherMode;
+}
+
+/** Buckets to render in Cash/Online summary — omits "other heads" when unused. */
+function resolveActiveSummaryBuckets(
+  summary: Map<SummaryBucketLabel, ModeTotals>
+): SummaryBucketLabel[] {
+  if (otherHeadsBucketTotal(summary) > 0.00001) return [...SUMMARY_BUCKET_LABELS];
+  return SUMMARY_BUCKET_LABELS.filter((b) => b !== "other heads");
 }
 
 /** Summary sits under the table, label in “Fee Type” col and amount in “Amount Paid” col (template style). */
@@ -122,31 +158,31 @@ const SUMMARY_AMOUNT_COL = 7;
 function pushSummarySection(
   rows: (string | number)[][],
   padRow: (cells: (string | number)[]) => (string | number)[],
-  headLabels: string[],
+  buckets: readonly SummaryBucketLabel[],
   title: string,
   total: number,
-  getAmount: (head: string) => number
+  getAmount: (bucket: SummaryBucketLabel) => number
 ) {
   const headRow = Array(TABLE_COLS).fill("");
   headRow[SUMMARY_LABEL_COL] = title;
   headRow[SUMMARY_AMOUNT_COL] = roundRupee(total);
   rows.push(padRow(headRow));
 
-  for (const head of headLabels) {
+  for (const bucket of buckets) {
     const r = Array(TABLE_COLS).fill("");
-    r[SUMMARY_LABEL_COL] = head;
-    r[SUMMARY_AMOUNT_COL] = roundRupee(getAmount(head));
+    r[SUMMARY_LABEL_COL] = bucket;
+    r[SUMMARY_AMOUNT_COL] = roundRupee(getAmount(bucket));
     rows.push(padRow(r));
   }
 }
 
 function addToSummary(
-  matrix: Map<string, ModeTotals>,
+  matrix: Map<SummaryBucketLabel, ModeTotals>,
   feeLabel: string,
   amount: number,
   gateway: string | undefined
 ): void {
-  const key = normalizeAccount(feeLabel);
+  const key = feeHeadSummaryBucket(feeLabel);
   if (!matrix.has(key)) {
     matrix.set(key, { cash: 0, online: 0, otherMode: 0 });
   }
@@ -172,8 +208,8 @@ export type DayReportDetailRow = {
 
 export type DayReportSummaryModel = {
   detailRows: DayReportDetailRow[];
-  headLabels: string[];
-  summary: Map<string, ModeTotals>;
+  summaryBuckets: readonly SummaryBucketLabel[];
+  summary: Map<SummaryBucketLabel, ModeTotals>;
   cashTotal: number;
   onlineTotal: number;
   otherTotal: number;
@@ -198,7 +234,7 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
     return r;
   };
 
-  const summary = new Map<string, ModeTotals>();
+  const summary = new Map<SummaryBucketLabel, ModeTotals>();
   const detailRows: DayReportDetailRow[] = [];
 
   for (const tx of sorted) {
@@ -209,7 +245,7 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
     for (const al of allocations) {
       const feeName = normalizeAccount(al.name);
       const amt = Number(al.amount || 0);
-      addToSummary(summary, feeName, amt, gateway);
+      addToSummary(summary, al.name || feeName, amt, gateway);
       detailRows.push({
         receiptNo: rec,
         admissionNo: (tx.student?.admissionNumber || "").trim() || "-",
@@ -224,12 +260,11 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
     }
   }
 
-  const headLabels = sortedFeeHeadLabels(summary);
   let cashTotal = 0;
   let onlineTotal = 0;
   let otherTotal = 0;
-  for (const h of headLabels) {
-    const t = summary.get(h);
+  for (const bucket of SUMMARY_BUCKET_LABELS) {
+    const t = summary.get(bucket);
     if (!t) continue;
     cashTotal += t.cash;
     onlineTotal += t.online;
@@ -240,7 +275,7 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
 
   return {
     detailRows,
-    headLabels,
+    summaryBuckets: resolveActiveSummaryBuckets(summary),
     summary,
     cashTotal: roundRupee(cashTotal),
     onlineTotal: roundRupee(onlineTotal),
@@ -481,15 +516,15 @@ export async function drawFeeDayReportPdf(args: {
     doc.setFontSize(9);
     doc.setTextColor(30, 41, 59);
 
-    const drawSection = (title: string, total: number, getAmt: (head: string) => number) => {
+    const drawSection = (title: string, total: number, getAmt: (bucket: SummaryBucketLabel) => number) => {
       doc.text(title, labelX, y);
       doc.text(fmt(total), amountX, y, { align: "right" });
       y += lineH;
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8.5);
-      for (const head of model.headLabels) {
-        const amt = getAmt(head);
-        doc.text(head, labelX + 3, y);
+      for (const bucket of model.summaryBuckets) {
+        const amt = getAmt(bucket);
+        doc.text(bucket, labelX + 3, y);
         doc.text(fmt(amt), amountX, y, { align: "right" });
         y += lineH;
       }
@@ -498,10 +533,10 @@ export async function drawFeeDayReportPdf(args: {
       y += 1;
     };
 
-    drawSection("Cash", model.cashTotal, (h) => model.summary.get(h)?.cash ?? 0);
-    drawSection("Online", model.onlineTotal, (h) => model.summary.get(h)?.online ?? 0);
+    drawSection("Cash", model.cashTotal, (b) => model.summary.get(b)?.cash ?? 0);
+    drawSection("Online", model.onlineTotal, (b) => model.summary.get(b)?.online ?? 0);
     if (model.otherTotal > 0.00001) {
-      drawSection("Cheque / DD / Others", model.otherTotal, (h) => model.summary.get(h)?.otherMode ?? 0);
+      drawSection("Cheque / DD / Others", model.otherTotal, (b) => model.summary.get(b)?.otherMode ?? 0);
     }
 
     doc.setFontSize(10);
@@ -521,10 +556,11 @@ export async function drawFeeDayReportPdf(args: {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7.2);
 
-  const summaryBlockH = 28 + model.headLabels.length * 10;
+  const summaryBlockH = 28 + model.summaryBuckets.length * 10;
+  const pageBottomMargin = 8;
 
   for (let i = 0; i < model.detailRows.length; i++) {
-    if (y + ROW_H > pageHeight - summaryBlockH - 8) {
+    if (y + ROW_H > pageHeight - pageBottomMargin) {
       doc.addPage();
       paintWhitePage();
       y = drawTableHeader(10);
@@ -659,21 +695,21 @@ export function appendDayReportSheet(
     ]);
   }
 
-  const { headLabels, summary, cashTotal, onlineTotal, otherTotal, totalCollection } = model;
+  const { summary, summaryBuckets, cashTotal, onlineTotal, otherTotal, totalCollection } = model;
 
   push(Array(TABLE_COLS).fill(""));
 
-  pushSummarySection(rows, padRow, headLabels, "Cash", cashTotal, (h) => summary.get(h)?.cash ?? 0);
-  pushSummarySection(rows, padRow, headLabels, "Online", onlineTotal, (h) => summary.get(h)?.online ?? 0);
+  pushSummarySection(rows, padRow, summaryBuckets, "Cash", cashTotal, (b) => summary.get(b)?.cash ?? 0);
+  pushSummarySection(rows, padRow, summaryBuckets, "Online", onlineTotal, (b) => summary.get(b)?.online ?? 0);
 
   if (otherTotal > 0.00001) {
     pushSummarySection(
       rows,
       padRow,
-      headLabels,
+      summaryBuckets,
       "Cheque / DD / Others",
       otherTotal,
-      (h) => summary.get(h)?.otherMode ?? 0
+      (b) => summary.get(b)?.otherMode ?? 0
     );
   }
 
