@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
+import { canonicalExtraFeeBaseName } from "@/lib/extraFeeInstallments";
 import { feeReportColumnFromGateway, type FeeReportColumn } from "@/lib/feePaymentGateway";
 import { roundRupee } from "@/lib/formatRupee";
 
@@ -93,9 +94,12 @@ function utrForRow(gateway: string | undefined, transactionId?: string | null, h
   return tid || "-";
 }
 
+/** Fee head label for reports — strips 1st/2nd installment suffixes so only the head name shows. */
 function normalizeAccount(feeTypeName?: string): string {
-  const label = (feeTypeName || "").trim().replace(/\s+/g, " ");
-  return label || "Default";
+  const raw = (feeTypeName || "").trim().replace(/\s+/g, " ");
+  if (!raw) return "Default";
+  const head = canonicalExtraFeeBaseName(raw);
+  return head || "Default";
 }
 
 function allocationsForTx(tx: DayReportTx): Array<{ name: string; amount: number }> {
@@ -263,6 +267,51 @@ export function resolveSchoolLogoFetchUrl(url: string | null | undefined): strin
   return parsed;
 }
 
+/** Keep IDs (admission no, etc.) on one line — shrink font before truncating. */
+function drawPdfSingleLineCell(
+  doc: jsPDF,
+  text: string,
+  x: number,
+  y: number,
+  width: number,
+  align: "left" | "right" = "left"
+): void {
+  const pad = 2;
+  const maxW = Math.max(4, width - pad);
+  const value = String(text ?? "").trim() || "-";
+  const baseSize = doc.getFontSize();
+  let size = baseSize;
+  const minSize = 5.5;
+
+  while (size > minSize && doc.getTextWidth(value) > maxW) {
+    size -= 0.25;
+    doc.setFontSize(size);
+  }
+
+  let display = value;
+  if (doc.getTextWidth(display) > maxW) {
+    const ellipsis = "...";
+    let low = 0;
+    let high = display.length;
+    let best = ellipsis;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const candidate = `${display.slice(0, mid)}${ellipsis}`;
+      if (doc.getTextWidth(candidate) <= maxW) {
+        best = candidate;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    display = best;
+  }
+
+  const textX = align === "right" ? x + width - 1 : x + 1;
+  doc.text(display, textX, y, align === "right" ? { align: "right" } : undefined);
+  doc.setFontSize(baseSize);
+}
+
 async function loadLogoDataUrl(url: string | null | undefined): Promise<string | null> {
   const fetchUrl = resolveSchoolLogoFetchUrl(url);
   if (!fetchUrl) return null;
@@ -311,23 +360,24 @@ export async function drawFeeDayReportPdf(args: {
     .join(", ");
 
   const cols = [
-    { key: "receiptNo", label: "Receipt no", w: 13 },
-    { key: "admissionNo", label: "Admission no", w: 21 },
-    { key: "date", label: "Date", w: 15 },
-    { key: "studentName", label: "Name of the Student", w: 32 },
-    { key: "className", label: "Class", w: 18 },
-    { key: "feeType", label: "Fee Type", w: 30 },
-    { key: "cashOnline", label: "Cash/Online", w: 16 },
-    { key: "amount", label: "Amount Paid", w: 17 },
-    { key: "utr", label: "UTR", w: 22 },
+    { key: "receiptNo", label: "Receipt no", w: 11 },
+    { key: "admissionNo", label: "Admission no", w: 30 },
+    { key: "date", label: "Date", w: 14 },
+    { key: "studentName", label: "Name of the Student", w: 30 },
+    { key: "className", label: "Class", w: 14 },
+    { key: "feeType", label: "Fee Type", w: 28 },
+    { key: "cashOnline", label: "Cash/Online", w: 15 },
+    { key: "amount", label: "Amount Paid", w: 16 },
+    { key: "utr", label: "UTR", w: 20 },
   ] as const;
 
   const colWidths = cols.map((c) => c.w);
   const widthSum = colWidths.reduce((a, b) => a + b, 0);
   if (widthSum < contentW) {
     const extra = contentW - widthSum;
-    colWidths[3] += extra * 0.45;
-    colWidths[5] += extra * 0.35;
+    colWidths[1] += extra * 0.2;
+    colWidths[3] += extra * 0.35;
+    colWidths[5] += extra * 0.25;
     colWidths[8] += extra * 0.2;
   } else if (widthSum > contentW) {
     const scale = contentW / widthSum;
@@ -495,12 +545,18 @@ export async function drawFeeDayReportPdf(args: {
       row.amount,
       row.utr,
     ];
+    const singleLineCols = new Set([0, 1, 2, 4, 6]);
     values.forEach((val, idx) => {
       const w = colWidths[idx];
       const cellText =
         typeof val === "number" ? roundRupee(val).toLocaleString("en-IN") : String(val);
-      if (idx === values.length - 2) doc.text(cellText, x + w - 1, textY, { align: "right" });
-      else doc.text(doc.splitTextToSize(cellText, Math.max(4, w - 2))[0] || "-", x + 1, textY);
+      if (idx === values.length - 2) {
+        drawPdfSingleLineCell(doc, cellText, x, textY, w, "right");
+      } else if (singleLineCols.has(idx)) {
+        drawPdfSingleLineCell(doc, cellText, x, textY, w);
+      } else {
+        doc.text(doc.splitTextToSize(cellText, Math.max(4, w - 2))[0] || "-", x + 1, textY);
+      }
       x += w;
     });
     y += ROW_H;

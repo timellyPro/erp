@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import {
+  buildStudentDetailsCoreBundle,
   buildStudentDetailsShellPayload,
   buildStudentDetailsTabExtras,
   buildStudentDetailsTabPayload,
@@ -29,6 +30,9 @@ async function resolveSchoolId(session: {
 
 const BREAKDOWN_TIMEOUT_MS = 12_000;
 
+const shellCache = new Map<string, { freshUntil: number; value: Record<string, unknown> }>();
+const SHELL_CACHE_TTL_MS = 300_000;
+
 async function loadFeeBreakdownSafe(schoolId: string, studentId: string) {
   try {
     return await Promise.race([
@@ -51,6 +55,7 @@ export async function GET(req: Request, context: RouteParams) {
   const url = new URL(req.url);
   const shellOnly = url.searchParams.get("shell") === "1";
   const extrasOnly = url.searchParams.get("extras") === "1";
+  const coreOnly = url.searchParams.get("core") === "1";
   const profileOnly = url.searchParams.get("profileOnly") === "1";
   const fast = url.searchParams.get("fast") === "1";
 
@@ -79,9 +84,34 @@ export async function GET(req: Request, context: RouteParams) {
       return NextResponse.json(extras, { status: 200 });
     }
 
+    if (coreOnly) {
+      const core = await buildStudentDetailsCoreBundle(id, resolvedSchoolId);
+      if (!core) {
+        return NextResponse.json({ message: "Student not found" }, { status: 404 });
+      }
+      return NextResponse.json({ ...core.shell, feeBreakdown: core.feeBreakdown }, { status: 200 });
+    }
+
     const withBreakdown = url.searchParams.get("breakdown") === "1";
 
     if (shellOnly || (fast && !profileOnly)) {
+      if (shellOnly && !withBreakdown) {
+        const shellKey = `${resolvedSchoolId ?? "own"}:${id}:shell`;
+        const shellHit = shellCache.get(shellKey);
+        if (shellHit && Date.now() < shellHit.freshUntil) {
+          return NextResponse.json({ ...shellHit.value, feeBreakdown: null }, { status: 200 });
+        }
+        const shell = await buildStudentDetailsShellPayload(id, resolvedSchoolId);
+        if (!shell) {
+          return NextResponse.json({ message: "Student not found" }, { status: 404 });
+        }
+        shellCache.set(shellKey, {
+          value: shell as unknown as Record<string, unknown>,
+          freshUntil: Date.now() + SHELL_CACHE_TTL_MS,
+        });
+        return NextResponse.json({ ...shell, feeBreakdown: null }, { status: 200 });
+      }
+
       if (shellOnly && withBreakdown && resolvedSchoolId) {
         const [shell, feeBreakdown] = await Promise.all([
           buildStudentDetailsShellPayload(id, resolvedSchoolId),

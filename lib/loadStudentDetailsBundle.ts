@@ -3,4 +3,5 @@ export {
   fetchStudentDetailsFast as loadStudentDetailsBundle,
   peekStudentDetailsFast as peekStudentDetailsBundle,
   invalidateStudentDetailsFast as invalidateStudentDetailsBundleCache,
+  warmStudentDetailsBundle,
 } from "@/lib/fetchStudentDetailsFast";

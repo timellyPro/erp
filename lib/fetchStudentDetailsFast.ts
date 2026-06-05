@@ -1,5 +1,6 @@
 import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
 import type { StudentDetailsTabExtras, StudentDetailsTabPayload } from "@/lib/buildStudentDetailsTabPayload";
+import { invalidateStudentDetailsCoreCache } from "@/lib/studentDetailsCoreCache";
 import {
   fetchFeeBreakdownFast,
   getFeeBreakdownCached,
@@ -13,13 +14,69 @@ export type StudentDetailsFastBundle = StudentDetailsTabPayload & {
 
 const bundleMemory = new Map<string, { expiresAt: number; value: StudentDetailsFastBundle }>();
 const bundleInflight = new Map<string, Promise<StudentDetailsFastBundle>>();
+const extrasInflight = new Map<string, Promise<StudentDetailsTabExtras>>();
 
 const BUNDLE_TTL_MS = 30 * 60 * 1000;
+const SESSION_KEY = "erp:student-details-bundle:v2";
+const SESSION_TTL_MS = 30 * 60 * 1000;
 
-function parseShell(data: unknown): StudentDetailsTabPayload {
+type SessionStore = Record<string, { savedAt: number; value: StudentDetailsFastBundle }>;
+
+function readSession(): SessionStore {
+  if (typeof sessionStorage === "undefined") return {};
+  try {
+    return JSON.parse(sessionStorage.getItem(SESSION_KEY) ?? "{}") as SessionStore;
+  } catch {
+    return {};
+  }
+}
+
+function writeSession(store: SessionStore): void {
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    const keys = Object.keys(store);
+    if (keys.length > 12) {
+      keys
+        .sort((a, b) => (store[b]?.savedAt ?? 0) - (store[a]?.savedAt ?? 0))
+        .slice(12)
+        .forEach((k) => delete store[k]);
+    }
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(store));
+  } catch {
+    /* quota */
+  }
+}
+
+function readSessionBundle(studentId: string): StudentDetailsFastBundle | null {
+  const store = readSession();
+  const entry = store[studentId];
+  if (!entry || Date.now() - entry.savedAt > SESSION_TTL_MS) {
+    if (entry) {
+      delete store[studentId];
+      writeSession(store);
+    }
+    return null;
+  }
+  return entry.value;
+}
+
+function writeSessionBundle(studentId: string, value: StudentDetailsFastBundle): void {
+  const store = readSession();
+  store[studentId] = { savedAt: Date.now(), value };
+  writeSession(store);
+}
+
+function parseCore(data: unknown): { shell: StudentDetailsTabPayload; feeBreakdown: AdminStudentFeeBreakdownResult | null } {
   if (!(data as { student?: unknown })?.student) {
     throw new Error("Invalid student details response");
   }
+  const shell = parseShell(data);
+  const feeBreakdown =
+    (data as { feeBreakdown?: AdminStudentFeeBreakdownResult | null }).feeBreakdown ?? null;
+  return { shell, feeBreakdown };
+}
+
+function parseShell(data: unknown): StudentDetailsTabPayload {
   const payload = data as StudentDetailsTabPayload;
   return {
     ...payload,
@@ -40,26 +97,80 @@ function parseExtras(data: unknown): StudentDetailsTabExtras {
   };
 }
 
+function emptyExtras(): StudentDetailsTabExtras {
+  return {
+    payments: [],
+    attendanceTrends: [],
+    academicPerformance: [],
+    certificates: [],
+  };
+}
+
+function toBundle(
+  shell: StudentDetailsTabPayload,
+  extras: StudentDetailsTabExtras,
+  feeBreakdown: AdminStudentFeeBreakdownResult | null
+): StudentDetailsFastBundle {
+  return { ...shell, ...extras, feeBreakdown };
+}
+
+function cacheBundle(studentId: string, bundle: StudentDetailsFastBundle): void {
+  bundleMemory.set(studentId, { value: bundle, expiresAt: Date.now() + BUNDLE_TTL_MS });
+  writeSessionBundle(studentId, bundle);
+}
+
 export function peekStudentDetailsFast(studentId: string): StudentDetailsFastBundle | null {
   const entry = bundleMemory.get(studentId);
   if (entry && Date.now() < entry.expiresAt) return entry.value;
-  return null;
+  return readSessionBundle(studentId);
+}
+
+/** Prefetch profile + fees when hovering a student link (no-op if already cached). */
+export function warmStudentDetailsBundle(studentId: string): void {
+  if (!studentId.trim() || peekStudentDetailsFast(studentId)) return;
+  void fetchStudentDetailsFast(studentId).catch(() => {});
 }
 
 export function invalidateStudentDetailsFast(studentId?: string) {
   if (studentId) {
     bundleMemory.delete(studentId);
     bundleInflight.delete(studentId);
+    extrasInflight.delete(studentId);
+    invalidateStudentDetailsCoreCache(studentId);
     invalidateFeeBreakdownCache(studentId);
+    const store = readSession();
+    delete store[studentId];
+    writeSession(store);
     return;
   }
   bundleMemory.clear();
   bundleInflight.clear();
+  extrasInflight.clear();
   invalidateFeeBreakdownCache();
+  if (typeof sessionStorage !== "undefined") sessionStorage.removeItem(SESSION_KEY);
+}
+
+async function fetchExtras(studentId: string, signal?: AbortSignal): Promise<StudentDetailsTabExtras> {
+  const running = extrasInflight.get(studentId);
+  if (running) return running;
+
+  const run = fetch(
+    `/api/student/${encodeURIComponent(studentId)}/details-bundle?extras=1`,
+    { credentials: "include", cache: "no-store", signal }
+  )
+    .then(async (res) => (res.ok ? parseExtras(await res.json().catch(() => ({}))) : emptyExtras()))
+    .catch(() => emptyExtras());
+
+  extrasInflight.set(studentId, run);
+  try {
+    return await run;
+  } finally {
+    extrasInflight.delete(studentId);
+  }
 }
 
 /**
- * One HTTP round-trip for profile + fee breakdown; extras in background.
+ * One core API call (profile + fees, single DB student read), then extras in background.
  */
 export async function fetchStudentDetailsFast(
   studentId: string,
@@ -67,11 +178,18 @@ export async function fetchStudentDetailsFast(
     signal?: AbortSignal;
     onShellLoaded?: (bundle: StudentDetailsFastBundle) => void;
     onBreakdownLoaded?: (breakdown: AdminStudentFeeBreakdownResult) => void;
+    onExtrasLoaded?: (bundle: StudentDetailsFastBundle) => void;
   }
 ): Promise<StudentDetailsFastBundle> {
   const mem = bundleMemory.get(studentId);
   if (mem && Date.now() < mem.expiresAt) {
     return mem.value;
+  }
+
+  const sessionHit = readSessionBundle(studentId);
+  if (sessionHit) {
+    bundleMemory.set(studentId, { value: sessionHit, expiresAt: Date.now() + BUNDLE_TTL_MS });
+    return sessionHit;
   }
 
   const running = bundleInflight.get(studentId);
@@ -81,47 +199,41 @@ export async function fetchStudentDetailsFast(
     const cachedBreakdown = getFeeBreakdownCached(studentId);
     if (cachedBreakdown) options?.onBreakdownLoaded?.(cachedBreakdown);
 
-    const [shellRes, extrasRes] = await Promise.all([
-      fetch(
-        `/api/student/${encodeURIComponent(studentId)}/details-bundle?shell=1&breakdown=1`,
-        { credentials: "include", cache: "no-store", signal: options?.signal }
-      ),
-      fetch(
-        `/api/student/${encodeURIComponent(studentId)}/details-bundle?extras=1`,
-        { credentials: "include", cache: "no-store", signal: options?.signal }
-      ),
-    ]);
-
-    const shellData = await shellRes.json().catch(() => ({}));
-    if (!shellRes.ok) {
+    const coreRes = await fetch(
+      `/api/student/${encodeURIComponent(studentId)}/details-bundle?core=1`,
+      { credentials: "include", cache: "no-store", signal: options?.signal }
+    );
+    const coreData = await coreRes.json().catch(() => ({}));
+    if (!coreRes.ok) {
       throw new Error(
-        (shellData as { message?: string })?.message || "Failed to load student profile"
+        (coreData as { message?: string })?.message || "Failed to load student profile"
       );
     }
 
-    const shell = parseShell(shellData);
-    const extras = extrasRes.ok
-      ? parseExtras(await extrasRes.json().catch(() => ({})))
-      : parseExtras({});
-
-    let feeBreakdown =
-      (shellData as { feeBreakdown?: AdminStudentFeeBreakdownResult | null }).feeBreakdown ??
-      cachedBreakdown ??
-      null;
+    const { shell, feeBreakdown: coreBreakdown } = parseCore(coreData);
+    let feeBreakdown = coreBreakdown ?? cachedBreakdown ?? null;
 
     if (!feeBreakdown) {
       feeBreakdown = await fetchFeeBreakdownFast(studentId, { signal: options?.signal });
-    } else {
+    }
+    if (feeBreakdown) {
       setFeeBreakdownCache(studentId, feeBreakdown);
+      options?.onBreakdownLoaded?.(feeBreakdown);
     }
 
-    if (feeBreakdown) options?.onBreakdownLoaded?.(feeBreakdown);
+    const shellBundle = toBundle(shell, emptyExtras(), feeBreakdown);
+    options?.onShellLoaded?.(shellBundle);
 
-    const partial: StudentDetailsFastBundle = { ...shell, ...extras, feeBreakdown };
-    options?.onShellLoaded?.(partial);
+    void fetchExtras(studentId, options?.signal)
+      .then((extras) => {
+        const full = toBundle(shell, extras, feeBreakdown);
+        cacheBundle(studentId, full);
+        options?.onExtrasLoaded?.(full);
+      })
+      .catch(() => {});
 
-    const bundle: StudentDetailsFastBundle = { ...shell, ...extras, feeBreakdown };
-    bundleMemory.set(studentId, { value: bundle, expiresAt: Date.now() + BUNDLE_TTL_MS });
+    const bundle = toBundle(shell, emptyExtras(), feeBreakdown);
+    cacheBundle(studentId, bundle);
     return bundle;
   })();
 

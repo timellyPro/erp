@@ -40,23 +40,24 @@ export type CollectionByMethodRow = {
 };
 
 export function aggregateCollectionByMethod(
-  payments: Array<{ amount: unknown; gateway: string | null }>
+  payments: Array<{ amount: unknown; gateway: string | null; count?: number }>
 ): { rows: CollectionByMethodRow[]; total: number } {
   const map = new Map<string, CollectionByMethodRow>();
   let total = 0;
 
   for (const payment of payments) {
     const amount = Number(payment.amount ?? 0);
-    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const paymentCount = Math.max(0, Math.floor(Number(payment.count ?? 1)));
+    if (!Number.isFinite(amount) || amount <= 0 || paymentCount <= 0) continue;
 
     const bucket = paymentCollectionBucket(payment.gateway);
     const label = bucket === "CASH" ? "Cash" : bucket === "ONLINE" ? "Online" : "Others";
     const existing = map.get(bucket);
     if (existing) {
       existing.amount += amount;
-      existing.count += 1;
+      existing.count += paymentCount;
     } else {
-      map.set(bucket, { key: bucket, label, amount, count: 1 });
+      map.set(bucket, { key: bucket, label, amount, count: paymentCount });
     }
     total += amount;
   }

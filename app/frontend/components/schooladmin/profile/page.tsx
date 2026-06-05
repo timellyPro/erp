@@ -20,7 +20,6 @@ import {
   getFeeBreakdownCached,
   setFeeBreakdownCache,
 } from "@/lib/feeBreakdownClientCache";
-import { fetchAllStudents } from "@/lib/fetchAllStudents";
 import { readStudentListCache, writeStudentListCache } from "@/lib/studentListSessionCache";
 import { StudentSearchAutocomplete } from "./components/StudentSearchAutocomplete";
 import { Calendar, BookOpen, Activity, Clock, FileSpreadsheet, X } from "lucide-react";
@@ -226,52 +225,84 @@ function StudentDetailsPageContent() {
   const [bulkExtraFeeOpen, setBulkExtraFeeOpen] = useState(false);
   const [feesModalOpen, setFeesModalOpen] = useState(false);
 
+  const [dropdownListLoaded, setDropdownListLoaded] = useState(false);
+
   useEffect(() => {
     const cached = readStudentListCache<StudentOption>();
     if (cached?.length) {
       setStudents(cached.map((s) => normalizeStudentOption(s)));
       setListLoading(false);
+      setDropdownListLoaded(true);
     }
 
     let cancelled = false;
-    (async () => {
+
+    const mapListRow = (s: {
+      id: string;
+      user?: { name?: string };
+      admissionNumber?: string;
+      fatherName?: string;
+      parentName?: string;
+      class?: { id: string; name: string; section: string | null };
+    }): StudentOption => ({
+      id: s.id,
+      name: s.user?.name ?? "Unknown",
+      admissionNumber: s.admissionNumber ?? "",
+      parentName: s.fatherName?.trim() || s.parentName?.trim() || "-",
+      classDisplay: s.class ? `${s.class.name}${s.class.section ? `-${s.class.section}` : ""}` : "-",
+      classId: s.class?.id ?? "",
+      section: s.class?.section ?? null,
+    });
+
+    const loadDropdownList = async () => {
+      if (dropdownListLoaded || cancelled) return;
       try {
-        const [studentsData, classesRes] = await Promise.all([
-          fetchAllStudents<{
-            id: string;
-            user?: { name?: string };
-            admissionNumber?: string;
-            fatherName?: string;
-            parentName?: string;
-            class?: { id: string; name: string; section: string | null };
-          }>({ credentials: "include" }, { take: 100, maxPages: 50 }),
-          fetch("/api/class/list", { credentials: "include" }),
-        ]);
-        if (!cancelled) {
-          const list: StudentOption[] = (studentsData || []).map((s) => ({
-            id: s.id,
-            name: s.user?.name ?? "Unknown",
-            admissionNumber: s.admissionNumber ?? "",
-            parentName: s.fatherName?.trim() || s.parentName?.trim() || "-",
-            classDisplay: s.class ? `${s.class.name}${s.class.section ? `-${s.class.section}` : ""}` : "-",
-            classId: s.class?.id ?? "",
-            section: s.class?.section ?? null,
-          }));
+        const res = await fetch("/api/student/list?take=100", {
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json().catch(() => ({}));
+        const rows = Array.isArray(data?.students) ? data.students : [];
+        const list = rows.map(mapListRow);
+        if (list.length > 0) {
           setStudents(list);
           writeStudentListCache(list);
         }
+        setDropdownListLoaded(true);
+      } catch {
+        /* keep search API as fallback */
+      }
+    };
+
+    (async () => {
+      try {
+        const classesRes = await fetch("/api/class/list", { credentials: "include" });
         if (!cancelled && classesRes.ok) {
           const c = await classesRes.json();
           setClasses(c.classes ?? []);
         }
+
+        if (studentIdFromUrl) {
+          setListLoading(false);
+          return;
+        }
+
+        if (!cached?.length) {
+          await loadDropdownList();
+        }
+        if (!cancelled) setListLoading(false);
       } catch {
         if (!cancelled && !cached?.length) setStudents([]);
-      } finally {
         if (!cancelled) setListLoading(false);
       }
     })();
-    return () => { cancelled = true; };
-  }, []);
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deep link skips bulk list
+  }, [studentIdFromUrl]);
 
   // Deep link (?studentId=…): follow the URL when it changes. Do NOT depend on `students` here — that
   // was resetting selection back to the URL id on every list refresh and overwrote the student's dropdown pick.
@@ -360,51 +391,63 @@ function StudentDetailsPageContent() {
       return;
     }
 
-    const controller = new AbortController();
     let cancelled = false;
 
     const cached = peekStudentDetailsBundle(selectedId);
     if (cached) {
       applyDetailsBundle(cached);
       setFeeBreakdownPending(false);
-      return () => {
-        cancelled = true;
-        controller.abort();
-      };
+      return;
     }
 
-    const fromList = students.find((s) => s.id === selectedId);
-    setDetail(
-      fromList ? buildPlaceholderDetail(normalizeStudentOption(fromList)) : buildPlaceholderById(selectedId)
-    );
-
     const cachedBreakdown = getFeeBreakdownCached(selectedId);
+    setDetail((prev) => {
+      if (prev?.student.id === selectedId) return prev;
+      const fromList = students.find((s) => s.id === selectedId);
+      return fromList
+        ? buildPlaceholderDetail(normalizeStudentOption(fromList))
+        : buildPlaceholderById(selectedId);
+    });
     if (cachedBreakdown) {
       setFeeBreakdown(cachedBreakdown);
       setFeeBreakdownPending(false);
     } else {
       setFeeBreakdownPending(true);
-      void fetchFeeBreakdownFast(selectedId, { signal: controller.signal }).then((bd) => {
-        if (!cancelled && bd) setFeeBreakdown(bd);
-      });
     }
 
     loadStudentDetailsBundle(selectedId, {
-      signal: controller.signal,
       onShellLoaded: (partial) => {
         if (cancelled) return;
         const { feeBreakdown: bd, ...rest } = partial;
-        if (rest?.student) setDetail(rest);
+        if (rest?.student) {
+          setDetail(rest);
+          setStudents((prev) => {
+            if (prev.some((s) => s.id === rest.student.id)) return prev;
+            const row = normalizeStudentOption({
+              id: rest.student.id,
+              name: rest.student.name,
+              admissionNumber: rest.student.admissionNumber,
+              fatherName: rest.student.fatherName,
+              classDisplay: rest.student.class?.displayName,
+              classId: rest.student.class?.id,
+              section: rest.student.class?.section,
+            });
+            return [row, ...prev];
+          });
+        }
         if (bd) {
           setFeeBreakdown(bd);
           setFeeBreakdownPending(false);
         }
       },
       onBreakdownLoaded: (bd) => {
-        if (!cancelled) {
-          setFeeBreakdown(bd);
-          setFeeBreakdownPending(false);
-        }
+        if (cancelled) return;
+        setFeeBreakdown(bd);
+        setFeeBreakdownPending(false);
+      },
+      onExtrasLoaded: (full) => {
+        if (cancelled) return;
+        applyDetailsBundle(full);
       },
     })
       .then((bundle) => {
@@ -412,7 +455,7 @@ function StudentDetailsPageContent() {
         applyDetailsBundle(bundle);
       })
       .catch((err) => {
-        if (cancelled || (err instanceof DOMException && err.name === "AbortError")) return;
+        if (cancelled) return;
         console.error("Student details error:", err);
       })
       .finally(() => {
@@ -421,9 +464,10 @@ function StudentDetailsPageContent() {
 
     return () => {
       cancelled = true;
-      controller.abort();
     };
-  }, [selectedId, reloadKey, applyDetailsBundle, students]);
+    // `students` read for placeholder only — must not restart fetch when list hydrates
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
+  }, [selectedId, reloadKey, applyDetailsBundle]);
 
   const filtered = students.filter((s) => {
     if (searchQuery) {
@@ -566,7 +610,26 @@ function StudentDetailsPageContent() {
               }))}
               gender={detail.student.gender ?? ""}
               residencyType={detail.student.residencyType ?? "Day Scholar"}
-              onSaved={() => setReloadKey((k) => k + 1)}
+              onSaved={(patch) => {
+                if (patch) {
+                  setDetail((current) =>
+                    current
+                      ? {
+                          ...current,
+                          student: {
+                            ...current.student,
+                            fatherName: patch.fatherName,
+                            fatherPhone: patch.fatherPhone,
+                            motherName: patch.motherName,
+                            motherPhone: patch.motherPhone,
+                            phone: patch.fatherPhone,
+                          },
+                        }
+                      : current
+                  );
+                }
+                setReloadKey((k) => k + 1);
+              }}
               onOpenFees={() => {
                 warmFeeBreakdown();
                 setFeesModalOpen(true);

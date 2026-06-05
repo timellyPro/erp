@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { purgeExpiredNewsFeeds } from "@/lib/newsfeedRetention";
 import { buildSchoolDashboardCollection } from "@/lib/buildSchoolDashboardCollection";
+import { buildSchoolDashboardFast } from "@/lib/buildSchoolDashboardFast";
+import { getSchoolDashboardFeeTotals } from "@/lib/schoolDashboardFeeTotals";
 import { resolveSchoolAdminSchoolId } from "@/lib/resolveSchoolAdminSchoolId";
-import { FEE_COLLECTION_PAYMENT_WHERE, todayYmdLocal } from "@/lib/schoolDashboardCollection";
+import { todayYmdLocal } from "@/lib/schoolDashboardCollection";
 import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
@@ -65,7 +68,15 @@ export async function GET(request: Request) {
     }
     const schoolId = ctx.schoolId;
 
-    const dateParam = new URL(request.url).searchParams.get("date")?.trim() || todayYmdLocal();
+    const url = new URL(request.url);
+    const dateParam = url.searchParams.get("date")?.trim() || todayYmdLocal();
+    const fastOnly = url.searchParams.get("fast") === "1";
+
+    if (fastOnly) {
+      const payload = await buildSchoolDashboardFast(schoolId, dateParam);
+      return NextResponse.json(payload, { status: 200 });
+    }
+
     const cacheKey = `dashboard:${schoolId}:${dateParam}`;
     const cachedPayload = getSchoolDashboardServerCached<Record<string, unknown>>(cacheKey);
     if (cachedPayload) {
@@ -87,7 +98,7 @@ export async function GET(request: Request) {
       classCountLastMonth,
       studentCountLastMonth,
       teacherCountLastMonth,
-      feeSummary,
+      feeTotals,
       todayAttendance,
       leaves,
       newsFeeds,
@@ -102,18 +113,16 @@ export async function GET(request: Request) {
       prisma.user.count({
         where: { schoolId, role: "TEACHER", createdAt: { lt: startOfMonth } },
       }),
-      prisma.studentFee.aggregate({
-        where: { student: { schoolId } },
-        _sum: { amountPaid: true, finalFee: true },
-      }),
-      prisma.attendance.groupBy({
-        by: ["status"],
-        where: {
-          class: { schoolId },
-          date: { gte: todayStart, lt: todayEnd },
-        },
-        _count: true,
-      }),
+      getSchoolDashboardFeeTotals(schoolId),
+      prisma.$queryRaw<Array<{ status: string; count: bigint }>>(Prisma.sql`
+        SELECT a.status, COUNT(*)::bigint AS count
+        FROM "Attendance" a
+        INNER JOIN "Class" c ON c.id = a."classId"
+        WHERE c."schoolId" = ${schoolId}
+          AND a.date >= ${todayStart}
+          AND a.date < ${todayEnd}
+        GROUP BY a.status
+      `),
       prisma.leaveRequest.findMany({
         where: { schoolId, status: { in: ["APPROVED", "PENDING"] } },
         select: {
@@ -140,29 +149,29 @@ export async function GET(request: Request) {
         orderBy: { createdAt: "desc" },
         take: 5,
       }),
-      prisma.payment.findMany({
-        where: {
-          student: { schoolId },
-          ...FEE_COLLECTION_PAYMENT_WHERE,
-        },
-        select: {
-          amount: true,
-          createdAt: true,
-          student: { select: { user: { select: { name: true } } } },
-        },
-        orderBy: { createdAt: "desc" },
-        take: 5,
-      }),
+      prisma.$queryRaw<
+        Array<{ amount: number; createdAt: Date; studentName: string | null }>
+      >(Prisma.sql`
+        SELECT p.amount, p."createdAt", u.name AS "studentName"
+        FROM "Payment" p
+        INNER JOIN "Student" s ON s.id = p."studentId"
+        INNER JOIN "User" u ON u.id = s."userId"
+        WHERE s."schoolId" = ${schoolId}
+          AND p.status IN ('SUCCESS', 'COMPLETED')
+          AND p."eventRegistrationId" IS NULL
+        ORDER BY p."createdAt" DESC
+        LIMIT 5
+      `),
       buildSchoolDashboardCollection(schoolId, dateParam),
     ]);
 
-    const totalPaid = feeSummary._sum.amountPaid ?? 0;
-    const totalFee = feeSummary._sum.finalFee ?? 0;
+    const totalPaid = feeTotals.totalPaid;
+    const totalFee = feeTotals.totalFee;
     const collectedPct = totalFee > 0 ? Math.round((totalPaid / totalFee) * 100) : 0;
 
     const attendanceByStatus = todayAttendance.reduce(
       (acc, g) => {
-        acc[g.status] = g._count;
+        acc[g.status] = Number(g.count);
         return acc;
       },
       {} as Record<string, number>
@@ -209,7 +218,7 @@ export async function GET(request: Request) {
       recentActivities.push({
         type: "Fee Payment",
         title: "Fee Payment",
-        subtitle: `${p.student.user?.name ?? "Student"} paid ₹${p.amount.toLocaleString("en-IN")} tuition fee`,
+        subtitle: `${p.studentName ?? "Student"} paid ₹${p.amount.toLocaleString("en-IN")} tuition fee`,
         meta: formatTimeAgo(p.createdAt),
         createdAt: p.createdAt,
       });
@@ -267,7 +276,7 @@ export async function GET(request: Request) {
       })),
     };
 
-    setSchoolDashboardServerCached(cacheKey, payload, 25_000);
+    setSchoolDashboardServerCached(cacheKey, payload, 120_000);
     return NextResponse.json(payload);
   } catch (error: unknown) {
     console.error("School dashboard error:", error);

@@ -9,6 +9,8 @@ import {
   dominantFeeHead,
   feeHeadLinesFromMap,
 } from "@/lib/paymentFeeHeadLines";
+import type { PrismaClient } from "@prisma/client";
+import { ensureStudentApplicationLink } from "@/lib/ensureStudentApplicationLink";
 import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
 
 type RouteParams =
@@ -410,7 +412,10 @@ export async function PUT(req: Request, context: RouteParams) {
   try {
     const student = await prisma.student.findFirst({
       where: { id, schoolId },
-      include: { user: { select: { id: true } } },
+      include: {
+        user: { select: { id: true, name: true } },
+        class: { select: { name: true } },
+      },
     });
     if (!student) {
       return NextResponse.json({ message: "Student not found" }, { status: 404 });
@@ -456,9 +461,24 @@ export async function PUT(req: Request, context: RouteParams) {
     const languagesAtHome = typeof body.languagesAtHome === "string" ? body.languagesAtHome.trim() || null : undefined;
     const caste = typeof body.caste === "string" ? body.caste.trim() || null : undefined;
     const religion = typeof body.religion === "string" ? body.religion.trim() || null : undefined;
-    const emergencyFatherNo = typeof body.emergencyFatherNo === "string" ? body.emergencyFatherNo.trim() || null : undefined;
-    const emergencyMotherNo = typeof body.emergencyMotherNo === "string" ? body.emergencyMotherNo.trim() || null : undefined;
-    const emergencyGuardianNo = typeof body.emergencyGuardianNo === "string" ? body.emergencyGuardianNo.trim() || null : undefined;
+    const emergencyFatherNo =
+      typeof body.emergencyFatherNo === "string"
+        ? body.emergencyFatherNo.trim() || "-"
+        : body.emergencyFatherNo === null
+          ? "-"
+          : undefined;
+    const emergencyMotherNo =
+      typeof body.emergencyMotherNo === "string"
+        ? body.emergencyMotherNo.trim() || "-"
+        : body.emergencyMotherNo === null
+          ? "-"
+          : undefined;
+    const emergencyGuardianNo =
+      typeof body.emergencyGuardianNo === "string"
+        ? body.emergencyGuardianNo.trim() || "-"
+        : body.emergencyGuardianNo === null
+          ? "-"
+          : undefined;
     const dob = dobRaw
       ? (() => {
           const parsed = new Date(dobRaw);
@@ -551,7 +571,9 @@ export async function PUT(req: Request, context: RouteParams) {
     }
 
     const applicationUpdate: Record<string, unknown> = {};
-    if (fatherName !== undefined) applicationUpdate.parentName = fatherName || null;
+    if (fatherName !== undefined) applicationUpdate.parentName = fatherName || "-";
+    if (motherName !== undefined) applicationUpdate.motherName = motherName;
+    if (phoneNo !== undefined) applicationUpdate.parentPhone = phoneNo || "-";
     if (occupation !== undefined) applicationUpdate.parentOccupation = occupation;
     if (email !== undefined) applicationUpdate.parentEmail = email || null;
     if (previousSchool !== undefined) applicationUpdate.previousSchoolName = previousSchool;
@@ -573,10 +595,39 @@ export async function PUT(req: Request, context: RouteParams) {
     if (emergencyMotherNo !== undefined) applicationUpdate.emergencyMotherNo = emergencyMotherNo;
     if (emergencyGuardianNo !== undefined) applicationUpdate.emergencyGuardianNo = emergencyGuardianNo;
     if (Object.keys(applicationUpdate).length > 0) {
-      await prisma.studentApplication.updateMany({
-        where: { studentId: id, schoolId },
-        data: applicationUpdate as Record<string, never>,
-      });
+      const applicationId = await ensureStudentApplicationLink(
+        prisma as unknown as Pick<PrismaClient, "studentApplication">,
+        {
+        id: student.id,
+        schoolId: student.schoolId,
+        aadhaarNo: student.aadhaarNo,
+        admissionNumber: student.admissionNumber,
+        fatherName:
+          typeof applicationUpdate.parentName === "string"
+            ? applicationUpdate.parentName
+            : student.fatherName,
+        motherName:
+          applicationUpdate.motherName === undefined
+            ? student.motherName
+            : (applicationUpdate.motherName as string | null),
+        phoneNo:
+          typeof applicationUpdate.parentPhone === "string"
+            ? applicationUpdate.parentPhone
+            : student.phoneNo,
+        dob: student.dob,
+        gender: student.gender,
+        classId: student.classId,
+        address: student.address,
+        user: student.user,
+        class: student.class,
+        }
+      );
+      if (applicationId) {
+        await prisma.studentApplication.update({
+          where: { id: applicationId },
+          data: applicationUpdate as Record<string, never>,
+        });
+      }
     }
 
     if (classId !== undefined || residencyType !== undefined) {

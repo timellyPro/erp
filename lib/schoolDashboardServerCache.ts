@@ -11,6 +11,6 @@ export function getSchoolDashboardServerCached<T>(key: string): T | null {
   return hit.value as T;
 }
 
-export function setSchoolDashboardServerCached(key: string, value: unknown, ttlMs = 20_000): void {
+export function setSchoolDashboardServerCached(key: string, value: unknown, ttlMs = 120_000): void {
   cache.set(key, { value, freshUntil: Date.now() + ttlMs });
 }

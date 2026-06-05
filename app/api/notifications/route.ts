@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { NotificationType } from "@prisma/client";
-import { swrGet, swrSet } from "@/lib/tenantCache";
+import { apiMemGetSwr, apiMemSet } from "@/lib/apiMemoryCache";
 
 export async function GET(req: Request) {
   try {
@@ -18,6 +18,15 @@ export async function GET(req: Request) {
     const onlyUnread = searchParams.get("onlyUnread") === "true";
     const take = Math.min(100, Number(searchParams.get("take") || 20));
 
+    const memKey = `notifications:${userId}:${type ?? "ALL"}:${onlyUnread ? "1" : "0"}:${take}`;
+    const cached = apiMemGetSwr<{ notifications: unknown[]; unreadCount: number }>(memKey);
+    if (cached) {
+      return NextResponse.json(cached.value, {
+        status: 200,
+        headers: { "Cache-Control": "private, no-store, must-revalidate" },
+      });
+    }
+
     const where: {
       userId: string;
       type?: NotificationType;
@@ -26,20 +35,6 @@ export async function GET(req: Request) {
 
     if (type) where.type = type;
     if (onlyUnread) where.isRead = false;
-    const cacheKey = `cache:user:${userId}:notifications:${type ?? "ALL"}:${onlyUnread ? "1" : "0"}:${take}`;
-    const now = Date.now();
-    const cached = await swrGet<{ notifications: unknown[]; unreadCount: number }>(cacheKey);
-    if (cached && now < cached.freshUntil) {
-      return NextResponse.json(
-        cached.value,
-        {
-          status: 200,
-          headers: {
-            "Cache-Control": "private, no-store, must-revalidate",
-          },
-        }
-      );
-    }
 
     const [notifications, unreadCount] = await Promise.all([
       prisma.notification.findMany({
@@ -53,20 +48,12 @@ export async function GET(req: Request) {
     ]);
 
     const payload = { notifications, unreadCount };
-    await swrSet(
-      cacheKey,
-      { value: payload, freshUntil: now + 3_000, staleUntil: now + 10_000 },
-      10
-    );
-    return NextResponse.json(
-      payload,
-      {
-        status: 200,
-        headers: {
-          "Cache-Control": "private, no-store, must-revalidate",
-        },
-      }
-    );
+    apiMemSet(memKey, payload, 25_000, 120_000);
+
+    return NextResponse.json(payload, {
+      status: 200,
+      headers: { "Cache-Control": "private, no-store, must-revalidate" },
+    });
   } catch (e: unknown) {
     console.error("Notifications GET:", e);
     return NextResponse.json(
@@ -115,4 +102,3 @@ export async function POST(req: Request) {
     );
   }
 }
-

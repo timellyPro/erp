@@ -35,7 +35,12 @@ type Props = {
   classes?: { id: string; label: string }[];
   gender?: string;
   residencyType?: string;
-  onSaved?: () => void;
+  onSaved?: (patch?: {
+    fatherName: string;
+    fatherPhone: string;
+    motherName: string;
+    motherPhone: string;
+  }) => void;
   onOpenFees?: () => void;
   /** Warm fee breakdown before the user opens the fees sheet. */
   onFeesHover?: () => void;
@@ -153,7 +158,7 @@ export const ProfileSidebar = ({
           fatherName: pFatherName.trim(),
           motherName: pMotherName.trim() || null,
           phoneNo: pFatherPhone.trim(),
-          emergencyMotherNo: pMotherPhone.trim() || null,
+          emergencyMotherNo: pMotherPhone.trim() || "-",
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -162,7 +167,12 @@ export const ProfileSidebar = ({
         return;
       }
       setParentModalOpen(false);
-      onSaved?.();
+      onSaved?.({
+        fatherName: pFatherName.trim(),
+        fatherPhone: pFatherPhone.trim(),
+        motherName: pMotherName.trim(),
+        motherPhone: pMotherPhone.trim(),
+      });
     } catch {
       alert("Update failed");
     } finally {

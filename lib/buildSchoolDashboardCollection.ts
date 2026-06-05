@@ -38,6 +38,7 @@ export async function buildSchoolDashboardCollection(schoolId: string, dateYmd?:
   const pseudoPayments = grouped.map((g) => ({
     amount: g._sum.amount ?? 0,
     gateway: g.gateway,
+    count: g._count._all,
   }));
 
   const { rows, total } = aggregateCollectionByMethod(pseudoPayments);

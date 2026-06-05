@@ -2,7 +2,7 @@ import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFe
 
 const MEMORY_TTL_MS = 30 * 60 * 1000;
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
-const SESSION_KEY = "erp:fee-breakdown:v1";
+const SESSION_KEY = "erp:fee-breakdown:v2";
 const MAX_SESSION_ENTRIES = 80;
 
 const memory = new Map<string, { expiresAt: number; value: AdminStudentFeeBreakdownResult }>();
