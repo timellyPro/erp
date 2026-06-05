@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { apiMemGet, apiMemSet } from "@/lib/apiMemoryCache";
 import { isRedisEnabled, redisGet, redisSet, bumpTenantCacheVersion, getTenantCacheVersion } from "@/lib/redis";
 
 export type SwrEntry<T> = {
@@ -36,14 +37,33 @@ export async function tenantCacheKey(
 }
 
 export async function swrGet<T>(key: string): Promise<SwrEntry<T> | null> {
-  if (!isRedisEnabled()) return null;
-  const cached = await redisGet(key);
-  return (cached as SwrEntry<T> | null) ?? null;
+  const memKey = `swr:${key}`;
+  const memHit = apiMemGet<SwrEntry<T>>(memKey);
+  if (memHit && Date.now() < memHit.staleUntil) return memHit;
+
+  if (!isRedisEnabled()) return memHit ?? null;
+
+  try {
+    const cached = await redisGet(key);
+    const entry = (cached as SwrEntry<T> | null) ?? null;
+    if (entry && Date.now() < entry.staleUntil) {
+      apiMemSet(memKey, entry, Math.max(0, entry.freshUntil - Date.now()), entry.staleUntil - Date.now());
+    }
+    return entry ?? memHit;
+  } catch {
+    return memHit;
+  }
 }
 
 export async function swrSet<T>(key: string, entry: SwrEntry<T>, ttlSeconds: number): Promise<void> {
+  const memKey = `swr:${key}`;
+  apiMemSet(memKey, entry, Math.max(1000, entry.freshUntil - Date.now()), entry.staleUntil - Date.now());
   if (!isRedisEnabled()) return;
-  await redisSet(key, entry, ttlSeconds);
+  try {
+    await redisSet(key, entry, ttlSeconds);
+  } catch {
+    /* memory cache already set */
+  }
 }
 
 export async function invalidateTenant(schoolId: string): Promise<void> {

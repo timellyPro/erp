@@ -105,11 +105,56 @@ type InternalHead =
       splitIntoTwoInstallments: boolean;
     };
 
+export type BreakdownStudentCtx = {
+  id: string;
+  residencyType: string | null;
+  class: { id: string; section: string | null } | null;
+};
+
+const extraFeesScopeCache = new Map<
+  string,
+  { freshUntil: number; rows: Array<{
+    id: string;
+    name: string;
+    amount: number;
+    targetType: string;
+    targetClassId: string | null;
+    targetSection: string | null;
+    targetStudentId: string | null;
+    residencyScope: string;
+    splitIntoTwoInstallments?: boolean;
+  }> }
+>();
+
+const EXTRA_FEES_CACHE_TTL_MS = 300_000;
+
+const classFeeStructureCache = new Map<
+  string,
+  { freshUntil: number; row: { components: unknown } | null }
+>();
+const CLASS_FEE_STRUCTURE_TTL_MS = 300_000;
+
+async function loadClassFeeStructure(classId: string) {
+  const hit = classFeeStructureCache.get(classId);
+  if (hit && Date.now() < hit.freshUntil) return hit.row;
+  const row = await prisma.classFeeStructure.findUnique({
+    where: { classId },
+    select: { components: true },
+  });
+  classFeeStructureCache.set(classId, {
+    row,
+    freshUntil: Date.now() + CLASS_FEE_STRUCTURE_TTL_MS,
+  });
+  return row;
+}
+
 /** Shared fee-head breakdown for profile / payment UI. Set migrateLumps false on read-heavy paths. */
 export async function computeAdminStudentFeeBreakdown(
   schoolId: string,
   studentId: string,
   options?: {
+    /** Skip second Student lookup when caller already loaded the row. */
+    student?: BreakdownStudentCtx;
     migrateLumps?: boolean;
     cleanupHostelMessDuplicates?: boolean;
     /** When false, skip realigning StudentFee totals on read (faster student-details switch). */
@@ -135,14 +180,16 @@ export async function computeAdminStudentFeeBreakdown(
     await cleanupDuplicateHostelMessExtraFees(prisma, schoolId);
   }
 
-  const student = await prisma.student.findFirst({
-    where: { id: studentId, schoolId },
-    select: {
-      id: true,
-      residencyType: true,
-      class: { select: { id: true, section: true } },
-    },
-  });
+  const student =
+    options?.student ??
+    (await prisma.student.findFirst({
+      where: { id: studentId, schoolId },
+      select: {
+        id: true,
+        residencyType: true,
+        class: { select: { id: true, section: true } },
+      },
+    }));
   if (!student) {
     throw new Error("Student not found");
   }
@@ -173,6 +220,36 @@ export async function computeAdminStudentFeeBreakdown(
     residencyScope: true,
   } as const;
 
+  const extraFeesCacheKey = `${schoolId}:${classId ?? ""}:${classSection ?? ""}:${student.id}`;
+  const extraFeesCached = extraFeesScopeCache.get(extraFeesCacheKey);
+  const loadExtraFees = async (): Promise<ExtraFeeBreakdownRow[]> => {
+    if (extraFeesCached && Date.now() < extraFeesCached.freshUntil) {
+      return extraFeesCached.rows as ExtraFeeBreakdownRow[];
+    }
+    const rows = await prisma.extraFee
+      .findMany({
+        where: extraFeeWhere,
+        select: { ...extraFeeSelectBase, splitIntoTwoInstallments: true } as typeof extraFeeSelectBase & {
+          splitIntoTwoInstallments: true;
+        },
+      })
+      .catch(async (e) => {
+        if (!isUnknownExtraFeeSplitFieldError(e)) throw e;
+        const legacy = await prisma.extraFee.findMany({
+          where: extraFeeWhere,
+          select: extraFeeSelectBase,
+        });
+        return legacy.map((r) => ({ ...r, splitIntoTwoInstallments: false }));
+      });
+    if (!migrateLumps) {
+      extraFeesScopeCache.set(extraFeesCacheKey, {
+        rows: rows as ExtraFeeBreakdownRow[],
+        freshUntil: Date.now() + EXTRA_FEES_CACHE_TTL_MS,
+      });
+    }
+    return rows as ExtraFeeBreakdownRow[];
+  };
+
   const [fee, classFeeStructure, extraFeesRawFirst, groupedAllocations] = await Promise.all([
     prisma.studentFee.findUnique({
       where: { studentId: student.id },
@@ -186,27 +263,8 @@ export async function computeAdminStudentFeeBreakdown(
         discountFeeHeadLabel: true,
       },
     }),
-    classId
-      ? prisma.classFeeStructure.findUnique({
-          where: { classId },
-          select: { components: true },
-        })
-      : Promise.resolve(null),
-    prisma.extraFee
-      .findMany({
-        where: extraFeeWhere,
-        select: { ...extraFeeSelectBase, splitIntoTwoInstallments: true } as typeof extraFeeSelectBase & {
-          splitIntoTwoInstallments: true;
-        },
-      })
-      .catch(async (e) => {
-        if (!isUnknownExtraFeeSplitFieldError(e)) throw e;
-        const rows = await prisma.extraFee.findMany({
-          where: extraFeeWhere,
-          select: extraFeeSelectBase,
-        });
-        return rows.map((r) => ({ ...r, splitIntoTwoInstallments: false }));
-      }),
+    classId ? loadClassFeeStructure(classId) : Promise.resolve(null),
+    loadExtraFees(),
     prisma.paymentFeeAllocation.groupBy({
       by: ["allocationType", "headType", "componentIndex", "extraFeeId"],
       where: {

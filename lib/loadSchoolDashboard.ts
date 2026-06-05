@@ -12,6 +12,49 @@ const inflight = new Map<string, Promise<SchoolDashboardPayload>>();
 
 export type { SchoolDashboardPayload };
 
+async function fetchDashboardUrl(
+  dateYmd: string,
+  options?: { schoolId?: string | null; signal?: AbortSignal; fast?: boolean }
+): Promise<SchoolDashboardPayload> {
+  const fastParam = options?.fast ? "&fast=1" : "";
+  const res = await fetch(
+    `/api/school/dashboard?date=${encodeURIComponent(dateYmd)}${fastParam}`,
+    { credentials: "include", cache: "no-store", signal: options?.signal }
+  );
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((json as { message?: string })?.message || "Failed to load dashboard");
+  }
+  return json as SchoolDashboardPayload;
+}
+
+/** Fast shell — stat cards + attendance + day collection (~1s). */
+export async function fetchSchoolDashboardFast(
+  dateYmd: string,
+  options?: { schoolId?: string | null; signal?: AbortSignal }
+): Promise<SchoolDashboardPayload> {
+  const key = `fast:${options?.schoolId ?? "anon"}:${dateYmd}`;
+  const running = inflight.get(key);
+  if (running) return running;
+
+  const run = (async () => {
+    const payload = await fetchDashboardUrl(dateYmd, { ...options, fast: true });
+    const cacheId = options?.schoolId;
+    if (cacheId) {
+      setSchoolDashboardCached(dashboardCacheKey(cacheId, dateYmd), payload);
+    } else {
+      setSchoolDashboardCached(`anon:${dateYmd}`, payload);
+    }
+    return payload;
+  })();
+  inflight.set(key, run);
+  try {
+    return await run;
+  } finally {
+    inflight.delete(key);
+  }
+}
+
 export async function fetchSchoolDashboard(
   dateYmd: string,
   options?: {
@@ -34,17 +77,7 @@ export async function fetchSchoolDashboard(
   if (running) return running;
 
   const run = (async () => {
-    const res = await fetch(
-      `/api/school/dashboard?date=${encodeURIComponent(dateYmd)}`,
-      { credentials: "include", cache: "no-store", signal: options?.signal }
-    );
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(
-        (json as { message?: string })?.message || "Failed to load dashboard"
-      );
-    }
-    const payload = json as SchoolDashboardPayload;
+    const payload = await fetchDashboardUrl(dateYmd, options);
     if (options?.schoolId) {
       setSchoolDashboardCached(key, payload);
     }

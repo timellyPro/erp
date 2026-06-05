@@ -1,3 +1,5 @@
+import { warmStudentDetailsBundle } from "@/lib/loadStudentDetailsBundle";
+
 function buildStudentDetailsUrl(basePath: string, studentId: string, focus?: "fees") {
   const p = new URLSearchParams({
     tab: "student-details",
@@ -14,6 +16,10 @@ function buildStudentDetailsFeesUrl(basePath: string, studentId: string) {
 /** School admin: open Student Details for a student and scroll to the fees block. */
 export function schoolAdminStudentDetailsFeesUrl(studentId: string) {
   return buildStudentDetailsFeesUrl("/frontend/pages/schooladmin", studentId);
+}
+
+export function warmSchoolAdminStudentDetails(studentId: string) {
+  warmStudentDetailsBundle(studentId);
 }
 
 /** Teacher portal: same student profile + fees focus. */

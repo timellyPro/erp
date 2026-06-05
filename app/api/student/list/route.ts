@@ -126,7 +126,7 @@ export async function GET(req: Request) {
 
         const payload = { students: items, items, nextCursor, ...(total !== undefined ? { total } : {}) };
         if (!renderAll) {
-          setSchoolDashboardServerCached(memKey, payload, 30_000);
+          setSchoolDashboardServerCached(memKey, payload, 180_000);
         }
         return NextResponse.json(payload, { status: 200 });
       }

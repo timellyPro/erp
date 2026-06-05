@@ -1,5 +1,13 @@
 import prisma from "@/lib/db";
 import {
+  computeAdminStudentFeeBreakdown,
+  type AdminStudentFeeBreakdownResult,
+} from "@/lib/computeAdminStudentFeeBreakdown";
+import {
+  getStudentDetailsCoreCached,
+  setStudentDetailsCoreCached,
+} from "@/lib/studentDetailsCoreCache";
+import {
   buildFeeHeadAmountsByPaymentId,
   dominantFeeHead,
   feeHeadLinesFromMap,
@@ -273,18 +281,18 @@ export async function buildStudentDetailsTabExtras(
     prisma.attendance.findMany({
       where: { studentId },
       orderBy: { date: "desc" },
-      take: 90,
+      take: 60,
     }),
     prisma.mark.findMany({
       where: { studentId },
       orderBy: { createdAt: "desc" },
-      take: 200,
+      take: 80,
       select: { subject: true, marks: true, totalMarks: true, createdAt: true, examType: true },
     }),
     prisma.certificate.findMany({
       where: { studentId },
       orderBy: { issuedDate: "desc" },
-      take: 100,
+      take: 30,
       select: {
         id: true,
         title: true,
@@ -447,6 +455,68 @@ function mapStudentToTabPayload(
       : null,
     ...extras,
   };
+}
+
+/**
+ * One Student DB read → profile shell + fee breakdown (avoids duplicate ~5s findFirst on slow DBs).
+ */
+export async function buildStudentDetailsCoreBundle(
+  studentId: string,
+  schoolId: string | null
+): Promise<{
+  shell: StudentDetailsTabPayload;
+  feeBreakdown: AdminStudentFeeBreakdownResult | null;
+} | null> {
+  const cacheKey = `${schoolId ?? "own"}:${studentId}:core`;
+  const cached = getStudentDetailsCoreCached(cacheKey);
+  if (cached) return cached;
+
+  const whereClause = schoolId ? { id: studentId, schoolId } : { id: studentId };
+  const student = await prisma.student.findFirst({
+    where: whereClause,
+    include: studentDetailsInclude,
+  });
+  if (!student) return null;
+
+  const fallbackApplication =
+    student.application ??
+    (await prisma.studentApplication.findUnique({
+      where: { schoolId_aadharNo: { schoolId: student.schoolId, aadharNo: student.aadhaarNo } },
+      select: { emergencyMotherNo: true },
+    }));
+
+  const motherPhoneRaw = String(fallbackApplication?.emergencyMotherNo ?? "").trim();
+  const motherPhoneResolved =
+    !motherPhoneRaw || motherPhoneRaw === "-" || motherPhoneRaw === "—" ? "" : motherPhoneRaw;
+
+  const shell = mapStudentToTabPayload(student, motherPhoneResolved, 0, {
+    payments: [],
+    attendanceTrends: [],
+    academicPerformance: [],
+    certificates: [],
+  });
+
+  let feeBreakdown: AdminStudentFeeBreakdownResult | null = null;
+  if (schoolId) {
+    try {
+      feeBreakdown = await computeAdminStudentFeeBreakdown(schoolId, studentId, {
+        student: {
+          id: student.id,
+          residencyType: student.residencyType,
+          class: student.class,
+        },
+        migrateLumps: false,
+        cleanupHostelMessDuplicates: false,
+        reconcileTotals: false,
+      });
+    } catch {
+      feeBreakdown = null;
+    }
+  }
+
+  const value = { shell, feeBreakdown };
+  setStudentDetailsCoreCached(cacheKey, value);
+  return value;
 }
 
 /** Tab payload for student profile (payments, attendance, marks, certificates). */

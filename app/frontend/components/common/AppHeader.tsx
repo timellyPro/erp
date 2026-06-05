@@ -123,7 +123,7 @@ export default function AppHeader({ title, profile, hideSearchAndNotifications =
       };
     }
 
-    const interval = setInterval(fetchUnreadCount, 10000);
+    const interval = setInterval(fetchUnreadCount, 30000);
     return () => {
       clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisible);

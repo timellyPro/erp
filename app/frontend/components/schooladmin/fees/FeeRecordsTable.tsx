@@ -7,7 +7,10 @@ import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import SelectInput from "../../common/SelectInput";
 import type { Class, FeeRecord } from "./types";
-import { schoolAdminStudentDetailsFeesUrl } from "./studentDetailsNav";
+import {
+  schoolAdminStudentDetailsFeesUrl,
+  warmSchoolAdminStudentDetails,
+} from "./studentDetailsNav";
 import InlinePagination from "../schooladmincomponents/InlinePagination";
 import {
   appendDayReportSheet,
@@ -794,7 +797,10 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
               <button
                 type="button"
                 className="text-left text-base font-semibold text-white underline-offset-2 hover:underline"
-                onMouseEnter={() => router.prefetch(schoolAdminStudentDetailsFeesUrl(f.student.id))}
+                onMouseEnter={() => {
+                  warmSchoolAdminStudentDetails(f.student.id);
+                  router.prefetch(schoolAdminStudentDetailsFeesUrl(f.student.id));
+                }}
                 onClick={() => router.push(schoolAdminStudentDetailsFeesUrl(f.student.id))}
               >
                 {f.student.user?.name || "-"}
@@ -871,7 +877,10 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
                 <td
                   className="py-3 cursor-pointer select-none underline-offset-2 hover:underline text-white/95"
                   title="Double-click to open student fee details"
-                  onMouseEnter={() => router.prefetch(schoolAdminStudentDetailsFeesUrl(f.student.id))}
+                  onMouseEnter={() => {
+                    warmSchoolAdminStudentDetails(f.student.id);
+                    router.prefetch(schoolAdminStudentDetailsFeesUrl(f.student.id));
+                  }}
                   onDoubleClick={() => router.push(schoolAdminStudentDetailsFeesUrl(f.student.id))}
                 >
                   {f.student.user?.name || "-"}

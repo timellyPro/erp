@@ -131,6 +131,9 @@ export function setSchoolDashboardCached(key: string, value: SchoolDashboardPayl
 
 /** Instant paint before session hydrates (uses last known school). */
 export function peekSchoolDashboardAny(dateYmd: string): SchoolDashboardPayload | null {
+  const anon = getSchoolDashboardCached(`anon:${dateYmd}`);
+  if (anon) return anon;
+
   if (typeof sessionStorage === "undefined") return null;
   try {
     const schoolId = sessionStorage.getItem(LAST_SCHOOL_KEY);

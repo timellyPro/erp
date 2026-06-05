@@ -7,7 +7,10 @@ import SelectInput from "../../common/SelectInput";
 import SearchInput from "../../common/SearchInput";
 import RefundModal, { type TransactionItem } from "./RefundModal";
 import type { Class } from "./types";
-import { schoolAdminStudentDetailsFeesUrl } from "./studentDetailsNav";
+import {
+  schoolAdminStudentDetailsFeesUrl,
+  warmSchoolAdminStudentDetails,
+} from "./studentDetailsNav";
 import InlinePagination from "../schooladmincomponents/InlinePagination";
 import {
   fetchFeesTransactions,
@@ -252,7 +255,10 @@ export default function FeeTransactionsList({
                 <button
                   type="button"
                   className="text-left text-base font-semibold text-white underline-offset-2 hover:underline"
-                  onMouseEnter={() => router.prefetch(schoolAdminStudentDetailsFeesUrl(t.student.id))}
+                  onMouseEnter={() => {
+                    warmSchoolAdminStudentDetails(t.student.id);
+                    router.prefetch(schoolAdminStudentDetailsFeesUrl(t.student.id));
+                  }}
                   onClick={() => router.push(schoolAdminStudentDetailsFeesUrl(t.student.id))}
                 >
                   {t.student.user?.name || t.student.admissionNumber || "-"}
@@ -354,7 +360,10 @@ export default function FeeTransactionsList({
                   <td
                     className="py-3 text-white font-medium cursor-pointer select-none underline-offset-2 hover:underline"
                     title="Double-click to open student fee details"
-                    onMouseEnter={() => router.prefetch(schoolAdminStudentDetailsFeesUrl(t.student.id))}
+                    onMouseEnter={() => {
+                      warmSchoolAdminStudentDetails(t.student.id);
+                      router.prefetch(schoolAdminStudentDetailsFeesUrl(t.student.id));
+                    }}
                     onDoubleClick={() => router.push(schoolAdminStudentDetailsFeesUrl(t.student.id))}
                   >
                     {t.student.user?.name || t.student.admissionNumber || "-"}

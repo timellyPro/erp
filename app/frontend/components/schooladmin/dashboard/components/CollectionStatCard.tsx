@@ -56,12 +56,12 @@ export function CollectionStatCard({
         <p className="text-[9px] sm:text-[10px] font-bold tracking-wide uppercase truncate">
           <span className="text-gray-400">Cash </span>
           <span className="text-white">{cash.formattedAmount}</span>
-          <span className="text-gray-500 font-medium normal-case"> · {cash.count} paid</span>
+          <span className="text-lime-400/90 font-medium normal-case"> · {cash.count} paid</span>
         </p>
         <p className="text-[9px] sm:text-[10px] font-bold tracking-wide uppercase truncate">
           <span className="text-gray-400">Online </span>
           <span className="text-lime-300">{online.formattedAmount}</span>
-          <span className="text-gray-500 font-medium normal-case"> · {online.count} paid</span>
+          <span className="text-lime-400/90 font-medium normal-case"> · {online.count} paid</span>
         </p>
       </div>
     </div>

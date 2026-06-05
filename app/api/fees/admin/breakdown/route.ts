@@ -89,7 +89,7 @@ export async function GET(req: Request) {
       reconcileTotals: !skipMigrate,
     });
     if (skipMigrate) {
-      breakdownMemCache.set(memKey, { value: result, freshUntil: now + 15_000 });
+      breakdownMemCache.set(memKey, { value: result, freshUntil: now + 300_000 });
     }
     if (cacheKey) {
       await swrSet(

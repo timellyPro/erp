@@ -10,12 +10,17 @@ import { todayYmdLocal } from "@/lib/schoolDashboardCollection";
 import { loadSchoolDashboardCollection } from "@/lib/loadSchoolDashboardCollection";
 import {
   fetchSchoolDashboard,
+  fetchSchoolDashboardFast,
   peekSchoolDashboard,
   peekSchoolDashboardAny,
   type SchoolDashboardPayload,
 } from "@/lib/loadSchoolDashboard";
-import Spinner from "../../common/Spinner";
+import {
+  dashboardCacheKey,
+  setSchoolDashboardCached,
+} from "@/lib/schoolDashboardClientCache";
 import { useRouter } from "next/navigation";
+import { SchoolDashboardLoader } from "./components/SchoolDashboardLoader";
 import { ROUTES } from "@/app/frontend/constants/routes";
 import { useSession } from "next-auth/react";
 
@@ -23,14 +28,13 @@ export default function Dashboard() {
   const today = todayYmdLocal();
   const initialCached = peekSchoolDashboardAny(today);
   const [data, setData] = useState<SchoolDashboardPayload | null>(initialCached);
-  const [loading, setLoading] = useState(!initialCached);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const [selectedCollectionDate, setSelectedCollectionDate] = useState(() => todayYmdLocal());
   const [collectionLoading, setCollectionLoading] = useState(false);
   const lastFetchedCollectionDateRef = useRef<string | null>(null);
   const collectionAbortRef = useRef<AbortController | null>(null);
-  const { data: session } = useSession();
+  const { data: session, status: sessionStatus } = useSession();
   const userName = useMemo(() => {
     const n = session?.user?.name?.trim();
     return n ? (n.split(" ")[0] ?? "School") : "School";
@@ -39,54 +43,66 @@ export default function Dashboard() {
   const schoolId = session?.user?.schoolId ?? null;
 
   useEffect(() => {
+    if (sessionStatus !== "authenticated") return;
+
+    const sid = session?.user?.schoolId ?? null;
     const cached =
-      (schoolId ? peekSchoolDashboard(schoolId, today) : null) ?? peekSchoolDashboardAny(today);
+      (sid ? peekSchoolDashboard(sid, today) : null) ?? peekSchoolDashboardAny(today);
+
+    let shellLoaded = Boolean(cached);
     if (cached) {
       setData(cached);
-      setLoading(false);
+      setError(null);
       lastFetchedCollectionDateRef.current = today;
     }
-  }, [schoolId, today]);
 
-  useEffect(() => {
     let cancelled = false;
-    const controller = new AbortController();
-    const hadCache = Boolean(data);
-    if (!hadCache) setLoading(true);
 
     (async () => {
       try {
-        const json = await fetchSchoolDashboard(today, {
-          schoolId,
-          signal: controller.signal,
-          revalidate: true,
-        });
-        if (!cancelled) {
-          setData(json);
+        if (!shellLoaded) {
+          const fast = await fetchSchoolDashboardFast(today, { schoolId: sid });
+          if (cancelled) return;
+          shellLoaded = true;
+          setData(fast);
           setError(null);
           lastFetchedCollectionDateRef.current = today;
         }
       } catch (err) {
         if (cancelled) return;
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("Dashboard fetch error:", err);
+        console.error("Dashboard fast fetch error:", err);
         const message =
           err instanceof Error ? err.message : "Unable to load dashboard data";
-        if (!hadCache && !data) {
+        if (!shellLoaded) {
           setError(message);
           setData(null);
         }
-      } finally {
-        if (!cancelled) setLoading(false);
       }
     })();
 
+    void fetchSchoolDashboard(today, { schoolId: sid, revalidate: true })
+      .then((full) => {
+        if (cancelled) return;
+        setData(full);
+        setError(null);
+        lastFetchedCollectionDateRef.current = today;
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("Dashboard full fetch error:", err);
+      });
+
     return () => {
       cancelled = true;
-      controller.abort();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per mount; cache supplies instant UI
-  }, [schoolId]);
+    // schoolId is read inside the effect; server resolves school when client id is missing
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- avoid restart when schoolId hydrates
+  }, [sessionStatus, today]);
+
+  useEffect(() => {
+    if (!schoolId || !data) return;
+    setSchoolDashboardCached(dashboardCacheKey(schoolId, today), data);
+  }, [schoolId, data, today]);
 
   const fetchCollectionForDate = useCallback(async (dateYmd: string) => {
     if (dateYmd === lastFetchedCollectionDateRef.current) return;
@@ -159,15 +175,8 @@ export default function Dashboard() {
     label: "Online",
   };
 
-  if (loading && !data) {
-    return (
-      <div className="min-h-screen p-6 md:p-10 flex items-center justify-center">
-        <div className="text-white/70">
-          <Spinner />
-        </div>
-      </div>
-    );
-  }
+  const showLoader = !data && !error;
+  const isInitialLoading = showLoader;
 
   return (
     <div className="min-h-screen space-y-4 md:space-y-8 max-w-[1900px] mx-auto">
@@ -181,44 +190,48 @@ export default function Dashboard() {
           </p>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 sm:gap-3">
+        <div
+          className={`grid grid-cols-2 lg:grid-cols-5 gap-2 sm:gap-3 ${isInitialLoading ? "animate-pulse" : ""}`}
+        >
           <StatCard
             label="Total Classes"
-            value={String(data?.stats.totalClasses ?? "—")}
-            trend={data ? formatChange(data.stats.totalClassesChange) : "—"}
+            value={isInitialLoading ? "…" : String(data?.stats.totalClasses ?? "—")}
+            trend={isInitialLoading ? "Loading" : data ? formatChange(data.stats.totalClassesChange) : "—"}
             Icon={Users}
           />
           <StatCard
             label="Total Students"
-            value={data ? data.stats.totalStudents.toLocaleString() : "—"}
-            trend={data ? formatChange(data.stats.totalStudentsChange) : "—"}
+            value={isInitialLoading ? "…" : data ? data.stats.totalStudents.toLocaleString() : "—"}
+            trend={isInitialLoading ? "Loading" : data ? formatChange(data.stats.totalStudentsChange) : "—"}
             Icon={GraduationCap}
           />
           <StatCard
             label="Total Teachers"
-            value={String(data?.stats.totalTeachers ?? "—")}
-            trend={data ? formatChange(data.stats.totalTeachersChange) : "—"}
+            value={isInitialLoading ? "…" : String(data?.stats.totalTeachers ?? "—")}
+            trend={isInitialLoading ? "Loading" : data ? formatChange(data.stats.totalTeachersChange) : "—"}
             Icon={UserCheck}
           />
           <StatCard
             label="Fees Collected"
-            value={data?.stats.feesCollected ?? "—"}
-            trend={data ? `${data.stats.feesCollectedPct}% collected` : "—"}
+            value={isInitialLoading ? "…" : data?.stats.feesCollected ?? "—"}
+            trend={isInitialLoading ? "Loading" : data ? `${data.stats.feesCollectedPct}% collected` : "—"}
             trendColor="text-lime-400"
             Icon={Wallet}
           />
           <CollectionStatCard
             selectedDate={selectedCollectionDate}
             onDateChange={handleCollectionDateChange}
-            totalFormatted={data?.stats.todayCollectionTotal ?? "₹0"}
+            totalFormatted={isInitialLoading ? "…" : data?.stats.todayCollectionTotal ?? "₹0"}
             cash={collectionCash}
             online={collectionOnline}
-            loading={collectionLoading}
+            loading={collectionLoading || isInitialLoading}
           />
         </div>
       </div>
 
-      {data && (
+      {isInitialLoading ? (
+        <SchoolDashboardLoader />
+      ) : data ? (
         <>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 lg:gap-8">
             <div className="lg:col-span-2">
@@ -267,7 +280,7 @@ export default function Dashboard() {
             </div>
           </div>
         </>
-      )}
+      ) : null}
 
       {data?.latestNews && data.latestNews.length > 0 && (
         <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-2xl p-5 sm:p-6 md:p-8">
@@ -305,27 +318,19 @@ export default function Dashboard() {
           <button
             onClick={() => {
               setError(null);
-              setLoading(!data);
               void fetchSchoolDashboard(today, { schoolId, revalidate: true })
                 .then((json) => {
                   setData(json);
-                  setLoading(false);
+                  setError(null);
                 })
                 .catch((err) => {
                   setError(err instanceof Error ? err.message : "Unable to load dashboard");
-                  setLoading(false);
                 });
             }}
             className="mt-4 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg transition-colors"
           >
             Retry
           </button>
-        </div>
-      )}
-
-      {!data && !error && !loading && (
-        <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-2xl p-8 text-center text-gray-400">
-          No dashboard data available.
         </div>
       )}
     </div>

@@ -66,7 +66,7 @@ const prismaClientSingleton = () => {
 
 const WRITE_OPERATIONS = new Set(["create", "createMany", "update", "updateMany", "upsert", "delete", "deleteMany"]);
 const localCacheEnabled = (process.env.LOCAL_QUERY_CACHE_ENABLED || "true").toLowerCase() !== "false";
-const localCacheTtlMs = Number(process.env.LOCAL_QUERY_CACHE_TTL_MS || "4000");
+const localCacheTtlMs = Number(process.env.LOCAL_QUERY_CACHE_TTL_MS || "45000");
 
 type LocalCacheEntry = {
   value: unknown;
@@ -103,6 +103,26 @@ function clearLocalCache() {
   localQueryCache.clear();
 }
 
+function stableArgsKey(args: unknown): string {
+  try {
+    return JSON.stringify(args, (_, v) => (typeof v === "bigint" ? v.toString() : v));
+  } catch {
+    return String(args);
+  }
+}
+
+const READ_OPERATIONS = new Set([
+  "findFirst",
+  "findMany",
+  "findUnique",
+  "count",
+  "aggregate",
+  "groupBy",
+  "findRaw",
+  "aggregateRaw",
+  "queryRaw",
+]);
+
 declare const globalThis: {
   prismaGlobal?: ReturnType<typeof createPrisma>;
 } & typeof global;
@@ -114,8 +134,22 @@ const createPrisma = () => {
     query: {
       async $allOperations({ operation, args, model, query }) {
         const start = performance.now();
+        const canCache =
+          localCacheEnabled &&
+          model &&
+          READ_OPERATIONS.has(operation) &&
+          !isDeferredCacheInvalidation();
+        const cacheKey = canCache ? `pq:${model}:${operation}:${stableArgsKey(args)}` : null;
+
+        if (cacheKey) {
+          const hit = getLocalCachedValue(cacheKey);
+          if (hit !== null) return hit;
+        }
+
         try {
-          return await query(args);
+          const result = await query(args);
+          if (cacheKey) setLocalCachedValue(cacheKey, result);
+          return result;
         } finally {
           const ms = performance.now() - start;
           const slowMs = Number(process.env.PRISMA_SLOW_QUERY_MS || "50");
@@ -129,7 +163,7 @@ const createPrisma = () => {
 
           if (!isDeferredCacheInvalidation() && isWriteOperation(operation)) {
             clearLocalCache();
-            const a = args as any;
+            const a = args as { data?: { schoolId?: string }; where?: { schoolId?: string } };
             const schoolId =
               typeof a?.data?.schoolId === "string"
                 ? a.data.schoolId
