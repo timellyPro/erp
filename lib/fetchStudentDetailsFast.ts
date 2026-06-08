@@ -150,6 +150,82 @@ export function invalidateStudentDetailsFast(studentId?: string) {
   if (typeof sessionStorage !== "undefined") sessionStorage.removeItem(SESSION_KEY);
 }
 
+/** Targeted refresh after fee payment / structure save — payments first, breakdown in background. */
+export async function refreshStudentFeesAfterMutation(
+  studentId: string,
+  options?: {
+    onPartial?: (bundle: StudentDetailsFastBundle) => void;
+    /** Reuse current profile shell to skip slow core refetch after payment. */
+    keepShell?: StudentDetailsTabPayload | null;
+    /** Keep client fee-breakdown cache (already patched optimistically after payment). */
+    keepPatchedBreakdown?: boolean;
+  }
+): Promise<StudentDetailsFastBundle | null> {
+  if (options?.keepPatchedBreakdown) {
+    bundleMemory.delete(studentId);
+    bundleInflight.delete(studentId);
+    extrasInflight.delete(studentId);
+    invalidateStudentDetailsCoreCache(studentId);
+  } else {
+    invalidateStudentDetailsFast(studentId);
+  }
+
+  const existingShell = options?.keepShell;
+  if (!existingShell?.student) {
+    try {
+      const [coreRes, extrasRes, breakdown] = await Promise.all([
+        fetch(
+          `/api/student/${encodeURIComponent(studentId)}/details-bundle?core=1&refresh=1`,
+          { credentials: "include", cache: "no-store" }
+        ),
+        fetch(
+          `/api/student/${encodeURIComponent(studentId)}/details-bundle?extras=1`,
+          { credentials: "include", cache: "no-store" }
+        ),
+        fetchFeeBreakdownFast(studentId, { force: true }),
+      ]);
+
+      const coreData = await coreRes.json().catch(() => ({}));
+      if (!coreRes.ok || !(coreData as { student?: unknown })?.student) {
+        return null;
+      }
+
+      const { shell, feeBreakdown: coreBreakdown } = parseCore(coreData);
+      const extras = extrasRes.ok ? parseExtras(await extrasRes.json().catch(() => ({}))) : emptyExtras();
+      const feeBreakdown = breakdown ?? coreBreakdown ?? null;
+      if (feeBreakdown) setFeeBreakdownCache(studentId, feeBreakdown);
+
+      const bundle = toBundle(shell, extras, feeBreakdown);
+      cacheBundle(studentId, bundle);
+      options?.onPartial?.(bundle);
+      return bundle;
+    } catch {
+      return null;
+    }
+  }
+
+  try {
+    const extrasRes = await fetch(
+      `/api/student/${encodeURIComponent(studentId)}/details-bundle?extras=1`,
+      { credentials: "include", cache: "no-store" }
+    );
+    const extras = extrasRes.ok ? parseExtras(await extrasRes.json().catch(() => ({}))) : emptyExtras();
+
+    // Keep optimistic breakdown visible — only replace UI when fresh server data arrives.
+    void fetchFeeBreakdownFast(studentId, { force: true }).then((breakdown) => {
+      if (!breakdown) return;
+      setFeeBreakdownCache(studentId, breakdown);
+      const full = toBundle(existingShell, extras, breakdown);
+      cacheBundle(studentId, full);
+      options?.onPartial?.(full);
+    });
+
+    return toBundle(existingShell, extras, getFeeBreakdownCached(studentId));
+  } catch {
+    return null;
+  }
+}
+
 async function fetchExtras(studentId: string, signal?: AbortSignal): Promise<StudentDetailsTabExtras> {
   const running = extrasInflight.get(studentId);
   if (running) return running;

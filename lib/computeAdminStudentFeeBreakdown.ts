@@ -17,6 +17,8 @@ import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 import { isInstallmentFeeName, isUnsplitLumpExtraFee } from "@/lib/extraFeeInstallments";
 import { formatFeeHeadDisplayLabel } from "@/lib/feeHeadInstallmentDisplay";
+import { loadExtraFeesForStudentScope } from "@/lib/loadExtraFeesForStudentScope";
+import { sumSuccessfulFeePayments } from "@/lib/reconcileStudentFeeFromPayments";
 import { cleanupDuplicateHostelMessExtraFees } from "@/lib/cleanupDuplicateHostelMessExtraFees";
 import { migrateUnsplitLumpExtraFees } from "@/lib/extraFeeInstallmentDb";
 
@@ -197,18 +199,6 @@ export async function computeAdminStudentFeeBreakdown(
   const classId = student.class?.id ?? null;
   const classSection = student.class?.section ?? null;
 
-  const extraFeeWhere = {
-    schoolId,
-    OR: [
-      { targetType: "SCHOOL" as const },
-      ...(classId ? [{ targetType: "CLASS" as const, targetClassId: classId }] : []),
-      ...(classId && classSection
-        ? [{ targetType: "SECTION" as const, targetClassId: classId, targetSection: classSection }]
-        : []),
-      { targetType: "STUDENT" as const, targetStudentId: student.id },
-    ],
-  };
-
   const extraFeeSelectBase = {
     id: true,
     name: true,
@@ -226,21 +216,17 @@ export async function computeAdminStudentFeeBreakdown(
     if (extraFeesCached && Date.now() < extraFeesCached.freshUntil) {
       return extraFeesCached.rows as ExtraFeeBreakdownRow[];
     }
-    const rows = await prisma.extraFee
-      .findMany({
-        where: extraFeeWhere,
-        select: { ...extraFeeSelectBase, splitIntoTwoInstallments: true } as typeof extraFeeSelectBase & {
-          splitIntoTwoInstallments: true;
-        },
-      })
-      .catch(async (e) => {
-        if (!isUnknownExtraFeeSplitFieldError(e)) throw e;
-        const legacy = await prisma.extraFee.findMany({
-          where: extraFeeWhere,
-          select: extraFeeSelectBase,
-        });
-        return legacy.map((r) => ({ ...r, splitIntoTwoInstallments: false }));
-      });
+    const scope = { schoolId, studentId: student.id, classId, classSection };
+    const rows = await loadExtraFeesForStudentScope(
+      scope,
+      { ...extraFeeSelectBase, splitIntoTwoInstallments: true } as typeof extraFeeSelectBase & {
+        splitIntoTwoInstallments: true;
+      }
+    ).catch(async (e) => {
+      if (!isUnknownExtraFeeSplitFieldError(e)) throw e;
+      const legacy = await loadExtraFeesForStudentScope(scope, extraFeeSelectBase);
+      return legacy.map((r) => ({ ...r, splitIntoTwoInstallments: false }));
+    });
     if (!migrateLumps) {
       extraFeesScopeCache.set(extraFeesCacheKey, {
         rows: rows as ExtraFeeBreakdownRow[],
@@ -250,7 +236,7 @@ export async function computeAdminStudentFeeBreakdown(
     return rows as ExtraFeeBreakdownRow[];
   };
 
-  const [fee, classFeeStructure, extraFeesRawFirst, groupedAllocations] = await Promise.all([
+  let [fee, classFeeStructure, extraFeesRawFirst, groupedAllocations] = await Promise.all([
     prisma.studentFee.findUnique({
       where: { studentId: student.id },
       select: {
@@ -275,6 +261,31 @@ export async function computeAdminStudentFeeBreakdown(
       _sum: { allocatedAmount: true },
     }),
   ]);
+
+  if (reconcileTotals && fee) {
+    const paymentSum = await sumSuccessfulFeePayments(student.id);
+    if (Math.abs(fee.amountPaid - paymentSum) > 0.02) {
+      const remainingFee = Math.max(Math.round((fee.finalFee - paymentSum) * 100) / 100, 0);
+      fee = await prisma.studentFee.update({
+        where: { studentId: student.id },
+        data: { amountPaid: paymentSum, remainingFee },
+        select: {
+          amountPaid: true,
+          finalFee: true,
+          totalFee: true,
+          remainingFee: true,
+          discountPercent: true,
+          discountFeeHeadKey: true,
+          discountFeeHeadLabel: true,
+        },
+      });
+    }
+  } else if (fee) {
+    const paymentSum = await sumSuccessfulFeePayments(student.id);
+    if (Math.abs(fee.amountPaid - paymentSum) > 0.02) {
+      fee = { ...fee, amountPaid: paymentSum, remainingFee: Math.max(Math.round((fee.finalFee - paymentSum) * 100) / 100, 0) };
+    }
+  }
 
   if (!fee) {
     throw new Error("Fee record not found for this student");
@@ -308,12 +319,12 @@ export async function computeAdminStudentFeeBreakdown(
           splitIntoTwoInstallments: Boolean(ef.splitIntoTwoInstallments),
         }))
       );
-      extraFeesRaw = await prisma.extraFee.findMany({
-        where: extraFeeWhere,
-        select: { ...extraFeeSelectBase, splitIntoTwoInstallments: true } as typeof extraFeeSelectBase & {
+      extraFeesRaw = await loadExtraFeesForStudentScope(
+        { schoolId, studentId: student.id, classId, classSection },
+        { ...extraFeeSelectBase, splitIntoTwoInstallments: true } as typeof extraFeeSelectBase & {
           splitIntoTwoInstallments: true;
-        },
-      });
+        }
+      );
     }
   }
 
@@ -385,7 +396,8 @@ export async function computeAdminStudentFeeBreakdown(
   );
 
   const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);
-  const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);
+  /** Per-head paid comes from allocations only — never spread leftover amountPaid across all heads. */
+  const legacyPaidTotal = 0;
   const totalSnapshotDue = Math.max(allHeads.reduce((s, h) => s + h.snapshotDue, 0), 0);
 
   const dueHeads: AdminFeeBreakdownDueHead[] = allHeads.map((h) => {

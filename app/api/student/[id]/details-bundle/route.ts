@@ -9,6 +9,10 @@ import {
   buildStudentDetailsTabPayload,
 } from "@/lib/buildStudentDetailsTabPayload";
 import { computeAdminStudentFeeBreakdown } from "@/lib/computeAdminStudentFeeBreakdown";
+import {
+  getShellCached,
+  setShellCached,
+} from "@/lib/studentFeeReadCache";
 
 type RouteParams =
   | { params: { id: string } }
@@ -29,9 +33,6 @@ async function resolveSchoolId(session: {
 }
 
 const BREAKDOWN_TIMEOUT_MS = 12_000;
-
-const shellCache = new Map<string, { freshUntil: number; value: Record<string, unknown> }>();
-const SHELL_CACHE_TTL_MS = 300_000;
 
 async function loadFeeBreakdownSafe(schoolId: string, studentId: string) {
   try {
@@ -58,6 +59,7 @@ export async function GET(req: Request, context: RouteParams) {
   const coreOnly = url.searchParams.get("core") === "1";
   const profileOnly = url.searchParams.get("profileOnly") === "1";
   const fast = url.searchParams.get("fast") === "1";
+  const bypassCache = url.searchParams.get("refresh") === "1";
 
   const session = await getServerSession(authOptions);
   if (!session?.user) {
@@ -85,7 +87,9 @@ export async function GET(req: Request, context: RouteParams) {
     }
 
     if (coreOnly) {
-      const core = await buildStudentDetailsCoreBundle(id, resolvedSchoolId);
+      const core = await buildStudentDetailsCoreBundle(id, resolvedSchoolId, {
+        bypassCache,
+      });
       if (!core) {
         return NextResponse.json({ message: "Student not found" }, { status: 404 });
       }
@@ -97,18 +101,19 @@ export async function GET(req: Request, context: RouteParams) {
     if (shellOnly || (fast && !profileOnly)) {
       if (shellOnly && !withBreakdown) {
         const shellKey = `${resolvedSchoolId ?? "own"}:${id}:shell`;
-        const shellHit = shellCache.get(shellKey);
-        if (shellHit && Date.now() < shellHit.freshUntil) {
-          return NextResponse.json({ ...shellHit.value, feeBreakdown: null }, { status: 200 });
+        if (!bypassCache) {
+          const shellHit = getShellCached(shellKey);
+          if (shellHit) {
+            return NextResponse.json({ ...shellHit, feeBreakdown: null }, { status: 200 });
+          }
         }
         const shell = await buildStudentDetailsShellPayload(id, resolvedSchoolId);
         if (!shell) {
           return NextResponse.json({ message: "Student not found" }, { status: 404 });
         }
-        shellCache.set(shellKey, {
-          value: shell as unknown as Record<string, unknown>,
-          freshUntil: Date.now() + SHELL_CACHE_TTL_MS,
-        });
+        if (!bypassCache) {
+          setShellCached(shellKey, shell as unknown as Record<string, unknown>);
+        }
         return NextResponse.json({ ...shell, feeBreakdown: null }, { status: 200 });
       }
 

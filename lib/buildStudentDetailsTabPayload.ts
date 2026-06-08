@@ -122,32 +122,28 @@ async function loadPaymentsWithFeeTypes(studentId: string) {
     return { payments: [], tuitionPaidFromAllocations: 0 };
   }
 
-  const [paymentAllocations, refundAllocations] = await Promise.all([
-    prisma.paymentFeeAllocation.findMany({
-      where: { paymentId: { in: paymentIds }, allocationType: "PAYMENT" },
-      select: {
-        paymentId: true,
-        headType: true,
-        componentIndex: true,
-        componentName: true,
-        extraFeeId: true,
-        allocatedAmount: true,
-      },
-    }),
-    prisma.paymentFeeAllocation.findMany({
-      where: { paymentId: { in: paymentIds }, allocationType: "REFUND" },
-      select: {
-        paymentId: true,
-        headType: true,
-        componentIndex: true,
-        allocatedAmount: true,
-      },
-    }),
-  ]);
+  const allAllocations = await prisma.paymentFeeAllocation.findMany({
+    where: {
+      paymentId: { in: paymentIds },
+      allocationType: { in: ["PAYMENT", "REFUND"] },
+    },
+    select: {
+      paymentId: true,
+      allocationType: true,
+      headType: true,
+      componentIndex: true,
+      componentName: true,
+      extraFeeId: true,
+      allocatedAmount: true,
+    },
+  });
+
+  const paymentAllocationRows = allAllocations.filter((a) => a.allocationType === "PAYMENT");
+  const refundAllocationRows = allAllocations.filter((a) => a.allocationType === "REFUND");
 
   const extraFeeIds = Array.from(
     new Set(
-      paymentAllocations
+      paymentAllocationRows
         .filter((a) => a.headType === "EXTRA_FEE" && !!a.extraFeeId)
         .map((a) => a.extraFeeId as string)
     )
@@ -163,15 +159,15 @@ async function loadPaymentsWithFeeTypes(studentId: string) {
 
   const extraFeeNameById = new Map(extraFees.map((ef) => [ef.id, ef.name]));
   const feeHeadAmountsByPaymentId = buildFeeHeadAmountsByPaymentId(
-    paymentAllocations,
+    paymentAllocationRows,
     extraFeeNameById
   );
 
   const tuitionPaidFromAllocations =
-    paymentAllocations
+    paymentAllocationRows
       .filter((a) => a.headType === "BASE_COMPONENT" && a.componentIndex === -1)
       .reduce((s, a) => s + a.allocatedAmount, 0) -
-    refundAllocations
+    refundAllocationRows
       .filter((a) => a.headType === "BASE_COMPONENT" && a.componentIndex === -1)
       .reduce((s, a) => s + a.allocatedAmount, 0);
 
@@ -462,14 +458,17 @@ function mapStudentToTabPayload(
  */
 export async function buildStudentDetailsCoreBundle(
   studentId: string,
-  schoolId: string | null
+  schoolId: string | null,
+  options?: { bypassCache?: boolean }
 ): Promise<{
   shell: StudentDetailsTabPayload;
   feeBreakdown: AdminStudentFeeBreakdownResult | null;
 } | null> {
   const cacheKey = `${schoolId ?? "own"}:${studentId}:core`;
-  const cached = getStudentDetailsCoreCached(cacheKey);
-  if (cached) return cached;
+  if (!options?.bypassCache) {
+    const cached = getStudentDetailsCoreCached(cacheKey);
+    if (cached) return cached;
+  }
 
   const whereClause = schoolId ? { id: studentId, schoolId } : { id: studentId };
   const student = await prisma.student.findFirst({

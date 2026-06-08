@@ -28,24 +28,41 @@ export type DayReportTx = {
   student?: {
     admissionNumber?: string | null;
     user?: { name?: string | null } | null;
-    class?: { name?: string | null; section?: string | null } | null;
+    class?: { id?: string | null; name?: string | null; section?: string | null } | null;
   } | null;
 };
 
 const TABLE_COLS = 9;
 
-/** Fixed Cash/Online summary rows (template order). */
-export const SUMMARY_BUCKET_LABELS = [
-  "Tuition Fee",
-  "Mess Fee",
-  "Hostel Fee",
-  "Transport Fee",
-  "other heads",
+/** Fixed collection matrix rows (template order — do not reorder). */
+export const COLLECTION_ACCOUNT_LABELS = [
+  "ADMISSION FEE",
+  "SCHOOL FEES",
+  "MESS FEE",
+  "HOSTEL FEE",
+  "TRANSPORTATION FEES",
 ] as const;
 
-export type SummaryBucketLabel = (typeof SUMMARY_BUCKET_LABELS)[number];
+export type CollectionAccountLabel = (typeof COLLECTION_ACCOUNT_LABELS)[number];
 
-type ModeTotals = { cash: number; online: number; otherMode: number };
+/** Fixed collection matrix columns (template order — do not reorder). */
+export const COLLECTION_PAYMENT_COLUMNS: FeeReportColumn[] = [
+  "Cash",
+  "OTHERS",
+  "ONLINE PAYMENT",
+  "Cheque",
+  "DD",
+];
+
+/** @deprecated Use COLLECTION_ACCOUNT_LABELS */
+export const SUMMARY_BUCKET_LABELS = COLLECTION_ACCOUNT_LABELS;
+export type SummaryBucketLabel = CollectionAccountLabel;
+
+type CollectionModeTotals = Record<FeeReportColumn, number>;
+
+function emptyCollectionModeTotals(): CollectionModeTotals {
+  return { Cash: 0, OTHERS: 0, "ONLINE PAYMENT": 0, Cheque: 0, DD: 0 };
+}
 
 export function formatDdMmYyyy(iso: string): string {
   const d = new Date(iso);
@@ -126,72 +143,65 @@ function allocationsForTx(tx: DayReportTx): Array<{ name: string; amount: number
     : [{ name: normalizeAccount(tx.feeTypeName), amount: Number(tx.amount || 0) }];
 }
 
-/** Map any fee-head label into the fixed summary bucket. */
-export function feeHeadSummaryBucket(feeTypeName?: string): SummaryBucketLabel {
+/** Map any fee-head label into the fixed collection account row; null = skip matrix row. */
+export function feeHeadSummaryBucket(feeTypeName?: string): CollectionAccountLabel | null {
   const raw = (feeTypeName || "").trim();
-  if (isTuitionNamedExtraFee(raw)) return "Tuition Fee";
-  if (isMessCategoryExtraFeeName(raw)) return "Mess Fee";
-  if (isHostelCategoryExtraFeeName(raw)) return "Hostel Fee";
+  if (!raw) return null;
   const lower = raw.toLowerCase();
-  if (lower.includes("transport")) return "Transport Fee";
-  return "other heads";
+  if (lower.includes("admission")) return "ADMISSION FEE";
+  if (isTuitionNamedExtraFee(raw) || lower.includes("tuition") || lower.includes("school fee")) {
+    return "SCHOOL FEES";
+  }
+  if (isMessCategoryExtraFeeName(raw)) return "MESS FEE";
+  if (isHostelCategoryExtraFeeName(raw)) return "HOSTEL FEE";
+  if (lower.includes("transport")) return "TRANSPORTATION FEES";
+  return null;
 }
 
-function otherHeadsBucketTotal(summary: Map<SummaryBucketLabel, ModeTotals>): number {
-  const t = summary.get("other heads");
-  if (!t) return 0;
-  return t.cash + t.online + t.otherMode;
-}
-
-/** Buckets to render in Cash/Online summary — omits "other heads" when unused. */
-function resolveActiveSummaryBuckets(
-  summary: Map<SummaryBucketLabel, ModeTotals>
-): SummaryBucketLabel[] {
-  if (otherHeadsBucketTotal(summary) > 0.00001) return [...SUMMARY_BUCKET_LABELS];
-  return SUMMARY_BUCKET_LABELS.filter((b) => b !== "other heads");
-}
-
-/** Summary sits under the table, label in “Fee Type” col and amount in “Amount Paid” col (template style). */
-const SUMMARY_LABEL_COL = 6;
-const SUMMARY_AMOUNT_COL = 7;
-
-function pushSummarySection(
+function pushCollectionMatrixTable(
   rows: (string | number)[][],
   padRow: (cells: (string | number)[]) => (string | number)[],
-  buckets: readonly SummaryBucketLabel[],
-  title: string,
-  total: number,
-  getAmount: (bucket: SummaryBucketLabel) => number
+  model: DayReportSummaryModel
 ) {
-  const headRow = Array(TABLE_COLS).fill("");
-  headRow[SUMMARY_LABEL_COL] = title;
-  headRow[SUMMARY_AMOUNT_COL] = roundRupee(total);
-  rows.push(padRow(headRow));
+  pushRow(rows, padRow, ["Accounts", ...COLLECTION_PAYMENT_COLUMNS]);
 
-  for (const bucket of buckets) {
-    const r = Array(TABLE_COLS).fill("");
-    r[SUMMARY_LABEL_COL] = bucket;
-    r[SUMMARY_AMOUNT_COL] = roundRupee(getAmount(bucket));
-    rows.push(padRow(r));
+  for (const account of COLLECTION_ACCOUNT_LABELS) {
+    const modes = model.collectionMatrix.get(account) ?? emptyCollectionModeTotals();
+    pushRow(rows, padRow, [
+      account,
+      ...COLLECTION_PAYMENT_COLUMNS.map((col) => roundRupee(modes[col] ?? 0)),
+    ]);
   }
+
+  pushRow(rows, padRow, [
+    "Total",
+    ...COLLECTION_PAYMENT_COLUMNS.map((col) => roundRupee(model.columnTotals[col] ?? 0)),
+  ]);
 }
 
-function addToSummary(
-  matrix: Map<SummaryBucketLabel, ModeTotals>,
+function pushRow(
+  rows: (string | number)[][],
+  padRow: (cells: (string | number)[]) => (string | number)[],
+  cells: (string | number)[]
+) {
+  const padded = padRow(cells);
+  rows.push(padded);
+}
+
+function addToCollectionMatrix(
+  matrix: Map<CollectionAccountLabel, CollectionModeTotals>,
   feeLabel: string,
   amount: number,
   gateway: string | undefined
 ): void {
   const key = feeHeadSummaryBucket(feeLabel);
+  if (!key) return;
   if (!matrix.has(key)) {
-    matrix.set(key, { cash: 0, online: 0, otherMode: 0 });
+    matrix.set(key, emptyCollectionModeTotals());
   }
   const row = matrix.get(key)!;
-  const col: FeeReportColumn = feeReportColumnFromGateway(gateway);
-  const n = Number(amount) || 0;
-  if (col === "Cash") row.cash += n;
-  else if (col === "ONLINE PAYMENT") row.online += n;
-  else row.otherMode += n;
+  const col = feeReportColumnFromGateway(gateway);
+  row[col] = (row[col] ?? 0) + (Number(amount) || 0);
 }
 
 export type DayReportDetailRow = {
@@ -208,15 +218,12 @@ export type DayReportDetailRow = {
 
 export type DayReportSummaryModel = {
   detailRows: DayReportDetailRow[];
-  summaryBuckets: readonly SummaryBucketLabel[];
-  summary: Map<SummaryBucketLabel, ModeTotals>;
-  cashTotal: number;
-  onlineTotal: number;
-  otherTotal: number;
+  collectionMatrix: Map<CollectionAccountLabel, CollectionModeTotals>;
+  columnTotals: CollectionModeTotals;
   totalCollection: number;
 };
 
-/** Shared detail rows + Cash/Online summary (Excel + PDF). */
+/** Shared detail rows + collection matrix (Excel + PDF). */
 export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayReportSummaryModel {
   const sorted = [...transactions].sort(
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
@@ -234,7 +241,7 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
     return r;
   };
 
-  const summary = new Map<SummaryBucketLabel, ModeTotals>();
+  const collectionMatrix = new Map<CollectionAccountLabel, CollectionModeTotals>();
   const detailRows: DayReportDetailRow[] = [];
 
   for (const tx of sorted) {
@@ -245,7 +252,7 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
     for (const al of allocations) {
       const feeName = normalizeAccount(al.name);
       const amt = Number(al.amount || 0);
-      addToSummary(summary, al.name || feeName, amt, gateway);
+      addToCollectionMatrix(collectionMatrix, al.name || feeName, amt, gateway);
       detailRows.push({
         receiptNo: rec,
         admissionNo: (tx.student?.admissionNumber || "").trim() || "-",
@@ -260,26 +267,27 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
     }
   }
 
-  let cashTotal = 0;
-  let onlineTotal = 0;
-  let otherTotal = 0;
-  for (const bucket of SUMMARY_BUCKET_LABELS) {
-    const t = summary.get(bucket);
-    if (!t) continue;
-    cashTotal += t.cash;
-    onlineTotal += t.online;
-    otherTotal += t.otherMode;
+  const columnTotals = emptyCollectionModeTotals();
+  for (const account of COLLECTION_ACCOUNT_LABELS) {
+    const row = collectionMatrix.get(account);
+    if (!row) continue;
+    for (const col of COLLECTION_PAYMENT_COLUMNS) {
+      columnTotals[col] += row[col] ?? 0;
+    }
   }
 
   const totalCollection = detailRows.reduce((s, r) => s + r.amount, 0);
 
   return {
     detailRows,
-    summaryBuckets: resolveActiveSummaryBuckets(summary),
-    summary,
-    cashTotal: roundRupee(cashTotal),
-    onlineTotal: roundRupee(onlineTotal),
-    otherTotal: roundRupee(otherTotal),
+    collectionMatrix,
+    columnTotals: {
+      Cash: roundRupee(columnTotals.Cash),
+      OTHERS: roundRupee(columnTotals.OTHERS),
+      "ONLINE PAYMENT": roundRupee(columnTotals["ONLINE PAYMENT"]),
+      Cheque: roundRupee(columnTotals.Cheque),
+      DD: roundRupee(columnTotals.DD),
+    },
     totalCollection: roundRupee(totalCollection),
   };
 }
@@ -505,45 +513,49 @@ export async function drawFeeDayReportPdf(args: {
     return headerBottom + 1.5;
   };
 
+  const COLLECTION_COLS = ["Accounts", ...COLLECTION_PAYMENT_COLUMNS] as const;
+  const collectionTableW = contentW * 0.92;
+  const collectionColW = collectionTableW / COLLECTION_COLS.length;
+
   const drawSummaryBlock = (startY: number) => {
-    const labelX = margin + contentW * 0.52;
-    const amountX = pageWidth - margin;
     let y = startY + 4;
-    const lineH = 5;
+    const lineH = 5.5;
     const fmt = (n: number) => roundRupee(n).toLocaleString("en-IN");
 
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(9);
+    doc.setFontSize(8);
     doc.setTextColor(30, 41, 59);
 
-    const drawSection = (title: string, total: number, getAmt: (bucket: SummaryBucketLabel) => number) => {
-      doc.text(title, labelX, y);
-      doc.text(fmt(total), amountX, y, { align: "right" });
+    const drawCollectionRow = (cells: (string | number)[], bold = false) => {
+      doc.setFont("helvetica", bold ? "bold" : "normal");
+      let x = margin;
+      cells.forEach((cell, idx) => {
+        const w = collectionColW;
+        const text = typeof cell === "number" ? fmt(cell) : String(cell);
+        const align = idx === 0 ? ("left" as const) : ("right" as const);
+        if (align === "right") doc.text(text, x + w - 1, y, { align: "right" });
+        else doc.text(text, x + 1, y);
+        x += w;
+      });
       y += lineH;
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(8.5);
-      for (const bucket of model.summaryBuckets) {
-        const amt = getAmt(bucket);
-        doc.text(bucket, labelX + 3, y);
-        doc.text(fmt(amt), amountX, y, { align: "right" });
-        y += lineH;
-      }
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(9);
-      y += 1;
     };
 
-    drawSection("Cash", model.cashTotal, (b) => model.summary.get(b)?.cash ?? 0);
-    drawSection("Online", model.onlineTotal, (b) => model.summary.get(b)?.online ?? 0);
-    if (model.otherTotal > 0.00001) {
-      drawSection("Cheque / DD / Others", model.otherTotal, (b) => model.summary.get(b)?.otherMode ?? 0);
+    drawCollectionRow([...COLLECTION_COLS], true);
+
+    for (const account of COLLECTION_ACCOUNT_LABELS) {
+      const modes = model.collectionMatrix.get(account) ?? emptyCollectionModeTotals();
+      drawCollectionRow([
+        account,
+        ...COLLECTION_PAYMENT_COLUMNS.map((col) => modes[col] ?? 0),
+      ]);
     }
 
-    doc.setFontSize(10);
-    doc.text("Total Collection", labelX, y);
-    doc.text(fmt(model.totalCollection), amountX, y, { align: "right" });
-    y += 10;
+    drawCollectionRow(
+      ["Total", ...COLLECTION_PAYMENT_COLUMNS.map((col) => model.columnTotals[col] ?? 0)],
+      true
+    );
 
+    y += 4;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.text("Signature of Chairman", margin, y);
@@ -556,7 +568,7 @@ export async function drawFeeDayReportPdf(args: {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7.2);
 
-  const summaryBlockH = 28 + model.summaryBuckets.length * 10;
+  const summaryBlockH = 12 + (COLLECTION_ACCOUNT_LABELS.length + 2) * 6;
   const pageBottomMargin = 8;
 
   for (let i = 0; i < model.detailRows.length; i++) {
@@ -695,28 +707,9 @@ export function appendDayReportSheet(
     ]);
   }
 
-  const { summary, summaryBuckets, cashTotal, onlineTotal, otherTotal, totalCollection } = model;
-
   push(Array(TABLE_COLS).fill(""));
 
-  pushSummarySection(rows, padRow, summaryBuckets, "Cash", cashTotal, (b) => summary.get(b)?.cash ?? 0);
-  pushSummarySection(rows, padRow, summaryBuckets, "Online", onlineTotal, (b) => summary.get(b)?.online ?? 0);
-
-  if (otherTotal > 0.00001) {
-    pushSummarySection(
-      rows,
-      padRow,
-      summaryBuckets,
-      "Cheque / DD / Others",
-      otherTotal,
-      (b) => summary.get(b)?.otherMode ?? 0
-    );
-  }
-
-  const totRow = Array(TABLE_COLS).fill("");
-  totRow[SUMMARY_LABEL_COL] = "Total Collection";
-  totRow[SUMMARY_AMOUNT_COL] = totalCollection;
-  push(padRow(totRow));
+  pushCollectionMatrixTable(rows, padRow, model);
 
   push(Array(TABLE_COLS).fill(""));
   push(["Signature of Chairman", "", "", "", "", "", "", "", "Signature of Cashier"]);

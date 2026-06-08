@@ -53,7 +53,18 @@ type Props = {
   discountFeeHeadLabel?: string | null;
   discountRemarks?: string | null;
   discountFixedAmount?: number | null;
-  onFeeModified?: () => void;
+  onFeeModified?: (paymentResult?: {
+    payment: {
+      id: string;
+      amount: number;
+      status: string;
+      gateway?: string;
+      createdAt: string;
+      transactionId?: string | null;
+    };
+    updatedFee: { amountPaid: number; remainingFee: number; finalFee?: number; totalFee?: number };
+    feeAllocations?: Array<{ name: string; amount: number }>;
+  }) => void;
   /** Used to seed assign-from-catalog rows (hostel vs transport hint). */
   residencyType?: string | null;
   classSection?: string | null;
@@ -195,14 +206,18 @@ export const FeesBreakdown = ({
       : totalFee > 0
         ? totalFee
         : 0;
+  const displayAmountPaid =
+    headCards.length > 0
+      ? roundRupee(headCards.reduce((s, h) => s + h.paid, 0))
+      : amountPaid;
   const displayRemainingAmount =
     headCards.length > 0
       ? roundRupee(headCards.reduce((s, h) => s + h.due, 0))
       : headsRemainingAmount != null && headsRemainingAmount >= 0
         ? roundRupee(headsRemainingAmount)
-        : roundRupee(Math.max(0, displayTotalAmount - amountPaid));
+        : roundRupee(Math.max(0, displayTotalAmount - displayAmountPaid));
   const paidPercentage =
-    displayTotalAmount > 0 ? (amountPaid / displayTotalAmount) * 100 : 0;
+    displayTotalAmount > 0 ? (displayAmountPaid / displayTotalAmount) * 100 : 0;
 
   const applyBreakdownData = (data: AdminStudentFeeBreakdownResult) => {
     const dueHeads = Array.isArray(data?.dueHeads) ? data.dueHeads : [];
@@ -242,22 +257,10 @@ export const FeesBreakdown = ({
     setHeadsRemainingAmount(roundRupee(splitHeads.reduce((s: number, h: { due: number }) => s + h.due, 0)));
   };
 
-  const feeSyncNotifiedRef = useRef(false);
-
   useEffect(() => {
     if (!initialFeeBreakdown?.dueHeads?.length) return;
     applyBreakdownData(initialFeeBreakdown);
-    const syncedTotal = Number(initialFeeBreakdown.totalAmount) || 0;
-    if (
-      !feeSyncNotifiedRef.current &&
-      syncedTotal > 0 &&
-      Math.abs(syncedTotal - totalFee) > 0.02 &&
-      onFeeModified
-    ) {
-      feeSyncNotifiedRef.current = true;
-      onFeeModified();
-    }
-  }, [initialFeeBreakdown, studentId, totalFee, onFeeModified]);
+  }, [initialFeeBreakdown, studentId]);
 
   const handleDownloadReceipt = async () => {
     try {
@@ -442,6 +445,7 @@ export const FeesBreakdown = ({
     setPaymentSaving(true);
     try {
       const ref = paymentForm.referenceNo.trim();
+      const allocationKey = payingHead.sourceKey ?? payingHead.key;
       const response = await fetch("/api/fees/offline-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -454,14 +458,54 @@ export const FeesBreakdown = ({
           transactionId: ref || undefined,
           selectedHeads: [selectedHead],
           paymentDate: paymentForm.paymentDate,
+          explicitAllocations: [{ key: allocationKey, amount, label: payingHead.label }],
         }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(typeof data.message === "string" ? data.message : "Failed to record payment");
       }
+      const paidCardKey = payingHead.key;
       setPayingHead(null);
-      onFeeModified?.();
+      setPaymentSaving(false);
+      setHeadCards((prev) =>
+        prev.map((h) => {
+          if (h.key !== paidCardKey) return h;
+          return {
+            ...h,
+            paid: roundRupee(h.paid + amount),
+            due: roundRupee(Math.max(h.due - amount, 0)),
+          };
+        })
+      );
+      setHeadsRemainingAmount((prev) => roundRupee(Math.max((prev ?? 0) - amount, 0)));
+      onFeeModified?.({
+        payment: {
+          id: String(data.payment?.id ?? ""),
+          amount: Number(data.payment?.amount ?? amount),
+          status: String(data.payment?.status ?? "SUCCESS"),
+          gateway: typeof data.payment?.gateway === "string" ? data.payment.gateway : paymentForm.mode,
+          createdAt:
+            typeof data.payment?.createdAt === "string"
+              ? data.payment.createdAt
+              : paymentForm.paymentDate
+                ? `${paymentForm.paymentDate}T12:00:00.000Z`
+                : new Date().toISOString(),
+          transactionId:
+            typeof data.payment?.transactionId === "string" ? data.payment.transactionId : ref || null,
+        },
+        updatedFee: {
+          amountPaid: Number(data.updatedFee?.amountPaid ?? 0),
+          remainingFee: Number(data.updatedFee?.remainingFee ?? 0),
+          finalFee:
+            typeof data.updatedFee?.finalFee === "number" ? data.updatedFee.finalFee : undefined,
+        },
+        feeAllocations: (
+          Array.isArray(data.feeAllocations) && data.feeAllocations.length > 0
+            ? (data.feeAllocations as Array<{ name: string; amount: number; key?: string }>)
+            : [{ name: payingHead.label, amount }]
+        ).map((line, index) => (index === 0 ? { ...line, key: allocationKey } : line)),
+      });
     } catch (error) {
       setPaymentError(error instanceof Error ? error.message : "Failed to record payment");
     } finally {
@@ -554,7 +598,7 @@ export const FeesBreakdown = ({
 
         <div className="bg-lime-400/10 border border-lime-400/20 rounded-xl p-4">
           <p className="text-xs text-lime-300/70 uppercase tracking-widest font-bold">Amount Paid</p>
-          <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(amountPaid)}</p>
+          <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(displayAmountPaid)}</p>
           <p className="text-xs text-lime-400 mt-1 font-semibold">{Math.round(paidPercentage)}% Paid</p>
         </div>
 
@@ -913,7 +957,7 @@ export const FeesBreakdown = ({
               </div>
               <div>
                 <p className="text-gray-600 text-sm">Amount Paid</p>
-                <p className="text-2xl font-bold text-green-600">₹{formatRupee(amountPaid)}</p>
+                <p className="text-2xl font-bold text-green-600">₹{formatRupee(displayAmountPaid)}</p>
               </div>
               <div>
                 <p className="text-gray-600 text-sm">Amount Due</p>
