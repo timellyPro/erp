@@ -28,6 +28,7 @@
     "exceljs": "^4.4.0",
     "framer-motion": "^12.23.26",
     "html2canvas": "^1.4.1",
+    "html2canvas-pro": "^2.0.4",
     "jsonwebtoken": "^9.0.3",
     "jspdf": "^4.2.1",
     "lucide-react": "^0.561.0",

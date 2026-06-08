@@ -1,7 +1,14 @@
 'use client';
 
 import { useEffect, useState, useMemo } from "react";
+import { flushSync } from "react-dom";
 import { useSession } from "next-auth/react";
+import {
+  fetchParentMarks,
+  loadParentAnalytics,
+  peekParentAnalytics,
+  peekParentPortalAny,
+} from "@/lib/loadParentPortal";
 import {
   TrendingUp,
   Trophy,
@@ -12,8 +19,9 @@ import {
 } from "lucide-react";
 import ProgressReport from "./ProgressReport";
 import SubjectPerformance from "./SubjetPerformance";
-import Spinner from "../../common/Spinner";
-import { generatePDF } from "@/lib/pdfUtils";
+import ParentTimellyLoader from "../ParentTimellyLoader";
+import { downloadParentPortalPdf } from "@/lib/downloadParentPortalPdf";
+import { currentAcademicYearLabel, resolveSchoolBrand, type SchoolBrand } from "@/lib/resolveSchoolBrand";
 import MarksReportTemplate, { type MarksReportData } from "../../pdf/MarksReportTemplate";
 import { useRef } from "react";
 
@@ -58,117 +66,70 @@ export default function ParentMarksTab() {
   const { data: session } = useSession();
   const sessionSchoolName =
     typeof (session?.user as any)?.schoolName === "string" ? (session?.user as any).schoolName : "";
-  const [marks, setMarks] = useState<Mark[]>([]);
-  const [studentInfo, setStudentInfo] = useState<StudentInfo | null>(null);
-  const [schoolName, setSchoolName] = useState(sessionSchoolName || "");
-  const [rank, setRank] = useState<number | null>(null);
+  const sessionStudentId = session?.user?.studentId ?? null;
+  const peekedMarks = peekParentPortalAny<{ marks: Mark[] }>("marks", "all");
+  const peekedAnalytics = peekParentAnalytics(sessionStudentId);
+  const [marks, setMarks] = useState<Mark[]>(() => peekedMarks?.marks ?? []);
+  const [studentInfo, setStudentInfo] = useState<StudentInfo | null>(() => {
+    const student = peekedAnalytics?.student;
+    if (!student) return null;
+    const classParts = typeof student.class === "string" ? student.class.split(" • ") : [];
+    return {
+      name: student.name || "Student",
+      class: classParts[0] || "",
+      section: classParts[1] || null,
+      photoUrl: student.photoUrl || null,
+      rollNo: student.rollNo || undefined,
+    };
+  });
+  const [schoolName, setSchoolName] = useState(
+    peekedAnalytics?.student?.schoolName?.trim() || sessionSchoolName || ""
+  );
+  const [rank, setRank] = useState<number | null>(peekedAnalytics?.stats?.grade?.rank ?? null);
   const [totalStudents, setTotalStudents] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!(peekedMarks?.marks?.length || peekedAnalytics));
   const [examTypeFilter, setExamTypeFilter] = useState<string>("ALL");
   const [generatingPdf, setGeneratingPdf] = useState(false);
+  const [schoolBrand, setSchoolBrand] = useState<SchoolBrand | null>(null);
+  const [pdfReportData, setPdfReportData] = useState<MarksReportData | null>(null);
   const reportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    void resolveSchoolBrand().then(setSchoolBrand);
+  }, []);
+
+  useEffect(() => {
+    if (!sessionStudentId) {
+      setLoading(false);
+      return;
+    }
+
     (async () => {
       try {
-        const [marksRes, analyticsRes, userRes, schoolRes] = await Promise.all([
-          fetch("/api/marks/view", { credentials: "include" }),
-          fetch("/api/analytics/student", { credentials: "include" }),
-          fetch("/api/user/me", { credentials: "include" }),
-          fetch("/api/school/mine", { credentials: "include" }),
+        const [marksData, analyticsData] = await Promise.all([
+          fetchParentMarks(sessionStudentId),
+          loadParentAnalytics(sessionStudentId),
         ]);
 
-        if (marksRes.ok) {
-          const marksData = await marksRes.json();
-          setMarks(marksData.marks || []);
+        setMarks((marksData.marks || []) as Mark[]);
+
+        const student = analyticsData.student;
+
+        if (analyticsData.stats?.grade?.rank !== undefined && analyticsData.stats.grade.rank !== null) {
+          setRank(analyticsData.stats.grade.rank);
         }
 
-        if (schoolRes.ok) {
-          const schoolData = await schoolRes.json();
-          const n = schoolData?.school?.name;
-          if (typeof n === "string" && n.trim()) {
-            setSchoolName(n.trim());
-          }
-        }
-
-        // Get student ID from user session
-        let studentId: string | null = null;
-        if (userRes.ok) {
-          const userData = await userRes.json();
-          studentId = userData.user?.studentId || null;
-        }
-
-        if (analyticsRes.ok) {
-          const analyticsData = await analyticsRes.json();
-          const student = analyticsData.student;
-          
-          // Get rank from analytics data
-          if (analyticsData.stats?.grade?.rank !== undefined && analyticsData.stats.grade.rank !== null) {
-            setRank(analyticsData.stats.grade.rank);
-          }
-          
-          if (student) {
-            // The analytics API returns student.photoUrl directly and class as a string
-            const classParts = typeof student.class === 'string' ? student.class.split(' • ') : [];
-            const studentInfoData = {
-              name: student.name || "Student",
-              class: classParts[0] || "",
-              section: classParts[1] || null,
-              photoUrl: student.photoUrl || null,
-              rollNo: student.rollNo || undefined,
-            };
-            setStudentInfo(studentInfoData);
-            if (typeof student.schoolName === "string" && student.schoolName.trim()) {
-              setSchoolName(student.schoolName.trim());
-            }
-          } else if (studentId) {
-            // Fallback: fetch student details directly if analytics doesn't have it
-            try {
-              const studentRes = await fetch(`/api/student/${studentId}`, { credentials: "include" });
-              if (studentRes.ok) {
-                const studentData = await studentRes.json();
-                const student = studentData.student;
-                if (student) {
-                  setStudentInfo({
-                    name: student.user?.name || "Student",
-                    class: student.class?.name || "",
-                    section: student.class?.section || null,
-                    photoUrl: student.user?.photoUrl || null,
-                    rollNo: student.rollNo || undefined,
-                  });
-                  if (typeof student.schoolName === "string" && student.schoolName.trim()) {
-                    setSchoolName(student.schoolName.trim());
-                  }
-                  
-                  // Try to get class students count for rank context
-                  if (student.classId) {
-                    try {
-                      const classStudentsRes = await fetch(`/api/class/students?classId=${student.classId}`, { credentials: "include" });
-                      if (classStudentsRes.ok) {
-                        const classStudentsData = await classStudentsRes.json();
-                        if (classStudentsData.students && Array.isArray(classStudentsData.students)) {
-                          setTotalStudents(classStudentsData.students.length);
-                        }
-                      }
-                    } catch (e) {
-                      // Ignore error for class count
-                    }
-                  }
-                }
-              }
-            } catch (e) {
-              console.error("Failed to fetch student details:", e);
-            }
-          }
-          
-          // Try to get total students count if we have class info
-          if (studentInfo?.class && !totalStudents) {
-            try {
-              // This would require the classId, which we might not have from analytics
-              // We'll leave this for now and can enhance later
-            } catch (e) {
-              // Ignore
-            }
+        if (student) {
+          const classParts = typeof student.class === "string" ? student.class.split(" • ") : [];
+          setStudentInfo({
+            name: student.name || "Student",
+            class: classParts[0] || "",
+            section: classParts[1] || null,
+            photoUrl: student.photoUrl || null,
+            rollNo: student.rollNo || undefined,
+          });
+          if (typeof student.schoolName === "string" && student.schoolName.trim()) {
+            setSchoolName(student.schoolName.trim());
           }
         }
       } catch (e) {
@@ -177,7 +138,7 @@ export default function ParentMarksTab() {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [sessionStudentId]);
 
   const examTypeOptions = useMemo(() => {
     const types = new Set<string>();
@@ -227,49 +188,59 @@ export default function ParentMarksTab() {
 
   const studentName = studentInfo?.name || "Student";
 
+  const reportData: MarksReportData = useMemo(
+    () => ({
+      schoolName: schoolBrand?.name || schoolName,
+      schoolLogo: schoolBrand?.logo,
+      schoolAddress: schoolBrand?.address,
+      studentName,
+      studentClass: studentInfo?.class || "N/A",
+      academicYear: currentAcademicYearLabel(),
+      dateGenerated: new Date(),
+      overallScore: stats.overallScore,
+      overallGrade: stats.overallGrade,
+      totalMarks: stats.totalMarks,
+      totalMaxMarks: stats.totalMaxMarks,
+      rank,
+      marks: filteredMarks.map((m) => ({
+        subject: m.subject,
+        marks: m.marks,
+        totalMarks: m.totalMarks,
+        grade: m.grade,
+        examType: m.examType,
+      })),
+    }),
+    [schoolBrand, schoolName, studentName, studentInfo, stats, rank, filteredMarks]
+  );
+
   const handleDownloadReport = async () => {
+    setGeneratingPdf(true);
     try {
-      setGeneratingPdf(true);
-      setTimeout(async () => {
-        try {
-          await generatePDF(reportRef, `Marks_Report_${studentName.replace(/\s+/g, '_')}.pdf`);
-        } catch (err) {
-          console.error(err);
-        } finally {
-          setGeneratingPdf(false);
-        }
-      }, 500);
+      await downloadParentPortalPdf({
+        ref: reportRef,
+        filename: `Marks_Report_${studentName.replace(/\s+/g, "_")}.pdf`,
+        beforeCapture: (brand) => {
+          flushSync(() => {
+            setPdfReportData({
+              ...reportData,
+              schoolName: brand.name,
+              schoolLogo: brand.logo,
+              schoolAddress: brand.address,
+            });
+          });
+        },
+      });
     } catch (err) {
-      console.error(err);
+      alert(err instanceof Error ? err.message : "Failed to download report.");
+    } finally {
       setGeneratingPdf(false);
     }
   };
 
-  const reportData: MarksReportData = useMemo(() => ({
-    schoolName,
-    studentName,
-    studentClass: studentInfo?.class || "N/A",
-    dateGenerated: new Date(),
-    overallScore: stats.overallScore,
-    overallGrade: stats.overallGrade,
-    totalMarks: stats.totalMarks,
-    totalMaxMarks: stats.totalMaxMarks,
-    rank,
-    marks: filteredMarks.map(m => ({
-      subject: m.subject,
-      marks: m.marks,
-      totalMarks: m.totalMarks,
-      grade: m.grade,
-      examType: m.examType,
-    }))
-  }), [schoolName, studentName, studentInfo, stats, rank, filteredMarks]);
-
   if (loading) {
     return (
       <div className="p-6 lg:p-10 min-h-screen text-white flex items-center justify-center">
-        <div className="text-center">
-          <Spinner/>
-        </div>
+        <ParentTimellyLoader preset="marks" className="w-full max-w-2xl" />
       </div>
     );
   }
@@ -409,10 +380,7 @@ export default function ParentMarksTab() {
         <SubjectPerformance marks={filteredMarks} />
       </div>
 
-      {/* Hidden Marks Report Template for PDF Generation */}
-      <div className="pointer-events-none opacity-0 fixed -top-[10000px] -left-[10000px]">
-        <MarksReportTemplate ref={reportRef} data={reportData} />
-      </div>
+      <MarksReportTemplate ref={reportRef} data={pdfReportData ?? reportData} />
     </div>
   );
 }

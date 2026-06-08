@@ -1,5 +1,6 @@
 import React, { forwardRef } from "react";
 import { format } from "date-fns";
+import { ParentPortalDocumentShell, ParentPortalPdfMount } from "./ParentPortalDocumentShell";
 
 export interface FeePaymentReceiptData {
   schoolName: string;
@@ -22,6 +23,8 @@ export interface FeePaymentReceiptData {
 
 type Props = {
   data: FeePaymentReceiptData | null;
+  singleCopy?: boolean;
+  showSignature?: boolean;
 };
 
 const numberToWords = (value: number) => {
@@ -54,65 +57,38 @@ const numberToWords = (value: number) => {
   return `${parts.join(" ")} only`;
 };
 
-const SingleReceipt = ({ data }: { data: FeePaymentReceiptData }) => {
+const SingleReceipt = ({
+  data,
+  showSignature = true,
+}: {
+  data: FeePaymentReceiptData;
+  showSignature?: boolean;
+}) => {
   const formattedDate = format(new Date(data.createdAt), "dd-MM-yyyy");
 
   return (
-    <div
-      className="p-6 pb-12 font-sans flex flex-col"
-      style={{
-        width: "800px",
-        minHeight: "510px",
-        backgroundColor: "#ffffff",
-        color: "#000000",
-        position: "relative",
-        boxSizing: "border-box",
+    <ParentPortalDocumentShell
+      brand={{
+        schoolName: data.schoolName,
+        schoolLogo: data.schoolLogo,
+        schoolAddress: data.schoolAddress,
+      }}
+      documentTitle={data.receiptTitle?.trim() || "Fee Receipt"}
+      generatedAt={data.createdAt}
+      minHeight={510}
+      student={{
+        studentName: data.studentName,
+        className: data.className,
+        admissionNumber: data.admissionNumber,
+        academicYear: data.academicYear,
+        rightRows: [
+          { label: "Father Name", value: data.fatherName || data.parentName || "-" },
+          { label: "Mother Name", value: data.motherName || "-" },
+          { label: "Receipt Date", value: formattedDate },
+          { label: "Phone", value: data.parentPhone || "-" },
+        ],
       }}
     >
-      <div
-        className="absolute inset-0 flex items-center justify-center pointer-events-none"
-        style={{ opacity: 0.06 }}
-      >
-        <img
-          src={data.schoolLogo || "/timelylogo.webp"}
-          alt="watermark"
-          className="w-48 h-48 object-contain"
-        />
-      </div>
-
-      <div className="border-b pb-2 mb-3" style={{ borderColor: "#000" }}>
-        <div className="flex items-center justify-center gap-3">
-          {data.schoolLogo ? (
-            <img src={data.schoolLogo} alt="Logo" className="w-12 h-12 object-contain rounded-full border" style={{ borderColor: "#000" }} />
-          ) : (
-            <div className="w-12 h-12 rounded-full border flex items-center justify-center text-[9px] font-bold" style={{ borderColor: "#000" }}>
-              LOGO
-            </div>
-          )}
-          <div className="text-center">
-            <h1 className="text-[28px] font-bold leading-tight tracking-wide">{data.schoolName || "School"}</h1>
-            <p className="text-xs leading-tight">{data.schoolAddress || "-"}</p>
-            <h2 className="text-sm font-semibold mt-1">{data.receiptTitle?.trim() || "Fee Receipt"}</h2>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-6 mb-3 text-xs">
-        <div className="space-y-1">
-          <div className="font-semibold">Receipt To</div>
-          <div><span className="font-semibold">Student Name:</span> {data.studentName}</div>
-          <div><span className="font-semibold">Admission No.:</span> {data.admissionNumber || "-"}</div>
-          <div><span className="font-semibold">Class:</span> {data.className}</div>
-          <div><span className="font-semibold">Academic Year:</span> {data.academicYear || "-"}</div>
-        </div>
-        <div className="space-y-1">
-          <div><span className="font-semibold">Father Name:</span> {data.fatherName || data.parentName || "-"}</div>
-          <div><span className="font-semibold">Mother Name:</span> {data.motherName || "-"}</div>
-          <div><span className="font-semibold">Receipt Date:</span> {formattedDate}</div>
-          <div><span className="font-semibold">Phone:</span> {data.parentPhone || "-"}</div>
-        </div>
-      </div>
-
       <div className="mb-2 rounded-sm overflow-hidden border" style={{ borderColor: "#000" }}>
         <table className="w-full text-xs">
           <thead>
@@ -131,7 +107,9 @@ const SingleReceipt = ({ data }: { data: FeePaymentReceiptData }) => {
                 <td className="px-3 py-2">{row.description}</td>
                 <td className="px-3 py-2">{row.paymentMethod || "-"}</td>
                 <td className="px-3 py-2">{row.utrNo || "-"}</td>
-                <td className="px-3 py-2 text-right font-semibold">Rs. {Number(row.amount || 0).toLocaleString("en-IN")}.00</td>
+                <td className="px-3 py-2 text-right font-semibold">
+                  Rs. {Number(row.amount || 0).toLocaleString("en-IN")}.00
+                </td>
               </tr>
             ))}
           </tbody>
@@ -148,36 +126,41 @@ const SingleReceipt = ({ data }: { data: FeePaymentReceiptData }) => {
         </table>
       </div>
 
-      <div className="mt-4 flex items-end justify-end text-xs">
-        <div className="text-xs font-semibold">
-          <div className="border-t pt-1 min-w-[140px] text-center" style={{ borderColor: "#000" }}>
-            Authorised Signature
+      {showSignature ? (
+        <div className="mt-4 flex items-end justify-end text-xs">
+          <div className="text-xs font-semibold">
+            <div className="border-t pt-1 min-w-[140px] text-center" style={{ borderColor: "#000" }}>
+              Authorised Signature
+            </div>
           </div>
         </div>
-      </div>
-
-      <div
-        className="absolute bottom-2 left-0 right-0 text-center text-[11px]"
-        style={{ fontWeight: 400 }}
-      >
-        Powered by Timelly
-      </div>
-    </div>
+      ) : null}
+    </ParentPortalDocumentShell>
   );
 };
 
-const FeePaymentReceiptTemplate = forwardRef<HTMLDivElement, Props>(({ data }, ref) => {
-  if (!data) return null;
-  return (
-    <div style={{ position: "fixed", top: "-9999px", left: "-9999px", zIndex: -9999 }}>
-      <div ref={ref} style={{ width: "800px", display: "flex", flexDirection: "column" }}>
-        <SingleReceipt data={data} />
-        <div style={{ width: "100%", borderTop: "1px dashed #555", margin: "3px 0" }} />
-        <SingleReceipt data={data} />
-      </div>
-    </div>
-  );
-});
+const FeePaymentReceiptTemplate = forwardRef<HTMLDivElement, Props>(
+  ({ data, singleCopy = false, showSignature = true }, ref) => {
+    if (!data) {
+      return (
+        <ParentPortalPdfMount ref={ref}>
+          <div style={{ width: "800px", minHeight: "1px", backgroundColor: "#ffffff" }} />
+        </ParentPortalPdfMount>
+      );
+    }
+    return (
+      <ParentPortalPdfMount ref={ref}>
+        <SingleReceipt data={data} showSignature={showSignature} />
+        {!singleCopy ? (
+          <>
+            <div style={{ width: "100%", borderTop: "1px dashed #555", margin: "3px 0" }} />
+            <SingleReceipt data={data} showSignature={showSignature} />
+          </>
+        ) : null}
+      </ParentPortalPdfMount>
+    );
+  }
+);
 
 FeePaymentReceiptTemplate.displayName = "FeePaymentReceiptTemplate";
 export default FeePaymentReceiptTemplate;

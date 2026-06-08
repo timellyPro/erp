@@ -18,6 +18,7 @@ import type {
   PreferencesState,
 } from "../settings/portalSettingsTypes";
 import Spinner from "./Spinner";
+import ParentTimellyLoader from "../parent/ParentTimellyLoader";
 import PageHeader from "./PageHeader";
 
 type UserMe = {
@@ -264,9 +265,12 @@ export default function PortalSettingsPanel({ portal }: { portal: PortalVariant 
 
   if (loading) {
     return (
-      <div className="min-h-[50vh] flex items-center justify-center">
-        {/* <div className="h-10 w-10 rounded-full border-2 border-white/20 border-t-lime-400 animate-spin" /> */}
-        <Spinner/>
+      <div className="min-h-[50vh] flex items-center justify-center px-4">
+        {portal === "parent" ? (
+          <ParentTimellyLoader preset="settings" className="w-full max-w-2xl" />
+        ) : (
+          <Spinner />
+        )}
       </div>
     );
   }

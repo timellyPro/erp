@@ -331,6 +331,7 @@ model StudentLeaveRequest {
   @@index([status])
   @@index([schoolId, status, fromDate])
   @@index([schoolId, studentId, fromDate])
+  @@index([studentId, fromDate])
 }
 
 model Class {
@@ -356,6 +357,10 @@ model Class {
   circularsTargeted Circular[]         @relation("CircularTargetClass")
 
   createdAt DateTime @default(now())
+
+  @@index([schoolId])
+  @@index([teacherId])
+  @@index([schoolId, teacherId])
 }
 
 model ExamTerm {
@@ -379,6 +384,8 @@ model ExamTerm {
   @@index([schoolId])
   @@index([classId])
   @@index([status])
+  @@index([schoolId, classId, createdAt])
+  @@index([schoolId, classId, status])
 }
 
 model ExamSchedule {
@@ -589,6 +596,7 @@ model Mark {
 
   @@index([studentId])
   @@index([studentId, createdAt])
+  @@index([studentId, createdAt(sort: Desc)], map: "Mark_studentId_createdAt_desc_idx")
   @@index([classId])
   @@index([examType])
 }
@@ -653,6 +661,10 @@ model Event {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([schoolId])
+  @@index([schoolId, createdAt])
+  @@index([schoolId, eventDate])
+  @@index([schoolId, classId, eventDate])
   @@index([classId])
   @@index([teacherId])
 }
@@ -676,6 +688,7 @@ model EventRegistration {
   @@unique([eventId, studentId])
   @@index([studentId])
   @@index([eventId])
+  @@index([studentId, eventId])
 }
 
 // =====================
@@ -749,9 +762,11 @@ model Homework {
   updatedAt DateTime @updatedAt
 
   @@index([classId])
+  @@index([classId, dueDate])
   @@index([teacherId])
   @@index([schoolId])
   @@index([schoolId, classId, dueDate])
+  @@index([schoolId, classId, createdAt])
 }
 
 model HomeworkSubmission {
@@ -865,7 +880,9 @@ model TransferCertificate {
   updatedAt DateTime @updatedAt
 
   @@index([studentId])
+  @@index([studentId, createdAt])
   @@index([schoolId])
+  @@index([schoolId, studentId])
   @@index([status])
 }
 
@@ -919,11 +936,13 @@ model Appointment {
   updatedAt DateTime @updatedAt
 
   @@index([studentId])
+  @@index([studentId, createdAt])
   @@index([teacherId])
   @@index([schoolId])
   @@index([status])
   @@index([schoolId, status, requestedAt])
   @@index([schoolId, teacherId, status])
+  @@index([schoolId, studentId, createdAt])
 }
 
 model ChatMessage {
@@ -937,6 +956,7 @@ model ChatMessage {
   sender      User        @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
 
   @@index([appointmentId])
+  @@index([appointmentId, createdAt])
   @@index([senderId])
 }
 
@@ -1095,6 +1115,7 @@ model Payment {
   @@index([studentId])
   @@index([studentId, createdAt])
   @@index([studentId, status, createdAt])
+  @@index([studentId, purpose, status, createdAt])
 }
 
 // Tracks how a payment amount was distributed across individual fee "heads"
@@ -1164,6 +1185,7 @@ model ParentSubscription {
   updatedAt DateTime @updatedAt
 
   @@index([studentId, status])
+  @@index([studentId, schoolId, currentPeriodEnd])
   @@index([schoolId])
   @@index([paymentId])
 }

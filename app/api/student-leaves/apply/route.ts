@@ -7,6 +7,7 @@ import {
   createNotificationsForUserIds,
   getClassStaffNotifyUserIds,
 } from "@/lib/notificationService";
+import { invalidateParentPortalCaches } from "@/lib/invalidateParentPortalCaches";
 
 export async function POST(req: Request) {
   try {
@@ -87,6 +88,8 @@ export async function POST(req: Request) {
     } catch (nErr) {
       console.warn("Student leave request notification failed:", nErr);
     }
+
+    invalidateParentPortalCaches({ schoolId: student.schoolId, studentId });
 
     return NextResponse.json({ leave }, { status: 201 });
   } catch (e: unknown) {

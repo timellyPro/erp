@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { useSession } from "next-auth/react";
 import {
   Download,
@@ -16,9 +17,19 @@ import {
   FileText,
   ChevronDown,
 } from "lucide-react";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import Spinner from "../../common/Spinner";
+import ParentTimellyLoader from "../ParentTimellyLoader";
+import ProfileReportTemplate, { type ProfileReportData } from "../../pdf/ProfileReportTemplate";
+import { downloadParentPortalPdf } from "@/lib/downloadParentPortalPdf";
+import { currentAcademicYearLabel, resolveSchoolBrand } from "@/lib/resolveSchoolBrand";
 import PageHeader from "../../common/PageHeader";
+import {
+  fetchParentHomeworkList,
+  fetchParentEventsList,
+  fetchParentMarks,
+  fetchParentProfileShell,
+  peekParentDashboard,
+  peekParentProfileShell,
+} from "@/lib/loadParentPortal";
 
 type StudentProfile = {
   student: {
@@ -55,20 +66,26 @@ function InfoTag({ value, icon: Icon }: { value: string; icon?: React.ComponentT
 
 export default function ParentProfile() {
   const { data: session, status } = useSession();
-  const [profile, setProfile] = useState<StudentProfile | null>(null);
+  const studentId = (session?.user as { studentId?: string | null })?.studentId ?? null;
+  const initialProfile = peekParentProfileShell(studentId) as StudentProfile | null;
+  const initialDash = peekParentDashboard(studentId);
+
+  const [profile, setProfile] = useState<StudentProfile | null>(initialProfile);
   const [user, setUser] = useState<{ name: string | null; photoUrl: string | null; mobile: string | null } | null>(null);
-  const [homeworkTotal, setHomeworkTotal] = useState(0);
-  const [homeworkSubmitted, setHomeworkSubmitted] = useState(0);
-  const [pendingHomework, setPendingHomework] = useState(0);
+  const [homeworkTotal, setHomeworkTotal] = useState(initialDash?.homeworkTotal ?? 0);
+  const [homeworkSubmitted, setHomeworkSubmitted] = useState(initialDash?.homeworkSubmitted ?? 0);
+  const [pendingHomework, setPendingHomework] = useState(
+    Math.max(0, (initialDash?.homeworkTotal ?? 0) - (initialDash?.homeworkSubmitted ?? 0))
+  );
   const [upcomingEvents, setUpcomingEvents] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialProfile);
   const [error, setError] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfReportData, setPdfReportData] = useState<ProfileReportData | null>(null);
+  const reportRef = useRef<HTMLDivElement>(null);
   const [examTypeFilter, setExamTypeFilter] = useState<string>("ALL");
   // compute academic year string based on current date
   const [academicYear, setAcademicYear] = useState("");
-  const studentId = (session?.user as { studentId?: string | null })?.studentId ?? null;
-
   type Mark = {
     id: string;
     subject: string;
@@ -87,46 +104,53 @@ export default function ParentProfile() {
       setError("No student linked to this account.");
       return;
     }
-    setLoading(true);
+    if (!profile) setLoading(true);
     setError(null);
     try {
-      const [userRes, studentRes, homeworkRes, eventsRes, marksRes] = await Promise.all([
+      const [userRes, profileData] = await Promise.all([
         fetch("/api/user/me", { credentials: "include" }),
-        fetch(`/api/student/${studentId}`, { credentials: "include" }),
-        fetch("/api/homework/list", { credentials: "include" }),
-        fetch("/api/events/list", { credentials: "include" }),
-        fetch("/api/marks/view", { credentials: "include" }),
+        fetchParentProfileShell(studentId),
       ]);
       if (userRes.ok) {
         const d = await userRes.json();
         setUser(d.user ?? null);
       }
-      if (studentRes.ok) {
-        const d = await studentRes.json();
-        setProfile(d as StudentProfile);
+      if (profileData) {
+        setProfile(profileData as StudentProfile);
       } else {
-        const d = await studentRes.json().catch(() => ({}));
-        setError(d.message || "Failed to load profile");
+        setError("Failed to load profile");
       }
-      if (homeworkRes.ok) {
-        const d = await homeworkRes.json();
-        const list = d.homeworks ?? [];
-        setHomeworkTotal(list.length);
-        const submitted = list.filter((h: { hasSubmitted?: boolean }) => h.hasSubmitted).length;
-        setHomeworkSubmitted(submitted);
-        setPendingHomework(list.length - submitted);
+
+      const dash = peekParentDashboard(studentId);
+      if (dash) {
+        setHomeworkTotal(dash.homeworkTotal);
+        setHomeworkSubmitted(dash.homeworkSubmitted);
+        setPendingHomework(Math.max(0, dash.homeworkTotal - dash.homeworkSubmitted));
       }
-      if (eventsRes.ok) {
-        const d = await eventsRes.json();
-        const list = d.events ?? [];
-        const now = new Date();
-        const upcoming = list.filter((e: any) => e.eventDate && new Date(e.eventDate) >= now).length;
-        setUpcomingEvents(upcoming);
-      }
-      if (marksRes.ok) {
-        const d = await marksRes.json();
-        setMarks(d.marks ?? []);
-      }
+
+      void Promise.all([
+        fetchParentHomeworkList(studentId),
+        fetchParentEventsList(studentId),
+        fetchParentMarks(studentId),
+      ])
+        .then(([homeworkData, eventsData, marksData]) => {
+          const hwList = homeworkData.homeworks ?? [];
+          setHomeworkTotal(hwList.length);
+          const submitted = hwList.filter((h) => (h as { hasSubmitted?: boolean }).hasSubmitted).length;
+          setHomeworkSubmitted(submitted);
+          setPendingHomework(hwList.length - submitted);
+
+          const evList = eventsData.events ?? [];
+          const now = new Date();
+          const upcoming = evList.filter(
+            (e) =>
+              (e as { eventDate?: string }).eventDate &&
+              new Date((e as { eventDate: string }).eventDate) >= now
+          ).length;
+          setUpcomingEvents(upcoming);
+          setMarks((marksData.marks ?? []) as Mark[]);
+        })
+        .catch(() => undefined);
       // Academic year calc
       const yr = new Date().getFullYear();
       setAcademicYear(`${yr - 1}-${yr}`);
@@ -147,175 +171,144 @@ export default function ParentProfile() {
     fetchData();
   }, [session?.user, status, fetchData]);
 
-  const generatePdf = async () => {
-    if (!profile) return;
+  useEffect(() => {
+    void resolveSchoolBrand();
+  }, []);
+
+  const filteredMarks = useMemo(() => {
+    if (examTypeFilter === "ALL") return marks;
+    return marks.filter((m) => (m.examType || "").trim() === examTypeFilter);
+  }, [marks, examTypeFilter]);
+
+  const filteredPerformance = useMemo(() => {
+    if (!profile) return [];
+    if (filteredMarks.length > 0) {
+      const bySubject = new Map<string, { total: number; max: number }>();
+      filteredMarks.forEach((m) => {
+        const existing = bySubject.get(m.subject) || { total: 0, max: 0 };
+        existing.total += m.marks;
+        existing.max += m.totalMarks;
+        bySubject.set(m.subject, existing);
+      });
+      return Array.from(bySubject.entries()).map(([subject, agg]) => ({
+        subject,
+        score: agg.max > 0 ? Math.round((agg.total / agg.max) * 100) : 0,
+      }));
+    }
+    return profile.academicPerformance;
+  }, [profile, filteredMarks]);
+
+  const attendancePct = useMemo(() => {
+    if (!profile || profile.attendanceTrends.length === 0) return 0;
+    return Math.round(
+      profile.attendanceTrends.reduce((a, t) => a + t.pct, 0) / profile.attendanceTrends.length
+    );
+  }, [profile]);
+
+  const overallGrade = useMemo(() => {
+    if (filteredPerformance.length === 0) return "—";
+    const avg = Math.round(
+      filteredPerformance.reduce((a, x) => a + x.score, 0) / filteredPerformance.length
+    );
+    if (avg >= 90) return "A+";
+    if (avg >= 80) return "A";
+    if (avg >= 70) return "B+";
+    if (avg >= 60) return "B";
+    return "C";
+  }, [filteredPerformance]);
+
+  const stats = useMemo(
+    () => [
+      { label: "Overall grade", value: overallGrade, icon: Award },
+      { label: "Attendance", value: `${attendancePct}%`, icon: TrendingUp },
+      { label: "Total assignments", value: String(homeworkTotal), icon: BookOpen },
+      { label: "Pending homework", value: String(pendingHomework), icon: Clock },
+      { label: "Upcoming events", value: String(upcomingEvents), icon: Calendar },
+    ],
+    [overallGrade, attendancePct, homeworkTotal, pendingHomework, upcomingEvents]
+  );
+
+  const profileReportPreview = useMemo((): ProfileReportData | null => {
+    if (!profile) return null;
+    const s = profile.student;
+    return {
+      studentName: s.name || "Student",
+      admissionNumber: s.admissionNumber,
+      className: s.class?.displayName,
+      rollNo: s.rollNo,
+      dob: s.dob,
+      fatherName: s.fatherName,
+      motherName: s.motherName,
+      phone: s.phone || user?.mobile || undefined,
+      email: s.email,
+      academicYear: academicYear || currentAcademicYearLabel(),
+      dateGenerated: new Date(),
+      stats: stats.map((item) => ({ label: item.label, value: String(item.value) })),
+      attendanceTrends: profile.attendanceTrends,
+      academicPerformance: filteredPerformance,
+      certificates: profile.certificates,
+    };
+  }, [profile, user, academicYear, stats, filteredPerformance]);
+
+  const generatePdf = useCallback(async () => {
+    if (!profileReportPreview) return;
     setPdfLoading(true);
     try {
-      const pdfDoc = await PDFDocument.create();
-      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-      const pageWidth = 595;
-      const pageHeight = 842;
-      let page = pdfDoc.addPage([pageWidth, pageHeight]);
-      let y = pageHeight - 50;
-
-      const lineHeight = 14;
-      const ensureSpace = (need: number) => {
-        if (y < need) {
-          page = pdfDoc.addPage([pageWidth, pageHeight]);
-          y = pageHeight - 40;
-        }
-      };
-      const draw = (text: string, x: number, size: number, bold: boolean) => {
-        ensureSpace(lineHeight);
-        page.drawText(text, {
-          x,
-          y,
-          size,
-          font: bold ? boldFont : font,
-          color: rgb(0.1, 0.1, 0.1),
-        });
-        y -= size + 2;
-      };
-
-      draw("Student Profile & Overview", 50, 18, true);
-      y -= 8;
-      draw(`Name: ${profile.student.name}`, 50, 11, false);
-      draw(`Admission: ${profile.student.admissionNumber}`, 50, 11, false);
-      draw(`Class: ${profile.student.class?.displayName ?? "—"}`, 50, 11, false);
-      draw(`Roll: ${profile.student.rollNo || "—"}`, 50, 11, false);
-      draw(`DOB: ${profile.student.dob || "—"}`, 50, 11, false);
-      draw(`Guardian: ${profile.student.fatherName || "—"}`, 50, 11, false);
-      draw(`Contact: ${profile.student.phone || "—"}`, 50, 11, false);
-      y -= 16;
-
-      draw("Attendance Summary", 50, 14, true);
-      y -= 6;
-      profile.attendanceTrends.forEach((t) => {
-        draw(`${t.month}: ${t.present}/${t.total} (${t.pct}%)`, 50, 10, false);
+      await downloadParentPortalPdf({
+        ref: reportRef,
+        filename: `Student_Profile_${profileReportPreview.admissionNumber || "report"}.pdf`,
+        minHeight: 400,
+        beforeCapture: (brand) => {
+          flushSync(() => {
+            setPdfReportData({
+              ...profileReportPreview,
+              schoolName: brand.name,
+              schoolLogo: brand.logo,
+              schoolAddress: brand.address,
+            });
+          });
+        },
       });
-      y -= 16;
-
-      draw("Academic Performance", 50, 14, true);
-      y -= 6;
-      profile.academicPerformance.forEach((a) => {
-        draw(`${a.subject}: ${a.score}%`, 50, 10, false);
-      });
-      y -= 16;
-
-      if (profile.certificates.length > 0) {
-        draw("Certificates", 50, 14, true);
-        y -= 6;
-        profile.certificates.slice(0, 10).forEach((c) => {
-          draw(`${c.title} - ${c.issuedDate}`, 50, 10, false);
-        });
-      }
-
-      const pdfBytes = await pdfDoc.save();
-      const blob = new Blob([new Uint8Array(pdfBytes)], { type: "application/pdf" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `student-profile-${profile.student.admissionNumber}-${Date.now()}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to generate PDF.");
     } finally {
       setPdfLoading(false);
     }
-  };
+  }, [profileReportPreview]);
+
+  let content: ReactNode;
 
   if (status === "loading" || loading) {
-    return (
+    content = (
       <div className="min-h-screen p-4 sm:p-6 md:p-8 flex items-center justify-center">
-        <Spinner />
+        <ParentTimellyLoader preset="profile" className="w-full max-w-2xl" />
       </div>
     );
-  }
-
-  if (error && !profile) {
-    return (
+  } else if (error && !profile) {
+    content = (
       <div className="min-h-screen p-4 sm:p-6 md:p-8">
         <div className="rounded-2xl border border-white/10 bg-white/5 p-8 text-center">
           <p className="text-red-300">{error}</p>
         </div>
       </div>
     );
-  }
+  } else if (!profile) {
+    content = null;
+  } else {
+    const s = profile.student;
+    const photoUrl = s.photoUrl || user?.photoUrl || null;
 
-  if (!profile) return null;
+    const examTypeOptions = (() => {
+      const types = new Set<string>();
+      marks.forEach((m) => {
+        if (m.examType && m.examType.trim()) {
+          types.add(m.examType.trim());
+        }
+      });
+      return ["ALL", ...Array.from(types).sort()];
+    })();
 
-  const s = profile.student;
-
-  const examTypeOptions = (() => {
-    const types = new Set<string>();
-    marks.forEach((m) => {
-      if (m.examType && m.examType.trim()) {
-        types.add(m.examType.trim());
-      }
-    });
-    return ["ALL", ...Array.from(types).sort()];
-  })();
-
-  const filteredMarks = (() => {
-    if (examTypeFilter === "ALL") return marks;
-    return marks.filter(
-      (m) => (m.examType || "").trim() === examTypeFilter
-    );
-  })();
-
-  const filteredPerformance =
-    filteredMarks.length > 0
-      ? (() => {
-          const bySubject = new Map<
-            string,
-            { total: number; max: number }
-          >();
-          filteredMarks.forEach((m) => {
-            const key = m.subject;
-            const existing = bySubject.get(key) || { total: 0, max: 0 };
-            existing.total += m.marks;
-            existing.max += m.totalMarks;
-            bySubject.set(key, existing);
-          });
-          return Array.from(bySubject.entries()).map(([subject, agg]) => ({
-            subject,
-            score: agg.max > 0 ? Math.round((agg.total / agg.max) * 100) : 0,
-          }));
-        })()
-      : profile.academicPerformance;
-  const photoUrl = s.photoUrl || user?.photoUrl || null;
-  const attendancePct =
-    profile.attendanceTrends.length > 0
-      ? Math.round(
-        profile.attendanceTrends.reduce((a, t) => a + t.pct, 0) / profile.attendanceTrends.length
-      )
-      : 0;
-  const overallGrade =
-    filteredPerformance.length > 0
-      ? (() => {
-        const avg = Math.round(
-          filteredPerformance.reduce((a, x) => a + x.score, 0) /
-          filteredPerformance.length
-        );
-        if (avg >= 90) return "A+";
-        if (avg >= 80) return "A";
-        if (avg >= 70) return "B+";
-        if (avg >= 60) return "B";
-        return "C";
-      })()
-      : "—";
-
-  const stats = [
-    { label: "Overall grade", value: overallGrade, icon: Award },
-    { label: "Attendance", value: `${attendancePct}%`, icon: TrendingUp },
-    { label: "Total assignments", value: String(homeworkTotal), icon: BookOpen },
-    { label: "Pending homework", value: String(pendingHomework), icon: Clock },
-    { label: "Upcoming events", value: String(upcomingEvents), icon: Calendar },
-  ];
-
-  return (
+    content = (
     <div className="min-h-screen p-3 sm:p-5 md:p-6 pb-20 sm:pb-6 overflow-x-hidden">
       <main className="max-w-6xl mx-auto space-y-5 md:space-y-7">
         {/* Header: student name + overview */}
@@ -567,5 +560,18 @@ export default function ParentProfile() {
 
       </main>
     </div>
+    );
+  }
+
+  return (
+    <>
+      {content}
+      {profileReportPreview ? (
+        <ProfileReportTemplate
+          ref={reportRef}
+          data={pdfReportData ?? profileReportPreview}
+        />
+      ) : null}
+    </>
   );
 }

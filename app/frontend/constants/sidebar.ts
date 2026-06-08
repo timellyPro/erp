@@ -118,14 +118,14 @@ export const PARENT_MENU_ITEMS: SidebarItem[] = [
         permission: Permission.CERTIFICATES,
     requiresSubscription: true,
     },
-    // {
-    //     label: "Fees",
-    //     tab: "fees",
-    //     href: "/frontend/pages/parent?tab=fees",
-    //     icon: CreditCard,
-    //     permission: Permission.FEES,
-    // requiresSubscription: false,
-    // },
+    {
+        label: "Fees",
+        tab: "fees",
+        href: "/frontend/pages/parent?tab=fees",
+        icon: CreditCard,
+        permission: Permission.FEES,
+        requiresSubscription: false,
+    },
     {
         label: "Leave Application",
         tab: "leave",
