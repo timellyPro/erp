@@ -327,7 +327,8 @@ export async function POST(req: Request) {
             }
           }
           const local = emailLocalPartFromFullName(name);
-          let userEmail = email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : `${local}@${schoolDomain}`;
+          // Student login email is always name@schoolDomain — CSV email is parent contact only.
+          let userEmail = `${local}@${schoolDomain}`;
           let counter = 1;
           while (
             await tx.user.findUnique({

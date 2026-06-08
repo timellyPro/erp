@@ -187,12 +187,6 @@ export async function enrollStudentFromAdmissionApplication(params: {
   const password = dobDate.toISOString().split("T")[0].replace(/-/g, "");
   const hashedPassword = await bcrypt.hash(password, 10);
 
-  const parentEmailRaw = (app.parentEmail || "").trim();
-  const emailForUser =
-    parentEmailRaw && parentEmailRaw !== "-" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parentEmailRaw)
-      ? parentEmailRaw
-      : "";
-
   const studentRecord = await prisma.$transaction(
     async (tx) => {
       let settingsRow = await tx.schoolSettings.findUnique({ where: { schoolId } });
@@ -260,7 +254,8 @@ export async function enrollStudentFromAdmissionApplication(params: {
       }
 
       const local = emailLocalPartFromFullName(name);
-      let userEmail = emailForUser || `${local}@${schoolDomain}`;
+      // Student login email is always name@schoolDomain — parentEmail on the application is contact only.
+      let userEmail = `${local}@${schoolDomain}`;
       let counter = 1;
       while (
         await tx.user.findUnique({
