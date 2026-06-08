@@ -19,8 +19,12 @@ import ParentCertificatesTab from "../../components/parent/certificates/ParentCe
 import ParentLeavesTab from "../../components/parent/leaves/LeaveApplications";
 import ParentSettingsTab from "../../components/parent/settings/ParentSettings";
 import ParentAnalyticsTab from "../../components/parent/analytics/ParentAnalyticsTab";
-import Spinner from "../../components/common/Spinner";
+import ParentTimellyLoader from "../../components/parent/ParentTimellyLoader";
 import ParentSubscriptionTab from "../../components/parent/subscription/ParentSubscriptionTab";
+import {
+  peekParentDetailsFromBootstrap,
+  warmParentPortalBootstrap,
+} from "@/lib/loadParentPortal";
 import { Lock } from "lucide-react";
 
 const PARENT_TAB_TITLES: Record<string, string> = {
@@ -30,7 +34,7 @@ const PARENT_TAB_TITLES: Record<string, string> = {
   attendance: "Attendance",
   marks: "Marks",
   exams: "Exams & Syllabus",
-  // fees: "Fees",
+  fees: "Fees",
   chat: "Chat",
   workshops: "Workshops",
   certificates: "Certificates",
@@ -85,8 +89,8 @@ function ParentDashboardInner() {
         return <ParentMarksTab />;
       case "exams":
         return <ParentExamsTab />;
-      // case "fees":
-      //   return <ParentFeesTab />;
+      case "fees":
+        return <ParentFeesTab />;
       case "subscription":
         return <ParentSubscriptionTab />;
       case "chat":
@@ -106,28 +110,41 @@ function ParentDashboardInner() {
 
   useEffect(() => {
     let cancelled = false;
+    const studentId = session?.user?.studentId;
 
     (async () => {
       try {
-        const [userRes, parentDetailsRes] = await Promise.all([
-          fetch("/api/user/me"),
-          fetch("/api/student/parent-details"),
-        ]);
+        if (studentId) {
+          const boot = await warmParentPortalBootstrap(studentId).catch(() => null);
+          if (cancelled) return;
+          if (boot?.parentDetails?.address) {
+            setProfile((prev) => ({
+              ...prev,
+              address: boot.parentDetails.address || prev.address,
+            }));
+          }
+        }
+
+        const cachedDetails = peekParentDetailsFromBootstrap();
+        if (cachedDetails?.address) {
+          setProfile((prev) => ({ ...prev, address: cachedDetails.address || prev.address }));
+        }
+
+        const userRes = await fetch("/api/user/me");
         const userData = await userRes.json();
-        const parentData = await parentDetailsRes.json().catch(() => ({}));
         if (cancelled || !userRes.ok) return;
 
         const u = userData.user;
         if (u) {
-          setProfile({
-            name: u.name ?? session?.user?.name ?? "Parent",
+          setProfile((prev) => ({
+            name: u.name ?? prev.name ?? session?.user?.name ?? "Parent",
             subtitle: "Parent",
-            image: u.photoUrl ?? session?.user?.image ?? null,
-            email: u.email ?? session?.user?.email ?? undefined,
-            phone: u.mobile ?? (session?.user as any)?.mobile ?? undefined,
-            address: parentDetailsRes.ok ? parentData?.address ?? undefined : undefined,
-            userId: u.id ?? (session?.user as any)?.id ?? undefined,
-          });
+            image: u.photoUrl ?? prev.image ?? session?.user?.image ?? null,
+            email: u.email ?? prev.email ?? session?.user?.email ?? undefined,
+            phone: u.mobile ?? prev.phone ?? (session?.user as any)?.mobile ?? undefined,
+            address: prev.address ?? cachedDetails?.address ?? undefined,
+            userId: u.id ?? prev.userId ?? (session?.user as any)?.id ?? undefined,
+          }));
         }
       } catch {
         // fallback default
@@ -137,13 +154,25 @@ function ParentDashboardInner() {
     return () => {
       cancelled = true;
     };
-  }, [session?.user?.name, session?.user?.image, session?.user?.email, (session?.user as any)?.mobile, (session?.user as any)?.id]);
+  }, [
+    session?.user?.studentId,
+    session?.user?.name,
+    session?.user?.image,
+    session?.user?.email,
+    (session?.user as any)?.mobile,
+    (session?.user as any)?.id,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         setLoadingSub(true);
+        const studentId = session?.user?.studentId;
+        if (studentId) {
+          await warmParentPortalBootstrap(studentId).catch(() => undefined);
+        }
+        if (cancelled) return;
         const res = await fetch("/api/parent/subscription/status", { credentials: "include" });
         const data = await res.json();
         if (!cancelled && res.ok) {
@@ -158,7 +187,7 @@ function ParentDashboardInner() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [session?.user?.studentId]);
 
   const isLocked =
     subStatus &&
@@ -226,8 +255,8 @@ export default function ParentDashboardContent() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen flex items-center justify-center text-white/70">
-          <Spinner />
+        <div className="min-h-screen flex items-center justify-center px-4 py-10">
+          <ParentTimellyLoader preset="shell" className="w-full max-w-lg" />
         </div>
       }
     >

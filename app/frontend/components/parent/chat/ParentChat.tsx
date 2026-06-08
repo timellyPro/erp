@@ -6,6 +6,7 @@ import SearchInput from "../../common/SearchInput";
 import ChatWindow from "../../teacher/parentchat/ChatWindow";
 import { Chat, Status } from "../../teacher/parentchat/ChatList";
 import NewChatModal from "./NewChatModal";
+import ParentTimellyLoader from "../ParentTimellyLoader";
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200";
 
@@ -49,7 +50,7 @@ export default function TeacherParentChatTab() {
   const [showModal, setShowModal] = useState(false);
 
   const fetchAppointments = useCallback(async () => {
-    setLoading(true);
+    if (chats.length === 0) setLoading(true);
     try {
       const res = await fetch("/api/communication/appointments", { credentials: "include" });
       const data = await res.json().catch(() => ({}));
@@ -136,9 +137,7 @@ export default function TeacherParentChatTab() {
           {/* Chat List */}
           <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 sm:p-3 space-y-2 overscroll-contain min-h-0">
             {loading ? (
-              <div className="text-center text-gray-400 text-sm">
-                Loading...
-              </div>
+              <ParentTimellyLoader preset="chat" compact bare className="py-8" />
             ) : filteredChats.length === 0 ? (
               <div className="text-center text-gray-400 text-sm">
                 No conversations

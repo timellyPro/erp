@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Receipt, ShieldCheck, Clock, CreditCard } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
-import Spinner from "../../common/Spinner";
+import ParentTimellyLoader from "../ParentTimellyLoader";
 import PayButton from "../../common/PayButton";
 
 type StatusResponse = {
@@ -62,7 +62,7 @@ export default function ParentSubscriptionTab() {
   if (loading) {
     return (
       <div className="min-h-[40vh] flex items-center justify-center">
-        <Spinner />
+        <ParentTimellyLoader preset="subscription" className="w-full max-w-2xl" />
       </div>
     );
   }

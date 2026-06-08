@@ -7,6 +7,7 @@ import StatCard from "../../common/statCard";
 import CertificateRequestCard from "./CertificateRequestCard";
 import CertificatesCard from "./CertificatesCard";
 import ApprovedCertificates from "./ApprovedCertificates";
+import ParentTimellyLoader from "../ParentTimellyLoader";
 
 interface CertificateRequest {
   id: string;
@@ -183,6 +184,14 @@ export default function ParentCertificatesTab() {
     return d.toISOString();
   };
 
+  if (loading && certificateRequests.length === 0 && certificates.length === 0) {
+    return (
+      <div className="min-h-[calc(100vh-80px)] flex items-center justify-center px-4">
+        <ParentTimellyLoader preset="certificates" className="w-full max-w-2xl" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-[calc(100vh-80px)]">
       <div className="space-y-6 md:space-y-8 animate-fadeIn">
@@ -247,7 +256,7 @@ export default function ParentCertificatesTab() {
           </div>
 
           {loading ? (
-            <div className="py-6 text-center text-gray-400 text-sm">Loading requests…</div>
+            <ParentTimellyLoader preset="certificates" compact className="w-full" />
           ) : certificateRequests.length === 0 ? (
             <div className="py-6 text-center text-gray-400 text-sm">No certificate requests yet.</div>
           ) : (
