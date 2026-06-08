@@ -5,6 +5,7 @@ import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import { saveClassFeeStructureAndSyncStudents } from "@/lib/classFeeStructureApply";
 import { finalFeeFromStructureAndExtras, sumExtraFeesForStudent } from "@/lib/studentTuitionFromStructure";
+import { invalidateSchoolFeeReadCaches } from "@/lib/studentFeeReadCache";
 import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
@@ -104,6 +105,7 @@ export async function PUT(req: Request) {
         classId,
         components,
       });
+      await invalidateSchoolFeeReadCaches(schoolId);
       return NextResponse.json({ structure });
     } catch (applyErr: any) {
       const msg = String(applyErr?.message || "");
@@ -198,6 +200,7 @@ export async function DELETE(req: Request) {
       );
     }
 
+    await invalidateSchoolFeeReadCaches(schoolId);
     return NextResponse.json({ success: true });
   } catch (error: any) {
     console.error("Fee structure DELETE error:", error);

@@ -5,36 +5,18 @@ import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
 import { rollupOrphanExtraFeeAllocations } from "@/lib/rollupOrphanExtraFeeAllocations";
+import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
+import { FEE_MUTATION_TX } from "@/lib/prismaFeeMutationTx";
+import { loadExtraFeesForStudentScope } from "@/lib/loadExtraFeesForStudentScope";
 import { discountedSnapshotDueForHead, studentFeeDiscountFromRecord } from "@/lib/studentFeeHeadDiscount";
 import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 import { canonicalizeGatewayForStorage } from "@/lib/feePaymentGateway";
-
-async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
-  let schoolId = session.user.schoolId;
-  if (!schoolId) {
-    const adminSchool = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = adminSchool?.id ?? null;
-  }
-  if (!schoolId) {
-    const teacherClass = await prisma.class.findFirst({
-      where: { teacherId: session.user.id },
-      select: { schoolId: true },
-    });
-    schoolId = teacherClass?.schoolId ?? null;
-  }
-  if (!schoolId) {
-    const teacherSchool = await prisma.school.findFirst({
-      where: { teachers: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = teacherSchool?.id ?? null;
-  }
-  return schoolId;
-}
+import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import {
+  canUseFastOfflineFeePayment,
+  recordFastOfflineFeePayment,
+} from "@/lib/recordFastOfflineFeePayment";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -50,7 +32,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const schoolId = await getSchoolId(session);
+    const schoolId = await resolveFeesSchoolId(session);
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
@@ -71,21 +53,6 @@ export async function POST(req: Request) {
     if (!studentId || typeof amount !== "number" || isNaN(amount) || amount <= 0) {
       return NextResponse.json({ message: "studentId and amount (positive number) required" }, { status: 400 });
     }
-
-    const student = await prisma.student.findFirst({
-      where: { id: studentId, schoolId },
-      include: { fee: true, class: true },
-    });
-
-    if (!student) {
-      return NextResponse.json({ message: "Student not found in your school" }, { status: 404 });
-    }
-
-    if (!student.fee) {
-      return NextResponse.json({ message: "Fee record not found for this student" }, { status: 404 });
-    }
-
-    const fee = student.fee;
 
     type SelectedHead =
       | { headType: "BASE_COMPONENT"; componentIndex: number; componentName?: string }
@@ -110,29 +77,89 @@ export async function POST(req: Request) {
           .filter((x): x is SelectedHead => x !== null)
       : [];
 
-    const normalizedExplicitAllocations: Array<{ key: string; amount: number }> = Array.isArray(rawExplicitAllocations)
+    const normalizedExplicitAllocations = (Array.isArray(rawExplicitAllocations)
       ? rawExplicitAllocations
           .map((a: any) => {
             const key = typeof a?.key === "string" ? a.key.trim() : "";
             const allocAmount = Number(a?.amount);
+            const label = typeof a?.label === "string" ? a.label.trim() : undefined;
             if (!key || !Number.isFinite(allocAmount) || allocAmount <= 0) return null;
-            return { key, amount: allocAmount };
+            return { key, amount: allocAmount, label };
           })
-          .filter((a): a is { key: string; amount: number } => a !== null)
-      : [];
+          .filter((a) => a !== null)
+      : []) as Array<{ key: string; amount: number; label?: string }>;
 
-    const classFeeStructure = student.class?.id
-      ? await prisma.classFeeStructure.findUnique({
-          where: { classId: student.class.id },
-          select: { components: true },
-        })
-      : null;
+    if (canUseFastOfflineFeePayment(normalizedSelectedHeads, normalizedExplicitAllocations)) {
+      try {
+        const fastResult = await recordFastOfflineFeePayment({
+          schoolId,
+          studentId,
+          amount,
+          paymentMode,
+          refNo,
+          transactionId,
+          paymentDate,
+          selectedHeads: normalizedSelectedHeads,
+          explicitAllocations: normalizedExplicitAllocations,
+        });
+        return NextResponse.json(
+          { ...fastResult, message: "Payment recorded successfully" },
+          { status: 201 }
+        );
+      } catch (fastErr: unknown) {
+        const msg = fastErr instanceof Error ? fastErr.message : "Payment failed";
+        const status = msg.includes("not found") ? 404 : 400;
+        return NextResponse.json({ message: msg }, { status });
+      }
+    }
+
+    const student = await prisma.student.findFirst({
+      where: { id: studentId, schoolId },
+      include: { fee: true, class: true },
+    });
+
+    if (!student) {
+      return NextResponse.json({ message: "Student not found in your school" }, { status: 404 });
+    }
+
+    if (!student.fee) {
+      return NextResponse.json({ message: "Fee record not found for this student" }, { status: 404 });
+    }
+
+    const fee = student.fee;
+
+    const classId = student.class?.id ?? null;
+    const classSection = student.class?.section ?? null;
+
+    const [classFeeStructure, extraFeesRaw, groupedAllocations] = await Promise.all([
+      classId
+        ? prisma.classFeeStructure.findUnique({
+            where: { classId },
+            select: { components: true },
+          })
+        : Promise.resolve(null),
+      loadExtraFeesForStudentScope(
+        { schoolId, studentId: student.id, classId, classSection },
+        { id: true, name: true, amount: true, targetType: true, residencyScope: true }
+      ),
+      prisma.paymentFeeAllocation.groupBy({
+        by: ["allocationType", "headType", "componentIndex", "extraFeeId"],
+        where: {
+          studentId: student.id,
+          allocationType: { in: ["PAYMENT", "REFUND"] },
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+        },
+        _sum: { allocatedAmount: true },
+      }),
+    ]);
 
     const baseComponents =
-      ((classFeeStructure?.components as Array<{ name: string; amount: number }>) ?? []).map((c) => ({
-        name: c.name,
-        amount: Number(c.amount) || 0,
-      }));
+      ((classFeeStructure?.components as Array<{ name: string; amount: number }> | null) ?? []).map(
+        (c) => ({
+          name: c.name,
+          amount: Number(c.amount) || 0,
+        })
+      );
 
     const discount = studentFeeDiscountFromRecord(
       {
@@ -145,23 +172,6 @@ export async function POST(req: Request) {
       baseComponents
     );
 
-    const classId = student.class?.id ?? null;
-    const classSection = student.class?.section ?? null;
-
-    const extraFeesRaw = await prisma.extraFee.findMany({
-      where: {
-        schoolId,
-        OR: [
-          { targetType: "SCHOOL" },
-          ...(classId ? [{ targetType: "CLASS", targetClassId: classId }] : []),
-          ...(classId && classSection
-            ? [{ targetType: "SECTION", targetClassId: classId, targetSection: classSection }]
-            : []),
-          { targetType: "STUDENT", targetStudentId: student.id },
-        ],
-      },
-      select: { id: true, name: true, amount: true, targetType: true, residencyScope: true },
-    });
     const residency = student.residencyType ?? "Day Scholar";
     const rte = isStudentRte(residency);
     const extraFees = extraFeesRaw
@@ -203,40 +213,15 @@ export async function POST(req: Request) {
       return `EXTRA:${h.extraFeeId}`;
     };
 
-    // Net already-paid by head via allocations (new payments only).
-    const [paymentAllocations, refundAllocations] = await Promise.all([
-      prisma.paymentFeeAllocation.findMany({
-        where: {
-          studentId: student.id,
-          allocationType: "PAYMENT",
-          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
-        },
-        select: { headType: true, componentIndex: true, componentName: true, extraFeeId: true, allocatedAmount: true },
-      }),
-      prisma.paymentFeeAllocation.findMany({
-        where: {
-          studentId: student.id,
-          allocationType: "REFUND",
-          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
-        },
-        select: { headType: true, componentIndex: true, componentName: true, extraFeeId: true, allocatedAmount: true },
-      }),
-    ]);
-
     const netPaidByHead = new Map<string, number>();
-    for (const a of paymentAllocations) {
+    for (const a of groupedAllocations) {
       const key =
         a.headType === "BASE_COMPONENT"
           ? `BASE:${a.componentIndex}`
           : `EXTRA:${a.extraFeeId}`;
-      netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) + a.allocatedAmount);
-    }
-    for (const a of refundAllocations) {
-      const key =
-        a.headType === "BASE_COMPONENT"
-          ? `BASE:${a.componentIndex}`
-          : `EXTRA:${a.extraFeeId}`;
-      netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) - a.allocatedAmount);
+      const amount = a._sum.allocatedAmount ?? 0;
+      const sign = a.allocationType === "REFUND" ? -1 : 1;
+      netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) + sign * amount);
     }
 
     redistributeBaseMinusOneAllocations(
@@ -431,43 +416,68 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Invalid paymentDate" }, { status: 400 });
     }
 
-    const paymentAndAllocations = await prisma.$transaction(async (tx) => {
-      const payment = await tx.payment.create({
-        data: {
-          studentId,
-          amount,
-          gateway: offlineGateway,
-          status: "SUCCESS",
-          transactionId: txId,
-          ...(selectedPaymentDate ? { createdAt: selectedPaymentDate } : {}),
-        },
-      });
+    const paymentAndAllocations = await prisma.$transaction(
+      async (tx) => {
+        const payment = await tx.payment.create({
+          data: {
+            studentId,
+            amount,
+            gateway: offlineGateway,
+            status: "SUCCESS",
+            transactionId: txId,
+            ...(selectedPaymentDate ? { createdAt: selectedPaymentDate } : {}),
+          },
+        });
 
-      const allocationsCreateMany = paymentAllocationsData.map((d: any) => ({
-        paymentId: payment.id,
-        studentId: d.studentId,
-        allocationType: d.allocationType,
-        allocatedAmount: d.allocatedAmount,
-        headType: d.headType,
-        componentIndex: d.componentIndex,
-        componentName: d.componentName,
-        extraFeeId: d.extraFeeId,
+        const allocationsCreateMany = paymentAllocationsData.map((d: any) => ({
+          paymentId: payment.id,
+          studentId: d.studentId,
+          allocationType: d.allocationType,
+          allocatedAmount: d.allocatedAmount,
+          headType: d.headType,
+          componentIndex: d.componentIndex,
+          componentName: d.componentName,
+          extraFeeId: d.extraFeeId,
+        }));
+
+        if (allocationsCreateMany.length > 0) {
+          await tx.paymentFeeAllocation.createMany({ data: allocationsCreateMany });
+        }
+
+        const updatedFee = await tx.studentFee.update({
+          where: { studentId },
+          data: { amountPaid: newAmountPaid, remainingFee: newRemaining },
+        });
+
+        return { payment, updatedFee };
+      },
+      FEE_MUTATION_TX
+    );
+
+    invalidateStudentFeeReadCaches({ studentId, schoolId });
+
+    const allocationLines = paymentAllocationsData
+      .filter((d) => d.allocatedAmount > 0.00001)
+      .map((d) => ({
+        name:
+          d.headType === "BASE_COMPONENT"
+            ? String(d.componentName ?? "Fee")
+            : String(extraFees.find((ef) => ef.id === d.extraFeeId)?.name ?? "Extra Fee"),
+        amount: d.allocatedAmount,
       }));
 
-      if (allocationsCreateMany.length > 0) {
-        await tx.paymentFeeAllocation.createMany({ data: allocationsCreateMany });
-      }
-
-      await tx.studentFee.update({
-        where: { studentId },
-        data: { amountPaid: newAmountPaid, remainingFee: newRemaining },
-      });
-
-      return payment;
-    });
-
     return NextResponse.json(
-      { payment: paymentAndAllocations, message: "Payment recorded successfully" },
+      {
+        payment: paymentAndAllocations.payment,
+        updatedFee: {
+          amountPaid: paymentAndAllocations.updatedFee.amountPaid,
+          remainingFee: paymentAndAllocations.updatedFee.remainingFee,
+          finalFee: paymentAndAllocations.updatedFee.finalFee,
+          totalFee: paymentAndAllocations.updatedFee.totalFee,
+        },
+        feeAllocations: allocationLines,
+        message: "Payment recorded successfully",
+      },
       { status: 201 }
     );
   } catch (error: any) {

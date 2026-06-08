@@ -3,5 +3,6 @@ export {
   fetchStudentDetailsFast as loadStudentDetailsBundle,
   peekStudentDetailsFast as peekStudentDetailsBundle,
   invalidateStudentDetailsFast as invalidateStudentDetailsBundleCache,
+  refreshStudentFeesAfterMutation,
   warmStudentDetailsBundle,
 } from "@/lib/fetchStudentDetailsFast";

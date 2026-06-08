@@ -462,9 +462,35 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     return d >= startDate && d <= endDate;
   };
 
+  const getReportDateRange = (): { from: string; to: string } => {
+    if (reportPeriod === "DAY_WISE") {
+      return { from: reportDate, to: reportDate };
+    }
+    if (reportPeriod === "MONTH_WISE") {
+      const [y, m] = reportMonth.split("-").map((v) => Number(v));
+      const lastDay = new Date(y, m, 0).getDate();
+      return {
+        from: `${reportMonth}-01`,
+        to: `${reportMonth}-${String(lastDay).padStart(2, "0")}`,
+      };
+    }
+    if (reportPeriod === "YEAR_WISE") {
+      return { from: `${reportYear}-01-01`, to: `${reportYear}-12-31` };
+    }
+    const [start, end] = academicYear.split("-").map((v) => Number(v));
+    return { from: `${start}-04-01`, to: `${end}-03-31` };
+  };
+
   const exportFinalTemplate = async () => {
+    const { from: reportFrom, to: reportTo } = getReportDateRange();
+    const txQs = new URLSearchParams({
+      limit: "10000",
+      forFeeReport: "1",
+      from: reportFrom,
+      to: reportTo,
+    });
     const [txRes, schoolRes] = await Promise.all([
-      fetch("/api/fees/transactions?limit=10000&forFeeReport=1", { credentials: "include" }),
+      fetch(`/api/fees/transactions?${txQs.toString()}`, { credentials: "include" }),
       fetch("/api/school/mine", { credentials: "include", cache: "no-store" }),
     ]);
     const txData = await txRes.json().catch(() => ({}));

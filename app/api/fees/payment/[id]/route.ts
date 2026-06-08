@@ -4,6 +4,8 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import { canonicalizeGatewayForStorage } from "@/lib/feePaymentGateway";
+import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
+import { deleteFastFeePayment } from "@/lib/deleteFastFeePayment";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -200,6 +202,7 @@ export async function PATCH(req: Request, context: RouteParams) {
       });
 
       const updated = await prisma.payment.findUnique({ where: { id: payment.id } });
+    await invalidateStudentFeeReadCaches({ studentId: payment.studentId, schoolId });
       return NextResponse.json({ payment: updated, message: "Payment updated" }, { status: 200 });
     }
 
@@ -213,6 +216,7 @@ export async function PATCH(req: Request, context: RouteParams) {
       },
     });
     const updated = await prisma.payment.findUnique({ where: { id: payment.id } });
+    await invalidateStudentFeeReadCaches({ studentId: payment.studentId, schoolId });
     return NextResponse.json({ payment: updated, message: "Payment updated" }, { status: 200 });
   } catch (error: unknown) {
     console.error("PATCH /api/fees/payment/[id] error:", error);
@@ -251,61 +255,16 @@ export async function DELETE(_req: Request, context: RouteParams) {
       return NextResponse.json({ message: "Invalid payment id" }, { status: 400 });
     }
 
-    const payment = await loadAuthorizedPayment(paymentId, schoolId);
-    if (!payment) {
-      return NextResponse.json({ message: "Payment not found" }, { status: 404 });
-    }
-
-    if (!isFeePayment(payment)) {
-      return NextResponse.json(
-        { message: "Only school fee payments can be deleted here" },
-        { status: 400 }
-      );
-    }
-
-    const subCount = await prisma.parentSubscription.count({
-      where: { paymentId: payment.id },
-    });
-    if (subCount > 0) {
-      return NextResponse.json(
-        { message: "This payment is linked to a subscription and cannot be deleted" },
-        { status: 400 }
-      );
-    }
-
-    const refundCount = await prisma.refund.count({
-      where: { paymentId: payment.id, status: "SUCCESS" },
-    });
-    if (refundCount > 0) {
-      return NextResponse.json(
-        { message: "Delete blocked: this payment has refund records. Use the refund flow instead." },
-        { status: 400 }
-      );
-    }
-
-    const fee = payment.student.fee;
-    const st = String(payment.status || "").toUpperCase();
-    const shouldReverseFee = fee && (st === "SUCCESS" || st === "COMPLETED");
-
-    await prisma.$transaction(async (tx) => {
-      if (shouldReverseFee) {
-        const newPaid = Math.max(0, Math.round((fee!.amountPaid - payment.amount) * 100) / 100);
-        const newRemaining = Math.max(0, Math.round((fee!.finalFee - newPaid) * 100) / 100);
-        await tx.studentFee.update({
-          where: { studentId: payment.studentId },
-          data: { amountPaid: newPaid, remainingFee: newRemaining },
-        });
-      }
-
-      await tx.payment.delete({ where: { id: payment.id } });
-    });
-
-    return NextResponse.json({ success: true }, { status: 200 });
+    const result = await deleteFastFeePayment(paymentId, schoolId);
+    return NextResponse.json({ success: true, ...result }, { status: 200 });
   } catch (error: unknown) {
-    console.error("DELETE /api/fees/payment/[id] error:", error);
-    return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
-      { status: 500 }
-    );
+    const msg = error instanceof Error ? error.message : "Internal server error";
+    const status = msg.includes("not found")
+      ? 404
+      : msg.includes("blocked") || msg.includes("cannot") || msg.includes("Only school")
+        ? 400
+        : 500;
+    if (status === 500) console.error("DELETE /api/fees/payment/[id] error:", error);
+    return NextResponse.json({ message: msg }, { status });
   }
 }

@@ -485,6 +485,7 @@ model Student {
   @@unique([schoolId, aadhaarNo])
   @@unique([schoolId, admissionNumber])
   @@index([schoolId, createdAt])
+  @@index([schoolId, classId])
 }
 
 // =====================
@@ -556,6 +557,7 @@ model Attendance {
 
   @@unique([studentId, classId, date, period])
   @@index([studentId, date])
+  @@index([studentId, date(sort: Desc)], map: "Attendance_studentId_date_desc_idx")
   @@index([classId, date])
 }
 
@@ -1009,6 +1011,10 @@ model ExtraFee {
   @@index([schoolId])
   @@index([targetStudentId])
   @@index([targetClassId])
+  @@index([schoolId, targetType])
+  @@index([schoolId, targetClassId, targetType])
+  @@index([schoolId, targetClassId, targetSection, targetType])
+  @@index([schoolId, targetStudentId, targetType])
 }
 
 /// Reusable fee head (title + amount) for picking in Admission → Assign Fees. Does not post to student balances until assigned.
@@ -1088,6 +1094,7 @@ model Payment {
 
   @@index([studentId])
   @@index([studentId, createdAt])
+  @@index([studentId, status, createdAt])
 }
 
 // Tracks how a payment amount was distributed across individual fee "heads"
@@ -1123,7 +1130,9 @@ model PaymentFeeAllocation {
 
   @@index([paymentId])
   @@index([paymentId, allocationType])
+  @@index([paymentId, allocationType, headType])
   @@index([studentId, headType])
+  @@index([studentId, allocationType, headType, componentIndex, extraFeeId])
   @@index([componentIndex])
   @@index([extraFeeId])
 }
@@ -1156,6 +1165,7 @@ model ParentSubscription {
 
   @@index([studentId, status])
   @@index([schoolId])
+  @@index([paymentId])
 }
 
 model PaymentWebhookEvent {
@@ -1179,6 +1189,7 @@ model Refund {
   createdAt DateTime @default(now())
 
   @@index([paymentId])
+  @@index([paymentId, status])
 }
 
 model StudentApplication {

@@ -4,12 +4,11 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { computeAdminStudentFeeBreakdown } from "@/lib/computeAdminStudentFeeBreakdown";
 import { isRedisEnabled } from "@/lib/redis";
+import {
+  getBreakdownMemCached,
+  setBreakdownMemCached,
+} from "@/lib/studentFeeReadCache";
 import { tenantCacheKey, swrGet, swrSet } from "@/lib/tenantCache";
-
-const breakdownMemCache = new Map<
-  string,
-  { freshUntil: number; value: Awaited<ReturnType<typeof computeAdminStudentFeeBreakdown>> }
->();
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -58,17 +57,18 @@ export async function GET(req: Request) {
     const skipMigrate =
       searchParams.get("skipMigrate") === "1" ||
       searchParams.get("fast") === "1";
+    const bypassCache = searchParams.get("refresh") === "1";
 
     const now = Date.now();
     const memKey = `${schoolId}:${studentId}:fast`;
-    if (skipMigrate) {
-      const memHit = breakdownMemCache.get(memKey);
-      if (memHit && now < memHit.freshUntil) {
-        return NextResponse.json(memHit.value, { status: 200 });
+    if (skipMigrate && !bypassCache) {
+      const memHit = getBreakdownMemCached(memKey);
+      if (memHit) {
+        return NextResponse.json(memHit, { status: 200 });
       }
     }
 
-    const cacheableFastPath = skipMigrate && isRedisEnabled();
+    const cacheableFastPath = skipMigrate && !bypassCache && isRedisEnabled();
     const cacheKey = cacheableFastPath
       ? await tenantCacheKey(schoolId, "api", "fees:admin:breakdown", {
           studentId,
@@ -88,8 +88,8 @@ export async function GET(req: Request) {
       cleanupHostelMessDuplicates: !skipMigrate,
       reconcileTotals: !skipMigrate,
     });
-    if (skipMigrate) {
-      breakdownMemCache.set(memKey, { value: result, freshUntil: now + 300_000 });
+    if (skipMigrate && !bypassCache) {
+      setBreakdownMemCached(memKey, result);
     }
     if (cacheKey) {
       await swrSet(

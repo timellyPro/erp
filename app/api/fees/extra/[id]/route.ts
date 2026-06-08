@@ -5,6 +5,7 @@ import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
 import { patchExtraFeeWithInstallmentSupport } from "@/lib/extraFeeInstallmentDb";
+import { invalidateSchoolFeeReadCaches } from "@/lib/studentFeeReadCache";
 import { Prisma } from "@prisma/client";
 
 const STUDENT_FEE_UPDATE_CHUNK = 200;
@@ -150,6 +151,8 @@ export async function PATCH(
     }
     console.log("============================================\n");
 
+    await invalidateSchoolFeeReadCaches(schoolId);
+
     return NextResponse.json({
       extraFee: result.extraFee,
       extraFeeIds: result.extraFeeIds,
@@ -202,6 +205,7 @@ export async function DELETE(
     await applyStudentFeeDelta(eligibleIds, -extraFee.amount);
     await prisma.extraFee.delete({ where: { id } });
 
+    await invalidateSchoolFeeReadCaches(schoolId);
     return NextResponse.json({ success: true });
   } catch (error: unknown) {
     const err = error as { message?: string };

@@ -7,6 +7,27 @@ import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
 } from "@/lib/schoolDashboardServerCache";
+import { loadAdmissionFeeDayReportTransactions } from "@/lib/loadAdmissionFeeDayReportTx";
+
+function parseYmdLocalStart(ymd: string): Date | null {
+  const parts = ymd.trim().split("-").map((v) => Number(v));
+  const y = parts[0];
+  const m = parts[1];
+  const day = parts[2];
+  if (!y || !m || !day) return null;
+  const d = new Date(y, m - 1, day, 0, 0, 0, 0);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function parseYmdLocalEnd(ymd: string): Date | null {
+  const parts = ymd.trim().split("-").map((v) => Number(v));
+  const y = parts[0];
+  const m = parts[1];
+  const day = parts[2];
+  if (!y || !m || !day) return null;
+  const d = new Date(y, m - 1, day, 23, 59, 59, 999);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 
 /**
  * GET /api/fees/transactions
@@ -33,6 +54,8 @@ export async function GET(req: Request) {
     const studentId = searchParams.get("studentId")?.trim() || undefined;
     const rawLimit = Number(searchParams.get("limit")) || 100;
     const forFeeReport = searchParams.get("forFeeReport") === "1";
+    const reportFrom = searchParams.get("from")?.trim() || "";
+    const reportTo = searchParams.get("to")?.trim() || reportFrom;
     /** Fee-report exports need a high cap; default list views stay small. */
     const limit = Math.min(Math.max(rawLimit, 1), forFeeReport ? 25000 : 200);
 
@@ -177,7 +200,16 @@ export async function GET(req: Request) {
       };
     });
 
-    const payload = { transactions };
+    let admissionFeeTransactions: Awaited<ReturnType<typeof loadAdmissionFeeDayReportTransactions>> = [];
+    if (forFeeReport && reportFrom) {
+      const from = parseYmdLocalStart(reportFrom);
+      const to = parseYmdLocalEnd(reportTo || reportFrom);
+      if (from && to && from <= to) {
+        admissionFeeTransactions = await loadAdmissionFeeDayReportTransactions(schoolId, from, to);
+      }
+    }
+
+    const payload = { transactions: [...transactions, ...admissionFeeTransactions] };
     if (!forFeeReport && !studentId && transactions.length > 0) {
       setSchoolDashboardServerCached(`fees:transactions:${schoolId}:${limit}`, payload, 20_000);
     }

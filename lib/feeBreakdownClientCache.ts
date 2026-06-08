@@ -107,7 +107,7 @@ export async function fetchFeeBreakdownFast(
 
   const run = (async (): Promise<AdminStudentFeeBreakdownResult | null> => {
     const res = await fetch(
-      `/api/fees/admin/breakdown?studentId=${encodeURIComponent(studentId)}&fast=1`,
+      `/api/fees/admin/breakdown?studentId=${encodeURIComponent(studentId)}&fast=1${options?.force ? "&refresh=1" : ""}`,
       { credentials: "include", cache: "no-store", signal: options?.signal }
     );
     const data = await res.json().catch(() => ({}));

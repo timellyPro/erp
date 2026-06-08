@@ -8,11 +8,13 @@ import { FeesBreakdown } from "./components/FeesBreakdown";
 import { ProfileSidebar } from "./components/ProfileSidebar";
 import { AttendanceTrends } from "./components/AttendanceTrends";
 import { Certificates } from "./components/Certificates";
+import type { StudentDetailsTabPayload } from "@/lib/buildStudentDetailsTabPayload";
 import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
 import {
   invalidateStudentDetailsBundleCache,
   loadStudentDetailsBundle,
   peekStudentDetailsBundle,
+  refreshStudentFeesAfterMutation,
 } from "@/lib/loadStudentDetailsBundle";
 import { dueHeadRowsFromBreakdown, type DueHeadRow } from "@/lib/feeBreakdownPaymentRows";
 import {
@@ -201,6 +203,172 @@ function buildPlaceholderById(studentId: string): StudentDetail {
   };
 }
 
+type FeePaymentSuccess = {
+  payment: {
+    id: string;
+    amount: number;
+    status: string;
+    gateway?: string;
+    createdAt: string;
+    transactionId?: string | null;
+  };
+  updatedFee: {
+    amountPaid: number;
+    remainingFee: number;
+    finalFee?: number;
+    totalFee?: number;
+  };
+  feeAllocations?: Array<{ name: string; amount: number; key?: string }>;
+};
+
+function patchDetailAfterPayment(
+  prev: StudentDetail | null,
+  result: FeePaymentSuccess,
+  fallbackLines?: Array<{ name: string; amount: number }>
+): StudentDetail | null {
+  if (!prev?.fee) return prev;
+  const { payment, updatedFee } = result;
+  const lines =
+    result.feeAllocations && result.feeAllocations.length > 0
+      ? result.feeAllocations
+      : fallbackLines ?? [{ name: "Fee payment", amount: payment.amount }];
+
+  const gateway = String(payment.gateway ?? "OFFLINE_CASH");
+  const createdAt =
+    typeof payment.createdAt === "string"
+      ? payment.createdAt
+      : new Date(payment.createdAt).toISOString();
+
+  return {
+    ...prev,
+    fee: {
+      ...prev.fee,
+      amountPaid: updatedFee.amountPaid,
+      remainingFee: updatedFee.remainingFee,
+      totalFee: updatedFee.finalFee ?? prev.fee.totalFee,
+    },
+    payments: [
+      {
+        id: payment.id,
+        amount: payment.amount,
+        status: payment.status || "SUCCESS",
+        method: gateway,
+        createdAt,
+        transactionId: payment.transactionId ?? null,
+        feeAllocations: lines,
+      },
+      ...prev.payments.filter((p) => p.id !== payment.id),
+    ],
+  };
+}
+
+function normalizeBreakdownHeadKey(raw: string): string {
+  const key = raw.trim();
+  if (key.startsWith("BASE:")) return key.split("::")[0]!;
+  if (key.startsWith("EXTRA:")) return key.split("::")[0]!;
+  return key;
+}
+
+function patchBreakdownTotalsOnly(
+  prev: AdminStudentFeeBreakdownResult | null,
+  updatedFee: FeePaymentSuccess["updatedFee"]
+): AdminStudentFeeBreakdownResult | null {
+  if (!prev) return prev;
+  return {
+    ...prev,
+    amountPaid: updatedFee.amountPaid,
+    remainingFee: updatedFee.remainingFee,
+    finalFee: updatedFee.finalFee ?? prev.finalFee,
+    totalAmount: prev.totalAmount,
+  };
+}
+
+function patchBreakdownAfterDelete(
+  prev: AdminStudentFeeBreakdownResult | null,
+  updatedFee: FeePaymentSuccess["updatedFee"]
+): AdminStudentFeeBreakdownResult | null {
+  if (!prev) return prev;
+  const allCleared = updatedFee.amountPaid <= 0.00001;
+  const dueHeads = allCleared
+    ? prev.dueHeads.map((h) => ({ ...h, dueBefore: h.snapshotAmount }))
+    : prev.dueHeads;
+  return {
+    ...prev,
+    amountPaid: updatedFee.amountPaid,
+    remainingFee: updatedFee.remainingFee,
+    finalFee: updatedFee.finalFee ?? prev.finalFee,
+    totalAmount: prev.totalAmount,
+    dueHeads,
+  };
+}
+
+function patchBreakdownAfterPayment(
+  prev: AdminStudentFeeBreakdownResult | null,
+  result: FeePaymentSuccess
+): AdminStudentFeeBreakdownResult | null {
+  if (!prev) return prev;
+  const { updatedFee, feeAllocations } = result;
+
+  const deductByKey = new Map<string, number>();
+  for (const line of feeAllocations ?? []) {
+    const key =
+      typeof (line as { key?: string }).key === "string"
+        ? normalizeBreakdownHeadKey((line as { key: string }).key)
+        : "";
+    if (!key) continue;
+    deductByKey.set(key, (deductByKey.get(key) ?? 0) + (Number(line.amount) || 0));
+  }
+
+  const dueHeads =
+    deductByKey.size > 0
+      ? prev.dueHeads.map((h) => {
+          const deduct = deductByKey.get(normalizeBreakdownHeadKey(h.key)) ?? 0;
+          if (deduct <= 0) return h;
+          const dueBefore = Math.max(Math.round((h.dueBefore - deduct) * 100) / 100, 0);
+          return { ...h, dueBefore };
+        })
+      : prev.dueHeads;
+
+  return {
+    ...prev,
+    amountPaid: updatedFee.amountPaid,
+    remainingFee: updatedFee.remainingFee,
+    finalFee: updatedFee.finalFee ?? prev.finalFee,
+    totalAmount: prev.totalAmount,
+    dueHeads,
+  };
+}
+
+type FeeDeleteSuccess = {
+  paymentId: string;
+  updatedFee: {
+    amountPaid: number;
+    remainingFee: number;
+    finalFee?: number;
+  } | null;
+};
+
+function patchDetailAfterDelete(
+  prev: StudentDetail | null,
+  deleteResult: FeeDeleteSuccess
+): StudentDetail | null {
+  if (!prev) return prev;
+  const { paymentId, updatedFee } = deleteResult;
+  return {
+    ...prev,
+    payments: prev.payments.filter((p) => p.id !== paymentId),
+    fee:
+      prev.fee && updatedFee
+        ? {
+            ...prev.fee,
+            amountPaid: updatedFee.amountPaid,
+            remainingFee: updatedFee.remainingFee,
+            totalFee: updatedFee.finalFee ?? prev.fee.totalFee,
+          }
+        : prev.fee,
+  };
+}
+
 function StudentDetailsPageContent() {
   const router = useRouter();
   const pathname = usePathname();
@@ -376,6 +544,68 @@ function StudentDetailsPageContent() {
       }
     },
     []
+  );
+
+  const refreshFeesForStudent = useCallback(
+    async (studentId: string, paymentResult?: FeePaymentSuccess) => {
+      if (paymentResult) {
+        setDetail((prev) => patchDetailAfterPayment(prev, paymentResult));
+        setFeeBreakdown((prev) => {
+          const next = patchBreakdownAfterPayment(prev, paymentResult);
+          if (next) setFeeBreakdownCache(studentId, next);
+          return next;
+        });
+        setDetail((prev) => {
+          if (prev?.student.id === studentId) {
+            void refreshStudentFeesAfterMutation(studentId, {
+              keepShell: prev as unknown as StudentDetailsTabPayload,
+              keepPatchedBreakdown: true,
+              onPartial: (partial) => {
+                if (partial.student?.id === studentId) applyDetailsBundle(partial);
+              },
+            });
+          }
+          return prev;
+        });
+        return;
+      }
+
+      const bundle = await refreshStudentFeesAfterMutation(studentId, {
+        onPartial: (partial) => {
+          if (partial.student?.id === studentId) applyDetailsBundle(partial);
+        },
+      });
+      if (bundle?.student?.id === studentId) {
+        applyDetailsBundle(bundle);
+      }
+    },
+    [applyDetailsBundle]
+  );
+
+  const removePaymentForStudent = useCallback(
+    (studentId: string, deleteResult: FeeDeleteSuccess) => {
+      setDetail((prev) => patchDetailAfterDelete(prev, deleteResult));
+      if (deleteResult.updatedFee) {
+        setFeeBreakdown((prev) => {
+          const next = patchBreakdownAfterDelete(prev, deleteResult.updatedFee!);
+          if (next) setFeeBreakdownCache(studentId, next);
+          return next;
+        });
+      }
+      setDetail((prev) => {
+        if (prev?.student.id === studentId) {
+          void refreshStudentFeesAfterMutation(studentId, {
+            keepShell: prev as unknown as StudentDetailsTabPayload,
+            keepPatchedBreakdown: true,
+            onPartial: (partial) => {
+              if (partial.student?.id === studentId) applyDetailsBundle(partial);
+            },
+          });
+        }
+        return prev;
+      });
+    },
+    [applyDetailsBundle]
   );
 
   useEffect(() => {
@@ -699,6 +929,7 @@ function StudentDetailsPageContent() {
             <AttendanceTrends data={detail.attendanceTrends} />
             <FeeTransactions
               fee={detail.fee}
+              feeBreakdown={feeBreakdown}
               payments={detail.payments}
               applicationFee={detail.student.applicationFee}
               admissionFee={detail.student.admissionFee}
@@ -715,7 +946,12 @@ function StudentDetailsPageContent() {
                 detail.student.phone?.trim() ||
                 "-"
               }
-              onPaymentsChanged={() => setReloadKey((k) => k + 1)}
+              onPaymentsChanged={() => {
+                if (detail.student.id) void refreshFeesForStudent(detail.student.id);
+              }}
+              onPaymentDeleted={(result) => {
+                if (detail.student.id) removePaymentForStudent(detail.student.id, result);
+              }}
             />
 
             {detail.fee && (
@@ -738,7 +974,9 @@ function StudentDetailsPageContent() {
                   discountFeeHeadLabel={detail.fee.discountFeeHeadLabel}
                   discountRemarks={detail.fee.discountRemarks}
                   discountFixedAmount={detail.fee.discountFixedAmount}
-                  onFeeModified={() => setReloadKey(prev => prev + 1)}
+                  onFeeModified={(paymentResult) => {
+                    if (detail.student.id) void refreshFeesForStudent(detail.student.id, paymentResult);
+                  }}
                   residencyType={detail.student.residencyType ?? null}
                   initialFeeBreakdown={feeBreakdown}
                   feeBreakdownPending={feeBreakdownPending}
@@ -764,9 +1002,9 @@ function StudentDetailsPageContent() {
           initialFeeBreakdown={feeBreakdown ?? getFeeBreakdownCached(detail.student.id)}
           breakdownPending={feeBreakdownPending}
           onClose={() => setFeesModalOpen(false)}
-          onSuccess={() => {
+          onSuccess={(result) => {
             setFeesModalOpen(false);
-            setReloadKey((k) => k + 1);
+            void refreshFeesForStudent(detail.student.id, result);
           }}
         />
       ) : null}
@@ -807,7 +1045,7 @@ function StudentFeesPaymentModal({
   initialFeeBreakdown?: AdminStudentFeeBreakdownResult | null;
   breakdownPending?: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (result: FeePaymentSuccess) => void;
 }) {
   const seedRows = dueHeadRowsFromBreakdown(
     initialFeeBreakdown ?? getFeeBreakdownCached(studentId)
@@ -996,14 +1234,51 @@ function StudentFeesPaymentModal({
           transactionId: referenceNo.trim() || undefined,
           paymentDate,
           selectedHeads,
-          explicitAllocations: selectedRows.map((r) => ({ key: r.sourceKey || r.key, amount: Number(r.payAmount) })),
+          explicitAllocations: selectedRows.map((r) => ({
+            key: r.sourceKey || r.key,
+            amount: Number(r.payAmount),
+            label: r.label,
+          })),
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(typeof data.message === "string" ? data.message : "Payment failed");
       }
-      onSuccess();
+      const paymentResult: FeePaymentSuccess = {
+        payment: {
+          id: String(data.payment?.id ?? ""),
+          amount: Number(data.payment?.amount ?? total),
+          status: String(data.payment?.status ?? "SUCCESS"),
+          gateway: typeof data.payment?.gateway === "string" ? data.payment.gateway : mode,
+          createdAt:
+            typeof data.payment?.createdAt === "string"
+              ? data.payment.createdAt
+              : paymentDate
+                ? `${paymentDate}T12:00:00.000Z`
+                : new Date().toISOString(),
+          transactionId:
+            typeof data.payment?.transactionId === "string" ? data.payment.transactionId : referenceNo.trim() || null,
+        },
+        updatedFee: {
+          amountPaid: Number(data.updatedFee?.amountPaid ?? 0),
+          remainingFee: Number(data.updatedFee?.remainingFee ?? 0),
+          finalFee:
+            typeof data.updatedFee?.finalFee === "number" ? data.updatedFee.finalFee : undefined,
+          totalFee:
+            typeof data.updatedFee?.totalFee === "number" ? data.updatedFee.totalFee : undefined,
+        },
+        feeAllocations: Array.isArray(data.feeAllocations)
+          ? data.feeAllocations.map((line: { name?: string; amount?: number }) => ({
+              name: String(line?.name ?? "Fee"),
+              amount: Number(line?.amount ?? 0),
+            }))
+          : selectedRows.map((r) => ({
+              name: r.label,
+              amount: Number(r.payAmount),
+            })),
+      };
+      onSuccess(paymentResult);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Payment failed");
     } finally {

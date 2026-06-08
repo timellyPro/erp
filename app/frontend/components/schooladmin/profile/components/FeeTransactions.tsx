@@ -5,6 +5,7 @@ import FeePaymentReceiptTemplate, {
 } from "../../../pdf/FeePaymentReceiptTemplate";
 import { printFromElement } from "@/lib/pdfUtils";
 import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
+import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
 
 type PaymentFeeAllocationLine = { name: string; amount: number };
 
@@ -95,6 +96,8 @@ type Props = {
     amountPaid: number;
     remainingFee: number;
   } | null;
+  /** When present, totals prefer breakdown (matches fee head cards). */
+  feeBreakdown?: AdminStudentFeeBreakdownResult | null;
   payments?: PaymentRow[];
   studentName?: string;
   studentId?: string;
@@ -109,6 +112,10 @@ type Props = {
   motherName?: string;
   /** Refetch student detail after payment edit/delete */
   onPaymentsChanged?: () => void;
+  onPaymentDeleted?: (result: {
+    paymentId: string;
+    updatedFee: { amountPaid: number; remainingFee: number; finalFee?: number } | null;
+  }) => void;
 };
 
 function isSyntheticPaymentId(id: string) {
@@ -155,6 +162,7 @@ function formatPaymentMethod(method?: string) {
 
 export const FeeTransactions = ({
   fee,
+  feeBreakdown = null,
   payments,
   studentName = "Student",
   studentId = "",
@@ -168,6 +176,7 @@ export const FeeTransactions = ({
   parentPhone = "-",
   motherName = "-",
   onPaymentsChanged,
+  onPaymentDeleted,
 }: Props) => {
   const receiptRef = useRef<HTMLDivElement>(null);
   const [receiptData, setReceiptData] = useState<FeePaymentReceiptData | null>(null);
@@ -451,7 +460,18 @@ export const FeeTransactions = ({
         alert(typeof data.message === "string" ? data.message : "Delete failed");
         return;
       }
-      onPaymentsChanged?.();
+      onPaymentDeleted?.({
+        paymentId: p.id,
+        updatedFee:
+          data.updatedFee && typeof data.updatedFee.amountPaid === "number"
+            ? {
+                amountPaid: Number(data.updatedFee.amountPaid),
+                remainingFee: Number(data.updatedFee.remainingFee),
+                finalFee:
+                  typeof data.updatedFee.finalFee === "number" ? data.updatedFee.finalFee : undefined,
+              }
+            : null,
+      });
     } catch {
       alert("Delete failed");
     } finally {
@@ -459,8 +479,13 @@ export const FeeTransactions = ({
     }
   };
 
-  const totalPaid = hasFee ? fee!.amountPaid : 0;
-  const total = hasFee ? fee!.amountPaid + fee!.remainingFee : 0;
+  const totalPaid =
+    feeBreakdown?.amountPaid ??
+    (hasFee
+      ? fee!.amountPaid
+      : transactionRows.filter((r) => isSuccessStatus(r.status)).reduce((s, r) => s + r.amount, 0));
+  const total =
+    feeBreakdown?.totalAmount ?? (hasFee ? fee!.amountPaid + fee!.remainingFee : totalPaid);
   const hasAny = hasFee || transactionRows.length > 0;
 
   const simplifyFeeHeadName = (value?: string) => {

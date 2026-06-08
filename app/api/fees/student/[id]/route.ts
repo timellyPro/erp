@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { isOverallDiscountKey } from "@/lib/studentFeeHeadDiscount";
+import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
 
 type RouteParams =
   | { params: { id: string } }
@@ -157,6 +158,12 @@ export async function PATCH(req: Request, context: RouteParams) {
         discountRemarks: remarksVal,
       } as Parameters<(typeof prisma.studentFee)["update"]>[0]["data"],
     });
+
+    const student = await prisma.student.findUnique({
+      where: { id },
+      select: { schoolId: true },
+    });
+    await invalidateStudentFeeReadCaches({ studentId: id, schoolId: student?.schoolId ?? null });
 
     return NextResponse.json({ fee: updated });
   } catch (error: any) {
