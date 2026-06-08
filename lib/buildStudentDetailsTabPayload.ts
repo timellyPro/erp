@@ -513,7 +513,20 @@ export async function buildStudentDetailsCoreBundle(
     }
   }
 
-  const value = { shell, feeBreakdown };
+  const syncedShell =
+    feeBreakdown && shell.fee
+      ? {
+          ...shell,
+          fee: {
+            ...shell.fee,
+            amountPaid: feeBreakdown.amountPaid,
+            remainingFee: feeBreakdown.remainingFee,
+            totalFee: feeBreakdown.finalFee ?? shell.fee.totalFee,
+          },
+        }
+      : shell;
+
+  const value = { shell: syncedShell, feeBreakdown };
   setStudentDetailsCoreCached(cacheKey, value);
   return value;
 }

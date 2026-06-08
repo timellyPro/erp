@@ -535,7 +535,19 @@ function StudentDetailsPageContent() {
     (bundle: Awaited<ReturnType<typeof loadStudentDetailsBundle>>) => {
       const { feeBreakdown: breakdown, ...rest } = bundle;
       if (rest?.student) {
-        setDetail(rest);
+        const shell =
+          breakdown && rest.fee
+            ? {
+                ...rest,
+                fee: {
+                  ...rest.fee,
+                  amountPaid: breakdown.amountPaid,
+                  remainingFee: breakdown.remainingFee,
+                  totalFee: breakdown.finalFee ?? rest.fee.totalFee,
+                },
+              }
+            : rest;
+        setDetail(shell);
         setFeeBreakdown(breakdown ?? null);
         if (breakdown && rest.student.id) setFeeBreakdownCache(rest.student.id, breakdown);
       } else {
@@ -913,12 +925,16 @@ function StudentDetailsPageContent() {
                 <div>
                   <p className="text-xs text-gray-500">Fees Due</p>
                   <p className="text-lg font-bold text-lime-400">
-                    {detail.fee && detail.fee.remainingFee > 0
-                      ? `₹${detail.fee.remainingFee.toLocaleString()}`
-                      : "₹0"}
+                    {(() => {
+                      const due =
+                        feeBreakdown?.remainingFee ?? detail.fee?.remainingFee ?? 0;
+                      return due > 0 ? `₹${due.toLocaleString()}` : "₹0";
+                    })()}
                   </p>
                   <p className="text-[10px] text-lime-400">
-                    {detail.fee && detail.fee.remainingFee <= 0 ? "All Cleared" : "Pending"}
+                    {(feeBreakdown?.remainingFee ?? detail.fee?.remainingFee ?? 0) <= 0
+                      ? "All Cleared"
+                      : "Pending"}
                   </p>
                 </div>
               </div>
