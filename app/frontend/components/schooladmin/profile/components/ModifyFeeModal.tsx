@@ -10,7 +10,10 @@ export const DISCOUNT_HEAD_OVERALL_KEY = "__DISCOUNT_OVERALL__";
 
 type Props = {
   studentId: string;
+  /** Pre-discount total (sum of all fee head gross amounts). */
   currentTotalFee: number;
+  /** Net total from fee breakdown — should match Total Fees on the profile. */
+  currentNetTotal?: number;
   currentDiscountPercent: number;
   /** Fee heads from admin breakdown (BASE:n / EXTRA:id). */
   feeHeadOptions: FeeHeadOption[];
@@ -25,6 +28,7 @@ type Props = {
 export const ModifyFeeModal = ({
   studentId,
   currentTotalFee,
+  currentNetTotal,
   currentDiscountPercent,
   feeHeadOptions,
   initialDiscountFeeHeadKey,
@@ -149,8 +153,8 @@ export const ModifyFeeModal = ({
         <div className="p-6">
           <h2 className="text-2xl font-bold text-white mb-2">Modify Fee Setup</h2>
           <p className="text-gray-400 text-sm mb-6">
-            Update this student&apos;s tuition fee amount and discount. When a discount applies, specify which fee
-            head it relates to and record approval / remarks.
+            Set the pre-discount total (all assigned fee heads) and any concession. When discount is applied, choose
+            which fee head it relates to and record approval / remarks.
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -162,7 +166,9 @@ export const ModifyFeeModal = ({
             )}
 
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1.5">Tuition Fee Amount (₹)</label>
+              <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                Pre-discount total — all fee heads (₹)
+              </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                   <DollarSign className="w-5 h-5 text-gray-500" />
@@ -244,9 +250,16 @@ export const ModifyFeeModal = ({
               />
             </div>
 
-            <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4 text-center">
+            <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4 text-center space-y-1">
               <p className="text-xs text-blue-300/70 uppercase tracking-widest font-bold">Net Fee After Discount</p>
-              <p className="text-2xl font-bold text-white mt-1">₹{isNaN(currentFinalFee) ? "-" : currentFinalFee.toFixed(2)}</p>
+              <p className="text-2xl font-bold text-white mt-1">
+                ₹{isNaN(currentFinalFee) ? "-" : currentFinalFee.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+              </p>
+              {typeof currentNetTotal === "number" && currentNetTotal > 0 ? (
+                <p className="text-[11px] text-blue-300/60">
+                  Profile total (all heads): ₹{currentNetTotal.toLocaleString("en-IN")}
+                </p>
+              ) : null}
             </div>
 
             <div className="flex items-center gap-3 pt-2">
