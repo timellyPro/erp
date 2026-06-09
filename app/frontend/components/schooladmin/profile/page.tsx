@@ -854,21 +854,38 @@ function StudentDetailsPageContent() {
               residencyType={detail.student.residencyType ?? "Day Scholar"}
               onSaved={(patch) => {
                 if (patch) {
-                  setDetail((current) =>
-                    current
-                      ? {
-                          ...current,
-                          student: {
-                            ...current.student,
-                            fatherName: patch.fatherName,
-                            fatherPhone: patch.fatherPhone,
-                            motherName: patch.motherName,
-                            motherPhone: patch.motherPhone,
-                            phone: patch.fatherPhone,
-                          },
-                        }
-                      : current
-                  );
+                  setDetail((current) => {
+                    if (!current) return current;
+                    const nextStudent = { ...current.student };
+                    if (patch.fatherName !== undefined) nextStudent.fatherName = patch.fatherName;
+                    if (patch.fatherPhone !== undefined) {
+                      nextStudent.fatherPhone = patch.fatherPhone;
+                      nextStudent.phone = patch.fatherPhone;
+                    }
+                    if (patch.motherName !== undefined) nextStudent.motherName = patch.motherName;
+                    if (patch.motherPhone !== undefined) nextStudent.motherPhone = patch.motherPhone;
+                    if (patch.name !== undefined) nextStudent.name = patch.name;
+                    if (patch.email !== undefined) nextStudent.email = patch.email;
+                    if (patch.phone !== undefined) nextStudent.phone = patch.phone;
+                    if (patch.address !== undefined) nextStudent.address = patch.address;
+                    if (patch.rollNo !== undefined) nextStudent.rollNo = patch.rollNo;
+                    if (patch.gender !== undefined) nextStudent.gender = patch.gender;
+                    if (patch.residencyType !== undefined) nextStudent.residencyType = patch.residencyType;
+                    if (patch.classId !== undefined) {
+                      if (patch.classId && patch.classDisplayName) {
+                        const dash = patch.classDisplayName.indexOf(" - ");
+                        nextStudent.class = {
+                          id: patch.classId,
+                          name: dash > 0 ? patch.classDisplayName.slice(0, dash) : patch.classDisplayName,
+                          section: dash > 0 ? patch.classDisplayName.slice(dash + 3) : null,
+                          displayName: patch.classDisplayName.replace(" - ", "-"),
+                        };
+                      } else {
+                        nextStudent.class = null;
+                      }
+                    }
+                    return { ...current, student: nextStudent };
+                  });
                 }
                 setReloadKey((k) => k + 1);
               }}

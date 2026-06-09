@@ -19,6 +19,9 @@ export type ParentDocumentStudentBlock = {
 type ParentPortalDocumentShellProps = {
   brand: ParentDocumentBrand;
   documentTitle: string;
+  /** Pre-formatted "Generated on" label (dd-MM-yyyy at print time). */
+  generatedOn?: string;
+  /** @deprecated Prefer generatedOn */
   generatedAt?: string | Date;
   student?: ParentDocumentStudentBlock;
   children: React.ReactNode;
@@ -28,12 +31,15 @@ type ParentPortalDocumentShellProps = {
 export function ParentPortalDocumentShell({
   brand,
   documentTitle,
-  generatedAt = new Date(),
+  generatedOn,
+  generatedAt,
   student,
   children,
   minHeight = 720,
 }: ParentPortalDocumentShellProps) {
-  const formattedDate = format(new Date(generatedAt), "dd-MM-yyyy");
+  const formattedDate =
+    generatedOn?.trim() ||
+    (generatedAt != null ? format(new Date(generatedAt), "dd-MM-yyyy") : format(new Date(), "dd-MM-yyyy"));
 
   return (
     <div

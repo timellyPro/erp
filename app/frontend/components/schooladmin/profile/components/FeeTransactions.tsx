@@ -1,9 +1,11 @@
 import { Receipt, Printer, Pencil, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import FeePaymentReceiptTemplate, {
   type FeePaymentReceiptData,
 } from "../../../pdf/FeePaymentReceiptTemplate";
 import { printFromElement } from "@/lib/pdfUtils";
+import { formatReceiptGeneratedDate, formatReceiptTransactionDate } from "@/lib/receiptDates";
 import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
 import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
 
@@ -545,7 +547,8 @@ export const FeeTransactions = ({
 
   const buildReceiptDataFromTransactionRows = (
     selectedRows: TransactionDisplayRow[],
-    createdAt: string
+    transactionDate: string,
+    generatedOn: string
   ) => {
     const rawLines = selectedRows.map((row) => {
       const currentRef =
@@ -580,34 +583,36 @@ export const FeeTransactions = ({
       residencyType: formatResidencyTypeForDisplay(residencyType || "Day Scholar"),
       parentName: parentName || "-",
       parentPhone: parentPhone || "-",
-      createdAt,
+      transactionDate,
+      generatedOn,
       lines: groupedLines,
       total: finalTotal,
       receiptTitle,
     } satisfies FeePaymentReceiptData;
   };
 
-  const handlePrintReceipt = (row: TransactionDisplayRow) => {
+  const handlePrintReceipt = async (row: TransactionDisplayRow) => {
     if (!studentId.trim()) {
       alert("Missing student. Reload the page and try again.");
       return;
     }
-    const data = buildReceiptDataFromTransactionRows([row], row.createdAt);
+    const generatedOn = formatReceiptGeneratedDate(new Date());
+    const data = buildReceiptDataFromTransactionRows([row], row.createdAt, generatedOn);
 
     setPrintingId(row.rowKey);
-    setReceiptData(data);
+    flushSync(() => {
+      setReceiptData(data);
+    });
 
-    setTimeout(async () => {
-      try {
-        await printFromElement(receiptRef);
-      } catch (error) {
-        console.error("Error printing receipt:", error);
-        alert(error instanceof Error ? error.message : "Failed to print receipt. Please try again.");
-      } finally {
-        setPrintingId(null);
-        setReceiptData(null);
-      }
-    }, 500);
+    try {
+      await printFromElement(receiptRef, { minHeight: 400 });
+    } catch (error) {
+      console.error("Error printing receipt:", error);
+      alert(error instanceof Error ? error.message : "Failed to print receipt. Please try again.");
+    } finally {
+      setPrintingId(null);
+      setReceiptData(null);
+    }
   };
 
   const toggleReceiptSelection = (id: string) => {
@@ -616,26 +621,33 @@ export const FeeTransactions = ({
     );
   };
 
-  const printSelectedReceipts = () => {
+  const printSelectedReceipts = async () => {
     const selectedRows = transactionRows.filter((r) => selectedReceiptIds.includes(r.rowKey));
     if (selectedRows.length === 0) {
       alert("Select at least one transaction to print.");
       return;
     }
-    const data = buildReceiptDataFromTransactionRows(selectedRows, new Date().toISOString());
+    const latestTxDate = selectedRows.reduce((max, row) => {
+      const t = new Date(row.createdAt).getTime();
+      return t > max ? t : max;
+    }, 0);
+    const transactionDate =
+      latestTxDate > 0 ? new Date(latestTxDate).toISOString() : new Date().toISOString();
+    const generatedOn = formatReceiptGeneratedDate(new Date());
+    const data = buildReceiptDataFromTransactionRows(selectedRows, transactionDate, generatedOn);
     setPrintingId("bulk");
-    setReceiptData(data);
-    setTimeout(async () => {
-      try {
-        await printFromElement(receiptRef);
-      } catch (error) {
-        console.error("Error printing receipt:", error);
-        alert(error instanceof Error ? error.message : "Failed to print receipt. Please try again.");
-      } finally {
-        setPrintingId(null);
-        setReceiptData(null);
-      }
-    }, 500);
+    flushSync(() => {
+      setReceiptData(data);
+    });
+    try {
+      await printFromElement(receiptRef, { minHeight: 400 });
+    } catch (error) {
+      console.error("Error printing receipt:", error);
+      alert(error instanceof Error ? error.message : "Failed to print receipt. Please try again.");
+    } finally {
+      setPrintingId(null);
+      setReceiptData(null);
+    }
   };
 
   return (
@@ -708,7 +720,7 @@ export const FeeTransactions = ({
                       />
                     </td>
                     <td className="py-4 sm:py-5 text-gray-400 whitespace-nowrap">
-                      {new Date(row.createdAt).toISOString().slice(0, 10)}
+                      {formatReceiptTransactionDate(row.createdAt)}
                     </td>
                     <td className="py-4 sm:py-5 font-bold text-gray-100">
                       Fee payment

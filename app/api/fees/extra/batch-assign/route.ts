@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import { batchAssignStudentExtraFees } from "@/lib/batchAssignStudentExtraFees";
 import { resolveFeesSchoolIdForSession } from "../../extra-head-templates/resolveSchoolId";
+import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
 
 function canManage(role: string | null | undefined) {
   return role === "SCHOOLADMIN" || role === "SUPERADMIN" || role === "TEACHER";
@@ -36,6 +37,7 @@ export async function POST(req: Request) {
     }
 
     const result = await batchAssignStudentExtraFees(schoolId, studentId, fees);
+    invalidateStudentFeeReadCaches({ studentId, schoolId });
     return NextResponse.json(result, { status: 201 });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Internal server error";

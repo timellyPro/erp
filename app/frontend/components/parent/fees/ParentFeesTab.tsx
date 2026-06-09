@@ -26,6 +26,7 @@ import FeePaymentReceiptTemplate, {
 } from "../../pdf/FeePaymentReceiptTemplate";
 import { currentAcademicYearLabel } from "@/lib/resolveSchoolBrand";
 import { downloadParentPortalPdf } from "@/lib/downloadParentPortalPdf";
+import { formatReceiptGeneratedDate } from "@/lib/receiptDates";
 
 type DueHeadRow = {
   key: string;
@@ -215,6 +216,7 @@ export default function ParentFeesTab() {
                 },
               ];
 
+        const generatedOn = formatReceiptGeneratedDate(new Date());
         const buildPayload = (brand: {
           name: string;
           logo: string | null;
@@ -232,7 +234,8 @@ export default function ParentFeesTab() {
           residencyType: "Day Scholar",
           parentName: student?.fatherName || "-",
           parentPhone: student?.phone || "-",
-          createdAt: payment.createdAt,
+          transactionDate: payment.createdAt,
+          generatedOn,
           lines,
           total: payment.amount,
           receiptTitle: "Fee Receipt",

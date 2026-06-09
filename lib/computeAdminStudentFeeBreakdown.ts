@@ -130,6 +130,18 @@ const extraFeesScopeCache = new Map<
 
 const EXTRA_FEES_CACHE_TTL_MS = 300_000;
 
+/** Drop cached extra-fee rows for a student after assign / create / delete mutations. */
+export function invalidateExtraFeesScopeCacheForStudent(studentId?: string): void {
+  if (!studentId) {
+    extraFeesScopeCache.clear();
+    return;
+  }
+  const suffix = `:${studentId}`;
+  for (const key of extraFeesScopeCache.keys()) {
+    if (key.endsWith(suffix)) extraFeesScopeCache.delete(key);
+  }
+}
+
 const classFeeStructureCache = new Map<
   string,
   { freshUntil: number; row: { components: unknown } | null }

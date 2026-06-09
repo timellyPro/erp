@@ -13,6 +13,8 @@ import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
 } from "@/lib/schoolDashboardServerCache";
+import { invalidateAssignCatalogServerCache } from "@/lib/assignCatalogServerCache";
+import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -228,6 +230,11 @@ export async function POST(req: Request) {
           },
         });
       }
+    }
+
+    invalidateAssignCatalogServerCache(schoolId);
+    if (targetType === "STUDENT" && targetStudentId) {
+      invalidateStudentFeeReadCaches({ studentId: String(targetStudentId), schoolId });
     }
 
     return NextResponse.json({ extraFee, extraFeeIds: ids }, { status: 201 });

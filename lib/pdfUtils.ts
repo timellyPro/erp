@@ -75,6 +75,37 @@ function unhideCloneForCapture(clonedRoot: HTMLElement) {
   }
 }
 
+/** Wait until a hidden PDF mount has rendered (fonts, images, layout). */
+export async function waitForPdfMountReady(
+  elementRef: RefObject<HTMLElement | null>,
+  minHeight = 400,
+  maxMs = 8000
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    if (elementRef.current && elementRef.current.offsetHeight >= minHeight) break;
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  }
+  if (!elementRef.current || elementRef.current.offsetHeight < minHeight) {
+    throw new Error("Receipt template failed to render. Please try again.");
+  }
+  const imgs = elementRef.current.querySelectorAll("img");
+  await Promise.all(
+    Array.from(imgs).map(
+      (img) =>
+        new Promise<void>((resolve) => {
+          if (img.complete) resolve();
+          else {
+            img.addEventListener("load", () => resolve(), { once: true });
+            img.addEventListener("error", () => resolve(), { once: true });
+          }
+        })
+    )
+  );
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+}
+
 async function captureElementToCanvas(element: HTMLElement): Promise<HTMLCanvasElement> {
   const html2canvas = (await import("html2canvas-pro")).default as Html2CanvasFn;
   const snapshots = revealCaptureTree(element);
@@ -140,13 +171,14 @@ export async function generatePDF(
 }
 
 /** Same visual capture as generatePDF; opens the browser print dialog (no PDF file). */
-export async function printFromElement(elementRef: RefObject<HTMLElement | null>): Promise<void> {
-  if (!elementRef.current) {
-    throw new Error("PDF template is not ready. Please try again.");
-  }
+export async function printFromElement(
+  elementRef: RefObject<HTMLElement | null>,
+  opts?: { minHeight?: number }
+): Promise<void> {
+  await waitForPdfMountReady(elementRef, opts?.minHeight ?? 400);
 
   try {
-    const canvas = await captureElementToCanvas(elementRef.current);
+    const canvas = await captureElementToCanvas(elementRef.current!);
     if (canvas.width < 2 || canvas.height < 2) {
       throw new Error("PDF capture produced empty content.");
     }

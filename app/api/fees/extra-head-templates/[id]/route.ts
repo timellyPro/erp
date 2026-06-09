@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { extraHeadTemplatesErrorResponse } from "../mapPrismaError";
 import { resolveFeesSchoolIdForSession } from "../resolveSchoolId";
+import { invalidateAssignCatalogServerCache } from "@/lib/assignCatalogServerCache";
 
 function canManage(session: { user?: { role?: string | null } }) {
   const r = String(session.user?.role ?? "");
@@ -55,6 +56,7 @@ export async function PATCH(req: Request, ctx: RouteCtx) {
       where: { id },
       data: { name, amount, splitIntoTwoInstallments },
     });
+    invalidateAssignCatalogServerCache(schoolId);
     return NextResponse.json({ template: updated });
   } catch (error: unknown) {
     return extraHeadTemplatesErrorResponse(error, "extra-head-templates PATCH");
@@ -87,6 +89,7 @@ export async function DELETE(_req: Request, ctx: RouteCtx) {
     if (deleted.count === 0) {
       return NextResponse.json({ message: "Not found" }, { status: 404 });
     }
+    invalidateAssignCatalogServerCache(schoolId);
     return NextResponse.json({ ok: true });
   } catch (error: unknown) {
     return extraHeadTemplatesErrorResponse(error, "extra-head-templates DELETE");

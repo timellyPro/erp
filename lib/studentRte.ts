@@ -1,11 +1,12 @@
+import { isRteResidencyType } from "@/lib/residencyDisplay";
+
 /**
  * RTE (Right to Education): no tuition from the class global fee breakdown.
  * Kept in a small module so route bundles do not depend on Turbopack merging
  * `extraFeeResidencyScope` named exports incorrectly.
  */
 export function isStudentRte(residencyType: string | null | undefined): boolean {
-  const n = (residencyType ?? "").trim().toLowerCase().replace(/\s+/g, "");
-  return n === "rte";
+  return isRteResidencyType(residencyType);
 }
 
 /**
@@ -18,5 +19,5 @@ export function isTuitionNamedExtraFee(name: string | null | undefined): boolean
     .toLowerCase()
     .replace(/\s+/g, "");
   if (!n) return false;
-  return n.includes("tuition");
+  return n.includes("tuition") || n.includes("tution");
 }

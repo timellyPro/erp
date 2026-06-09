@@ -12,23 +12,11 @@ import {
 } from "@/lib/studentTuitionFromStructure";
 import { setApplicationEnrolled } from "@/lib/admissionsListQuery";
 import { studentApplicationForStudentCreateSelect } from "@/lib/studentApplicationSafeSelect";
+import { canonicalizeResidencyType } from "@/lib/residencyDisplay";
 
 function normalizeResidencyType(value: unknown) {
   if (typeof value !== "string") return "Day Scholar";
-  const raw = value.trim();
-  if (!raw) return "Day Scholar";
-  const normalized = raw.toLowerCase().replace(/\s+/g, "");
-  if (normalized === "dayscholar" || normalized === "dayscholer") return "Day Scholar";
-  if (
-    normalized === "hostel" ||
-    normalized === "hostler" ||
-    normalized === "hosteler" ||
-    normalized === "hosteller" ||
-    normalized === "hoster"
-  ) {
-    return "Hosteller";
-  }
-  return raw;
+  return canonicalizeResidencyType(value);
 }
 
 export async function POST(req: Request) {

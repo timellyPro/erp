@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { extraHeadTemplatesErrorResponse } from "./mapPrismaError";
 import { resolveFeesSchoolIdForSession } from "./resolveSchoolId";
+import { invalidateAssignCatalogServerCache } from "@/lib/assignCatalogServerCache";
 
 function canManage(session: { user?: { role?: string | null } }) {
   const r = String(session.user?.role ?? "");
@@ -64,6 +65,7 @@ export async function POST(req: Request) {
     const created = await prisma.extraFeeHeadTemplate.create({
       data: { schoolId, name, amount, splitIntoTwoInstallments },
     });
+    invalidateAssignCatalogServerCache(schoolId);
     return NextResponse.json({ template: created }, { status: 201 });
   } catch (error: unknown) {
     return extraHeadTemplatesErrorResponse(error, "extra-head-templates POST");
