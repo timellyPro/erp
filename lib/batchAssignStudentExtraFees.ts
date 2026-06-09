@@ -5,6 +5,7 @@ import {
   suggestedResidencyScopeForExtraFeeName,
 } from "@/lib/extraFeeResidencyScope";
 import { createExtraFeeRows, type ExtraFeeCreatePayload } from "@/lib/extraFeeInstallmentDb";
+import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
 
 export type BatchAssignFeeInput = {
   name: string;
@@ -20,12 +21,18 @@ export async function batchAssignStudentExtraFees(
 ): Promise<{ createdCount: number; totalAmount: number; extraFeeIds: string[] }> {
   const student = await prisma.student.findFirst({
     where: { id: studentId, schoolId },
-    select: { id: true, residencyType: true },
+    select: {
+      id: true,
+      residencyType: true,
+      classId: true,
+      class: { select: { section: true } },
+    },
   });
   if (!student) {
     throw new Error("Student not found");
   }
 
+  const rejectedResidency: string[] = [];
   const cleaned = fees
     .map((f) => {
       const name = String(f.name ?? "").trim();
@@ -39,6 +46,7 @@ export async function batchAssignStudentExtraFees(
       }
 
       if (!extraFeeAppliesToStudent({ name, residencyScope }, student.residencyType)) {
+        rejectedResidency.push(name);
         return null;
       }
 
@@ -52,7 +60,12 @@ export async function batchAssignStudentExtraFees(
     .filter((f): f is NonNullable<typeof f> => f !== null);
 
   if (cleaned.length === 0) {
-    throw new Error("No valid fees to assign");
+    if (rejectedResidency.length > 0) {
+      throw new Error(
+        `These fee heads do not apply to this student's type (${student.residencyType ?? "Day Scholar"}): ${rejectedResidency.join(", ")}`
+      );
+    }
+    throw new Error("No valid fees to assign — enter a fee name and positive amount.");
   }
 
   const extraFeeIds: string[] = [];
@@ -76,16 +89,19 @@ export async function batchAssignStudentExtraFees(
       totalAmount += created.totalAmount;
     }
 
-    if (totalAmount > 0) {
-      await tx.studentFee.updateMany({
-        where: { studentId },
-        data: {
-          totalFee: { increment: totalAmount },
-          finalFee: { increment: totalAmount },
-          remainingFee: { increment: totalAmount },
-        },
-      });
-    }
+    const existingFee = await tx.studentFee.findUnique({
+      where: { studentId },
+      select: { discountPercent: true, amountPaid: true },
+    });
+    await upsertStudentFeeFromStructure(tx, {
+      schoolId,
+      studentId,
+      classId: student.classId,
+      section: student.class?.section ?? null,
+      discountPercent: existingFee?.discountPercent ?? 0,
+      amountPaid: existingFee?.amountPaid ?? 0,
+      residencyType: student.residencyType,
+    });
   });
 
   return { createdCount: extraFeeIds.length, totalAmount, extraFeeIds };

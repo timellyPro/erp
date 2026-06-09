@@ -3,6 +3,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { resolveFeesSchoolIdForSession } from "../extra-head-templates/resolveSchoolId";
+import {
+  getAssignCatalogMemCached,
+  setAssignCatalogMemCached,
+} from "@/lib/assignCatalogServerCache";
 
 const extraFeeSelect = {
   id: true,
@@ -19,8 +23,6 @@ const extraFeeSelect = {
 function canManage(role: string | null | undefined) {
   return role === "SCHOOLADMIN" || role === "SUPERADMIN" || role === "TEACHER";
 }
-
-const catalogMemCache = new Map<string, { freshUntil: number; value: unknown }>();
 
 /** One fast payload for Assign Fees modals (no lump migration, filtered extras). */
 export async function GET(req: Request) {
@@ -44,10 +46,13 @@ export async function GET(req: Request) {
     let section = (searchParams.get("section") ?? "").trim() || null;
     const skipClasses = searchParams.get("skipClasses") === "1";
 
+    const bypassCache = searchParams.get("refresh") === "1";
     const memKey = `${schoolId}:${studentId}:${classId}:${section ?? ""}:${skipClasses}`;
-    const memHit = catalogMemCache.get(memKey);
-    if (memHit && Date.now() < memHit.freshUntil) {
-      return NextResponse.json(memHit.value, { status: 200 });
+    if (!bypassCache) {
+      const memHit = getAssignCatalogMemCached(memKey);
+      if (memHit) {
+        return NextResponse.json(memHit, { status: 200 });
+      }
     }
 
     if (studentId && !classId) {
@@ -146,7 +151,7 @@ export async function GET(req: Request) {
       resolvedClassId: classId || null,
       resolvedSection: section,
     };
-    catalogMemCache.set(memKey, { value: payload, freshUntil: Date.now() + 20_000 });
+    setAssignCatalogMemCached(memKey, payload);
     return NextResponse.json(payload, { status: 200 });
   } catch (error: unknown) {
     console.error("assign-catalog GET error:", error);

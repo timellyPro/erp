@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import PrimaryButton from "../../common/PrimaryButton";
+import { invalidateAssignCatalogCache } from "@/lib/assignFeeCatalogCache";
 
 const inputClass =
   "w-full min-h-[44px] rounded-xl border border-white/10 bg-[#0F172A]/50 px-4 py-2.5 text-sm text-gray-200 placeholder:text-white/35 focus:border-lime-400/60 focus:outline-none focus:ring-1 focus:ring-lime-400/30";
@@ -86,6 +87,7 @@ export default function ExtraFeeHeadTemplatesPanel({ onSuccess }: { onSuccess?: 
       setNewName("");
       setNewAmount("");
       setNewSplitIntoTwoInstallments(false);
+      invalidateAssignCatalogCache();
       await load();
       onSuccess?.();
     } finally {
@@ -128,6 +130,7 @@ export default function ExtraFeeHeadTemplatesPanel({ onSuccess }: { onSuccess?: 
         alert(data.message || "Could not update head");
         return;
       }
+      invalidateAssignCatalogCache();
       cancelEdit();
       await load();
       onSuccess?.();
@@ -156,6 +159,7 @@ export default function ExtraFeeHeadTemplatesPanel({ onSuccess }: { onSuccess?: 
         return;
       }
       if (editingId === id) cancelEdit();
+      invalidateAssignCatalogCache();
       await load();
       onSuccess?.();
     } finally {
@@ -186,8 +190,9 @@ export default function ExtraFeeHeadTemplatesPanel({ onSuccess }: { onSuccess?: 
       <header className="mb-6 border-b border-white/10 pb-5">
         <h3 className="text-lg font-semibold tracking-tight text-white">Custom fee heads (saved templates)</h3>
         <p className="mt-2 max-w-3xl text-sm leading-relaxed text-white/55">
-          Add any number of title + amount pairs. They are stored only as reusable heads — students are not charged until
-          you pick them in <span className="font-medium text-white/75">Admission → Assign Fees</span> for each student.
+          Add any number of title + amount pairs. They are stored as reusable heads — students are not charged until
+          you assign them on <span className="font-medium text-white/75">Student Details → Fees → Assign from catalog</span>{" "}
+          (or Admission → Assign Fees).
         </p>
       </header>
 

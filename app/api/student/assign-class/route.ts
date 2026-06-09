@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
+import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
 
 export async function PUT(req: Request) {
   try {
@@ -102,6 +103,8 @@ export async function PUT(req: Request) {
       discountPercent: fee?.discountPercent ?? 0,
       amountPaid: fee?.amountPaid ?? 0,
     });
+
+    invalidateStudentFeeReadCaches({ studentId, schoolId });
 
     return NextResponse.json(
       {

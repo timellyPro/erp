@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import { buildAddressFromParts, formatStoredAddressForDisplay } from "@/lib/studentAddressFormat";
+import { formatStudentClassForReport } from "@/lib/feeDayReportExcel";
 
 /** Matches the "student details" sheet in `Student details report.xlsx` (header spelling preserved). */
 export const STUDENT_DETAILS_EXPORT_HEADERS = [
@@ -88,10 +89,7 @@ function titleCaseGender(g: string | null | undefined): string {
 }
 
 function classLabel(name: string | null | undefined, section: string | null | undefined): string {
-  const n = (name ?? "").trim();
-  const s = (section ?? "").trim();
-  if (!n && !s) return "";
-  return `Class ${n}${s}`;
+  return formatStudentClassForReport({ name, section });
 }
 
 type ExportApplication = {

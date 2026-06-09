@@ -62,32 +62,29 @@ function buildHeaderMap(headerRow: string[]) {
   return { timellyCol, feeNameCol, amountCol, nameCol };
 }
 
-function parseRowsFromSheet(workbook: XLSX.WorkBook): { rows: Array<{ timellyId: string; feeName: string; amount: number; studentName?: string }>; parseError?: string } {
-  const sheet = workbook.Sheets[workbook.SheetNames[0]!];
-  if (!sheet) return { rows: [], parseError: "No sheet found in file" };
-
-  const data = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+function parseRowsFromSheetData(
+  data: Record<string, unknown>[]
+): { rows: Array<{ timellyId: string; feeName: string; amount: number }>; parseError?: string } {
   if (data.length === 0) return { rows: [], parseError: "Sheet is empty" };
 
   const first = data[0]!;
   const headerRow = Object.keys(first);
-  const { timellyCol, feeNameCol, amountCol, nameCol } = buildHeaderMap(headerRow);
+  const { timellyCol, feeNameCol, amountCol } = buildHeaderMap(headerRow);
 
   if (!timellyCol || !feeNameCol || !amountCol) {
     return {
       rows: [],
       parseError:
-        "Could not detect columns. Use headers such as: Timelly ID (or Roll No), Fee Name, Amount. Optional: Student Name.",
+        "Could not detect columns. Use headers: Timelly ID (or Roll No), Fee Name, Amount.",
     };
   }
 
-  const rows: Array<{ timellyId: string; feeName: string; amount: number; studentName?: string }> = [];
+  const rows: Array<{ timellyId: string; feeName: string; amount: number }> = [];
   for (let i = 0; i < data.length; i++) {
     const row = data[i]!;
     const timellyRaw = toStr(row[timellyCol]);
     const feeName = toStr(row[feeNameCol]);
     const amountRaw = row[amountCol];
-    const studentName = nameCol ? toStr(row[nameCol]) : undefined;
 
     if (!timellyRaw && !feeName && (amountRaw === "" || amountRaw === undefined)) continue;
 
@@ -95,16 +92,41 @@ function parseRowsFromSheet(workbook: XLSX.WorkBook): { rows: Array<{ timellyId:
     const amount =
       typeof amountRaw === "number" ? amountRaw : parseFloat(toStr(amountRaw));
 
-    rows.push({
-      timellyId,
-      feeName,
-      amount,
-      ...(studentName ? { studentName } : {}),
-    });
+    rows.push({ timellyId, feeName, amount });
   }
 
   if (rows.length === 0) return { rows: [], parseError: "No data rows after header" };
   return { rows };
+}
+
+/** Merge rows from every worksheet — sheet tab names are ignored. */
+function parseRowsFromWorkbook(workbook: XLSX.WorkBook): {
+  rows: Array<{ timellyId: string; feeName: string; amount: number }>;
+  parseError?: string;
+} {
+  const merged: Array<{ timellyId: string; feeName: string; amount: number }> = [];
+  let lastParseError: string | undefined;
+
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) continue;
+    const data = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+    if (data.length === 0) continue;
+    const parsed = parseRowsFromSheetData(data);
+    if (parsed.parseError) {
+      lastParseError = parsed.parseError;
+      continue;
+    }
+    merged.push(...parsed.rows);
+  }
+
+  if (merged.length === 0) {
+    return {
+      rows: [],
+      parseError: lastParseError || "No data found in any worksheet",
+    };
+  }
+  return { rows: merged };
 }
 
 export default function BulkExtraFeeByTimellyModal({ open, onClose, onApplied }: Props) {
@@ -121,9 +143,9 @@ export default function BulkExtraFeeByTimellyModal({ open, onClose, onApplied }:
 
   const downloadTemplate = useCallback(() => {
     const aoa = [
-      ["Timelly ID", "Student Name", "Fee Name", "Amount"],
-      ["101", "Sample Student", "Lab Fee", 500],
-      ["ADM/2026/102", "Another Student", "Uniform Fee", 1200],
+      ["Timelly ID", "Fee Name", "Amount"],
+      ["101", "Lab Fee", 500],
+      ["ADM/2026/102", "Uniform Fee", 1200],
     ];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     const wb = XLSX.utils.book_new();
@@ -143,7 +165,7 @@ export default function BulkExtraFeeByTimellyModal({ open, onClose, onApplied }:
     try {
       const buf = await file.arrayBuffer();
       const workbook = XLSX.read(buf, { type: "array" });
-      const { rows, parseError } = parseRowsFromSheet(workbook);
+      const { rows, parseError } = parseRowsFromWorkbook(workbook);
       if (parseError) {
         setLocalError(parseError);
         return;
@@ -234,7 +256,7 @@ export default function BulkExtraFeeByTimellyModal({ open, onClose, onApplied }:
           </p>
           <ul className="list-disc pl-5 text-gray-500 space-y-1 text-xs">
             <li>Required columns: Timelly ID (or Roll No), Fee Name, Amount</li>
-            <li>Optional: Student Name — if present, it must match the student or the row is skipped</li>
+            <li>All worksheets in the file are merged — sheet tab names are not used</li>
           </ul>
 
           <div className="flex flex-wrap gap-2">

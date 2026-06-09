@@ -1,4 +1,5 @@
 import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
+import { invalidateExtraFeesScopeCacheForStudent } from "@/lib/computeAdminStudentFeeBreakdown";
 import type { StudentDetailsCoreCacheValue } from "@/lib/studentDetailsCoreCache";
 import {
   CORE_BUNDLE_TTL_MS,
@@ -70,6 +71,7 @@ function invalidateStudentFeeReadCachesSync(options: {
   const schoolPrefix = schoolId ? `${schoolId}:` : null;
 
   invalidateStudentDetailsCoreCache(studentId, schoolId);
+  invalidateExtraFeesScopeCacheForStudent(studentId);
 
   for (const key of breakdownMemCache.keys()) {
     if (key.endsWith(`:${studentId}:fast`)) breakdownMemCache.delete(key);
@@ -95,6 +97,7 @@ export function invalidateStudentFeeReadCaches(options: {
 /** Broad invalidation when class-wide fee structure changes. */
 export function invalidateSchoolFeeReadCaches(schoolId: string): void {
   invalidateStudentDetailsCoreCache();
+  invalidateExtraFeesScopeCacheForStudent();
   breakdownMemCache.clear();
   shellCache.clear();
   void invalidateTenant(schoolId).catch(() => {});

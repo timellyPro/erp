@@ -7,6 +7,7 @@ import { Role } from "@prisma/client";
 import * as XLSX from "xlsx";
 import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
 import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
+import { canonicalizeResidencyType } from "@/lib/residencyDisplay";
 
 function toStr(value: unknown) {
   if (value === null || value === undefined) return "";
@@ -32,18 +33,7 @@ function normalizeGender(value: unknown) {
 function normalizeResidencyType(value: unknown) {
   const raw = toStr(value);
   if (!raw) return "Day Scholar";
-  const normalized = raw.toLowerCase().replace(/\s+/g, "");
-  if (normalized === "dayscholar" || normalized === "dayscholer") return "Day Scholar";
-  if (
-    normalized === "hostel" ||
-    normalized === "hostler" ||
-    normalized === "hosteler" ||
-    normalized === "hosteller" ||
-    normalized === "hoster"
-  ) {
-    return "Hosteller";
-  }
-  return raw;
+  return canonicalizeResidencyType(raw);
 }
 
 function parseOptionalNumber(value: unknown) {

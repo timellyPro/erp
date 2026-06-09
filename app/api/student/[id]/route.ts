@@ -12,6 +12,8 @@ import {
 import type { PrismaClient } from "@prisma/client";
 import { ensureStudentApplicationLink } from "@/lib/ensureStudentApplicationLink";
 import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
+import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
+import { canonicalizeResidencyType } from "@/lib/residencyDisplay";
 
 type RouteParams =
   | { params: { id: string } }
@@ -21,20 +23,7 @@ function normalizeResidencyType(value: unknown): string | null | undefined {
   if (value === undefined) return undefined;
   if (value === null) return null;
   if (typeof value !== "string") return null;
-  const raw = value.trim();
-  if (!raw) return "Day Scholar";
-  const normalized = raw.toLowerCase().replace(/\s+/g, "");
-  if (normalized === "dayscholar" || normalized === "dayscholer") return "Day Scholar";
-  if (
-    normalized === "hostel" ||
-    normalized === "hostler" ||
-    normalized === "hosteler" ||
-    normalized === "hosteller" ||
-    normalized === "hoster"
-  ) {
-    return "Hosteller";
-  }
-  return raw;
+  return canonicalizeResidencyType(value);
 }
 
 export async function GET(_req: Request, context: RouteParams) {
@@ -650,6 +639,8 @@ export async function PUT(req: Request, context: RouteParams) {
         });
       }
     }
+
+    invalidateStudentFeeReadCaches({ studentId: id, schoolId });
 
     return NextResponse.json({ message: "Student updated successfully" }, { status: 200 });
   } catch (error: unknown) {

@@ -1,5 +1,8 @@
 import React, { forwardRef } from "react";
-import { format } from "date-fns";
+import {
+  formatReceiptGeneratedDate,
+  formatReceiptTransactionDate,
+} from "@/lib/receiptDates";
 import { ParentPortalDocumentShell, ParentPortalPdfMount } from "./ParentPortalDocumentShell";
 
 export interface FeePaymentReceiptData {
@@ -15,7 +18,12 @@ export interface FeePaymentReceiptData {
   residencyType: string;
   parentName: string;
   parentPhone: string;
-  createdAt: string | Date;
+  /** Payment / transaction date shown as Receipt Date */
+  transactionDate: string | Date;
+  /** Pre-formatted "Generated on" at print/download time (includes time of day). */
+  generatedOn?: string;
+  /** @deprecated Use transactionDate — kept for older callers */
+  createdAt?: string | Date;
   lines: Array<{ description: string; amount: number; paymentMethod?: string; utrNo?: string }>;
   total: number;
   receiptTitle?: string;
@@ -64,7 +72,9 @@ const SingleReceipt = ({
   data: FeePaymentReceiptData;
   showSignature?: boolean;
 }) => {
-  const formattedDate = format(new Date(data.createdAt), "dd-MM-yyyy");
+  const transactionRaw = data.transactionDate ?? data.createdAt ?? "";
+  const receiptDate = formatReceiptTransactionDate(transactionRaw);
+  const generatedOn = data.generatedOn?.trim() || formatReceiptGeneratedDate(new Date());
 
   return (
     <ParentPortalDocumentShell
@@ -74,7 +84,7 @@ const SingleReceipt = ({
         schoolAddress: data.schoolAddress,
       }}
       documentTitle={data.receiptTitle?.trim() || "Fee Receipt"}
-      generatedAt={data.createdAt}
+      generatedOn={generatedOn}
       minHeight={510}
       student={{
         studentName: data.studentName,
@@ -84,7 +94,7 @@ const SingleReceipt = ({
         rightRows: [
           { label: "Father Name", value: data.fatherName || data.parentName || "-" },
           { label: "Mother Name", value: data.motherName || "-" },
-          { label: "Receipt Date", value: formattedDate },
+          { label: "Receipt Date", value: receiptDate },
           { label: "Phone", value: data.parentPhone || "-" },
         ],
       }}

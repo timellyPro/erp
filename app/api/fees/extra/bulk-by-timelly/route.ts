@@ -262,29 +262,6 @@ export async function POST(req: Request) {
         continue;
       }
 
-      if (row.expectedName) {
-        const want = normKey(row.expectedName);
-        if (want) {
-          const actual = normKey(st.user.name || "");
-          if (!actual) {
-            errors.push({
-              index: row.index,
-              timellyId: row.token,
-              message: "Student name missing on file; cannot verify sheet name",
-            });
-            continue;
-          }
-          if (!actual.includes(want) && !want.includes(actual)) {
-            errors.push({
-              index: row.index,
-              timellyId: row.token,
-              message: `Name mismatch (sheet: "${row.expectedName}", student: "${st.user.name}")`,
-            });
-            continue;
-          }
-        }
-      }
-
       acceptedRows.push({
         index: row.index,
         timellyId: row.token,

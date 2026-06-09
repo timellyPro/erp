@@ -159,6 +159,8 @@ export async function loadAssignFeeCatalog(params: {
     if (params.section?.trim()) qs.set("section", params.section.trim());
     if (params.classRows?.length) qs.set("skipClasses", "1");
 
+    if (params.force) qs.set("refresh", "1");
+
     const res = await fetch(`/api/fees/assign-catalog?${qs.toString()}`, {
       credentials: "include",
       cache: "no-store",

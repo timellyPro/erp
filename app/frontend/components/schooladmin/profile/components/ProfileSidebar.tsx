@@ -36,10 +36,19 @@ type Props = {
   gender?: string;
   residencyType?: string;
   onSaved?: (patch?: {
-    fatherName: string;
-    fatherPhone: string;
-    motherName: string;
-    motherPhone: string;
+    fatherName?: string;
+    fatherPhone?: string;
+    motherName?: string;
+    motherPhone?: string;
+    name?: string;
+    email?: string;
+    phone?: string;
+    address?: string;
+    rollNo?: string;
+    classId?: string | null;
+    classDisplayName?: string;
+    gender?: string;
+    residencyType?: string;
   }) => void;
   onOpenFees?: () => void;
   /** Warm fee breakdown before the user opens the fees sheet. */
@@ -138,7 +147,22 @@ export const ProfileSidebar = ({
         return;
       }
       setStudentModalOpen(false);
-      onSaved?.();
+      const resolvedClass = classes.find((c) => c.id === sClassId);
+      onSaved?.({
+        name,
+        email: sEmail.trim(),
+        phone: sPhone.trim(),
+        address: sAddress.trim(),
+        rollNo: sRoll.trim(),
+        classId: sClassId || null,
+        gender: sGender.trim(),
+        residencyType: sResidency.trim() || "Day Scholar",
+        ...(resolvedClass
+          ? {
+              classDisplayName: resolvedClass.label,
+            }
+          : {}),
+      });
     } catch {
       alert("Update failed");
     } finally {
@@ -415,6 +439,7 @@ export const ProfileSidebar = ({
                   options={[
                     { label: "Day Scholar", value: "Day Scholar" },
                     { label: "Hostel", value: "Hosteller" },
+                    { label: "RTE", value: "RTE" },
                   ]}
                   bgColor="black"
                 />

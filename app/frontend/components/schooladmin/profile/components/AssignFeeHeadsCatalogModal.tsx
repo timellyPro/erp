@@ -48,18 +48,6 @@ function displayResidencyType(value: string | null | undefined): string {
   return formatResidencyTypeForDisplay(normalizeResidencyType(value));
 }
 
-function seededRows(residencyType: string | null | undefined): FeeAssignRow[] {
-  const now = Date.now();
-  const normalized = normalizeResidencyType(residencyType);
-  if (normalized === "Hosteller") {
-    return [{ id: `seed-${now}`, name: "Hostel Fee", amount: "" }];
-  }
-  if (normalized === "Day Scholar") {
-    return [{ id: `seed-${now}`, name: "Transport Fee", amount: "" }];
-  }
-  return [{ id: `seed-${now}`, name: "", amount: "" }];
-}
-
 type Props = {
   studentId: string;
   studentName: string;
@@ -82,26 +70,21 @@ export function AssignFeeHeadsCatalogModal({
   onSuccess,
 }: Props) {
   const [dbFeeHeadOptions, setDbFeeHeadOptions] = useState<FeeHeadOption[]>([]);
-  const [feeAssignRows, setFeeAssignRows] = useState<FeeAssignRow[]>(() => seededRows(residencyType));
+  const [feeAssignRows, setFeeAssignRows] = useState<FeeAssignRow[]>([]);
   const [assigningFees, setAssigningFees] = useState(false);
   const [assignFeeError, setAssignFeeError] = useState<string | null>(null);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
 
   const loadCatalog = useCallback(async () => {
     setAssignFeeError(null);
-    const params = { studentId, classId, section: classSection, residencyType };
-    const cached = peekAssignFeeCatalog(params);
-    if (cached) {
-      setDbFeeHeadOptions(cached.dbFeeHeadOptions as FeeHeadOption[]);
-      setLoadingCatalog(false);
-    } else {
-      setLoadingCatalog(true);
-    }
+    const params = { studentId, classId, section: classSection, residencyType, force: true };
+    setLoadingCatalog(true);
     try {
       const catalog = await loadAssignFeeCatalog(params);
       setDbFeeHeadOptions(catalog.dbFeeHeadOptions as FeeHeadOption[]);
     } catch {
-      if (!cached) setDbFeeHeadOptions([]);
+      const cached = peekAssignFeeCatalog(params);
+      setDbFeeHeadOptions((cached?.dbFeeHeadOptions as FeeHeadOption[]) ?? []);
     } finally {
       setLoadingCatalog(false);
     }
@@ -131,8 +114,18 @@ export function AssignFeeHeadsCatalogModal({
     setDbFeeHeadOptions((prev) => prev.map((x) => ({ ...x, selected: false })));
   };
 
-  const saveAssignedFees = async () => {
-    const cleaned = feeAssignRows
+  const buildFeesToSave = () => {
+    const fromCatalog = dbFeeHeadOptions
+      .filter((x) => x.selected)
+      .map((x) => ({
+        name: x.name.trim(),
+        amount: Number(x.amount),
+        residencyScope: x.residencyScope,
+        splitIntoTwoInstallments: x.splitIntoTwoInstallments === true,
+      }))
+      .filter((r) => r.name.length > 0 && Number.isFinite(r.amount) && r.amount > 0);
+
+    const fromRows = feeAssignRows
       .map((r) => ({
         name: r.name.trim(),
         amount: Number(r.amount),
@@ -141,8 +134,24 @@ export function AssignFeeHeadsCatalogModal({
       }))
       .filter((r) => r.name.length > 0 && Number.isFinite(r.amount) && r.amount > 0);
 
+    const seen = new Set<string>();
+    const merged: typeof fromRows = [];
+    for (const item of [...fromCatalog, ...fromRows]) {
+      const key = `${item.name.toLowerCase()}|${item.amount}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(item);
+    }
+    return merged;
+  };
+
+  const saveAssignedFees = async () => {
+    const cleaned = buildFeesToSave();
+
     if (cleaned.length === 0) {
-      setAssignFeeError("Add at least one fee with valid name and amount.");
+      setAssignFeeError(
+        "Select at least one fee head from the catalog above, or add a custom fee row with name and amount."
+      );
       return;
     }
 
@@ -190,8 +199,9 @@ export function AssignFeeHeadsCatalogModal({
           </div>
 
           <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-white/70">
-            Pick saved heads from your catalog (same as Admission → Assign Fees), or add custom rows below. Each
-            selection posts as a student extra fee and increases this student&apos;s total due.
+            Check fee heads from your catalog, then click <span className="font-semibold text-white/90">Save fees</span>
+            — you do not need to click &quot;Add selected heads&quot; first. Custom rows below work the same way.
+            Saved templates from Fees → Custom fee heads appear here after you create them.
           </div>
 
           <div className="rounded-xl border border-white/10 bg-black/20 p-3">
@@ -243,14 +253,14 @@ export function AssignFeeHeadsCatalogModal({
             )}
           </div>
 
-          {assignFeeError ? (
-            <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
-              {assignFeeError}
-            </div>
-          ) : null}
         </div>
 
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-y-contain px-5 py-4 [-webkit-overflow-scrolling:touch]">
+          {feeAssignRows.length === 0 ? (
+            <p className="text-xs text-white/45 py-2">
+              Select fee heads from the catalog above, or use &quot;+ Add another fee&quot; to enter a custom fee.
+            </p>
+          ) : null}
           {feeAssignRows.map((row) => (
             <div key={row.id} className="grid grid-cols-1 md:grid-cols-[1fr_160px_90px] gap-2">
               <input
@@ -289,7 +299,13 @@ export function AssignFeeHeadsCatalogModal({
           ))}
         </div>
 
-        <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-white/10 bg-[#0B1220] p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex shrink-0 flex-col gap-2 border-t border-white/10 bg-[#0B1220] p-5">
+          {assignFeeError ? (
+            <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
+              {assignFeeError}
+            </div>
+          ) : null}
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
           <button
             type="button"
             onClick={addAssignFeeRow}
@@ -315,6 +331,7 @@ export function AssignFeeHeadsCatalogModal({
               {assigningFees && <Loader2 size={16} className="animate-spin" />}
               {assigningFees ? "Saving…" : "Save fees"}
             </button>
+          </div>
           </div>
         </div>
       </div>
