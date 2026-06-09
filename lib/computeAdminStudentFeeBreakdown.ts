@@ -13,6 +13,7 @@ function roundMoney(n: number): number {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
 import { shouldOmitLegacySplitHostelMessExtraForBreakdown } from "@/lib/studentTuitionFromStructure";
+import { defaultSplitIntoTwoInstallmentsForFeeName } from "@/lib/extraFeeResidencyScope";
 import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 import { isInstallmentFeeName, isUnsplitLumpExtraFee } from "@/lib/extraFeeInstallments";
@@ -381,7 +382,9 @@ export async function computeAdminStudentFeeBreakdown(
         extraFeeId: ef.id,
         canDeleteOnStudentProfile: ef.targetType === "STUDENT" && ef.targetStudentId === student.id,
         splitIntoTwoInstallments:
-          Boolean(ef.splitIntoTwoInstallments) && !isInstallmentFeeName(ef.name),
+          !isInstallmentFeeName(ef.name) &&
+          (Boolean(ef.splitIntoTwoInstallments) ||
+            defaultSplitIntoTwoInstallmentsForFeeName(ef.name)),
       };
     }),
   ];

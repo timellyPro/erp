@@ -1,3 +1,5 @@
+import { defaultSplitIntoTwoInstallmentsForFeeName } from "@/lib/extraFeeResidencyScope";
+
 /**
  * Generic two-installment extra fees: persisted as two ExtraFee rows (50% + 50%),
  * not one lump with UI-only splitting.
@@ -129,9 +131,10 @@ export function findInstallmentPair<T extends ExtraFeeLike>(
   return null;
 }
 
-/** Lump row flagged for split but not yet migrated to two installment rows. */
+/** Lump row that should be two DB installment rows (flag set, or mess/hostel by product rule). */
 export function isUnsplitLumpExtraFee(fee: Pick<ExtraFeeLike, "name" | "splitIntoTwoInstallments">): boolean {
-  return Boolean(fee.splitIntoTwoInstallments) && !isInstallmentFeeName(fee.name);
+  if (isInstallmentFeeName(fee.name)) return false;
+  return Boolean(fee.splitIntoTwoInstallments) || defaultSplitIntoTwoInstallmentsForFeeName(fee.name);
 }
 
 /** PATCH/POST should split this single row into two installment rows in the database. */
@@ -199,7 +202,8 @@ export function groupExtraFeesForCatalogPicker<T extends ExtraFeeLike>(fees: T[]
     out.push({
       ...f,
       displayAmount: amt,
-      splitIntoTwoInstallments: Boolean(f.splitIntoTwoInstallments),
+      splitIntoTwoInstallments:
+        Boolean(f.splitIntoTwoInstallments) || defaultSplitIntoTwoInstallmentsForFeeName(f.name),
     });
   }
 

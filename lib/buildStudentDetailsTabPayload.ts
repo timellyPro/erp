@@ -504,7 +504,7 @@ export async function buildStudentDetailsCoreBundle(
           residencyType: student.residencyType,
           class: student.class,
         },
-        migrateLumps: false,
+        migrateLumps: true,
         cleanupHostelMessDuplicates: false,
         reconcileTotals: false,
       });
