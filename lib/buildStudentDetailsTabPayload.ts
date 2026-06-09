@@ -515,15 +515,23 @@ export async function buildStudentDetailsCoreBundle(
 
   const syncedShell =
     feeBreakdown && shell.fee
-      ? {
-          ...shell,
-          fee: {
-            ...shell.fee,
-            amountPaid: feeBreakdown.amountPaid,
-            remainingFee: feeBreakdown.remainingFee,
-            totalFee: feeBreakdown.finalFee ?? shell.fee.totalFee,
-          },
-        }
+      ? (() => {
+          const grossFromHeads = feeBreakdown.dueHeads.reduce(
+            (s, h) => s + (Number(h.grossAmount) || 0),
+            0
+          );
+          const netFromHeads = feeBreakdown.totalAmount ?? feeBreakdown.finalFee;
+          return {
+            ...shell,
+            fee: {
+              ...shell.fee,
+              baseTotalFee: Math.round(grossFromHeads),
+              amountPaid: feeBreakdown.amountPaid,
+              remainingFee: feeBreakdown.remainingFee,
+              totalFee: netFromHeads ?? shell.fee.totalFee,
+            },
+          };
+        })()
       : shell;
 
   const value = { shell: syncedShell, feeBreakdown };

@@ -993,7 +993,13 @@ function StudentDetailsPageContent() {
                   studentId={detail.student.id}
                   classId={detail.student.class?.id ?? null}
                   totalFee={feeBreakdown?.totalAmount ?? detail.fee.totalFee}
-                  baseTotalFee={detail.fee.baseTotalFee}
+                  baseTotalFee={
+                    feeBreakdown?.dueHeads?.length
+                      ? Math.round(
+                          feeBreakdown.dueHeads.reduce((s, h) => s + (Number(h.grossAmount) || 0), 0)
+                        )
+                      : detail.fee.baseTotalFee
+                  }
                   discountPercent={detail.fee.discountPercent}
                   amountPaid={feeBreakdown?.amountPaid ?? detail.fee.amountPaid}
                   remainingFee={feeBreakdown?.remainingFee ?? detail.fee.remainingFee}

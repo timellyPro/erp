@@ -10,6 +10,7 @@ import { EditExtraFeeModal } from "./EditExtraFeeModal";
 import { splitFeeHeadsForDisplay } from "@/lib/feeHeadInstallmentDisplay";
 import { storedDiscountRupeeAmount } from "@/lib/studentFeeHeadDiscount";
 import { formatRupee, roundRupee } from "@/lib/formatRupee";
+import { grossTotalFromBreakdown, netTotalFromBreakdown } from "@/lib/feeBreakdownTotals";
 import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
 
 function baseComponentIndexFromHead(head: {
@@ -126,6 +127,7 @@ export const FeesBreakdown = ({
       sourceKey?: string;
       label: string;
       amount: number;
+      gross?: number;
       paid: number;
       due: number;
       extraFeeId?: string;
@@ -195,10 +197,26 @@ export const FeesBreakdown = ({
     [headCards]
   );
 
+  const breakdownGrossTotal = useMemo(() => {
+    const fromBundle = grossTotalFromBreakdown(initialFeeBreakdown);
+    if (fromBundle != null && fromBundle > 0) return fromBundle;
+    if (headCards.length > 0) {
+      return roundRupee(headCards.reduce((s, h) => s + (Number(h.gross ?? h.amount) || 0), 0));
+    }
+    return baseTotalFee > 0 ? baseTotalFee : 0;
+  }, [initialFeeBreakdown, headCards, baseTotalFee]);
+
+  const breakdownNetTotal = useMemo(
+    () => netTotalFromBreakdown(initialFeeBreakdown) ?? (headsTotalAmount != null && headsTotalAmount > 0 ? headsTotalAmount : null),
+    [initialFeeBreakdown, headsTotalAmount]
+  );
+
+  const displayPreDiscountTotal = breakdownGrossTotal;
+
   const discountAmount =
     typeof discountFixedAmount === "number" && discountFixedAmount > 0
       ? discountFixedAmount
-      : storedDiscountRupeeAmount(baseTotalFee, totalFee, discountFixedAmount);
+      : storedDiscountRupeeAmount(displayPreDiscountTotal, totalFee, discountFixedAmount);
   /** Prefer breakdown head sum when loaded — stored StudentFee can be stale after bulk extra cleanup. */
   const displayTotalAmount =
     headsTotalAmount != null && headsTotalAmount > 0
@@ -564,7 +582,7 @@ export const FeesBreakdown = ({
           <p className="text-xs text-amber-300/70 uppercase tracking-widest font-bold">Total Fees (All Heads)</p>
           <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(displayTotalAmount)}</p>
           <p className="text-xs text-amber-300 mt-1 font-semibold">
-            Pre-discount (structure + extras): ₹{formatRupee(baseTotalFee)}
+            Pre-discount (all heads): ₹{formatRupee(displayPreDiscountTotal)}
           </p>
           <p className="text-xs text-amber-300 mt-1 font-semibold">
             Discount: ₹{formatRupee(discountAmount)}
@@ -1067,7 +1085,8 @@ export const FeesBreakdown = ({
       {showModifyFee && (
         <ModifyFeeModal
           studentId={studentId}
-          currentTotalFee={baseTotalFee}
+          currentTotalFee={displayPreDiscountTotal}
+          currentNetTotal={breakdownNetTotal ?? displayTotalAmount}
           currentDiscountPercent={discountPercent}
           feeHeadOptions={feeHeadOptionsForDiscount}
           initialDiscountFeeHeadKey={discountFeeHeadKey ?? null}
