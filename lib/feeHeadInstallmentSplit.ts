@@ -1,4 +1,5 @@
 import { isInstallmentFeeName, isUnsplitLumpExtraFee } from "@/lib/extraFeeInstallments";
+import { defaultSplitIntoTwoInstallmentsForFeeName } from "@/lib/extraFeeResidencyScope";
 
 export type SplitInstallmentHeadOptions = {
   splitIntoTwoInstallments?: boolean;
@@ -14,6 +15,7 @@ export function shouldSplitFeeHeadIntoTwoInstallments(
 ): boolean {
   if (isInstallmentFeeName(label)) return false;
   if (options?.splitIntoTwoInstallments === true) return true;
+  if (defaultSplitIntoTwoInstallmentsForFeeName(label)) return true;
   return false;
 }
 

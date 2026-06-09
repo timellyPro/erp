@@ -38,7 +38,7 @@ async function loadFeeBreakdownSafe(schoolId: string, studentId: string) {
   try {
     return await Promise.race([
       computeAdminStudentFeeBreakdown(schoolId, studentId, {
-        migrateLumps: false,
+        migrateLumps: true,
         cleanupHostelMessDuplicates: false,
         reconcileTotals: false,
       }),

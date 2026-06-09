@@ -40,6 +40,16 @@ export function isHostelCategoryExtraFeeName(name: string | null | undefined): b
   return n.includes("hostel") || n.includes("hostler") || n.includes("hosteler");
 }
 
+/**
+ * Mess and hostel fees are always collected in two installments in this product
+ * (same as class mess setup in HostelMessFeesPanel).
+ */
+export function defaultSplitIntoTwoInstallmentsForFeeName(
+  name: string | null | undefined
+): boolean {
+  return isMessCategoryExtraFeeName(name) || isHostelCategoryExtraFeeName(name);
+}
+
 /** Default residency scope when creating catalog rows from fee name. */
 export function suggestedResidencyScopeForExtraFeeName(
   name: string | null | undefined
