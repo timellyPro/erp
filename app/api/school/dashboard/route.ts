@@ -13,6 +13,7 @@ import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
 } from "@/lib/schoolDashboardServerCache";
+import { activeStudentWhere } from "@/lib/studentStatus";
 
 declare const globalThis: {
   schoolDashboardPurgeLastRunAt?: number;
@@ -106,10 +107,12 @@ export async function GET(request: Request) {
       collection,
     ] = await Promise.all([
       prisma.class.count({ where: { schoolId } }),
-      prisma.student.count({ where: { schoolId } }),
+      prisma.student.count({ where: { schoolId, ...activeStudentWhere } }),
       prisma.user.count({ where: { schoolId, role: "TEACHER" } }),
       prisma.class.count({ where: { schoolId, createdAt: { lt: startOfMonth } } }),
-      prisma.student.count({ where: { schoolId, createdAt: { lt: startOfMonth } } }),
+      prisma.student.count({
+        where: { schoolId, ...activeStudentWhere, createdAt: { lt: startOfMonth } },
+      }),
       prisma.user.count({
         where: { schoolId, role: "TEACHER", createdAt: { lt: startOfMonth } },
       }),

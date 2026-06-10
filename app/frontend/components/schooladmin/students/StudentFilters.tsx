@@ -1,9 +1,20 @@
 "use client";
 
-import { Download, Plus, Search, Upload, X } from "lucide-react";
-import SearchInput from "../../common/SearchInput";
-import SelectInput from "../../common/SelectInput";
+import {
+  BookOpen,
+  Download,
+  Funnel,
+  List,
+  Plus,
+  Search,
+  Upload,
+  UserCheck,
+  UserX,
+  X,
+} from "lucide-react";
 import { SelectOption } from "./types";
+
+type StatusFilter = "active" | "inactive" | "all";
 
 type Props = {
   classOptions: SelectOption[];
@@ -12,14 +23,27 @@ type Props = {
   onClassChange: (value: string) => void;
   selectedSection: string;
   onSectionChange: (value: string) => void;
+  statusFilter: StatusFilter;
+  onStatusFilterChange: (value: StatusFilter) => void;
   searchQuery: string;
   onSearchChange: (value: string) => void;
+  filteredCount: number;
   showAddForm: boolean;
   onToggleAddForm: () => void;
   onToggleUpload: () => void;
-  onDownloadReport: () => void;
+  onDownloadReport: (format?: "xlsx" | "pdf") => void;
   exportDetailsLoading?: boolean;
 };
+
+const STATUS_OPTIONS: {
+  key: StatusFilter;
+  label: string;
+  icon: typeof List;
+}[] = [
+  { key: "active", label: "Active", icon: UserCheck },
+  { key: "inactive", label: "Inactive", icon: UserX },
+  { key: "all", label: "All", icon: List },
+];
 
 export default function StudentFilters({
   classOptions,
@@ -28,8 +52,11 @@ export default function StudentFilters({
   onClassChange,
   selectedSection,
   onSectionChange,
+  statusFilter,
+  onStatusFilterChange,
   searchQuery,
   onSearchChange,
+  filteredCount,
   showAddForm,
   onToggleAddForm,
   onToggleUpload,
@@ -37,73 +64,130 @@ export default function StudentFilters({
   exportDetailsLoading = false,
 }: Props) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4 md:p-5">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[1.1fr_1.1fr_1.4fr_auto] gap-3 items-end">
-        <SelectInput
-          label="Class"
-          value={selectedClass}
-          onChange={onClassChange}
-          options={classOptions}
-          bgColor="white"
-        />
+    <section className="rounded-2xl p-6 lg:p-7 space-y-6 bg-white/5 backdrop-blur border border-white/10">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h3 className="text-lg font-semibold text-white">Filter Students</h3>
+          <p className="text-sm text-white/70">Pick a class for faster loading · search or export anytime</p>
+        </div>
+        <span className="self-start sm:self-auto rounded-full border border-lime-400/30 px-4 py-2 text-sm text-lime-300">
+          {filteredCount.toLocaleString()} Results
+        </span>
+      </div>
 
-        <SelectInput
-          label="Section"
-          value={selectedSection}
-          onChange={onSectionChange}
-          options={sectionOptions}
-          bgColor="white"
-        />
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+        <div className="lg:col-span-2">
+          <label className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-300">
+            <BookOpen className="w-4 h-4 text-lime-400" />
+            Class
+          </label>
+          <select
+            value={selectedClass}
+            onChange={(e) => onClassChange(e.target.value)}
+            className="w-full rounded-xl px-4 py-3 somu text-white border border-white/20 outline-none focus:border-lime-400 transition appearance-none"
+          >
+            {classOptions.map((opt) => (
+              <option key={opt.value || "all"} value={opt.value} className="bg-gray-900">
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
 
-        <SearchInput
-          label="Search"
-          placeholder="Search students..."
-          value={searchQuery}
-          onChange={onSearchChange}
-          icon={Search}
-          variant="glass"
-          className="w-full md:col-span-2 lg:col-span-1"
-        />
+        <div className="lg:col-span-1">
+          <label className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-300">
+            Section
+          </label>
+          <select
+            value={selectedSection}
+            onChange={(e) => onSectionChange(e.target.value)}
+            className="w-full rounded-xl px-4 py-3 somu text-white border border-white/20 outline-none focus:border-lime-400 transition appearance-none"
+          >
+            {sectionOptions.map((opt) => (
+              <option key={opt.value || "all"} value={opt.value} className="bg-gray-900">
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
 
+        <div className="lg:col-span-2">
+          <label className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-300">
+            <Search className="w-4 h-4 text-lime-400" />
+            Search
+          </label>
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Name, ID, email, phone…"
+            className="w-full rounded-xl px-4 py-3 somu text-white border border-white/20 outline-none focus:border-lime-400 transition placeholder:text-white/40"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-300">
+          <Funnel className="w-4 h-4 text-lime-400" />
+          Status
+        </label>
+        <div className="grid grid-cols-3 gap-3">
+          {STATUS_OPTIONS.map(({ key, label, icon: Icon }) => {
+            const isActive = statusFilter === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => onStatusFilterChange(key)}
+                className={`flex flex-col items-center justify-center gap-1.5 px-4 py-3 rounded-xl text-sm font-medium transition-all border somu ${
+                  isActive
+                    ? "bg-lime-400/10 border-lime-400 text-lime-300 shadow-[0_0_15px_rgba(163,230,53,0.15)]"
+                    : "border-white/20 text-gray-300 hover:border-white/40 hover:bg-white/5"
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-3 pt-1">
         <button
           type="button"
           onClick={onToggleAddForm}
-          className="w-full lg:w-auto md:col-span-2 lg:col-span-1 px-3 md:px-4 py-2 border rounded-xl font-medium 
-          transition-all shadow-[0_0_15px_rgba(163,230,53,0.15)] text-xs md:text-sm flex items-center justify-center
-           gap-2 bg-lime-400/10 text-lime-400 border-lime-400/20 hover:bg-lime-400/20"
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold bg-lime-400/10 text-lime-300 border border-lime-400/30 hover:bg-lime-400/20 transition"
         >
-          {showAddForm ? (
-            <>
-              <X size={16} /> Close Form
-            </>
-          ) : (
-            <>
-              <Plus size={16} /> Add Student
-            </>
-          )}
+          {showAddForm ? <X size={16} /> : <Plus size={16} />}
+          {showAddForm ? "Close Form" : "Add Student"}
         </button>
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-3">
         <button
           type="button"
           onClick={onToggleUpload}
-          className="px-3 md:px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl font-medium
-           transition-all text-xs md:text-sm flex items-center gap-2 text-gray-300"
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium border border-white/20 text-gray-300 hover:bg-white/5 transition"
         >
           <Upload size={16} /> Upload CSV
         </button>
         <button
           type="button"
-          onClick={onDownloadReport}
+          onClick={() => onDownloadReport("xlsx")}
           disabled={exportDetailsLoading}
-          className="px-3 md:px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl font-medium
-           transition-all text-xs md:text-sm flex items-center gap-2 text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium border border-white/20 text-gray-300 hover:bg-white/5 transition disabled:opacity-50"
         >
           <Download size={16} />
-          {exportDetailsLoading ? "Exporting…" : "Export details (Excel)"}
+          {exportDetailsLoading ? "Exporting…" : "Excel"}
+        </button>
+        <button
+          type="button"
+          onClick={() => onDownloadReport("pdf")}
+          disabled={exportDetailsLoading}
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium border border-white/20 text-gray-300 hover:bg-white/5 transition disabled:opacity-50"
+        >
+          <Download size={16} />
+          {exportDetailsLoading ? "Exporting…" : "PDF"}
         </button>
       </div>
-    </div>
+    </section>
   );
 }

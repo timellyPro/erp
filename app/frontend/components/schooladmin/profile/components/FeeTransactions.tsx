@@ -118,6 +118,9 @@ type Props = {
     paymentId: string;
     updatedFee: { amountPaid: number; remainingFee: number; finalFee?: number } | null;
   }) => void;
+  feesRecordingDisabled?: boolean;
+  /** True while payment history is still loading from the server. */
+  transactionsLoading?: boolean;
 };
 
 function isSyntheticPaymentId(id: string) {
@@ -179,6 +182,8 @@ export const FeeTransactions = ({
   motherName = "-",
   onPaymentsChanged,
   onPaymentDeleted,
+  feesRecordingDisabled = false,
+  transactionsLoading = false,
 }: Props) => {
   const receiptRef = useRef<HTMLDivElement>(null);
   const [receiptData, setReceiptData] = useState<FeePaymentReceiptData | null>(null);
@@ -294,7 +299,20 @@ export const FeeTransactions = ({
 
   const basePayments = payments && payments.length > 0 ? [...payments] : [];
 
-  if (admissionFee && admissionFee > 0) {
+  const hasAdmissionPayment = basePayments.some(
+    (p) =>
+      p.id === "admission-fee" ||
+      p.id.startsWith("admission-app-") ||
+      (p.feeTypeName ?? "").toLowerCase().includes("admission fee")
+  );
+  const hasApplicationPayment = basePayments.some(
+    (p) =>
+      p.id === "application-fee" ||
+      p.id.startsWith("application-app-") ||
+      (p.feeTypeName ?? "").toLowerCase().includes("application fee")
+  );
+
+  if (!hasAdmissionPayment && admissionFee && admissionFee > 0) {
     basePayments.push({
       id: "admission-fee",
       amount: admissionFee,
@@ -307,7 +325,7 @@ export const FeeTransactions = ({
     });
   }
 
-  if (applicationFee && applicationFee > 0) {
+  if (!hasApplicationPayment && applicationFee && applicationFee > 0) {
     basePayments.push({
       id: "application-fee",
       amount: applicationFee,
@@ -681,8 +699,10 @@ export const FeeTransactions = ({
         </div>
       </div>
 
-      {!hasAny ? (
+      {!transactionsLoading && !hasAny ? (
         <div className="py-8 text-center text-gray-500 text-sm">No fee records</div>
+      ) : transactionsLoading && transactionRows.length === 0 ? (
+        <div className="py-8 text-center text-gray-400 text-sm">Loading transaction history…</div>
       ) : (
         <div className="overflow-x-auto overscroll-x-contain touch-pan-x -mx-1 px-1 sm:mx-0 sm:px-0 pb-1 rounded-lg">
           <table className="w-full text-left min-w-[980px]">
@@ -704,7 +724,7 @@ export const FeeTransactions = ({
               {transactionRows.map((row) => {
                 const payment = row.sourcePayment;
                 const synthetic = isSyntheticPaymentId(row.paymentId);
-                const canEditRow = Boolean(studentId.trim());
+                const canEditRow = Boolean(studentId.trim()) && !feesRecordingDisabled;
                 return (
                   <tr
                     key={row.rowKey}

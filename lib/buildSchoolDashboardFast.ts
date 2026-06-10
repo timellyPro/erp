@@ -33,7 +33,7 @@ export async function buildSchoolDashboardFast(schoolId: string, dateParam: stri
     prisma.$queryRaw<Array<{ classes: bigint; students: bigint; teachers: bigint }>>(Prisma.sql`
       SELECT
         (SELECT COUNT(*)::bigint FROM "Class" WHERE "schoolId" = ${schoolId}) AS classes,
-        (SELECT COUNT(*)::bigint FROM "Student" WHERE "schoolId" = ${schoolId}) AS students,
+        (SELECT COUNT(*)::bigint FROM "Student" WHERE "schoolId" = ${schoolId} AND status = 'Active') AS students,
         (SELECT COUNT(*)::bigint FROM "User" WHERE "schoolId" = ${schoolId} AND role = 'TEACHER') AS teachers
     `),
     buildSchoolDashboardCollection(schoolId, dateParam),

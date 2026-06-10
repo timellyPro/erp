@@ -10,6 +10,7 @@ type StudentOption = {
   classDisplay: string;
   classId: string;
   section: string | null;
+  status?: string;
 };
 
 type Props = {
@@ -20,6 +21,7 @@ type Props = {
   selectedId: string | null;
   classFilter?: string;
   sectionFilter?: string;
+  statusFilter?: "all" | "active" | "inactive";
 };
 
 function mapApiRow(s: {
@@ -28,6 +30,7 @@ function mapApiRow(s: {
   admissionNumber?: string;
   fatherName?: string;
   motherName?: string;
+  status?: string;
   class?: { id: string; name: string; section: string | null };
 }): StudentOption {
   return {
@@ -38,7 +41,15 @@ function mapApiRow(s: {
     classDisplay: s.class ? `${s.class.name}${s.class.section ? `-${s.class.section}` : ""}` : "-",
     classId: s.class?.id ?? "",
     section: s.class?.section ?? null,
+    status: s.status ?? "Active",
   };
+}
+
+function matchesStatusFilter(status: string | undefined, filter: "all" | "active" | "inactive") {
+  const inactive = (status ?? "Active").trim().toLowerCase() === "inactive";
+  if (filter === "inactive") return inactive;
+  if (filter === "active") return !inactive;
+  return true;
 }
 
 export const StudentSearchAutocomplete = ({
@@ -49,6 +60,7 @@ export const StudentSearchAutocomplete = ({
   selectedId,
   classFilter = "",
   sectionFilter = "",
+  statusFilter = "all",
 }: Props) => {
   const [showDropdown, setShowDropdown] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
@@ -64,9 +76,10 @@ export const StudentSearchAutocomplete = ({
       list.filter((s) => {
         if (classFilter && s.classId !== classFilter) return false;
         if (sectionFilter && s.section !== sectionFilter) return false;
+        if (!matchesStatusFilter(s.status, statusFilter)) return false;
         return true;
       }),
-    [classFilter, sectionFilter]
+    [classFilter, sectionFilter, statusFilter]
   );
 
   const localFiltered = filterByClass(
@@ -94,6 +107,8 @@ export const StudentSearchAutocomplete = ({
       void (async () => {
         try {
           const params = new URLSearchParams({ q, take: "30" });
+          if (statusFilter === "active") params.set("status", "Active");
+          else if (statusFilter === "inactive") params.set("status", "Inactive");
           const res = await fetch(`/api/student/list?${params.toString()}`, {
             credentials: "include",
             cache: "no-store",
@@ -111,7 +126,7 @@ export const StudentSearchAutocomplete = ({
     }, 280);
 
     return () => clearTimeout(timer);
-  }, [searchQuery, filterByClass]);
+  }, [searchQuery, filterByClass, statusFilter]);
 
   const filteredStudents =
     searchQuery.trim().length >= 2 && remoteResults.length > 0
@@ -221,6 +236,11 @@ export const StudentSearchAutocomplete = ({
               >
                 <div className="font-semibold text-white">
                   {`${student.name} -${student.admissionNumber || "-"} | ${student.classDisplay || "-"} | ${student.parentName || "-"}`}
+                  {(student.status ?? "Active").trim().toLowerCase() === "inactive" ? (
+                    <span className="ml-2 text-[11px] font-bold uppercase tracking-wide text-red-300">
+                      Inactive
+                    </span>
+                  ) : null}
                 </div>
               </button>
             ))}

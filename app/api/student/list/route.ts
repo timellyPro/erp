@@ -9,6 +9,8 @@ import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
 } from "@/lib/schoolDashboardServerCache";
+import { activeStudentWhere, studentStatusFilter } from "@/lib/studentStatus";
+import { resolveStudentDisplayClass } from "@/lib/resolveStudentDisplayClass";
 
 export async function GET(req: Request) {
   try {
@@ -42,13 +44,25 @@ export async function GET(req: Request) {
         // Default: paginated + fast. If UI truly needs "render all", allow a larger cap explicitly.
         // NOTE: fetching everything in one request will not hit the <150ms target at scale.
         const renderAll = searchParams.get("all") === "1";
+        const bypassCache = searchParams.get("refresh") === "1";
         const maxTake = renderAll ? 10000 : 100;
-        const take = Math.min(maxTake, Math.max(1, Number.isFinite(takeRaw) ? takeRaw : 50));
+        const take = renderAll
+          ? maxTake
+          : Math.min(maxTake, Math.max(1, Number.isFinite(takeRaw) ? takeRaw : 50));
         const cursor = searchParams.get("cursor")?.trim() || null;
         const includeTotal = searchParams.get("includeTotal") === "1";
+        const activeOnlyTotal = searchParams.get("activeOnly") !== "0";
+        const statusFilter = studentStatusFilter(searchParams.get("status"));
+
+        const classId = searchParams.get("classId")?.trim() || "";
+        const className = searchParams.get("className")?.trim() || "";
+        const section = searchParams.get("section")?.trim() || "";
 
         const where: {
           schoolId: string;
+          status?: string;
+          classId?: string;
+          class?: { schoolId: string; name: string; section?: string };
           rollNo?: string | { contains: string; mode: "insensitive" };
           admissionNumber?: string | { contains: string; mode: "insensitive" };
           OR?: Array<
@@ -57,6 +71,17 @@ export async function GET(req: Request) {
             | { user: { name: { contains: string; mode: "insensitive" } } }
           >;
         } = { schoolId };
+
+        if (statusFilter) where.status = statusFilter;
+        if (classId) {
+          where.classId = classId;
+        } else if (className) {
+          where.class = {
+            schoolId,
+            name: className,
+            ...(section ? { section } : {}),
+          };
+        }
 
         if (rollNo) where.rollNo = { contains: rollNo, mode: "insensitive" };
         if (admissionNumber) where.admissionNumber = { contains: admissionNumber, mode: "insensitive" };
@@ -68,8 +93,8 @@ export async function GET(req: Request) {
           ];
         }
 
-        const memKey = `students:list:${schoolId}:${take}:${cursor ?? "0"}:${q ?? ""}:${rollNo ?? ""}:${admissionNumber ?? ""}`;
-        if (!renderAll) {
+        const memKey = `students:list:${schoolId}:${take}:${cursor ?? "0"}:${q ?? ""}:${rollNo ?? ""}:${admissionNumber ?? ""}:${statusFilter ?? ""}:${classId}:${className}:${section}`;
+        if (!renderAll && !bypassCache) {
           const memCached = getSchoolDashboardServerCached<{
             students: unknown[];
             items: unknown[];
@@ -96,6 +121,11 @@ export async function GET(req: Request) {
             createdAt: true,
             user: { select: { id: true, name: true, email: true, photoUrl: true } },
             class: { select: { id: true, name: true, section: true } },
+            application: {
+              select: {
+                class: { select: { id: true, name: true, section: true } },
+              },
+            },
           },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: take + 1,
@@ -103,19 +133,29 @@ export async function GET(req: Request) {
         });
 
         const hasNext = students.length > take;
-        const items = hasNext ? students.slice(0, take) : students;
+        const rawItems = hasNext ? students.slice(0, take) : students;
+        const items = rawItems.map((row) => {
+          const appClass = row.application?.class ?? null;
+          const resolvedClass = resolveStudentDisplayClass(row.class, appClass);
+          const { application: _app, ...rest } = row;
+          return { ...rest, class: resolvedClass };
+        });
         const nextCursor = hasNext ? items[items.length - 1]?.id ?? null : null;
 
         // Backwards compatible payload: older UI expects `{ students }`.
         let total: number | undefined = undefined;
         if (includeTotal && !cursor) {
-          const countKey = await tenantCacheKey(schoolId, "api", "students:count", { where });
+          const countWhere =
+            statusFilter || !activeOnlyTotal
+              ? where
+              : { ...where, ...activeStudentWhere };
+          const countKey = await tenantCacheKey(schoolId, "api", "students:count", { where: countWhere });
           const cached = await swrGet<{ total: number }>(countKey);
           const now = Date.now();
           if (cached && now < cached.freshUntil) {
             total = cached.value.total;
           } else {
-            total = await prisma.student.count({ where });
+            total = await prisma.student.count({ where: countWhere });
             await swrSet(
               countKey,
               { value: { total }, freshUntil: now + 10_000, staleUntil: now + 60_000 },
@@ -125,7 +165,7 @@ export async function GET(req: Request) {
         }
 
         const payload = { students: items, items, nextCursor, ...(total !== undefined ? { total } : {}) };
-        if (!renderAll) {
+        if (!renderAll && !bypassCache) {
           setSchoolDashboardServerCached(memKey, payload, 180_000);
         }
         return NextResponse.json(payload, { status: 200 });
