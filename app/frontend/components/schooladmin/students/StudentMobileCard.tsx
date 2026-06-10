@@ -29,77 +29,77 @@ export default function StudentMobileCard({
 }: Props) {
   const name = student.user?.name || student.name || "Student";
   const photoUrl = student.user?.photoUrl || student.photoUrl || AVATAR_URL;
-  const studentId = student.rollNo || student.admissionNumber || student.id.slice(0, 6).toUpperCase();
+  const studentId =
+    student.rollNo || student.admissionNumber || student.id.slice(0, 6).toUpperCase();
+  const isInactive = student.status === "Inactive";
   const classLabel = student.class?.name
-    ? `${student.class.name}${student.class.section ? `-${student.class.section}` : ""}`
-    : "-";
+    ? `${student.class.name}${student.class.section ? ` · ${student.class.section}` : ""}`
+    : "No class";
 
   return (
-    <div
-      style={{ animationDelay: `${index * 60}ms` }}
-      className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-lg animate-fadeIn"
+    <article
+      style={{ animationDelay: `${index * 40}ms` }}
+      className="somu rounded-2xl p-5 animate-fadeIn"
     >
-      <div className="flex items-center gap-3">
+      <div className="flex items-start gap-3">
         <img
           src={photoUrl}
           alt={name}
-          className="h-12 w-12 rounded-2xl object-cover border border-white/10"
+          className="h-12 w-12 rounded-xl object-cover border border-white/10 shrink-0"
         />
-        <div className="flex-1">
-          <div className="text-sm font-semibold text-white">{name}</div>
-          <div className="text-xs text-white/50">{studentId}</div>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-white/70">
-              {classLabel}
-            </span>
-            <span className="rounded-full border border-lime-400/30 bg-lime-400/10 px-2.5 py-1 text-[11px] font-semibold text-lime-300">
-              {student.status || "Active"}
-            </span>
-          </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm text-lime-300 truncate">{classLabel}</p>
+          <h3 className="text-lg font-semibold text-white truncate">{name}</h3>
+          <p className="text-sm text-white/70 truncate">
+            ID {studentId} · {getResidencyLabel(student.residencyType)}
+          </p>
         </div>
+        <span
+          className={`shrink-0 px-3 py-1 rounded-full text-xs font-semibold border ${
+            isInactive
+              ? "border-red-400/30 bg-red-400/10 text-red-300"
+              : "border-lime-400/30 bg-lime-400/10 text-lime-300"
+          }`}
+        >
+          {student.status || "Active"}
+        </span>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-          <div className="text-[11px] text-white/50">Gender</div>
-          <div className="text-sm font-semibold text-white">
-            {student.gender || "-"}
-          </div>
+      <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+        <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+          <p className="text-[11px] text-white/50">Gender</p>
+          <p className="font-semibold text-white">{student.gender || "—"}</p>
         </div>
-        <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-          <div className="text-[11px] text-white/50">Age</div>
-          <div className="text-sm font-semibold text-white">
-            {getAge(student.dob)}
-          </div>
-        </div>
-        <div className="rounded-xl border border-white/10 bg-black/20 p-3 col-span-2">
-          <div className="text-[11px] text-white/50">Type</div>
-          <div className="text-sm font-semibold text-white">
-            {getResidencyLabel(student.residencyType)}
-          </div>
+        <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+          <p className="text-[11px] text-white/50">Age</p>
+          <p className="font-semibold text-white">{getAge(student.dob)}</p>
         </div>
       </div>
 
       <div className="mt-4 flex items-center gap-2">
         <button
+          type="button"
           onClick={() => onView(student)}
-          className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/70 hover:bg-white/10"
+          className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-white/20 py-2.5 text-xs font-semibold text-white/80 hover:bg-white/5 transition"
         >
           <Eye size={14} /> View
         </button>
         <button
+          type="button"
           onClick={() => onEdit(student)}
-          className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-lime-400 px-3 py-2 text-xs font-semibold text-black hover:bg-lime-300"
+          className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-lime-400/40 py-2.5 text-xs font-semibold text-lime-300 hover:bg-lime-400/10 transition"
         >
           <Pencil size={14} /> Edit
         </button>
         <button
+          type="button"
           onClick={() => onDelete(student)}
-          className="inline-flex items-center justify-center rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs text-red-300 hover:bg-red-500/20"
+          className="inline-flex items-center justify-center rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2.5 text-red-300 hover:bg-red-500/20 transition"
+          aria-label="Delete student"
         >
           <Trash2 size={14} />
         </button>
       </div>
-    </div>
+    </article>
   );
 }

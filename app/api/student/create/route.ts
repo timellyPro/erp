@@ -13,6 +13,7 @@ import {
 import { setApplicationEnrolled } from "@/lib/admissionsListQuery";
 import { studentApplicationForStudentCreateSelect } from "@/lib/studentApplicationSafeSelect";
 import { canonicalizeResidencyType } from "@/lib/residencyDisplay";
+import { invalidateStudentListCaches } from "@/lib/invalidateStudentListCaches";
 
 function normalizeResidencyType(value: unknown) {
   if (typeof value !== "string") return "Day Scholar";
@@ -224,11 +225,15 @@ export async function POST(req: Request) {
     }
 
     // Normalize classId - convert empty string to null
-    const classId = effectiveClassIdInput && typeof effectiveClassIdInput === "string" && effectiveClassIdInput.trim() 
+    let classId = effectiveClassIdInput && typeof effectiveClassIdInput === "string" && effectiveClassIdInput.trim() 
       ? effectiveClassIdInput.trim() 
       : null;
 
-    if (!applicationToLink && !classId) {
+    if (effectiveStatus === "Inactive") {
+      classId = null;
+    }
+
+    if (!applicationToLink && !classId && effectiveStatus !== "Inactive") {
       return NextResponse.json(
         {
           message:
@@ -306,7 +311,8 @@ export async function POST(req: Request) {
     }
 
     const password = dobDate.toISOString().split("T")[0].replace(/-/g, "");
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword =
+      effectiveStatus === "Inactive" ? null : await bcrypt.hash(password, 10);
 
     // Check for duplicate aadhaar number before transaction
     const aadhaarTrimmed = String(effectiveAadhaarNo).trim();
@@ -612,6 +618,8 @@ export async function POST(req: Request) {
       classId: student.classId,
       className: student.class ? `${student.class.name}${student.class.section ? ` • ${student.class.section}` : ""}` : "Not assigned",
     });
+
+    invalidateStudentListCaches(schoolId);
 
     return NextResponse.json(
       { message: "Student created under your school", student },

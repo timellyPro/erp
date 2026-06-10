@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
+import prisma from "@/lib/db";
 import { purgeExpiredNewsFeeds } from "@/lib/newsfeedRetention";
 import {
   buildParentDashboardFast,
   buildParentDashboardFull,
 } from "@/lib/buildParentDashboard";
+import { isActiveStudent } from "@/lib/studentStatus";
 import {
   parentPortalSwrRead,
   parentPortalSwrWrite,
@@ -42,6 +44,20 @@ export async function GET(request: Request) {
     const schoolId = session.user.schoolId;
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
+    }
+
+    const studentRecord = await prisma.student.findFirst({
+      where: { id: studentId, schoolId },
+      select: { status: true },
+    });
+    if (!studentRecord) {
+      return NextResponse.json({ message: "Student not found" }, { status: 404 });
+    }
+    if (!isActiveStudent(studentRecord.status)) {
+      return NextResponse.json(
+        { message: "Your account is inactive. Please contact your school administrator." },
+        { status: 403 }
+      );
     }
 
     const ttl = fastOnly ? PARENT_DASHBOARD_FAST_TTL : PARENT_DASHBOARD_FULL_TTL;

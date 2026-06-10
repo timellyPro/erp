@@ -73,6 +73,8 @@ type Props = {
   initialFeeBreakdown?: AdminStudentFeeBreakdownResult | null;
   /** Parent is still loading breakdown after profile shell. */
   feeBreakdownPending?: boolean;
+  /** Inactive students — block fee recording and edits. */
+  feesRecordingDisabled?: boolean;
 };
 
 export const FeesBreakdown = ({
@@ -97,6 +99,7 @@ export const FeesBreakdown = ({
   classSection = null,
   initialFeeBreakdown = null,
   feeBreakdownPending = false,
+  feesRecordingDisabled = false,
 }: Props) => {
   const receiptRef = useRef<HTMLDivElement>(null);
   const [isGeneratingReceipt, setIsGeneratingReceipt] = useState(false);
@@ -305,6 +308,7 @@ export const FeesBreakdown = ({
     due: number;
     extraFeeId?: string;
   }) => {
+    if (feesRecordingDisabled) return;
     setPayingHead(head);
     setPaymentError(null);
     setPaymentForm({
@@ -533,6 +537,14 @@ export const FeesBreakdown = ({
 
   return (
     <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl sm:rounded-[2rem] p-3 sm:p-6 min-w-0">
+      {feesRecordingDisabled ? (
+        <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-2.5 text-sm text-red-200">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            <span className="font-semibold text-red-100">Inactive student.</span> You cannot record fees for this student.
+          </span>
+        </div>
+      ) : null}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-4 sm:mb-6 min-w-0">
         <h3 className="text-base sm:text-lg font-semibold text-white flex items-center gap-2 min-w-0">
           <Zap className="w-5 h-5 text-amber-400 flex-shrink-0" />
@@ -541,24 +553,27 @@ export const FeesBreakdown = ({
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto sm:flex-wrap sm:justify-end">
           <button
             type="button"
-            onClick={() => setShowAssignFeeHeadsCatalog(true)}
-            className="inline-flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] touch-manipulation bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/35 text-sky-100 rounded-lg text-sm font-semibold transition-colors"
+            onClick={() => !feesRecordingDisabled && setShowAssignFeeHeadsCatalog(true)}
+            disabled={feesRecordingDisabled}
+            className="inline-flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] touch-manipulation bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/35 text-sky-100 rounded-lg text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
           >
             <PlusCircle className="w-4 h-4 flex-shrink-0" />
             Assign from catalog
           </button>
           <button
             type="button"
-            onClick={() => setShowAddExtraFee(true)}
-            className="inline-flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] touch-manipulation bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-lg text-sm font-semibold transition-colors"
+            onClick={() => !feesRecordingDisabled && setShowAddExtraFee(true)}
+            disabled={feesRecordingDisabled}
+            className="inline-flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] touch-manipulation bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-lg text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
           >
             <PlusCircle className="w-4 h-4 flex-shrink-0" />
             Add Extra Fee
           </button>
           <button
             type="button"
-            onClick={() => setShowModifyFee(true)}
-            className="inline-flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] touch-manipulation bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-lg text-sm font-semibold transition-colors"
+            onClick={() => !feesRecordingDisabled && setShowModifyFee(true)}
+            disabled={feesRecordingDisabled}
+            className="inline-flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] touch-manipulation bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-lg text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Settings className="w-4 h-4 flex-shrink-0" />
             Edit Fee Setup
@@ -801,6 +816,7 @@ export const FeesBreakdown = ({
                 {h.due > 0 ? (
                   <button
                     type="button"
+                    disabled={feesRecordingDisabled}
                     onClick={() =>
                       openHeadPaymentModal({
                         key: h.key,
@@ -810,7 +826,7 @@ export const FeesBreakdown = ({
                         extraFeeId: h.extraFeeId,
                       })
                     }
-                    className="mt-2 inline-flex items-center justify-center rounded-lg border border-blue-500/30 bg-blue-500/15 px-3 py-2 text-xs font-semibold text-blue-300 hover:bg-blue-500/25 transition-colors"
+                    className="mt-2 inline-flex items-center justify-center rounded-lg border border-blue-500/30 bg-blue-500/15 px-3 py-2 text-xs font-semibold text-blue-300 hover:bg-blue-500/25 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Record Payment
                   </button>

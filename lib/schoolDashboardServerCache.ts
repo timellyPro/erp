@@ -14,3 +14,11 @@ export function getSchoolDashboardServerCached<T>(key: string): T | null {
 export function setSchoolDashboardServerCached(key: string, value: unknown, ttlMs = 120_000): void {
   cache.set(key, { value, freshUntil: Date.now() + ttlMs });
 }
+
+/** Drop in-memory entries whose key contains `substring` (e.g. students:list for a school). */
+export function purgeSchoolDashboardServerCacheMatching(substring: string): void {
+  if (!substring) return;
+  for (const key of cache.keys()) {
+    if (key.includes(substring)) cache.delete(key);
+  }
+}

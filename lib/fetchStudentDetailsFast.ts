@@ -121,8 +121,13 @@ function cacheBundle(studentId: string, bundle: StudentDetailsFastBundle): void 
 
 export function peekStudentDetailsFast(studentId: string): StudentDetailsFastBundle | null {
   const entry = bundleMemory.get(studentId);
-  if (entry && Date.now() < entry.expiresAt) return entry.value;
-  return readSessionBundle(studentId);
+  const hit =
+    entry && Date.now() < entry.expiresAt ? entry.value : readSessionBundle(studentId);
+  if (!hit) return null;
+  // Shell-only cache (payments load separately) — do not treat as complete.
+  const paid = hit.fee?.amountPaid ?? 0;
+  if (hit.payments.length === 0 && paid > 0) return null;
+  return hit;
 }
 
 /** Prefetch profile + fees when hovering a student link (no-op if already cached). */
@@ -226,12 +231,21 @@ export async function refreshStudentFeesAfterMutation(
   }
 }
 
-async function fetchExtras(studentId: string, signal?: AbortSignal): Promise<StudentDetailsTabExtras> {
-  const running = extrasInflight.get(studentId);
+async function fetchExtras(
+  studentId: string,
+  signal?: AbortSignal,
+  force?: boolean
+): Promise<StudentDetailsTabExtras> {
+  if (force) {
+    extrasInflight.delete(studentId);
+  }
+
+  const running = force ? undefined : extrasInflight.get(studentId);
   if (running) return running;
 
+  const query = force ? "extras=1&refresh=1" : "extras=1";
   const run = fetch(
-    `/api/student/${encodeURIComponent(studentId)}/details-bundle?extras=1`,
+    `/api/student/${encodeURIComponent(studentId)}/details-bundle?${query}`,
     { credentials: "include", cache: "no-store", signal }
   )
     .then(async (res) => (res.ok ? parseExtras(await res.json().catch(() => ({}))) : emptyExtras()))
@@ -252,33 +266,50 @@ export async function fetchStudentDetailsFast(
   studentId: string,
   options?: {
     signal?: AbortSignal;
+    /** Skip client cache and refetch core from server (e.g. after status change). */
+    force?: boolean;
     onShellLoaded?: (bundle: StudentDetailsFastBundle) => void;
     onBreakdownLoaded?: (breakdown: AdminStudentFeeBreakdownResult) => void;
     onExtrasLoaded?: (bundle: StudentDetailsFastBundle) => void;
   }
 ): Promise<StudentDetailsFastBundle> {
-  const mem = bundleMemory.get(studentId);
-  if (mem && Date.now() < mem.expiresAt) {
-    return mem.value;
+  if (options?.force) {
+    bundleMemory.delete(studentId);
+    bundleInflight.delete(studentId);
+    extrasInflight.delete(studentId);
+    const store = readSession();
+    delete store[studentId];
+    writeSession(store);
   }
 
-  const sessionHit = readSessionBundle(studentId);
-  if (sessionHit) {
-    bundleMemory.set(studentId, { value: sessionHit, expiresAt: Date.now() + BUNDLE_TTL_MS });
-    return sessionHit;
+  if (!options?.force) {
+    const mem = bundleMemory.get(studentId);
+    if (mem && Date.now() < mem.expiresAt) {
+      return mem.value;
+    }
+
+    const sessionHit = readSessionBundle(studentId);
+    if (sessionHit) {
+      bundleMemory.set(studentId, { value: sessionHit, expiresAt: Date.now() + BUNDLE_TTL_MS });
+      return sessionHit;
+    }
   }
 
-  const running = bundleInflight.get(studentId);
+  const running = options?.force ? undefined : bundleInflight.get(studentId);
   if (running) return running;
 
   const run = (async (): Promise<StudentDetailsFastBundle> => {
     const cachedBreakdown = getFeeBreakdownCached(studentId);
     if (cachedBreakdown) options?.onBreakdownLoaded?.(cachedBreakdown);
 
-    const coreRes = await fetch(
-      `/api/student/${encodeURIComponent(studentId)}/details-bundle?core=1`,
-      { credentials: "include", cache: "no-store", signal: options?.signal }
-    );
+    const coreQuery = options?.force ? "core=1&refresh=1" : "core=1";
+    const [coreRes, extras] = await Promise.all([
+      fetch(
+        `/api/student/${encodeURIComponent(studentId)}/details-bundle?${coreQuery}`,
+        { credentials: "include", cache: "no-store", signal: options?.signal }
+      ),
+      fetchExtras(studentId, options?.signal, options?.force),
+    ]);
     const coreData = await coreRes.json().catch(() => ({}));
     if (!coreRes.ok) {
       throw new Error(
@@ -300,17 +331,10 @@ export async function fetchStudentDetailsFast(
     const shellBundle = toBundle(shell, emptyExtras(), feeBreakdown);
     options?.onShellLoaded?.(shellBundle);
 
-    void fetchExtras(studentId, options?.signal)
-      .then((extras) => {
-        const full = toBundle(shell, extras, feeBreakdown);
-        cacheBundle(studentId, full);
-        options?.onExtrasLoaded?.(full);
-      })
-      .catch(() => {});
-
-    const bundle = toBundle(shell, emptyExtras(), feeBreakdown);
-    cacheBundle(studentId, bundle);
-    return bundle;
+    const full = toBundle(shell, extras, feeBreakdown);
+    cacheBundle(studentId, full);
+    options?.onExtrasLoaded?.(full);
+    return full;
   })();
 
   bundleInflight.set(studentId, run);

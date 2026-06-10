@@ -6,6 +6,7 @@ import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
 } from "@/lib/schoolDashboardServerCache";
+import { activeStudentWhere } from "@/lib/studentStatus";
 
 async function resolveSchoolId(session: { user: { id: string; schoolId?: string | null; role: string } }) {
   let schoolId = session.user.schoolId;
@@ -86,7 +87,11 @@ export async function GET(req: Request) {
           select: { id: true, name: true, email: true, subject: true },
         },
         _count: {
-          select: { students: true },
+          select: {
+            students: {
+              where: activeStudentWhere,
+            },
+          },
         },
       },
       orderBy: {

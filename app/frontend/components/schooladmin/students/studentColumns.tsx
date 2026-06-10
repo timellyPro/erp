@@ -19,6 +19,13 @@ type Actions = {
   onDelete: (student: StudentRow) => void;
 };
 
+const statusBadgeClass = (status?: string | null) => {
+  const isInactive = status === "Inactive";
+  return isInactive
+    ? "px-3 py-1 rounded-full text-xs font-semibold border bg-red-400/10 text-red-400 border-red-400/20"
+    : "px-3 py-1 rounded-full text-xs font-semibold border bg-lime-400/10 text-lime-400 border-lime-400/20 shadow-[0_0_8px_rgba(163,230,53,0.2)]";
+};
+
 export const buildStudentColumns = ({
   onView,
   onEdit,
@@ -83,8 +90,7 @@ export const buildStudentColumns = ({
   {
     header: "Status",
     render: (row) => (
-      <span className="px-3 py-1 rounded-full text-xs font-semibold border bg-lime-400/10
-       text-lime-400 border-lime-400/20 shadow-[0_0_8px_rgba(163,230,53,0.2)]">
+      <span className={statusBadgeClass(row.status)}>
         {row.status || "Active"}
       </span>
     ),

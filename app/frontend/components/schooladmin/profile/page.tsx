@@ -13,7 +13,6 @@ import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFe
 import {
   invalidateStudentDetailsBundleCache,
   loadStudentDetailsBundle,
-  peekStudentDetailsBundle,
   refreshStudentFeesAfterMutation,
 } from "@/lib/loadStudentDetailsBundle";
 import { dueHeadRowsFromBreakdown, type DueHeadRow } from "@/lib/feeBreakdownPaymentRows";
@@ -22,7 +21,8 @@ import {
   getFeeBreakdownCached,
   setFeeBreakdownCache,
 } from "@/lib/feeBreakdownClientCache";
-import { readStudentListCache, writeStudentListCache } from "@/lib/studentListSessionCache";
+import { readStudentListCacheLegacy, writeStudentListCacheLegacy } from "@/lib/studentListSessionCache";
+import { isInactiveStudentStatus } from "@/lib/resolveStudentDisplayClass";
 import { StudentSearchAutocomplete } from "./components/StudentSearchAutocomplete";
 import { Calendar, BookOpen, Activity, Clock, FileSpreadsheet, X } from "lucide-react";
 import BulkExtraFeeByTimellyModal from "./components/BulkExtraFeeByTimellyModal";
@@ -52,6 +52,7 @@ type StudentDetail = {
     applicationFee: number | null;
     admissionFee: number | null;
     createdAt?: string;
+    status?: string;
   };
   fee: {
     baseTotalFee: number;
@@ -96,6 +97,7 @@ type StudentOption = {
   classDisplay: string;
   classId: string;
   section: string | null;
+  status?: string;
 };
 
 /** List cache may hold fees-page rows (class object) or profile rows (classDisplay). */
@@ -110,6 +112,7 @@ function normalizeStudentOption(raw: {
   section?: string | null;
   user?: { name?: string | null };
   class?: { id: string; name: string; section: string | null } | null;
+  status?: string;
 }): StudentOption {
   const classDisplay =
     raw.classDisplay?.trim() ||
@@ -125,6 +128,20 @@ function normalizeStudentOption(raw: {
     classDisplay,
     classId: raw.classId ?? raw.class?.id ?? "",
     section: raw.section ?? (dash > 0 ? classDisplay.slice(dash + 1) : raw.class?.section ?? null),
+    status: raw.status ?? "Active",
+  };
+}
+
+function patchDetailShell(prev: StudentDetail | null, shell: StudentDetail): StudentDetail {
+  if (!shell?.student) return prev ?? shell;
+  const sameStudent = prev?.student.id === shell.student.id;
+  return {
+    student: shell.student,
+    fee: shell.fee,
+    payments: sameStudent ? (prev?.payments ?? []) : [],
+    attendanceTrends: sameStudent ? (prev?.attendanceTrends ?? []) : [],
+    academicPerformance: sameStudent ? (prev?.academicPerformance ?? []) : [],
+    certificates: sameStudent ? (prev?.certificates ?? []) : [],
   };
 }
 
@@ -155,6 +172,7 @@ function buildPlaceholderDetail(st: StudentOption): StudentDetail {
       gender: "",
       applicationFee: null,
       admissionFee: null,
+      status: opt.status ?? "Active",
       class: opt.classId
         ? {
             id: opt.classId,
@@ -382,6 +400,7 @@ function StudentDetailsPageContent() {
   const [detail, setDetail] = useState<StudentDetail | null>(null);
   const [feeBreakdown, setFeeBreakdown] = useState<AdminStudentFeeBreakdownResult | null>(null);
   const [feeBreakdownPending, setFeeBreakdownPending] = useState(false);
+  const [transactionsReady, setTransactionsReady] = useState(false);
   const [listLoading, setListLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
   const selectedIdRef = useRef(selectedId);
@@ -389,28 +408,19 @@ function StudentDetailsPageContent() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterClass, setFilterClass] = useState("");
   const [filterSection, setFilterSection] = useState("");
+  const [filterStatus, setFilterStatus] = useState<"all" | "active" | "inactive">("all");
   const [classes, setClasses] = useState<{ id: string; name: string; section: string | null }[]>([]);
   const [bulkExtraFeeOpen, setBulkExtraFeeOpen] = useState(false);
   const [feesModalOpen, setFeesModalOpen] = useState(false);
 
-  const [dropdownListLoaded, setDropdownListLoaded] = useState(false);
-
-  useEffect(() => {
-    const cached = readStudentListCache<StudentOption>();
-    if (cached?.length) {
-      setStudents(cached.map((s) => normalizeStudentOption(s)));
-      setListLoading(false);
-      setDropdownListLoaded(true);
-    }
-
-    let cancelled = false;
-
-    const mapListRow = (s: {
+  const mapListRow = useCallback(
+    (s: {
       id: string;
       user?: { name?: string };
       admissionNumber?: string;
       fatherName?: string;
       parentName?: string;
+      status?: string;
       class?: { id: string; name: string; section: string | null };
     }): StudentOption => ({
       id: s.id,
@@ -420,12 +430,23 @@ function StudentDetailsPageContent() {
       classDisplay: s.class ? `${s.class.name}${s.class.section ? `-${s.class.section}` : ""}` : "-",
       classId: s.class?.id ?? "",
       section: s.class?.section ?? null,
-    });
+      status: s.status ?? "Active",
+    }),
+    []
+  );
+
+  useEffect(() => {
+    const cached = readStudentListCacheLegacy<StudentOption>();
+    if (cached?.length) {
+      setStudents(cached.map((s) => normalizeStudentOption(s)));
+      setListLoading(false);
+    }
+
+    let cancelled = false;
 
     const loadDropdownList = async () => {
-      if (dropdownListLoaded || cancelled) return;
       try {
-        const res = await fetch("/api/student/list?take=100", {
+        const res = await fetch("/api/student/list?take=500&refresh=1", {
           credentials: "include",
           cache: "no-store",
         });
@@ -435,9 +456,8 @@ function StudentDetailsPageContent() {
         const list = rows.map(mapListRow);
         if (list.length > 0) {
           setStudents(list);
-          writeStudentListCache(list);
+          writeStudentListCacheLegacy(list);
         }
-        setDropdownListLoaded(true);
       } catch {
         /* keep search API as fallback */
       }
@@ -452,13 +472,12 @@ function StudentDetailsPageContent() {
         }
 
         if (studentIdFromUrl) {
+          void loadDropdownList();
           setListLoading(false);
           return;
         }
 
-        if (!cached?.length) {
-          await loadDropdownList();
-        }
+        await loadDropdownList();
         if (!cancelled) setListLoading(false);
       } catch {
         if (!cancelled && !cached?.length) setStudents([]);
@@ -470,7 +489,7 @@ function StudentDetailsPageContent() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deep link skips bulk list
-  }, [studentIdFromUrl]);
+  }, [studentIdFromUrl, mapListRow]);
 
   // Deep link (?studentId=…): follow the URL when it changes. Do NOT depend on `students` here — that
   // was resetting selection back to the URL id on every list refresh and overwrote the student's dropdown pick.
@@ -539,6 +558,7 @@ function StudentDetailsPageContent() {
           breakdown && rest.fee
             ? {
                 ...rest,
+                payments: rest.payments ?? [],
                 fee: {
                   ...rest.fee,
                   amountPaid: breakdown.amountPaid,
@@ -546,13 +566,15 @@ function StudentDetailsPageContent() {
                   totalFee: breakdown.finalFee ?? rest.fee.totalFee,
                 },
               }
-            : rest;
+            : { ...rest, payments: rest.payments ?? [] };
         setDetail(shell);
         setFeeBreakdown(breakdown ?? null);
         if (breakdown && rest.student.id) setFeeBreakdownCache(rest.student.id, breakdown);
+        setTransactionsReady(true);
       } else {
         setDetail(null);
         setFeeBreakdown(null);
+        setTransactionsReady(false);
       }
     },
     []
@@ -630,17 +652,12 @@ function StudentDetailsPageContent() {
     if (!selectedId) {
       setDetail(null);
       setFeeBreakdown(null);
+      setTransactionsReady(false);
       return;
     }
 
     let cancelled = false;
-
-    const cached = peekStudentDetailsBundle(selectedId);
-    if (cached) {
-      applyDetailsBundle(cached);
-      setFeeBreakdownPending(false);
-      return;
-    }
+    setTransactionsReady(false);
 
     const cachedBreakdown = getFeeBreakdownCached(selectedId);
     setDetail((prev) => {
@@ -658,13 +675,13 @@ function StudentDetailsPageContent() {
     }
 
     loadStudentDetailsBundle(selectedId, {
+      force: true,
       onShellLoaded: (partial) => {
         if (cancelled) return;
         const { feeBreakdown: bd, ...rest } = partial;
         if (rest?.student) {
-          setDetail(rest);
+          setDetail((prev) => patchDetailShell(prev, rest as StudentDetail));
           setStudents((prev) => {
-            if (prev.some((s) => s.id === rest.student.id)) return prev;
             const row = normalizeStudentOption({
               id: rest.student.id,
               name: rest.student.name,
@@ -673,7 +690,11 @@ function StudentDetailsPageContent() {
               classDisplay: rest.student.class?.displayName,
               classId: rest.student.class?.id,
               section: rest.student.class?.section,
+              status: rest.student.status,
             });
+            if (prev.some((s) => s.id === rest.student.id)) {
+              return prev.map((s) => (s.id === rest.student.id ? { ...s, ...row } : s));
+            }
             return [row, ...prev];
           });
         }
@@ -712,6 +733,8 @@ function StudentDetailsPageContent() {
   }, [selectedId, reloadKey, applyDetailsBundle]);
 
   const filtered = students.filter((s) => {
+    if (filterStatus === "active" && isInactiveStudentStatus(s.status)) return false;
+    if (filterStatus === "inactive" && !isInactiveStudentStatus(s.status)) return false;
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       if (!s.name.toLowerCase().includes(q) && !s.admissionNumber.toLowerCase().includes(q)) return false;
@@ -723,8 +746,10 @@ function StudentDetailsPageContent() {
 
   /** Options for the Students List <select>; must include selectedId or the browser can reset the value. */
   const studentSelectOptions = useMemo(() => {
+    const inactiveTag = (st: StudentOption) =>
+      isInactiveStudentStatus(st.status) ? " (Inactive)" : "";
     const core = filtered.map((s) => ({
-      label: `${s.name} -${s.admissionNumber || "-"} | ${s.classDisplay || "-"} | ${s.parentName || "-"}`,
+      label: `${s.name} -${s.admissionNumber || "-"} | ${s.classDisplay || "-"} | ${s.parentName || "-"}${inactiveTag(s)}`,
       value: s.id,
     }));
     if (selectedId && !core.some((o) => o.value === selectedId)) {
@@ -732,7 +757,7 @@ function StudentDetailsPageContent() {
       if (st) {
         return [
           {
-            label: `${st.name} -${st.admissionNumber || "-"} | ${st.classDisplay || "-"} | ${st.parentName || "-"}`,
+            label: `${st.name} -${st.admissionNumber || "-"} | ${st.classDisplay || "-"} | ${st.parentName || "-"}${inactiveTag(st)}`,
             value: st.id,
           },
           ...core,
@@ -744,7 +769,13 @@ function StudentDetailsPageContent() {
   }, [filtered, students, selectedId]);
 
   const selectedOption = filtered.find((s) => s.id === selectedId) ?? students.find((s) => s.id === selectedId) ?? filtered[0];
+  const isSelectedInactive = detail ? isInactiveStudentStatus(detail.student.status) : false;
   const classOptions = [{ label: "All Classes", value: "" }, ...classes.map((c) => ({ label: `${c.name}${c.section ? ` - ${c.section}` : ""}`, value: c.id }))];
+  const statusOptions = [
+    { label: "All Students", value: "all" },
+    { label: "Active", value: "active" },
+    { label: "Inactive", value: "inactive" },
+  ];
   const sections = Array.from(new Set(classes.map((c) => c.section).filter(Boolean))) as string[];
   const sectionOptions = [{ label: "All Sections", value: "" }, ...sections.map((s) => ({ label: s, value: s }))];
 
@@ -775,7 +806,7 @@ function StudentDetailsPageContent() {
         onApplied={() => setReloadKey((k) => k + 1)}
       />
       <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-xl sm:rounded-2xl p-3 sm:p-6 overflow-visible relative z-20 min-w-0">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 sm:gap-4 md:gap-6 overflow-visible">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 md:gap-6 overflow-visible">
           <div>
             <StudentSearchAutocomplete
               students={students}
@@ -785,6 +816,16 @@ function StudentDetailsPageContent() {
               selectedId={selectedId}
               classFilter={filterClass}
               sectionFilter={filterSection}
+              statusFilter={filterStatus}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 mb-2 block">Filter by Status</label>
+            <SelectInput
+              value={filterStatus}
+              onChange={(v) => setFilterStatus(v as "all" | "active" | "inactive")}
+              options={statusOptions}
+              bgColor="black"
             />
           </div>
           <div>
@@ -827,9 +868,16 @@ function StudentDetailsPageContent() {
 
       {detail && (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 sm:gap-6 md:gap-8 min-w-0">
+          {isSelectedInactive ? (
+            <div className="lg:col-span-4 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+              <span className="font-semibold text-red-100">Inactive student.</span>{" "}
+              This student is inactive — you cannot record new fees, mark attendance, or use the student portal until they are set back to Active. Existing payments and transaction history are unchanged.
+            </div>
+          ) : null}
           <div className="lg:col-span-1 min-w-0">
             <ProfileSidebar
               studentId={detail.student.id}
+              feesRecordingDisabled={isSelectedInactive}
               student={{
                 name: detail.student.name,
                 id: detail.student.admissionNumber,
@@ -890,6 +938,7 @@ function StudentDetailsPageContent() {
                 setReloadKey((k) => k + 1);
               }}
               onOpenFees={() => {
+                if (isSelectedInactive) return;
                 warmFeeBreakdown();
                 setFeesModalOpen(true);
               }}
@@ -964,6 +1013,7 @@ function StudentDetailsPageContent() {
               fee={detail.fee}
               feeBreakdown={feeBreakdown}
               payments={detail.payments}
+              transactionsLoading={!transactionsReady}
               applicationFee={detail.student.applicationFee}
               admissionFee={detail.student.admissionFee}
               studentCreatedAt={detail.student.createdAt}
@@ -979,6 +1029,7 @@ function StudentDetailsPageContent() {
                 detail.student.phone?.trim() ||
                 "-"
               }
+              feesRecordingDisabled={isSelectedInactive}
               onPaymentsChanged={() => {
                 if (detail.student.id) void refreshFeesForStudent(detail.student.id);
               }}
@@ -992,6 +1043,7 @@ function StudentDetailsPageContent() {
                 <FeesBreakdown
                   studentId={detail.student.id}
                   classId={detail.student.class?.id ?? null}
+                  feesRecordingDisabled={isSelectedInactive}
                   totalFee={feeBreakdown?.totalAmount ?? detail.fee.totalFee}
                   baseTotalFee={
                     feeBreakdown?.dueHeads?.length
@@ -1034,7 +1086,7 @@ function StudentDetailsPageContent() {
         <div className="text-center py-12 text-gray-400">Student not found.</div>
       )}
 
-      {feesModalOpen && detail ? (
+      {feesModalOpen && detail && !isSelectedInactive ? (
         <StudentFeesPaymentModal
           studentId={detail.student.id}
           studentName={detail.student.name}
