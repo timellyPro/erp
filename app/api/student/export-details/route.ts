@@ -54,8 +54,15 @@ export async function GET(req: Request) {
     const classId = searchParams.get("classId")?.trim() || "";
     const className = searchParams.get("className")?.trim() || "";
     const section = searchParams.get("section")?.trim() || "";
+    const status = searchParams.get("status")?.trim() || "";
 
     const where: Prisma.StudentWhereInput = { schoolId };
+
+    if (status.toLowerCase() === "active") {
+      where.status = "Active";
+    } else if (status.toLowerCase() === "inactive") {
+      where.status = "Inactive";
+    }
 
     if (classId) {
       const classData = await prisma.class.findFirst({

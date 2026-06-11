@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { Search } from "lucide-react";
 import DataTable from "../common/TableLayout";
 import PageHeader from "../common/PageHeader";
+import SearchInput from "../common/SearchInput";
 import StudentFilters from "./students/StudentFilters";
 import UploadCsvPanel from "./students/UploadCsvPanel";
 import AddStudentForm from "./students/AddStudentForm";
@@ -44,13 +46,27 @@ export default function StudentsManagementPage({ classes, reload }: Props) {
 
   useEffect(() => {
     setTablePage(1);
-  }, [page.searchQuery, page.selectedClass, page.selectedSection]);
+  }, [page.searchQuery, page.selectedClass, page.selectedSection, page.statusFilter]);
 
   const columns = buildStudentColumns({
     onView: page.openView,
     onEdit: page.openEdit,
     onDelete: page.openDelete,
   });
+
+  const tableTitle =
+    page.statusFilter === "All"
+      ? `All Students (${page.filteredStudents.length})`
+      : `${page.statusFilter} Students (${page.filteredStudents.length})`;
+  const studentSearch = (
+    <SearchInput
+      placeholder="Search students..."
+      value={page.searchQuery}
+      onChange={page.setSearchQuery}
+      icon={Search}
+      variant="glass"
+    />
+  );
 
   return (
     <>
@@ -67,13 +83,15 @@ export default function StudentsManagementPage({ classes, reload }: Props) {
           onClassChange={page.setSelectedClass}
           selectedSection={page.selectedSection}
           onSectionChange={page.setSelectedSection}
-          searchQuery={page.searchQuery}
-          onSearchChange={page.setSearchQuery}
+          statusFilter={page.statusFilter}
+          onStatusFilterChange={page.setStatusFilter}
           showAddForm={page.showAddForm}
           onToggleAddForm={() => page.setShowAddForm((prev) => !prev)}
           onToggleUpload={() => page.setShowUploadPanel((prev) => !prev)}
-          onDownloadReport={page.handleDownloadReport}
-          exportDetailsLoading={page.exportingDetails}
+          onDownloadExcel={page.handleDownloadExcel}
+          onDownloadPdf={page.handleDownloadPdf}
+          exportExcelLoading={page.exportingDetails}
+          exportPdfLoading={page.exportingPdf}
         />
 
         {page.showUploadPanel && (
@@ -123,6 +141,13 @@ export default function StudentsManagementPage({ classes, reload }: Props) {
         )}
 
         <div className="md:hidden space-y-3">
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-base font-semibold text-white">{tableTitle}</div>
+              <div className="w-full sm:min-w-[240px]">{studentSearch}</div>
+            </div>
+          </div>
+
           {page.tableLoading ? (
             <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
               <Spinner size={26} label="Loading..." />
@@ -177,7 +202,8 @@ export default function StudentsManagementPage({ classes, reload }: Props) {
             data={pagedStudents}
             loading={page.tableLoading}
             emptyText="No students found"
-            tableTitle={`All Students (${page.filteredStudents.length})`}
+            tableTitle={tableTitle}
+            headerRight={studentSearch}
             tableSubtitle={
               page.selectedClass
                 ? `Class ${page.selectedClass}${page.selectedSection ? ` ${page.selectedSection}` : ""}`

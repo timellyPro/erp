@@ -96,6 +96,15 @@ export async function GET(req: Request) {
             createdAt: true,
             user: { select: { id: true, name: true, email: true, photoUrl: true } },
             class: { select: { id: true, name: true, section: true } },
+            application: {
+              select: {
+                id: true,
+                createdAt: true,
+                admissionNo: true,
+                fedenaNo: true,
+                workflowStatus: true,
+              },
+            },
           },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: take + 1,

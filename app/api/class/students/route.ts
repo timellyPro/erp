@@ -61,10 +61,17 @@ export async function GET(req: Request) {
         class: {
           select: { id: true, name: true, section: true },
         },
+        application: {
+          select: {
+            id: true,
+            createdAt: true,
+            admissionNo: true,
+            fedenaNo: true,
+            workflowStatus: true,
+          },
+        },
       },
-      orderBy: {
-        createdAt: "asc",
-      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     });
 
     return NextResponse.json({ students }, { status: 200 });

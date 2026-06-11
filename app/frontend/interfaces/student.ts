@@ -1,7 +1,16 @@
+export type StudentApplicationSummary = {
+  id: string;
+  createdAt: string;
+  admissionNo?: string | null;
+  fedenaNo?: string | null;
+  workflowStatus?: string | null;
+};
 
 export interface IStudent {
   id: string;
   userId: string;
+  createdAt?: string;
+  application?: StudentApplicationSummary | null;
   adhaarNumber?: string;
   aadhaarNo?: string;
   fatherName?: string;
