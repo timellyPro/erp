@@ -9,6 +9,7 @@ import StudentFilters from "./students/StudentFilters";
 import UploadCsvPanel from "./students/UploadCsvPanel";
 import AddStudentForm from "./students/AddStudentForm";
 import StudentDetailsModal from "./students/StudentDetailsModal";
+import StudentMobileCard from "./students/StudentMobileCard";
 import DeleteConfirmation from "../common/DeleteConfirmation";
 import { buildStudentColumns } from "./students/studentColumns";
 import useStudentPage from "./students/useStudentPage";
@@ -16,7 +17,7 @@ import { getAge, toStudentForm } from "./students/utils";
 import { ClassItem } from "./students/types";
 import SuccessPopups from "../common/SuccessPopUps";
 import StudentsHeader from "./students/StudentsHeader";
-import StudentStats from "./students/StudentStats";
+import Spinner from "../common/Spinner";
 
 type Props = {
   classes?: ClassItem[];
@@ -30,9 +31,6 @@ export default function StudentsManagementPage({ classes, reload }: Props) {
   const page = useStudentPage({ classes: stableClasses, reload });
   const [tablePage, setTablePage] = useState(1);
   const pageSize = 25;
-  const listCount = page.tableLoading
-    ? (page.totalCount ?? 0)
-    : page.filteredStudents.length;
   const totalPages = Math.max(1, Math.ceil(page.filteredStudents.length / pageSize));
   const safePage = Math.min(tablePage, totalPages);
   const pagedStudents = useMemo(
@@ -92,7 +90,6 @@ export default function StudentsManagementPage({ classes, reload }: Props) {
           exportExcelLoading={page.exportingDetails}
           exportPdfLoading={page.exportingPdf}
         />
-      )}
 
         {page.showUploadPanel && (
           <UploadCsvPanel

@@ -12,8 +12,14 @@ import {
   StudentStatusFilter,
 } from "./types";
 import { mergeStudentAfterEdit, sortStudentsForDisplay, toStudentForm } from "./utils";
-import { fetchAllStudents as fetchAllStudentsPaginated } from "@/lib/fetchAllStudents";
 import { downloadStudentListPdf } from "@/lib/studentListPdf";
+import { invalidateStudentDetailsFast as invalidateStudentDetailsBundleCache } from "@/lib/fetchStudentDetailsFast";
+import {
+  clearStudentListCache,
+  readStudentListCache,
+  writeStudentListCache,
+  type StudentListCacheScope,
+} from "@/lib/studentListSessionCache";
 
 type Props = {
   classes?: ClassItem[];
@@ -271,6 +277,7 @@ export default function useStudentPage({ classes, reload }: Props) {
   const [showSuccess, setShowSuccess] = useState(false);
   const [exportingDetails, setExportingDetails] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
+  const listFetchGenRef = useRef(0);
 
   useEffect(() => {
     if (stableClasses.length) {
@@ -329,7 +336,12 @@ export default function useStudentPage({ classes, reload }: Props) {
 
   const listCacheScope = useMemo<StudentListCacheScope>(
     () => ({
-      status: statusFilter,
+      status:
+        statusFilter === "Active"
+          ? "active"
+          : statusFilter === "Inactive"
+            ? "inactive"
+            : "all",
       classId: selectedClassIdForFetch || undefined,
       className: selectedClass || undefined,
       section: selectedSection || undefined,
@@ -355,8 +367,8 @@ export default function useStudentPage({ classes, reload }: Props) {
       params.set("take", "10000");
       params.set("includeTotal", "1");
       if (bypassCache) params.set("refresh", "1");
-      if (statusFilter === "active") params.set("status", "Active");
-      else if (statusFilter === "inactive") params.set("status", "Inactive");
+      if (statusFilter === "Active") params.set("status", "Active");
+      else if (statusFilter === "Inactive") params.set("status", "Inactive");
       if (debouncedSearch) params.set("q", debouncedSearch);
       if (selectedClassIdForFetch) {
         params.set("classId", selectedClassIdForFetch);
@@ -460,8 +472,6 @@ export default function useStudentPage({ classes, reload }: Props) {
     void refreshStats();
   }, [refreshStats]);
 
-  const filteredStudents = useMemo<StudentRow[]>(() => students, [students]);
-
   const refreshList = useCallback(
     (silent?: boolean) => {
       clearStudentListCache();
@@ -543,7 +553,7 @@ export default function useStudentPage({ classes, reload }: Props) {
   }, [availableClasses, classesLoading]);
 
   const filteredStudents = useMemo<StudentRow[]>(() => {
-    let list: StudentRow[] = selectedClassIdForFetch ? students : allStudents;
+    let list: StudentRow[] = students;
     if (selectedClass) {
       list = list.filter((student) => student.class?.name === selectedClass);
     }
@@ -572,11 +582,9 @@ export default function useStudentPage({ classes, reload }: Props) {
     }
     return sortStudentsForDisplay(list);
   }, [
-    allStudents,
     searchQuery,
     selectedClass,
     selectedSection,
-    selectedClassIdForFetch,
     statusFilter,
     students,
   ]);
@@ -668,7 +676,7 @@ export default function useStudentPage({ classes, reload }: Props) {
       setForm({ ...DEFAULT_FORM, classId: form.classId });
       setShowAddForm(false);
       void refreshStats();
-      if (form.status !== "Inactive" && statusFilter !== "inactive") {
+      if (form.status !== "Inactive" && statusFilter !== "Inactive") {
         void refreshList(true);
       }
     } catch (e) {
@@ -888,8 +896,8 @@ export default function useStudentPage({ classes, reload }: Props) {
         updatedClassId !== selectedClassIdForFetch;
 
       const shouldRemoveFromList =
-        (statusFilter === "active" && becameInactive) ||
-        (statusFilter === "inactive" && becameActive) ||
+        (statusFilter === "Active" && becameInactive) ||
+        (statusFilter === "Inactive" && becameActive) ||
         movedOutOfFilteredClass;
 
       if (shouldRemoveFromList) {
@@ -979,13 +987,9 @@ export default function useStudentPage({ classes, reload }: Props) {
       const a = document.createElement("a");
       a.href = url;
       a.download =
-        format === "pdf"
-          ? statusFilter === "inactive"
-            ? "Inactive-students-report.pdf"
-            : "Student-details-report.pdf"
-          : statusFilter === "inactive"
-            ? "Inactive-students-report.xlsx"
-            : "Student-details-report.xlsx";
+        statusFilter === "Inactive"
+          ? "Inactive-students-report.xlsx"
+          : "Student-details-report.xlsx";
       document.body.appendChild(a);
       a.click();
       a.remove();

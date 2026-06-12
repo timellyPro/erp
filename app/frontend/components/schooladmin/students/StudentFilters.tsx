@@ -10,8 +10,6 @@ const STATUS_TABS: { label: string; value: StudentStatusFilter }[] = [
   { label: "All", value: "All" },
 ];
 
-type StatusFilter = "active" | "inactive" | "all";
-
 type Props = {
   classOptions: SelectOption[];
   sectionOptions: SelectOption[];
@@ -29,16 +27,6 @@ type Props = {
   exportExcelLoading?: boolean;
   exportPdfLoading?: boolean;
 };
-
-const STATUS_OPTIONS: {
-  key: StatusFilter;
-  label: string;
-  icon: typeof List;
-}[] = [
-  { key: "active", label: "Active", icon: UserCheck },
-  { key: "inactive", label: "Inactive", icon: UserX },
-  { key: "all", label: "All", icon: List },
-];
 
 export default function StudentFilters({
   classOptions,
@@ -146,6 +134,6 @@ export default function StudentFilters({
           </button>
         </div>
       </div>
-    </section>
+    </div>
   );
 }

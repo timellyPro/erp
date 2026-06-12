@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { resolveOfflinePaymentCollectorFromSession } from "@/lib/offlinePaymentCollector";
+import { isActiveStudent } from "@/lib/studentStatus";
 
 export async function POST(req: Request) {
     try {

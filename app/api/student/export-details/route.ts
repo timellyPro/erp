@@ -8,9 +8,7 @@ import {
   buildStudentDetailsExportWorkbook,
   studentToDetailsExportRow,
 } from "@/lib/studentDetailsExport";
-import { buildStudentDetailsPdfBuffer } from "@/lib/studentDetailsPdf";
 import { resolveStudentDisplayClass } from "@/lib/resolveStudentDisplayClass";
-import { studentStatusFilter } from "@/lib/studentStatus";
 
 const MAX_EXPORT = 5000;
 
@@ -133,72 +131,12 @@ export async function GET(req: Request) {
       );
     });
 
-    if (format === "pdf") {
-      const title =
-        statusFilter === "Inactive"
-          ? "Inactive Students Report"
-          : "Student Details Report";
-      const school = await prisma.school.findUnique({
-        where: { id: schoolId },
-        select: {
-          name: true,
-          address: true,
-          location: true,
-          logoUrl: true,
-          admins: {
-            take: 1,
-            select: { photoUrl: true },
-          },
-        },
-      });
-      const origin = new URL(req.url).origin;
-      const exportStudents = students.map((s) => {
-        const resolvedClass = resolveStudentDisplayClass(s.class, s.application?.class ?? null);
-        return {
-          ...s,
-          class: resolvedClass
-            ? {
-                name: resolvedClass.name ?? null,
-                section: resolvedClass.section ?? null,
-              }
-            : null,
-        };
-      });
-      const buf = await buildStudentDetailsPdfBuffer({
-        students: exportStudents,
-        title,
-        school: school
-          ? {
-              name: school.name,
-              address: school.address,
-              location: school.location,
-              logoUrl: school.logoUrl,
-              adminPhotoUrl: school.admins[0]?.photoUrl ?? null,
-            }
-          : null,
-        origin,
-      });
-      const body = new Uint8Array(buf);
-      const filename =
-        statusFilter === "Inactive"
-          ? "Inactive-students-report.pdf"
-          : "Student-details-report.pdf";
-      return new NextResponse(body, {
-        status: 200,
-        headers: {
-          "Content-Type": "application/pdf",
-          "Content-Disposition": `attachment; filename="${filename}"`,
-          "Cache-Control": "no-store",
-        },
-      });
-    }
-
     const wb = buildStudentDetailsExportWorkbook(rows);
     const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
     const body = new Uint8Array(buf);
 
     const filename =
-      statusFilter === "Inactive"
+      status.toLowerCase() === "inactive"
         ? "Inactive-students-report.xlsx"
         : "Student-details-report.xlsx";
     return new NextResponse(body, {

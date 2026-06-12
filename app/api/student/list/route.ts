@@ -128,6 +128,7 @@ export async function GET(req: Request) {
                 admissionNo: true,
                 fedenaNo: true,
                 workflowStatus: true,
+                class: { select: { id: true, name: true, section: true } },
               },
             },
           },

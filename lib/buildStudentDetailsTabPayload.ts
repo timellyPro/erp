@@ -133,17 +133,7 @@ async function loadPaymentsWithFeeTypes(studentId: string) {
   const paymentIds = payments.map((p) => p.id);
 
   let tuitionPaidFromAllocations = 0;
-  let gatewayPayments: Array<{
-    id: string;
-    amount: number;
-    status: string;
-    method: string;
-    createdAt: string;
-    transactionId: string | null;
-    feeTypeName?: string;
-    feeTypeAmount?: number;
-    feeAllocations?: Array<{ name: string; amount: number }>;
-  }> = [];
+  let feeHeadAmountsByPaymentId = new Map<string, Map<string, number>>();
 
   if (paymentIds.length > 0) {
     const allAllocations = await prisma.paymentFeeAllocation.findMany({
@@ -182,7 +172,7 @@ async function loadPaymentsWithFeeTypes(studentId: string) {
       : [];
 
   const extraFeeNameById = new Map(extraFees.map((ef) => [ef.id, ef.name]));
-  const feeHeadAmountsByPaymentId = buildFeeHeadAmountsByPaymentId(
+  feeHeadAmountsByPaymentId = buildFeeHeadAmountsByPaymentId(
     paymentAllocationRows,
     extraFeeNameById
   );
@@ -194,23 +184,6 @@ async function loadPaymentsWithFeeTypes(studentId: string) {
     refundAllocationRows
       .filter((a) => a.headType === "BASE_COMPONENT" && a.componentIndex === -1)
       .reduce((s, a) => s + a.allocatedAmount, 0);
-
-  gatewayPayments = payments.map((p) => {
-    const headMap = feeHeadAmountsByPaymentId.get(p.id);
-    const feeAllocations = feeHeadLinesFromMap(headMap);
-    const dominant = dominantFeeHead(headMap);
-    return {
-      id: p.id,
-      amount: p.amount,
-      status: p.status,
-      method: p.gateway ?? "—",
-      createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : String(p.createdAt),
-      transactionId: p.transactionId ?? null,
-      feeTypeName: dominant?.name,
-      feeTypeAmount: dominant?.amount,
-      feeAllocations: feeAllocations.length > 0 ? feeAllocations : undefined,
-    };
-  });
   }
 
   const admissionApplicationPayments = await loadStudentAdmissionApplicationPayments(
