@@ -64,11 +64,13 @@ const inflight = new Map<string, Promise<TransactionItem[]>>();
 
 export async function fetchFeesTransactions(
   schoolId: string | null | undefined,
-  options?: { signal?: AbortSignal; revalidate?: boolean }
+  options?: { signal?: AbortSignal; revalidate?: boolean; collectedByUserId?: string; limit?: number }
 ): Promise<TransactionItem[]> {
-  const cacheKey = resolveFeesTransactionsCacheKey(schoolId);
+  const collectorPart = options?.collectedByUserId ? `:collector:${options.collectedByUserId}` : "";
+  const limitPart = options?.limit ? `:limit:${options.limit}` : "";
+  const cacheKey = `${resolveFeesTransactionsCacheKey(schoolId)}${collectorPart}${limitPart}`;
 
-  if (!options?.revalidate) {
+  if (!options?.revalidate && !options?.collectedByUserId) {
     const cached = peekFeesTransactions(cacheKey);
     if (cached && cached.length > 0) return cached;
   }
@@ -77,7 +79,11 @@ export async function fetchFeesTransactions(
   if (running) return running;
 
   const run = (async () => {
-    const res = await fetch("/api/fees/transactions?limit=200", {
+    const qs = new URLSearchParams({ limit: String(options?.limit ?? 200) });
+    if (options?.collectedByUserId) {
+      qs.set("collectedByUserId", options.collectedByUserId);
+    }
+    const res = await fetch(`/api/fees/transactions?${qs.toString()}`, {
       credentials: "include",
       cache: "no-store",
       signal: options?.signal,
@@ -87,7 +93,7 @@ export async function fetchFeesTransactions(
       throw new Error((data as { message?: string }).message || "Failed to load transactions");
     }
     const list = (Array.isArray(data.transactions) ? data.transactions : []) as TransactionItem[];
-    if (list.length > 0) {
+    if (list.length > 0 && !options?.collectedByUserId) {
       setFeesTransactionsCache(cacheKey, list);
     }
     return list;

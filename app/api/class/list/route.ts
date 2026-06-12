@@ -71,7 +71,21 @@ export async function GET(req: Request) {
 
       const classes = await prisma.class.findMany({
         where,
-        select: { id: true, name: true, section: true },
+        select: {
+          id: true,
+          name: true,
+          section: true,
+          teacherId: true,
+          teacher: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              teacherId: true,
+              photoUrl: true,
+            },
+          },
+        },
         orderBy: [{ name: "asc" }, { section: "asc" }],
       });
       const payload = { classes };

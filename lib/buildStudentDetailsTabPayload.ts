@@ -114,6 +114,8 @@ async function loadPaymentsWithFeeTypes(studentId: string) {
       gateway: true,
       createdAt: true,
       transactionId: true,
+      collectedByUserId: true,
+      collectedByName: true,
     },
   });
 
@@ -183,6 +185,8 @@ async function loadPaymentsWithFeeTypes(studentId: string) {
         method: p.gateway ?? "—",
         createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : String(p.createdAt),
         transactionId: p.transactionId ?? null,
+        collectedByName: p.collectedByName ?? null,
+        collectedByUserId: p.collectedByUserId ?? null,
         feeTypeName: dominant?.name,
         feeTypeAmount: dominant?.amount,
         feeAllocations: feeAllocations.length > 0 ? feeAllocations : undefined,

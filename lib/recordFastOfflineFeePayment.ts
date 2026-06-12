@@ -23,6 +23,8 @@ type FastOfflinePaymentInput = {
   paymentDate?: string;
   selectedHeads: OfflineSelectedHead[];
   explicitAllocations: OfflineExplicitAllocation[];
+  collectedByUserId?: string;
+  collectedByName?: string;
 };
 
 function normalizeAllocationKey(raw: string): string {
@@ -68,6 +70,8 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
     paymentDate,
     selectedHeads,
     explicitAllocations,
+    collectedByUserId,
+    collectedByName,
   } = input;
 
   const selectedByKey = new Map<string, OfflineSelectedHead>();
@@ -188,6 +192,8 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
           gateway: offlineGateway,
           status: "SUCCESS",
           transactionId: txId,
+          ...(collectedByUserId ? { collectedByUserId } : {}),
+          ...(collectedByName ? { collectedByName } : {}),
           ...(selectedPaymentDate ? { createdAt: selectedPaymentDate } : {}),
         },
       });

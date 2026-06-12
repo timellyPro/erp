@@ -49,6 +49,9 @@ type Props = {
     feeTypeAmount?: number;
     feeAllocations?: Array<{ name: string; amount: number }>;
     createdAt: string;
+    collectedByName?: string | null;
+    method?: string;
+    gateway?: string;
   }>;
   discountFeeHeadKey?: string | null;
   discountFeeHeadLabel?: string | null;
@@ -998,6 +1001,7 @@ export const FeesBreakdown = ({
                   <tr className="bg-gray-200">
                     <th className="border border-gray-300 p-2 text-left font-semibold">Date</th>
                     <th className="border border-gray-300 p-2 text-left font-semibold">Fee Type</th>
+                    <th className="border border-gray-300 p-2 text-left font-semibold">Collected By</th>
                     <th className="border border-gray-300 p-2 text-right font-semibold">Amount</th>
                     <th className="border border-gray-300 p-2 text-left font-semibold">Status</th>
                   </tr>
@@ -1010,6 +1014,9 @@ export const FeesBreakdown = ({
                       </td>
                       <td className="border border-gray-300 p-2 text-sm">
                         {payment.feeTypeName || "Other Fees"}
+                      </td>
+                      <td className="border border-gray-300 p-2 text-sm">
+                        {payment.collectedByName || "—"}
                       </td>
                       <td className="border border-gray-300 p-2 text-right font-semibold text-sm">
                         ₹{payment.amount.toLocaleString("en-IN")}

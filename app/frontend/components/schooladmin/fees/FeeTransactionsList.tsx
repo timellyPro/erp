@@ -17,6 +17,7 @@ import {
   peekFeesTransactions,
   resolveFeesTransactionsCacheKey,
 } from "@/lib/feesTransactionsCache";
+import { isOfflinePaymentGateway } from "@/lib/feePaymentGateway";
 
 const PAGE_SIZE = 20;
 
@@ -51,6 +52,10 @@ export default function FeeTransactionsList({
   const [classStudents, setClassStudents] = useState<ClassDetailStudent[]>([]);
   const [refundTarget, setRefundTarget] = useState<TransactionItem | null>(null);
   const [page, setPage] = useState(1);
+  const [collectorOptions, setCollectorOptions] = useState<Array<{ label: string; value: string }>>([
+    { label: "All staff", value: "" },
+  ]);
+  const [selectedCollectorUserId, setSelectedCollectorUserId] = useState("");
 
   const fetchClassDetails = async (classId: string) => {
     if (!classId) {
@@ -78,18 +83,44 @@ export default function FeeTransactionsList({
   };
 
   useEffect(() => {
+    const controller = new AbortController();
+    void fetch("/api/fees/collectors", { credentials: "include", signal: controller.signal })
+      .then((res) => res.json())
+      .then((data) => {
+        const rows = Array.isArray(data?.collectors) ? data.collectors : [];
+        setCollectorOptions([
+          { label: "All staff", value: "" },
+          ...rows.map((c: { userId: string; name: string }) => ({
+            label: c.name,
+            value: c.userId,
+          })),
+        ]);
+      })
+      .catch(() => {
+        /* ignore */
+      });
+    return () => controller.abort();
+  }, [schoolId]);
+
+  useEffect(() => {
     const key = resolveFeesTransactionsCacheKey(schoolId);
-    const cached = peekFeesTransactions(key);
-    if (cached && cached.length > 0) {
-      setTransactions(cached);
-      setLoading(false);
+    if (!selectedCollectorUserId) {
+      const cached = peekFeesTransactions(key);
+      if (cached && cached.length > 0) {
+        setTransactions(cached);
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
     } else {
       setLoading(true);
     }
 
     const controller = new AbortController();
     void fetchFeesTransactions(schoolId, {
-      revalidate: !cached?.length,
+      revalidate: Boolean(selectedCollectorUserId),
+      collectedByUserId: selectedCollectorUserId || undefined,
+      limit: selectedCollectorUserId ? 500 : 200,
       signal: controller.signal,
     })
       .then((rows) => {
@@ -103,7 +134,7 @@ export default function FeeTransactionsList({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [schoolId]);
+  }, [schoolId, selectedCollectorUserId]);
 
   useEffect(() => {
     fetchClassDetails(selectedClassId);
@@ -166,7 +197,7 @@ export default function FeeTransactionsList({
 
   useEffect(() => {
     setPage(1);
-  }, [selectedClassId, selectedSection, selectedYear, studentSearch]);
+  }, [selectedClassId, selectedSection, selectedYear, studentSearch, selectedCollectorUserId]);
 
   const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / PAGE_SIZE));
   const paginatedTransactions = useMemo(
@@ -194,7 +225,7 @@ export default function FeeTransactionsList({
         View successful payments and process refunds when needed.
       </p>
       <div className="mb-5 w-full rounded-2xl border border-white/10 bg-white/5 p-3 sm:p-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
           <div>
             <SearchInput
               label="Search Student"
@@ -204,6 +235,14 @@ export default function FeeTransactionsList({
               showSearchIcon
               placeholder="Name or ID..."
               variant="glass"
+            />
+          </div>
+          <div>
+            <SelectInput
+              label="Collected by"
+              value={selectedCollectorUserId}
+              onChange={setSelectedCollectorUserId}
+              options={collectorOptions}
             />
           </div>
           <div>
@@ -301,6 +340,14 @@ export default function FeeTransactionsList({
                     </span>
                   </div>
                   <div className="flex items-center justify-between gap-3">
+                    <span className="text-gray-400">Collected by</span>
+                    <span className="text-right text-gray-300">
+                      {isOfflinePaymentGateway(t.gateway)
+                        ? t.collectedByName || "—"
+                        : "—"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
                     <span className="text-gray-400">Amount</span>
                     <span className="text-emerald-400">₹{t.amount.toLocaleString()}</span>
                   </div>
@@ -338,6 +385,7 @@ export default function FeeTransactionsList({
                 <th className="pb-3 font-medium">Student</th>
                 <th className="pb-3 font-medium">Class</th>
                 <th className="pb-3 font-medium">Gateway</th>
+                <th className="pb-3 font-medium">Collected by</th>
                 <th className="pb-3 font-medium">Reference No / UTR</th>
                 <th className="pb-3 font-medium">Amount</th>
                 <th className="pb-3 font-medium">Refunded</th>
@@ -383,6 +431,9 @@ export default function FeeTransactionsList({
                         </span>
                       ) : null}
                     </div>
+                  </td>
+                  <td className="py-3 text-gray-400">
+                    {isOfflinePaymentGateway(t.gateway) ? t.collectedByName || "—" : "—"}
                   </td>
                   <td className="py-3 text-gray-300 break-all">
                     {t.transactionId || "-"}

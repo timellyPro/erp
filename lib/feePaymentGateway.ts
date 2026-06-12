@@ -31,6 +31,14 @@ export function canonicalizeGatewayForStorage(raw: string): string {
   return u;
 }
 
+/** True when payment was collected offline at school (not online gateway). */
+export function isOfflinePaymentGateway(gateway?: string | null): boolean {
+  const g = String(gateway || "").trim().toUpperCase();
+  if (!g || g === "HYPERPG") return false;
+  if (g.startsWith("OFFLINE_")) return true;
+  return ["CASH", "CHEQUE", "CHQ", "DD", "UPI", "BANK", "BANK_TRANSFER", "CARD", "OTHERS", "OFFLINE"].includes(g);
+}
+
 /** Column in the school fee Excel matrix (Cash / Online / …). */
 export function feeReportColumnFromGateway(gateway?: string | null): FeeReportColumn {
   const g = String(gateway || "").trim().toUpperCase();
