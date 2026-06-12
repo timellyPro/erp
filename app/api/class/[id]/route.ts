@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import { activeStudentWhere } from "@/lib/studentStatus";
 
 export async function GET(
   req: Request,
@@ -36,6 +37,7 @@ export async function GET(
           select: { id: true, name: true, email: true },
         },
         students: {
+          where: activeStudentWhere,
           include: {
             user: {
               select: {

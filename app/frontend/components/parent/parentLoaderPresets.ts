@@ -75,6 +75,11 @@ export const PARENT_LOADER_PRESETS = {
     steps: ["Session", "Subscription", "Ready"],
     ariaLabel: "Loading parent portal",
   },
+  students: {
+    title: "Loading students",
+    steps: ["Class roster", "Profiles", "Records"],
+    ariaLabel: "Loading students",
+  },
 } as const;
 
 export type ParentLoaderPresetKey = keyof typeof PARENT_LOADER_PRESETS;

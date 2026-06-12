@@ -18,7 +18,7 @@ import {
   type SchoolFeesPageSnapshot,
 } from "@/lib/schoolFeesPageClientCache";
 import { fetchFeesTransactions } from "@/lib/feesTransactionsCache";
-import { readStudentListCache, writeStudentListCache } from "@/lib/studentListSessionCache";
+import { readStudentListCacheLegacy, writeStudentListCacheLegacy } from "@/lib/studentListSessionCache";
 
 export type { FeesSection, SchoolFeesPageSnapshot };
 export { invalidateSchoolFeesPageCache, peekLastFeesSchoolId, peekSchoolFeesSnapshot };
@@ -87,13 +87,13 @@ async function fetchExtraFees(signal?: AbortSignal): Promise<ExtraFee[]> {
 }
 
 async function fetchStudents(signal?: AbortSignal): Promise<Student[]> {
-  const cached = readStudentListCache<Student>();
+  const cached = readStudentListCacheLegacy<Student>();
   if (cached?.length) return cached;
   const students = await fetchAllStudents<Student>(
     { credentials: "include", cache: "no-store", signal },
     { take: 100, maxPages: 50 }
   );
-  if (students.length) writeStudentListCache(students);
+  if (students.length) writeStudentListCacheLegacy(students);
   return students;
 }
 
@@ -215,7 +215,7 @@ export async function loadSchoolFeesPage(
 
     if (req.students) {
       const cachedStudents =
-        readStudentListCache<Student>() ??
+        readStudentListCacheLegacy<Student>() ??
         (snap.students?.length ? snap.students : null);
       if (cachedStudents?.length) {
         snap = mergeSnapshot(snap, { students: cachedStudents });
@@ -267,7 +267,7 @@ export function warmSchoolFeesPage(schoolId: string | null | undefined): void {
     .then((feeRecords) => setSchoolFeesFeeRecordsCache(schoolId, feeRecords))
     .catch(() => {});
 
-  const cachedStudents = readStudentListCache<Student>();
+  const cachedStudents = readStudentListCacheLegacy<Student>();
   if (cachedStudents?.length) {
     setSchoolFeesStudentsCache(schoolId, cachedStudents);
     void fetchStudents()

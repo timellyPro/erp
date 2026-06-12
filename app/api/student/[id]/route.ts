@@ -10,10 +10,23 @@ import {
   feeHeadLinesFromMap,
 } from "@/lib/paymentFeeHeadLines";
 import type { PrismaClient } from "@prisma/client";
+import { hashStudentPasswordFromDob } from "@/lib/studentDefaultPassword";
+import {
+  parseStudentStatus,
+  STUDENT_STATUS_ACTIVE,
+  STUDENT_STATUS_INACTIVE,
+} from "@/lib/studentStatus";
 import { ensureStudentApplicationLink } from "@/lib/ensureStudentApplicationLink";
 import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
 import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
+import { invalidateStudentListCaches } from "@/lib/invalidateStudentListCaches";
 import { canonicalizeResidencyType } from "@/lib/residencyDisplay";
+import {
+  loadStudentAdmissionApplicationPayments,
+  loadStudentApplicationFeeSnapshot,
+  mergeStudentProfilePayments,
+  resolveStudentAdmissionApplicationFees,
+} from "@/lib/studentAdmissionApplicationPayments";
 
 type RouteParams =
   | { params: { id: string } }
@@ -86,6 +99,10 @@ export async function GET(_req: Request, context: RouteParams) {
                 emergencyFatherNo: true,
                 emergencyMotherNo: true,
                 emergencyGuardianNo: true,
+                applicationFee: true,
+                admissionFee: true,
+                applicationFeePaid: true,
+                admissionFeePaid: true,
               },
             },
           },
@@ -114,10 +131,20 @@ export async function GET(_req: Request, context: RouteParams) {
         const motherPhoneResolved =
           !motherPhoneRaw || motherPhoneRaw === "-" || motherPhoneRaw === "—" ? "" : motherPhoneRaw;
 
+        const appFeeSnapshot = await loadStudentApplicationFeeSnapshot(
+          id,
+          student.schoolId,
+          student.aadhaarNo
+        );
+        const resolvedAdmissionApplicationFees = resolveStudentAdmissionApplicationFees(
+          student,
+          appFeeSnapshot ?? student.application
+        );
+
         const payments = await prisma.payment.findMany({
           where: { studentId: id },
           orderBy: { createdAt: "desc" },
-          take: 20,
+          take: 500,
         });
 
         // For each payment row, show which fee heads were allocated
@@ -300,8 +327,8 @@ export async function GET(_req: Request, context: RouteParams) {
         emergencyGuardianNo: student.application?.emergencyGuardianNo ?? "",
         parentEmail: student.application?.parentEmail ?? "",
         residencyType: student.residencyType ?? "Day Scholar",
-        applicationFee: student.applicationFee ?? null,
-        admissionFee: student.admissionFee ?? null,
+        applicationFee: resolvedAdmissionApplicationFees.applicationFee,
+        admissionFee: resolvedAdmissionApplicationFees.admissionFee,
         createdAt: student.createdAt?.toISOString() ?? "",
         status: student.status ?? "Active",
         class: student.class
@@ -330,7 +357,8 @@ export async function GET(_req: Request, context: RouteParams) {
             discountRemarks: (student.fee as { discountRemarks?: string | null }).discountRemarks ?? null,
           }
         : null,
-      payments: payments.map((p) => {
+      payments: mergeStudentProfilePayments(
+        payments.map((p) => {
         const headMap = feeHeadAmountsByPaymentId.get(p.id);
         const feeAllocations = feeHeadLinesFromMap(headMap);
         const dominant = dominantFeeHead(headMap);
@@ -348,6 +376,8 @@ export async function GET(_req: Request, context: RouteParams) {
           feeAllocations: feeAllocations.length > 0 ? feeAllocations : undefined,
         };
       }),
+        await loadStudentAdmissionApplicationPayments(id, student.schoolId, student.aadhaarNo)
+      ),
       attendanceTrends,
       academicPerformance,
       certificates: certificates.map((c) => ({
@@ -432,12 +462,7 @@ export async function PUT(req: Request, context: RouteParams) {
     const gender = typeof body.gender === "string" ? body.gender.trim() || null : undefined;
     const residencyType = normalizeResidencyType(body.residencyType);
     const previousSchool = typeof body.previousSchool === "string" ? body.previousSchool.trim() || null : undefined;
-    const status =
-      typeof body.status === "string"
-        ? body.status.trim().toLowerCase() === "inactive"
-          ? "Inactive"
-          : "Active"
-        : undefined;
+    const status = parseStudentStatus(body.status);
     const officeAddress = typeof body.officeAddress === "string" ? body.officeAddress.trim() || null : undefined;
     const parentAadharNo = typeof body.parentAadharNo === "string" ? body.parentAadharNo.trim() || null : undefined;
     const parentWhatsapp = typeof body.parentWhatsapp === "string" ? body.parentWhatsapp.trim() || null : undefined;
@@ -532,7 +557,10 @@ export async function PUT(req: Request, context: RouteParams) {
     if (fatherName !== undefined) studentUpdate.fatherName = fatherName;
     if (motherName !== undefined) studentUpdate.motherName = motherName;
     if (occupation !== undefined) studentUpdate.occupation = occupation;
-    if (classId !== undefined) studentUpdate.classId = classId;
+    const effectiveStatus = status ?? student.status ?? "Active";
+    if (classId !== undefined) {
+      studentUpdate.classId = classId;
+    }
     if (rollNo !== undefined) studentUpdate.rollNo = rollNo;
     if (penNumber !== undefined) studentUpdate.penNumber = penNumber;
     if (apaarId !== undefined) studentUpdate.apaarId = apaarId;
@@ -561,6 +589,37 @@ export async function PUT(req: Request, context: RouteParams) {
       });
     }
 
+    if (status === STUDENT_STATUS_INACTIVE && student.user) {
+      await prisma.user.update({
+        where: { id: student.user.id },
+        data: { password: null },
+      });
+    }
+
+    const isReactivating =
+      status === STUDENT_STATUS_ACTIVE &&
+      student.status === STUDENT_STATUS_INACTIVE &&
+      Boolean(student.user);
+
+    if (isReactivating) {
+      const effectiveDob = dob !== undefined ? dob : student.dob;
+      try {
+        const hashedPassword = await hashStudentPasswordFromDob(effectiveDob);
+        await prisma.user.update({
+          where: { id: student.user.id },
+          data: { password: hashedPassword },
+        });
+      } catch {
+        return NextResponse.json(
+          {
+            message:
+              "Student marked active but login could not be restored. Set a valid date of birth or reset credentials.",
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     const applicationUpdate: Record<string, unknown> = {};
     if (fatherName !== undefined) applicationUpdate.parentName = fatherName || "-";
     if (motherName !== undefined) applicationUpdate.motherName = motherName;
@@ -586,65 +645,93 @@ export async function PUT(req: Request, context: RouteParams) {
     if (emergencyMotherNo !== undefined) applicationUpdate.emergencyMotherNo = emergencyMotherNo;
     if (emergencyGuardianNo !== undefined) applicationUpdate.emergencyGuardianNo = emergencyGuardianNo;
     if (Object.keys(applicationUpdate).length > 0) {
-      const applicationId = await ensureStudentApplicationLink(
-        prisma as unknown as Pick<PrismaClient, "studentApplication">,
-        {
-        id: student.id,
-        schoolId: student.schoolId,
-        aadhaarNo: student.aadhaarNo,
-        admissionNumber: student.admissionNumber,
-        fatherName:
-          typeof applicationUpdate.parentName === "string"
-            ? applicationUpdate.parentName
-            : student.fatherName,
-        motherName:
-          applicationUpdate.motherName === undefined
-            ? student.motherName
-            : (applicationUpdate.motherName as string | null),
-        phoneNo:
-          typeof applicationUpdate.parentPhone === "string"
-            ? applicationUpdate.parentPhone
-            : student.phoneNo,
-        dob: student.dob,
-        gender: student.gender,
-        classId: student.classId,
-        address: student.address,
-        user: student.user,
-        class: student.class,
+      const applicationPayload = { ...applicationUpdate };
+      const studentSnapshot = { ...student };
+      void (async () => {
+        try {
+          const applicationId = await ensureStudentApplicationLink(
+            prisma as unknown as Pick<PrismaClient, "studentApplication">,
+            {
+              id: studentSnapshot.id,
+              schoolId: studentSnapshot.schoolId,
+              aadhaarNo: studentSnapshot.aadhaarNo,
+              admissionNumber: studentSnapshot.admissionNumber,
+              fatherName:
+                typeof applicationPayload.parentName === "string"
+                  ? applicationPayload.parentName
+                  : studentSnapshot.fatherName,
+              motherName:
+                applicationPayload.motherName === undefined
+                  ? studentSnapshot.motherName
+                  : (applicationPayload.motherName as string | null),
+              phoneNo:
+                typeof applicationPayload.parentPhone === "string"
+                  ? applicationPayload.parentPhone
+                  : studentSnapshot.phoneNo,
+              dob: studentSnapshot.dob,
+              gender: studentSnapshot.gender,
+              classId: studentSnapshot.classId,
+              address: studentSnapshot.address,
+              user: studentSnapshot.user,
+              class: studentSnapshot.class,
+            }
+          );
+          if (applicationId) {
+            await prisma.studentApplication.update({
+              where: { id: applicationId },
+              data: applicationPayload as Record<string, never>,
+            });
+          }
+        } catch (err) {
+          console.error("Student application sync (background):", err);
         }
-      );
-      if (applicationId) {
-        await prisma.studentApplication.update({
-          where: { id: applicationId },
-          data: applicationUpdate as Record<string, never>,
-        });
-      }
+      })();
     }
 
-    if (classId !== undefined || residencyType !== undefined) {
-      const refreshed = await prisma.student.findFirst({
-        where: { id, schoolId },
-        include: { class: { select: { section: true } } },
-      });
-      if (refreshed) {
-        const fee = await prisma.studentFee.findUnique({
-          where: { studentId: id },
-          select: { discountPercent: true, amountPaid: true },
-        });
-        await upsertStudentFeeFromStructure(prisma, {
-          schoolId,
-          studentId: id,
-          classId: refreshed.classId,
-          section: refreshed.class?.section ?? null,
-          discountPercent: fee?.discountPercent ?? 0,
-          amountPaid: fee?.amountPaid ?? 0,
-        });
-      }
+    const effectiveStatusAfter = status ?? student.status ?? STUDENT_STATUS_ACTIVE;
+    const classChanged =
+      classId !== undefined && (classId ?? null) !== (student.classId ?? null);
+    const residencyChanged =
+      residencyType !== undefined &&
+      residencyType !== (student.residencyType ?? null);
+    const needsFeeSync =
+      effectiveStatusAfter !== STUDENT_STATUS_INACTIVE &&
+      (isReactivating || classChanged || residencyChanged);
+
+    if (needsFeeSync) {
+      void (async () => {
+        try {
+          const refreshed = await prisma.student.findFirst({
+            where: { id, schoolId },
+            include: { class: { select: { section: true } } },
+          });
+          if (!refreshed) return;
+          const fee = await prisma.studentFee.findUnique({
+            where: { studentId: id },
+            select: { discountPercent: true, amountPaid: true },
+          });
+          await upsertStudentFeeFromStructure(prisma, {
+            schoolId,
+            studentId: id,
+            classId: refreshed.classId,
+            section: refreshed.class?.section ?? null,
+            discountPercent: fee?.discountPercent ?? 0,
+            amountPaid: fee?.amountPaid ?? 0,
+          });
+        } catch (err) {
+          console.error("Student fee sync (background):", err);
+        }
+      })();
     }
 
+    invalidateStudentListCaches(schoolId);
     invalidateStudentFeeReadCaches({ studentId: id, schoolId });
 
-    return NextResponse.json({ message: "Student updated successfully" }, { status: 200 });
+    const message = isReactivating
+      ? "Student reactivated successfully. They can log in with their date of birth as password (YYYYMMDD)."
+      : "Student updated successfully";
+
+    return NextResponse.json({ message }, { status: 200 });
   } catch (error: unknown) {
     console.error("Student update error:", error);
     return NextResponse.json(
@@ -684,6 +771,8 @@ export async function DELETE(_req: Request, context: RouteParams) {
 
     await prisma.student.delete({ where: { id } });
     await prisma.user.delete({ where: { id: student.userId } });
+
+    invalidateStudentListCaches(schoolId);
 
     return NextResponse.json({ message: "Student deleted successfully" }, { status: 200 });
   } catch (error: unknown) {

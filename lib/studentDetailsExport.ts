@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import { buildAddressFromParts, formatStoredAddressForDisplay } from "@/lib/studentAddressFormat";
 import { formatStudentClassForReport } from "@/lib/feeDayReportExcel";
+import { resolveStudentDisplayClass } from "@/lib/resolveStudentDisplayClass";
 
 /** Matches the "student details" sheet in `Student details report.xlsx` (header spelling preserved). */
 export const STUDENT_DETAILS_EXPORT_HEADERS = [
@@ -28,6 +29,7 @@ export const STUDENT_DETAILS_EXPORT_HEADERS = [
   "eMail Id ",
   "Present Address",
   "Permanent Address",
+  "Status",
 ] as const;
 
 export function formatDateDdMmYyyy(value: Date | string | null | undefined): string {
@@ -88,8 +90,12 @@ function titleCaseGender(g: string | null | undefined): string {
   return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
 }
 
-function classLabel(name: string | null | undefined, section: string | null | undefined): string {
-  return formatStudentClassForReport({ name, section });
+function classLabelForStudent(student: ExportStudent): string {
+  const resolved = resolveStudentDisplayClass(
+    student.class,
+    student.application?.class ?? null
+  );
+  return formatStudentClassForReport(resolved);
 }
 
 type ExportApplication = {
@@ -108,6 +114,7 @@ type ExportApplication = {
   town: string | null;
   state: string | null;
   pinCode: string | null;
+  class?: { name: string | null; section: string | null } | null;
 } | null;
 
 type ExportStudent = {
@@ -125,7 +132,8 @@ type ExportStudent = {
   apaarId: string | null;
   user: { name: string | null; email: string | null } | null;
   class: { name: string | null; section: string | null } | null;
-  application: ExportApplication | null;
+  application: ExportApplication;
+  status?: string | null;
 };
 
 export function studentToDetailsExportRow(
@@ -169,7 +177,7 @@ export function studentToDetailsExportRow(
     formatDateDdMmYyyy(admissionDate),
     student.admissionNumber,
     studentName,
-    classLabel(student.class?.name, student.class?.section),
+    classLabelForStudent(student),
     titleCaseGender(student.gender),
     mapStudentCategory(student.residencyType),
     excelPhoneCell(student.phoneNo),
@@ -189,6 +197,7 @@ export function studentToDetailsExportRow(
     email,
     present,
     permanent || present,
+    (student.status ?? "Active").trim(),
   ];
 }
 

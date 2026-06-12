@@ -3,6 +3,7 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
 import type { PrismaClient } from "@prisma/client";
 import prisma from "@/lib/db";
+import { isActiveStudent } from "@/lib/studentStatus";
 import bcrypt from "bcryptjs";
 
 export const authOptions: NextAuthOptions = {
@@ -52,7 +53,7 @@ export const authOptions: NextAuthOptions = {
               mobile: true,
               photoUrl: true,
               allowedFeatures: true,
-              student: { select: { id: true, schoolId: true } },
+              student: { select: { id: true, schoolId: true, status: true } },
               assignedClasses: true,
               school: true,
             },
@@ -91,6 +92,11 @@ export const authOptions: NextAuthOptions = {
             // If bcrypt.compare fails (e.g., invalid hash format), treat as invalid password
             console.log("Auth: Password verification failed for user:", credentials.email, bcryptError);
             return null;
+          }
+
+          if (user.student && !isActiveStudent(user.student.status)) {
+            console.log("Auth: Student account is inactive for email:", credentials.email);
+            throw new Error("Account is deactivated or password not set. Please contact your administrator.");
           }
 
           console.log("Auth: Successfully authenticated user:", user.email, "Role:", user.role);

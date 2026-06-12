@@ -47,11 +47,18 @@ export async function POST(req: Request) {
         // Verify student exists and belongs to school
         const student = await prisma.student.findUnique({
             where: { id: studentId },
-            select: { id: true, schoolId: true, fee: true },
+            select: { id: true, schoolId: true, status: true, fee: true },
         });
 
         if (!student) {
             return NextResponse.json({ message: "Student not found" }, { status: 404 });
+        }
+
+        if (!isActiveStudent(student.status)) {
+            return NextResponse.json(
+                { message: "Cannot record payments for inactive students" },
+                { status: 400 }
+            );
         }
 
         if (student.schoolId !== schoolId) {

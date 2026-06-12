@@ -53,6 +53,8 @@ type Props = {
   onOpenFees?: () => void;
   /** Warm fee breakdown before the user opens the fees sheet. */
   onFeesHover?: () => void;
+  /** When true, fees sheet and payment actions are disabled (inactive student). */
+  feesRecordingDisabled?: boolean;
 };
 
 export const ProfileSidebar = ({
@@ -69,6 +71,7 @@ export const ProfileSidebar = ({
   onSaved,
   onOpenFees,
   onFeesHover,
+  feesRecordingDisabled = false,
 }: Props) => {
   const normalizedAddress = formatStoredAddressForDisplay(student.address || "");
 
@@ -213,11 +216,12 @@ export const ProfileSidebar = ({
           <div className="flex items-center gap-1.5">
             <button
               type="button"
-              onClick={onOpenFees}
-              onMouseEnter={onFeesHover}
-              onFocus={onFeesHover}
-              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-blue-500/40 bg-blue-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-blue-300 hover:bg-blue-500/25"
-              title="Open fees sheet"
+              onClick={feesRecordingDisabled ? undefined : onOpenFees}
+              onMouseEnter={feesRecordingDisabled ? undefined : onFeesHover}
+              onFocus={feesRecordingDisabled ? undefined : onFeesHover}
+              disabled={feesRecordingDisabled}
+              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-blue-500/40 bg-blue-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-blue-300 hover:bg-blue-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+              title={feesRecordingDisabled ? "Inactive students — fees cannot be recorded" : "Open fees sheet"}
             >
               <CircleDollarSign className="h-3.5 w-3.5" strokeWidth={2.25} />
               Fees

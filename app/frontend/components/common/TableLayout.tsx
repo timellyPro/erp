@@ -3,11 +3,14 @@
 import { ReactNode, memo } from "react";
 import { Column } from "../../types/superadmin";
 import Spinner from "./Spinner";
+import ParentTimellyLoader from "../parent/ParentTimellyLoader";
 
 type DataTableProps<T> = {
   columns: Column<T>[];
   data: T[];
   loading?: boolean;
+  /** Use Timelly branded loader inside the table body instead of spinner. */
+  timellyLoader?: boolean;
   emptyText?: string;
   rowKey?: (row: T, index: number) => string | number;
   caption?: string;
@@ -76,6 +79,7 @@ function DataTable<T>({
   columns,
   data,
   loading = false,
+  timellyLoader = false,
   emptyText = "No data found",
   rowKey,
   caption,
@@ -211,9 +215,13 @@ function DataTable<T>({
                 <tr>
                   <td
                     colSpan={columns.length}
-                    className="p-8 text-center text-white/60"
+                    className="p-6 sm:p-10 text-center text-white/60"
                   >
-                    <Spinner size={26} label="Loading..." />
+                    {timellyLoader ? (
+                      <ParentTimellyLoader preset="students" compact bare className="mx-auto w-full max-w-sm" />
+                    ) : (
+                      <Spinner size={26} label="Loading..." />
+                    )}
                   </td>
                 </tr>
               )}

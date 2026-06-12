@@ -12,6 +12,12 @@ import {
   dominantFeeHead,
   feeHeadLinesFromMap,
 } from "@/lib/paymentFeeHeadLines";
+import { resolveStudentDisplayClass } from "@/lib/resolveStudentDisplayClass";
+import {
+  loadStudentAdmissionApplicationPayments,
+  mergeStudentProfilePayments,
+  resolveStudentAdmissionApplicationFees,
+} from "@/lib/studentAdmissionApplicationPayments";
 
 export type StudentDetailsTabPayload = {
   student: {
@@ -103,10 +109,15 @@ export type StudentDetailsTabPayload = {
 };
 
 async function loadPaymentsWithFeeTypes(studentId: string) {
+  const studentMeta = await prisma.student.findUnique({
+    where: { id: studentId },
+    select: { schoolId: true, aadhaarNo: true },
+  });
+
   const payments = await prisma.payment.findMany({
     where: { studentId },
     orderBy: { createdAt: "desc" },
-    take: 20,
+    take: 500,
     select: {
       id: true,
       amount: true,
@@ -120,11 +131,22 @@ async function loadPaymentsWithFeeTypes(studentId: string) {
   });
 
   const paymentIds = payments.map((p) => p.id);
-  if (paymentIds.length === 0) {
-    return { payments: [], tuitionPaidFromAllocations: 0 };
-  }
 
-  const allAllocations = await prisma.paymentFeeAllocation.findMany({
+  let tuitionPaidFromAllocations = 0;
+  let gatewayPayments: Array<{
+    id: string;
+    amount: number;
+    status: string;
+    method: string;
+    createdAt: string;
+    transactionId: string | null;
+    feeTypeName?: string;
+    feeTypeAmount?: number;
+    feeAllocations?: Array<{ name: string; amount: number }>;
+  }> = [];
+
+  if (paymentIds.length > 0) {
+    const allAllocations = await prisma.paymentFeeAllocation.findMany({
     where: {
       paymentId: { in: paymentIds },
       allocationType: { in: ["PAYMENT", "REFUND"] },
@@ -165,13 +187,37 @@ async function loadPaymentsWithFeeTypes(studentId: string) {
     extraFeeNameById
   );
 
-  const tuitionPaidFromAllocations =
+  tuitionPaidFromAllocations =
     paymentAllocationRows
       .filter((a) => a.headType === "BASE_COMPONENT" && a.componentIndex === -1)
       .reduce((s, a) => s + a.allocatedAmount, 0) -
     refundAllocationRows
       .filter((a) => a.headType === "BASE_COMPONENT" && a.componentIndex === -1)
       .reduce((s, a) => s + a.allocatedAmount, 0);
+
+  gatewayPayments = payments.map((p) => {
+    const headMap = feeHeadAmountsByPaymentId.get(p.id);
+    const feeAllocations = feeHeadLinesFromMap(headMap);
+    const dominant = dominantFeeHead(headMap);
+    return {
+      id: p.id,
+      amount: p.amount,
+      status: p.status,
+      method: p.gateway ?? "—",
+      createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : String(p.createdAt),
+      transactionId: p.transactionId ?? null,
+      feeTypeName: dominant?.name,
+      feeTypeAmount: dominant?.amount,
+      feeAllocations: feeAllocations.length > 0 ? feeAllocations : undefined,
+    };
+  });
+  }
+
+  const admissionApplicationPayments = await loadStudentAdmissionApplicationPayments(
+    studentId,
+    studentMeta?.schoolId,
+    studentMeta?.aadhaarNo
+  );
 
   return {
     payments: payments.map((p) => {
@@ -237,6 +283,11 @@ const studentDetailsInclude = {
       emergencyFatherNo: true,
       emergencyMotherNo: true,
       emergencyGuardianNo: true,
+      applicationFee: true,
+      admissionFee: true,
+      applicationFeePaid: true,
+      admissionFeePaid: true,
+      class: { select: { id: true, name: true, section: true } },
     },
   },
 } as const;
@@ -420,18 +471,25 @@ function mapStudentToTabPayload(
       emergencyGuardianNo: student.application?.emergencyGuardianNo ?? "",
       parentEmail: student.application?.parentEmail ?? "",
       residencyType: student.residencyType ?? "Day Scholar",
-      applicationFee: student.applicationFee ?? null,
-      admissionFee: student.admissionFee ?? null,
+      ...resolveStudentAdmissionApplicationFees(student, student.application),
       createdAt: student.createdAt?.toISOString() ?? "",
       status: student.status ?? "Active",
-      class: student.class
-        ? {
-            id: student.class.id,
-            name: student.class.name,
-            section: student.class.section,
-            displayName: `${student.class.name}${student.class.section ? `-${student.class.section}` : ""}`,
-          }
-        : null,
+      class: (() => {
+        const resolved = resolveStudentDisplayClass(
+          student.class,
+          student.application?.class ?? null
+        );
+        const id = resolved?.id?.trim();
+        const name = resolved?.name?.trim();
+        if (!id || !name) return null;
+        const section = resolved?.section ?? null;
+        return {
+          id,
+          name,
+          section,
+          displayName: `${name}${section ? `-${section}` : ""}`,
+        };
+      })(),
     },
     fee: student.fee
       ? {

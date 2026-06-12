@@ -9,14 +9,14 @@ import StudentFilters from "./students/StudentFilters";
 import UploadCsvPanel from "./students/UploadCsvPanel";
 import AddStudentForm from "./students/AddStudentForm";
 import StudentDetailsModal from "./students/StudentDetailsModal";
-import StudentMobileCard from "./students/StudentMobileCard";
 import DeleteConfirmation from "../common/DeleteConfirmation";
 import { buildStudentColumns } from "./students/studentColumns";
 import useStudentPage from "./students/useStudentPage";
 import { getAge, toStudentForm } from "./students/utils";
 import { ClassItem } from "./students/types";
 import SuccessPopups from "../common/SuccessPopUps";
-import Spinner from "../common/Spinner";
+import StudentsHeader from "./students/StudentsHeader";
+import StudentStats from "./students/StudentStats";
 
 type Props = {
   classes?: ClassItem[];
@@ -29,11 +29,11 @@ export default function StudentsManagementPage({ classes, reload }: Props) {
   const stableClasses = classes ?? EMPTY_CLASSES;
   const page = useStudentPage({ classes: stableClasses, reload });
   const [tablePage, setTablePage] = useState(1);
-  const pageSize = 5;
-  const totalPages = Math.max(
-    1,
-    Math.ceil(page.filteredStudents.length / pageSize)
-  );
+  const pageSize = 25;
+  const listCount = page.tableLoading
+    ? (page.totalCount ?? 0)
+    : page.filteredStudents.length;
+  const totalPages = Math.max(1, Math.ceil(page.filteredStudents.length / pageSize));
   const safePage = Math.min(tablePage, totalPages);
   const pagedStudents = useMemo(
     () =>
@@ -69,11 +69,10 @@ export default function StudentsManagementPage({ classes, reload }: Props) {
   );
 
   return (
-    <>
-      <PageHeader
-        title="Students Management"
-        subtitle="Manage all student records"
-        className="bg-white/5 backdrop-blur-xl rounded-2xl p-4 md:p-6 shadow-lg border border-white/10"
+    <main className="mx-auto w-full max-w-none xl:max-w-7xl space-y-6 md:space-y-8 text-white pb-12 px-0">
+      <StudentsHeader
+        activeCount={page.activeCount}
+        inactiveCount={page.inactiveCount}
       />
       <div className="mx-auto w-full max-w-none xl:max-w-7xl space-y-4 md:space-y-6 text-gray-200 pb-12">
         <StudentFilters
@@ -93,6 +92,7 @@ export default function StudentsManagementPage({ classes, reload }: Props) {
           exportExcelLoading={page.exportingDetails}
           exportPdfLoading={page.exportingPdf}
         />
+      )}
 
         {page.showUploadPanel && (
           <UploadCsvPanel
@@ -250,7 +250,6 @@ export default function StudentsManagementPage({ classes, reload }: Props) {
         description="The student has been added and assigned to the class."
         onClose={() => page.setShowSuccess(false)}
       />
-
-    </>
+    </main>
   );
 }
