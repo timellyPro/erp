@@ -123,7 +123,11 @@ export async function GET(req: Request) {
             class: { select: { id: true, name: true, section: true } },
             application: {
               select: {
-                class: { select: { id: true, name: true, section: true } },
+                id: true,
+                createdAt: true,
+                admissionNo: true,
+                fedenaNo: true,
+                workflowStatus: true,
               },
             },
           },

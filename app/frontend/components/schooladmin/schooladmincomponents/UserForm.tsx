@@ -10,6 +10,13 @@ import RoleSelector from "./RoleSelector";
 import { Permission } from "@/app/frontend/enums/permissions";
 import Spinner from "../../common/Spinner";
 import { validateUserForm, type UserFormErrors } from "./userFormValidation";
+import type { IUser } from "@/app/frontend/constants/addUserTable";
+import {
+  fetchUserForEdit,
+  fetchUserFormMeta,
+  invalidateAddUserPageCache,
+  peekUserFormMeta,
+} from "@/lib/fetchAddUserPage";
 
 interface UserFormData {
   name: string;
@@ -33,7 +40,11 @@ interface UserFormData {
 
 interface UserFormProps {
   mode?: "create" | "edit";
+  schoolId?: string | null;
+  /** Row from list — instant shell while full user loads */
+  listShellUser?: IUser | null;
   initialData?: UserFormData & { id?: string };
+  onSuccess?: () => void;
 }
 
 function toDateInputValue(value: unknown): string {
@@ -75,12 +86,69 @@ const AVAILABLE_FEATURES_FOR_TEACHERS = [
   { key: Permission.TEACHER_AUDIT, label: "Teacher Audit" },
 ];
 
-export default function UserForm({ mode = "create", initialData }: UserFormProps) {
+function formDataFromApi(userData: Record<string, unknown>): UserFormData {
+  const joinDate = toDateInputValue(userData.joiningDate);
+  const subjects = userData.subjects;
+  return {
+    name: String(userData.name || ""),
+    email: String(userData.email || ""),
+    role: (userData.role as UserFormData["role"]) || "TEACHER",
+    designation: String(userData.designation || userData.subject || ""),
+    password: "",
+    confirmPassword: "",
+    allowedFeatures: Array.isArray(userData.allowedFeatures)
+      ? (userData.allowedFeatures as string[])
+      : [],
+    teacherId: String(userData.teacherId || ""),
+    subjects: Array.isArray(subjects) && subjects.length ? (subjects as string[]) : [],
+    assignedClassIds: Array.isArray(userData.assignedClassIds)
+      ? (userData.assignedClassIds as string[])
+      : [],
+    qualification: String(userData.qualification || ""),
+    experience: String(userData.experience || ""),
+    joiningDate: joinDate,
+    teacherStatus: String(userData.teacherStatus || "Active"),
+    mobile: String(userData.mobile || ""),
+    address: String(userData.address || ""),
+  };
+}
+
+function shellFromListUser(user: IUser): UserFormData {
+  return {
+    name: user.name || "",
+    email: user.email || "",
+    role: (user.role as UserFormData["role"]) || "TEACHER",
+    designation: user.designation || "",
+    password: "",
+    confirmPassword: "",
+    allowedFeatures: user.allowedFeatures || [],
+    teacherId: "",
+    subjects: [],
+    assignedClassIds: [],
+    qualification: "",
+    experience: "",
+    joiningDate: "",
+    teacherStatus: "Active",
+    mobile: "",
+    address: "",
+  };
+}
+
+export default function UserForm({
+  mode = "create",
+  schoolId = null,
+  listShellUser = null,
+  initialData,
+  onSuccess,
+}: UserFormProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const userId = searchParams.get("userId");
 
-  const [loading, setLoading] = useState(!!userId && !initialData);
+  const [loading, setLoading] = useState(
+    !!userId && !initialData && !listShellUser
+  );
+  const [detailLoading, setDetailLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<UserFormErrors>({});
@@ -89,24 +157,25 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
   const [emailSettingsLoading, setEmailSettingsLoading] = useState(false);
 
   const [formData, setFormData] = useState<UserFormData>(
-    initialData || {
-      name: "",
-      email: "",
-      role: "TEACHER",
-      designation: "",
-      password: "",
-      confirmPassword: "",
-      allowedFeatures: [],
-      teacherId: "",
-      subjects: [],
-      assignedClassIds: [],
-      qualification: "",
-      experience: "",
-      joiningDate: "",
-      teacherStatus: "Active",
-      mobile: "",
-      address: "",
-    }
+    initialData ||
+      (listShellUser ? shellFromListUser(listShellUser) : {
+        name: "",
+        email: "",
+        role: "TEACHER",
+        designation: "",
+        password: "",
+        confirmPassword: "",
+        allowedFeatures: [],
+        teacherId: "",
+        subjects: [],
+        assignedClassIds: [],
+        qualification: "",
+        experience: "",
+        joiningDate: "",
+        teacherStatus: "Active",
+        mobile: "",
+        address: "",
+      })
   );
 
   const [classesList, setClassesList] = useState<{ id: string; name: string; section: string | null }[]>([]);
@@ -120,83 +189,66 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
     }
   }, [initialData]);
 
-  // Fetch user data if in edit mode and no initialData was provided (deep link)
   useEffect(() => {
-    if (userId && !initialData) {
-      const fetchUser = async () => {
-        try {
-          const res = await fetch(`/api/user/${userId}`, {
-            credentials: "include",
-            cache: "no-store",
-          });
-          if (!res.ok) throw new Error("Failed to fetch user");
-          const userData = await res.json();
-          const joinDate = toDateInputValue(userData.joiningDate);
-          setFormData({
-            name: userData.name || "",
-            email: userData.email || "",
-            role: userData.role || "TEACHER",
-            designation: userData.designation || "",
-            password: "",
-            confirmPassword: "",
-            allowedFeatures: userData.allowedFeatures || [],
-            teacherId: userData.teacherId || "",
-            subjects: userData.subjects?.length ? userData.subjects : [],
-            assignedClassIds: userData.assignedClassIds || [],
-            qualification: userData.qualification || "",
-            experience: userData.experience || "",
-            joiningDate: joinDate,
-            teacherStatus: userData.teacherStatus || "Active",
-            mobile: userData.mobile || "",
-            address: userData.address || "",
-          });
-        } catch (err) {
-          setError(err instanceof Error ? err.message : "Failed to load user data");
-        } finally {
+    if (listShellUser && !initialData) {
+      setFormData(shellFromListUser(listShellUser));
+      setLoading(false);
+    }
+  }, [listShellUser, initialData]);
+
+  // Form metadata (classes + email domain) — cache-first
+  useEffect(() => {
+    if (!schoolId) return;
+    const cached = peekUserFormMeta(schoolId);
+    if (cached) {
+      setClassesList(cached.classes);
+      setSchoolEmailDomain(cached.emailDomain);
+      setEmailSettingsLoading(false);
+    }
+
+    const controller = new AbortController();
+    void fetchUserFormMeta(schoolId, {
+      revalidate: !cached,
+      signal: controller.signal,
+    })
+      .then((meta) => {
+        setClassesList(meta.classes);
+        setSchoolEmailDomain(meta.emailDomain);
+      })
+      .catch(() => {
+        /* optional */
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setEmailSettingsLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [schoolId]);
+
+  // Full user for edit — cache-first; list shell shows immediately
+  useEffect(() => {
+    if (!userId || initialData || !schoolId) return;
+
+    setDetailLoading(true);
+    const controller = new AbortController();
+
+    void fetchUserForEdit(schoolId, userId, { signal: controller.signal })
+      .then((userData) => {
+        setFormData(formDataFromApi(userData));
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError(err instanceof Error ? err.message : "Failed to load user data");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setDetailLoading(false);
           setLoading(false);
         }
-      };
-      fetchUser();
-    }
-  }, [userId, initialData]);
+      });
 
-  // Fetch classes for teacher assigned classes
-  useEffect(() => {
-    if (formData.role !== "TEACHER") return;
-    const fetchClasses = async () => {
-      try {
-        const res = await fetch("/api/class/list");
-        if (!res.ok) return;
-        const data = await res.json();
-        setClassesList(Array.isArray(data.classes) ? data.classes : []);
-      } catch (_) {}
-    };
-    fetchClasses();
-  }, [formData.role]);
-
-  useEffect(() => {
-    let active = true;
-    setEmailSettingsLoading(true);
-    (async () => {
-      try {
-        const res = await fetch("/api/school/settings", {
-          credentials: "include",
-          cache: "no-store",
-        });
-        const data = await res.json();
-        if (!active) return;
-        const domain = typeof data?.settings?.emailDomain === "string" ? data.settings.emailDomain.trim() : "";
-        setSchoolEmailDomain(domain || null);
-      } catch (_) {
-        // ignore: domain preview is optional
-      } finally {
-        if (active) setEmailSettingsLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, []);
+    return () => controller.abort();
+  }, [userId, initialData, schoolId]);
 
   const handleChange = (field: keyof UserFormData, value: unknown) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -281,14 +333,20 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
         throw new Error(data.message || `Failed to ${userId ? "update" : "create"} user`);
       }
 
+      if (schoolId) invalidateAddUserPageCache(schoolId);
       setSuccess(true);
-      setTimeout(() => {
-        const params = new URLSearchParams(searchParams.toString());
-        params.set("tab", "add-user");
-        params.set("view", "all");
-        params.delete("userId");
-        router.push(`?${params.toString()}`);
-      }, 1500);
+
+      if (onSuccess) {
+        window.setTimeout(() => onSuccess(), 500);
+      } else {
+        window.setTimeout(() => {
+          const params = new URLSearchParams(searchParams.toString());
+          params.set("tab", "add-user");
+          params.set("view", "all");
+          params.delete("userId");
+          router.push(`?${params.toString()}`);
+        }, 500);
+      }
     } catch (err) {
       setFieldErrors({});
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -308,6 +366,9 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
+      {detailLoading ? (
+        <p className="text-xs text-cyan-200/70">Loading full teacher profile…</p>
+      ) : null}
       {/* Top Section: Form Fields + Access Control */}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

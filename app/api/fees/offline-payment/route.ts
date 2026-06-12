@@ -13,6 +13,7 @@ import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 import { canonicalizeGatewayForStorage } from "@/lib/feePaymentGateway";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import { resolveOfflinePaymentCollectorFromSession } from "@/lib/offlinePaymentCollector";
 import {
   canUseFastOfflineFeePayment,
   recordFastOfflineFeePayment,
@@ -34,8 +35,10 @@ export async function POST(req: Request) {
   try {
     const schoolId = await resolveFeesSchoolId(session);
     if (!schoolId) {
-      return NextResponse.json({ message: "School not found" }, { status: 400 });
+      return NextResponse.json({ message: "School not found in session" }, { status: 400 });
     }
+
+    const collector = resolveOfflinePaymentCollectorFromSession(session);
 
     const body = await req.json();
     const {
@@ -101,6 +104,8 @@ export async function POST(req: Request) {
           paymentDate,
           selectedHeads: normalizedSelectedHeads,
           explicitAllocations: normalizedExplicitAllocations,
+          collectedByUserId: collector?.collectedByUserId,
+          collectedByName: collector?.collectedByName,
         });
         return NextResponse.json(
           { ...fastResult, message: "Payment recorded successfully" },
@@ -425,6 +430,8 @@ export async function POST(req: Request) {
             gateway: offlineGateway,
             status: "SUCCESS",
             transactionId: txId,
+            ...(collector?.collectedByUserId ? { collectedByUserId: collector.collectedByUserId } : {}),
+            ...(collector?.collectedByName ? { collectedByName: collector.collectedByName } : {}),
             ...(selectedPaymentDate ? { createdAt: selectedPaymentDate } : {}),
           },
         });

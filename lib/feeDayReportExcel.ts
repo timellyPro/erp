@@ -5,7 +5,7 @@ import {
   isHostelCategoryExtraFeeName,
   isMessCategoryExtraFeeName,
 } from "@/lib/extraFeeResidencyScope";
-import { feeReportColumnFromGateway, type FeeReportColumn } from "@/lib/feePaymentGateway";
+import { feeReportColumnFromGateway, isOfflinePaymentGateway, type FeeReportColumn } from "@/lib/feePaymentGateway";
 import { roundRupee } from "@/lib/formatRupee";
 import { isTuitionNamedExtraFee } from "@/lib/studentRte";
 
@@ -24,6 +24,7 @@ export type DayReportTx = {
   feeTypeName?: string;
   transactionId?: string | null;
   hyperpgTxnId?: string | null;
+  collectedByName?: string | null;
   feeAllocations?: Array<{ name: string; amount: number }>;
   student?: {
     admissionNumber?: string | null;
@@ -179,6 +180,20 @@ function pushCollectionMatrixTable(
   ]);
 }
 
+function pushCollectorSummaryTable(
+  rows: (string | number)[][],
+  padRow: (cells: (string | number)[]) => (string | number)[],
+  model: DayReportSummaryModel
+) {
+  if (model.collectorSummary.length === 0) return;
+  pushRow(rows, padRow, ["Offline collections by staff", "Amount collected"]);
+  for (const row of model.collectorSummary) {
+    pushRow(rows, padRow, [row.name, roundRupee(row.totalCollected)]);
+  }
+  const collectorGrandTotal = model.collectorSummary.reduce((s, r) => s + r.totalCollected, 0);
+  pushRow(rows, padRow, ["Total (offline staff)", roundRupee(collectorGrandTotal)]);
+}
+
 function pushRow(
   rows: (string | number)[][],
   padRow: (cells: (string | number)[]) => (string | number)[],
@@ -214,6 +229,12 @@ export type DayReportDetailRow = {
   cashOnline: string;
   amount: number;
   utr: string;
+  collectedBy: string;
+};
+
+export type CollectorSummaryRow = {
+  name: string;
+  totalCollected: number;
 };
 
 export type DayReportSummaryModel = {
@@ -221,6 +242,7 @@ export type DayReportSummaryModel = {
   collectionMatrix: Map<CollectionAccountLabel, CollectionModeTotals>;
   columnTotals: CollectionModeTotals;
   totalCollection: number;
+  collectorSummary: CollectorSummaryRow[];
 };
 
 /** Shared detail rows + collection matrix (Excel + PDF). */
@@ -243,11 +265,23 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
 
   const collectionMatrix = new Map<CollectionAccountLabel, CollectionModeTotals>();
   const detailRows: DayReportDetailRow[] = [];
+  const collectorTotalsRaw = new Map<string, number>();
 
   for (const tx of sorted) {
     const rec = getReceiptNo(tx.id);
     const gateway = tx.gateway;
+    const collectorLabel = (tx.collectedByName || "").trim() || "—";
     const allocations = allocationsForTx(tx);
+
+    if (isOfflinePaymentGateway(gateway)) {
+      const paymentAmt = roundRupee(Number(tx.amount || 0));
+      if (paymentAmt > 0) {
+        collectorTotalsRaw.set(
+          collectorLabel,
+          roundRupee((collectorTotalsRaw.get(collectorLabel) || 0) + paymentAmt)
+        );
+      }
+    }
 
     for (const al of allocations) {
       const feeName = normalizeAccount(al.name);
@@ -263,6 +297,7 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
         cashOnline: cashOnlineCell(gateway),
         amount: roundRupee(amt),
         utr: utrForRow(gateway, tx.transactionId, tx.hyperpgTxnId),
+        collectedBy: isOfflinePaymentGateway(gateway) ? collectorLabel : "—",
       });
     }
   }
@@ -278,6 +313,11 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
 
   const totalCollection = detailRows.reduce((s, r) => s + r.amount, 0);
 
+  const collectorSummary: CollectorSummaryRow[] = Array.from(collectorTotalsRaw.entries())
+    .map(([name, totalCollected]) => ({ name, totalCollected: roundRupee(totalCollected) }))
+    .filter((r) => r.totalCollected > 0)
+    .sort((a, b) => b.totalCollected - a.totalCollected || a.name.localeCompare(b.name));
+
   return {
     detailRows,
     collectionMatrix,
@@ -289,6 +329,7 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
       DD: roundRupee(columnTotals.DD),
     },
     totalCollection: roundRupee(totalCollection),
+    collectorSummary,
   };
 }
 
@@ -555,6 +596,39 @@ export async function drawFeeDayReportPdf(args: {
       true
     );
 
+    if (model.collectorSummary.length > 0) {
+      y += 6;
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8.5);
+      doc.text("Offline collections by staff", margin, y);
+      y += 5;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      const colW = contentW / 2;
+      doc.setFont("helvetica", "bold");
+      doc.text("Staff name", margin + 1, y);
+      doc.text("Amount collected", margin + colW, y, { align: "right" });
+      y += 4.5;
+      doc.setFont("helvetica", "normal");
+      for (const row of model.collectorSummary) {
+        doc.text(row.name, margin + 1, y);
+        doc.text(
+          roundRupee(row.totalCollected).toLocaleString("en-IN"),
+          margin + colW,
+          y,
+          { align: "right" }
+        );
+        y += 4.5;
+      }
+      const collectorGrandTotal = model.collectorSummary.reduce((s, r) => s + r.totalCollected, 0);
+      doc.setFont("helvetica", "bold");
+      doc.text("Total (offline staff)", margin + 1, y);
+      doc.text(roundRupee(collectorGrandTotal).toLocaleString("en-IN"), margin + colW, y, {
+        align: "right",
+      });
+      y += 4.5;
+    }
+
     y += 4;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
@@ -568,7 +642,10 @@ export async function drawFeeDayReportPdf(args: {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7.2);
 
-  const summaryBlockH = 12 + (COLLECTION_ACCOUNT_LABELS.length + 2) * 6;
+  const summaryBlockH =
+    12 +
+    (COLLECTION_ACCOUNT_LABELS.length + 2) * 6 +
+    (model.collectorSummary.length > 0 ? 14 + model.collectorSummary.length * 5 : 0);
   const pageBottomMargin = 8;
 
   for (let i = 0; i < model.detailRows.length; i++) {
@@ -710,6 +787,11 @@ export function appendDayReportSheet(
   push(Array(TABLE_COLS).fill(""));
 
   pushCollectionMatrixTable(rows, padRow, model);
+
+  if (model.collectorSummary.length > 0) {
+    push(Array(TABLE_COLS).fill(""));
+    pushCollectorSummaryTable(rows, padRow, model);
+  }
 
   push(Array(TABLE_COLS).fill(""));
   push(["Signature of Chairman", "", "", "", "", "", "", "", "Signature of Cashier"]);

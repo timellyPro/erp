@@ -56,10 +56,11 @@ export async function GET(req: Request) {
     const forFeeReport = searchParams.get("forFeeReport") === "1";
     const reportFrom = searchParams.get("from")?.trim() || "";
     const reportTo = searchParams.get("to")?.trim() || reportFrom;
+    const collectedByUserId = searchParams.get("collectedByUserId")?.trim() || undefined;
     /** Fee-report exports need a high cap; default list views stay small. */
     const limit = Math.min(Math.max(rawLimit, 1), forFeeReport ? 25000 : 200);
 
-    if (!forFeeReport && !studentId) {
+    if (!forFeeReport && !studentId && !collectedByUserId) {
       const memKey = `fees:transactions:${schoolId}:${limit}`;
       const cached = getSchoolDashboardServerCached<{ transactions: unknown[] }>(memKey);
       if (cached && Array.isArray(cached.transactions) && cached.transactions.length > 0) {
@@ -71,6 +72,7 @@ export async function GET(req: Request) {
       student: { schoolId: string; id?: string };
       status: { in: string[] };
       purpose: string;
+      collectedByUserId?: string;
     } = {
       student: { schoolId },
       status: { in: ["SUCCESS", "COMPLETED"] },
@@ -78,6 +80,9 @@ export async function GET(req: Request) {
     };
     if (studentId) {
       where.student.id = studentId;
+    }
+    if (collectedByUserId) {
+      where.collectedByUserId = collectedByUserId;
     }
 
     const payments = await prisma.payment.findMany({
@@ -190,6 +195,8 @@ export async function GET(req: Request) {
         hyperpgAmountRefunded: typeof p.hyperpgAmountRefunded === "number" ? p.hyperpgAmountRefunded : null,
         transactionId: p.transactionId,
         createdAt: p.createdAt,
+        collectedByName: p.collectedByName ?? null,
+        collectedByUserId: p.collectedByUserId ?? null,
         feeTypeName: dominantFeeTypeByPayment.get(p.id)?.name ?? "Default",
         feeTypeAmount: dominantFeeTypeByPayment.get(p.id)?.amount ?? p.amount,
         feeAllocations,
@@ -210,7 +217,7 @@ export async function GET(req: Request) {
     }
 
     const payload = { transactions: [...transactions, ...admissionFeeTransactions] };
-    if (!forFeeReport && !studentId && transactions.length > 0) {
+    if (!forFeeReport && !studentId && !collectedByUserId && transactions.length > 0) {
       setSchoolDashboardServerCached(`fees:transactions:${schoolId}:${limit}`, payload, 20_000);
     }
     return NextResponse.json(payload, { status: 200 });

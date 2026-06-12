@@ -16,6 +16,7 @@ type DataTableProps<T> = {
   caption?: string;
   tableTitle?: string;
   tableSubtitle?: string;
+  headerRight?: ReactNode;
   showMobile?: boolean;
   container?: boolean;
   rounded?: boolean;
@@ -84,6 +85,7 @@ function DataTable<T>({
   caption,
   tableTitle,
   tableSubtitle,
+  headerRight,
   showMobile = true,
   container = true,
   rounded = true,
@@ -152,14 +154,23 @@ function DataTable<T>({
       >
         {tableTitle && (
           <div className="p-4 lg:p-5 border-b border-white/10">
-            <div className="text-base lg:text-lg font-semibold text-white">
-              {tableTitle}
-            </div>
-            {tableSubtitle && (
-              <div className="text-xs text-white/60 mt-1">
-                {tableSubtitle}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="text-base lg:text-lg font-semibold text-white">
+                  {tableTitle}
+                </div>
+                {tableSubtitle && (
+                  <div className="text-xs text-white/60 mt-1">
+                    {tableSubtitle}
+                  </div>
+                )}
               </div>
-            )}
+              {headerRight && (
+                <div className="w-full sm:w-auto sm:min-w-[240px] md:min-w-[280px]">
+                  {headerRight}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import {
+  getSchoolDashboardServerCached,
+  setSchoolDashboardServerCached,
+} from "@/lib/schoolDashboardServerCache";
 
 export async function GET() {
   try {
@@ -14,13 +18,11 @@ export async function GET() {
     let schoolId = session.user.schoolId;
 
     if (!schoolId) {
-      // Try school from admin relation
       const adminSchool = await prisma.school.findFirst({
         where: { admins: { some: { id: session.user.id } } },
         select: { id: true },
       });
       schoolId = adminSchool?.id ?? null;
-      // For students: get school from student record
       if (!schoolId && (session.user as { studentId?: string }).studentId) {
         const student = await prisma.student.findUnique({
           where: { id: (session.user as { studentId: string }).studentId },
@@ -42,6 +44,13 @@ export async function GET() {
         { status: 400 }
       );
     }
+
+    const cacheKey = `teacher:list:${schoolId}`;
+    const cached = getSchoolDashboardServerCached<{ teachers: unknown[] }>(cacheKey);
+    if (cached?.teachers) {
+      return NextResponse.json(cached, { status: 200 });
+    }
+
     const teachers = await prisma.user.findMany({
       where: {
         schoolId: schoolId,
@@ -60,11 +69,14 @@ export async function GET() {
         name: "asc",
       },
     });
-    return NextResponse.json({ teachers }, { status: 200 });
-  } catch (error: any) {
+
+    const payload = { teachers };
+    setSchoolDashboardServerCached(cacheKey, payload, 60_000);
+    return NextResponse.json(payload, { status: 200 });
+  } catch (error: unknown) {
     console.error("List teachers error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: error instanceof Error ? error.message : "Internal server error" },
       { status: 500 }
     );
   }

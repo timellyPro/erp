@@ -143,6 +143,8 @@ model User {
 
   teacherSchools School[] @relation("SchoolTeacher")
 
+  offlinePaymentsCollected Payment[] @relation("PaymentCollector")
+
   @@unique([schoolId, email])
 }
 
@@ -1105,6 +1107,11 @@ model Payment {
 
   eventRegistrationId String? // When paying for workshop, links to EventRegistration
 
+  // Staff who recorded an offline collection (snapshot name for reports)
+  collectedByUserId String?
+  collectedBy       User?   @relation("PaymentCollector", fields: [collectedByUserId], references: [id], onDelete: SetNull)
+  collectedByName   String?
+
   feeAllocations PaymentFeeAllocation[]
 
   refunds       Refund[]
@@ -1116,6 +1123,8 @@ model Payment {
   @@index([studentId, createdAt])
   @@index([studentId, status, createdAt])
   @@index([studentId, purpose, status, createdAt])
+  @@index([collectedByUserId])
+  @@index([collectedByUserId, createdAt])
 }
 
 // Tracks how a payment amount was distributed across individual fee "heads"

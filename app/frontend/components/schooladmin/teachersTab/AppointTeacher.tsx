@@ -2,6 +2,11 @@
 
 import { GraduationCap, UserPlus, Trash2, Pencil } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
+import {
+  fetchAppointTeacherData,
+  invalidateTeachersPageCache,
+} from "@/lib/fetchTeachersPage";
+import { peekAppointTeacherData } from "@/lib/teachersPageClientCache";
 
 const DEFAULT_AVATAR =
   "https://randomuser.me/api/portraits/lego/1.jpg";
@@ -39,12 +44,13 @@ type AppointmentRow = {
 };
 
 type AppointTeacherProps = {
+  schoolId?: string | null;
   /** After assign/remove class teacher, refresh the main teachers list / stats. */
   onRosterChange?: () => void;
 };
 
 /* ================= COMPONENT ================= */
-export default function AppointTeacher({ onRosterChange }: AppointTeacherProps) {
+export default function AppointTeacher({ schoolId, onRosterChange }: AppointTeacherProps) {
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [teachers, setTeachers] = useState<TeacherItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,55 +61,59 @@ export default function AppointTeacher({ onRosterChange }: AppointTeacherProps) 
   const [assigning, setAssigning] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
 
-  // ⭐ NEW EDIT STATE
   const [editingClassId, setEditingClassId] = useState<string | null>(null);
 
-  /* ================= FETCH ================= */
-  const loadData = useCallback(
-    async (cancelledRef?: { current: boolean }) => {
-      setLoading(true);
-      try {
-        const [classRes, teacherRes] = await Promise.all([
-          fetch("/api/class/list", {
-            credentials: "include",
-            cache: "no-store",
-          }),
-          fetch("/api/teacher/list", {
-            credentials: "include",
-            cache: "no-store",
-          }),
-        ]);
+  const applyPayload = useCallback((payload: { classes: unknown[]; teachers: TeacherItem[] }) => {
+    setClasses(payload.classes as ClassItem[]);
+    setTeachers(payload.teachers);
+  }, []);
 
-        if (cancelledRef?.current) return;
-
-        const classData = await classRes.json();
-        const teacherData = await teacherRes.json();
-
-        if (classData.classes) setClasses(classData.classes);
-        if (teacherData.teachers) setTeachers(teacherData.teachers);
-      } finally {
-        if (!cancelledRef?.current) setLoading(false);
-      }
+  const reloadAppointData = useCallback(
+    async (revalidate = true) => {
+      if (!schoolId) return;
+      const payload = await fetchAppointTeacherData(schoolId, { revalidate });
+      applyPayload(payload);
     },
-    []
+    [schoolId, applyPayload]
   );
 
   useEffect(() => {
-    const cancelledRef = { current: false };
-    loadData(cancelledRef);
-    return () => {
-      cancelledRef.current = true;
-    };
-  }, [loadData]);
+    if (!schoolId) return;
+
+    const cached = peekAppointTeacherData(schoolId);
+    if (cached) {
+      applyPayload(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
+
+    const controller = new AbortController();
+    void fetchAppointTeacherData(schoolId, {
+      revalidate: !cached,
+      signal: controller.signal,
+    })
+      .then(applyPayload)
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("Failed to load appoint teacher data:", err);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [schoolId, applyPayload]);
 
   useEffect(() => {
+    if (!schoolId) return;
+
     const refresh = () => {
-      void loadData();
+      if (schoolId) invalidateTeachersPageCache(schoolId);
+      void reloadAppointData(true);
     };
     const onStorage = (e: StorageEvent) => {
-      if (e.key === "timelly:profile-updated") {
-        void loadData();
-      }
+      if (e.key === "timelly:profile-updated") refresh();
     };
     window.addEventListener("teacher-profile-updated", refresh);
     window.addEventListener("storage", onStorage);
@@ -111,7 +121,7 @@ export default function AppointTeacher({ onRosterChange }: AppointTeacherProps) 
       window.removeEventListener("teacher-profile-updated", refresh);
       window.removeEventListener("storage", onStorage);
     };
-  }, [loadData]);
+  }, [schoolId, reloadAppointData]);
 
   /* ================= DATA ================= */
   const teachersById = useMemo(
@@ -159,9 +169,8 @@ export default function AppointTeacher({ onRosterChange }: AppointTeacherProps) 
 
   /* ================= ACTIONS ================= */
 
-  // ASSIGN / UPDATE
   const handleAssign = async () => {
-    if (!selectedClassId || !selectedTeacherId) return;
+    if (!selectedClassId || !selectedTeacherId || !schoolId) return;
 
     setAssigning(true);
 
@@ -176,12 +185,12 @@ export default function AppointTeacher({ onRosterChange }: AppointTeacherProps) 
       const data = await res.json();
       if (!res.ok) throw new Error(data.message);
 
-      // reset form
       setSelectedClassId("");
       setSelectedTeacherId("");
       setEditingClassId(null);
 
-      await loadData();
+      invalidateTeachersPageCache(schoolId);
+      await reloadAppointData(true);
       onRosterChange?.();
     } catch (e) {
       window.alert(e instanceof Error ? e.message : "Failed.");
@@ -190,7 +199,6 @@ export default function AppointTeacher({ onRosterChange }: AppointTeacherProps) 
     }
   };
 
-  // EDIT
   const handleEdit = (item: AppointmentRow) => {
     setSelectedClassId(item.classId);
 
@@ -207,8 +215,8 @@ export default function AppointTeacher({ onRosterChange }: AppointTeacherProps) 
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // REMOVE
   const handleRemove = async (classId: string) => {
+    if (!schoolId) return;
     if (!confirm("Do you really want to remove this class teacher? This action cannot be undone.")) return;
 
     setRemovingId(classId);
@@ -220,7 +228,8 @@ export default function AppointTeacher({ onRosterChange }: AppointTeacherProps) 
       body: JSON.stringify({ teacherId: null }),
     });
 
-    await loadData();
+    invalidateTeachersPageCache(schoolId);
+    await reloadAppointData(true);
     onRosterChange?.();
 
     setRemovingId(null);
@@ -243,7 +252,7 @@ export default function AppointTeacher({ onRosterChange }: AppointTeacherProps) 
 
       {/* FORM */}
       <div className="border-t border-white/10 p-4 sm:p-5 md:p-6 bg-[#0F172A]/50">
-        {loading ? (
+        {loading && classes.length === 0 ? (
           <p className="text-white/50 text-sm">Loading...</p>
         ) : (
           <div className="flex flex-col gap-3 sm:gap-4">
@@ -290,7 +299,6 @@ export default function AppointTeacher({ onRosterChange }: AppointTeacherProps) 
           </div>
         )}
 
-        {/* CANCEL EDIT */}
         {editingClassId && (
           <button
             onClick={() => {
@@ -305,7 +313,6 @@ export default function AppointTeacher({ onRosterChange }: AppointTeacherProps) 
         )}
       </div>
 
-      {/* TABLE (md+) */}
       <div className="hidden md:block overflow-x-auto">
         <div className="min-w-[600px] p-4 sm:p-6">
         <table className="w-full text-sm">
@@ -362,7 +369,6 @@ export default function AppointTeacher({ onRosterChange }: AppointTeacherProps) 
         </div>
       </div>
 
-      {/* CARDS (mobile) */}
       <div className="md:hidden border-t border-white/10 p-4 space-y-3">
         {appointments.length === 0 ? (
           <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-center text-white/50 text-sm">

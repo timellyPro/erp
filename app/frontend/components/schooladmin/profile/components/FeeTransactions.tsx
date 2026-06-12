@@ -7,6 +7,7 @@ import FeePaymentReceiptTemplate, {
 import { printFromElement } from "@/lib/pdfUtils";
 import { formatReceiptGeneratedDate, formatReceiptTransactionDate } from "@/lib/receiptDates";
 import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
+import { isOfflinePaymentGateway } from "@/lib/feePaymentGateway";
 import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
 
 type PaymentFeeAllocationLine = { name: string; amount: number };
@@ -18,6 +19,8 @@ type PaymentRow = {
   method: string;
   createdAt: string;
   transactionId: string | null;
+  collectedByName?: string | null;
+  collectedByUserId?: string | null;
   feeTypeName?: string;
   feeTypeAmount?: number;
   feeAllocations?: PaymentFeeAllocationLine[];
@@ -32,6 +35,7 @@ type TransactionDisplayRow = {
   method: string;
   createdAt: string;
   transactionId: string | null;
+  collectedByName: string | null;
   feeTypeName: string;
   sourcePayment: PaymentRow;
 };
@@ -63,6 +67,7 @@ function paymentsToTransactionRows(payments: PaymentRow[]): TransactionDisplayRo
       method: payment.method,
       createdAt: payment.createdAt,
       transactionId: payment.transactionId,
+      collectedByName: payment.collectedByName ?? null,
       sourcePayment: payment,
     };
 
@@ -705,7 +710,7 @@ export const FeeTransactions = ({
         <div className="py-8 text-center text-gray-400 text-sm">Loading transaction history…</div>
       ) : (
         <div className="overflow-x-auto overscroll-x-contain touch-pan-x -mx-1 px-1 sm:mx-0 sm:px-0 pb-1 rounded-lg">
-          <table className="w-full text-left min-w-[980px]">
+          <table className="w-full text-left min-w-[1100px]">
             <thead>
               <tr className="text-[11px] text-gray-400 font-bold tracking-wider uppercase border-b border-white/5">
                 <th className="pb-4 font-medium">PRINT</th>
@@ -713,6 +718,7 @@ export const FeeTransactions = ({
                 <th className="pb-4 font-medium">DESCRIPTION</th>
                 <th className="pb-4 font-medium">FEE TYPE</th>
                 <th className="pb-4 font-medium">METHOD</th>
+                <th className="pb-4 font-medium">COLLECTED BY</th>
                 <th className="pb-4 font-medium">UTR / REF</th>
                 <th className="pb-4 font-medium">STATUS</th>
                 <th className="pb-4 font-medium text-right">AMOUNT</th>
@@ -747,6 +753,9 @@ export const FeeTransactions = ({
                     </td>
                     <td className="py-4 sm:py-5 text-gray-300">{row.feeTypeName}</td>
                     <td className="py-4 sm:py-5 text-gray-300">{formatPaymentMethod(row.method)}</td>
+                    <td className="py-4 sm:py-5 text-gray-300">
+                      {isOfflinePaymentGateway(row.method) ? row.collectedByName || "—" : "—"}
+                    </td>
                     <td className="py-4 sm:py-5 text-gray-400">
                       {row.transactionId && row.transactionId.trim() && row.transactionId !== "N/A"
                         ? row.transactionId

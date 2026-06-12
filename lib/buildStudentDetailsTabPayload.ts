@@ -125,6 +125,8 @@ async function loadPaymentsWithFeeTypes(studentId: string) {
       gateway: true,
       createdAt: true,
       transactionId: true,
+      collectedByUserId: true,
+      collectedByName: true,
     },
   });
 
@@ -218,7 +220,24 @@ async function loadPaymentsWithFeeTypes(studentId: string) {
   );
 
   return {
-    payments: mergeStudentProfilePayments(gatewayPayments, admissionApplicationPayments),
+    payments: payments.map((p) => {
+      const headMap = feeHeadAmountsByPaymentId.get(p.id);
+      const feeAllocations = feeHeadLinesFromMap(headMap);
+      const dominant = dominantFeeHead(headMap);
+      return {
+        id: p.id,
+        amount: p.amount,
+        status: p.status,
+        method: p.gateway ?? "—",
+        createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : String(p.createdAt),
+        transactionId: p.transactionId ?? null,
+        collectedByName: p.collectedByName ?? null,
+        collectedByUserId: p.collectedByUserId ?? null,
+        feeTypeName: dominant?.name,
+        feeTypeAmount: dominant?.amount,
+        feeAllocations: feeAllocations.length > 0 ? feeAllocations : undefined,
+      };
+    }),
     tuitionPaidFromAllocations,
   };
 }

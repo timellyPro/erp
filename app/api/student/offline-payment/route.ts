@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
-import { isActiveStudent } from "@/lib/studentStatus";
+import { resolveOfflinePaymentCollectorFromSession } from "@/lib/offlinePaymentCollector";
 
 export async function POST(req: Request) {
     try {
@@ -75,6 +75,7 @@ export async function POST(req: Request) {
 
         // Create transaction ID for offline payment
         const transactionId = `OFFLN${Date.now()}${Math.random().toString(36).substring(7).toUpperCase()}`;
+        const collector = resolveOfflinePaymentCollectorFromSession(session);
 
         // Record the payment
         const payment = await prisma.payment.create({
@@ -84,6 +85,8 @@ export async function POST(req: Request) {
                 status: "COMPLETED",
                 gateway: method,
                 transactionId,
+                ...(collector?.collectedByUserId ? { collectedByUserId: collector.collectedByUserId } : {}),
+                ...(collector?.collectedByName ? { collectedByName: collector.collectedByName } : {}),
             },
         });
 

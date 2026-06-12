@@ -89,11 +89,21 @@ export const buildStudentColumns = ({
   },
   {
     header: "Status",
-    render: (row) => (
-      <span className={statusBadgeClass(row.status)}>
-        {row.status || "Active"}
-      </span>
-    ),
+    render: (row) => {
+      const status = row.status || "Active";
+      const isInactive = status === "Inactive";
+      return (
+        <span
+          className={`px-3 py-1 rounded-full text-xs font-semibold border ${
+            isInactive
+              ? "bg-red-400/10 text-red-400 border-red-400/20"
+              : "bg-lime-400/10 text-lime-400 border-lime-400/20 shadow-[0_0_8px_rgba(163,230,53,0.2)]"
+          }`}
+        >
+          {status}
+        </span>
+      );
+    },
   },
   {
     header: "Actions",

@@ -369,6 +369,8 @@ export async function GET(_req: Request, context: RouteParams) {
           method: p.gateway ?? "—",
           createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : String(p.createdAt),
           transactionId: p.transactionId ?? null,
+          collectedByName: p.collectedByName ?? null,
+          collectedByUserId: p.collectedByUserId ?? null,
           feeTypeName: dominant?.name,
           feeTypeAmount: dominant?.amount,
           feeAllocations: feeAllocations.length > 0 ? feeAllocations : undefined,

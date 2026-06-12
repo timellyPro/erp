@@ -1,4 +1,33 @@
 import { ClassItem, StudentFormState, StudentRow } from "./types";
+import type { StudentApplicationSummary } from "../../../interfaces/student";
+
+export const isAdmissionStudent = (student: StudentRow): boolean => {
+  const app = student.application;
+  if (!app) return false;
+  if (app.workflowStatus === "APPROVED") return true;
+  if ((app.admissionNo ?? "").trim()) return true;
+  if ((app.fedenaNo ?? "").trim()) return true;
+  return false;
+};
+
+const getStudentSortTimestamp = (
+  student: StudentRow,
+  app?: StudentApplicationSummary | null
+): number => {
+  const raw = app?.createdAt ?? student.createdAt;
+  if (!raw) return 0;
+  const time = new Date(raw).getTime();
+  return Number.isNaN(time) ? 0 : time;
+};
+
+/** Admission students first (latest admission on top), then previous students. */
+export const sortStudentsForDisplay = (students: StudentRow[]): StudentRow[] =>
+  [...students].sort((a, b) => {
+    const aAdmission = isAdmissionStudent(a);
+    const bAdmission = isAdmissionStudent(b);
+    if (aAdmission !== bAdmission) return aAdmission ? -1 : 1;
+    return getStudentSortTimestamp(b, b.application) - getStudentSortTimestamp(a, a.application);
+  });
 
 export const getInitials = (name?: string | null) => {
   if (!name) return "ST";

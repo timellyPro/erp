@@ -55,4 +55,6 @@ export type StudentFormState = {
 
 export type StudentFormErrors = Partial<Record<keyof StudentFormState, string>>;
 
+export type StudentStatusFilter = "Active" | "Inactive" | "All";
+
 export type StudentRow = IStudent;

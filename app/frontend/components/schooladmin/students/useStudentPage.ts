@@ -9,15 +9,11 @@ import {
   StudentFormErrors,
   StudentFormState,
   StudentRow,
+  StudentStatusFilter,
 } from "./types";
-import { mergeStudentAfterEdit, toStudentForm } from "./utils";
-import {
-  clearStudentListCache,
-  readStudentListCache,
-  writeStudentListCache,
-  type StudentListCacheScope,
-} from "@/lib/studentListSessionCache";
-import { invalidateStudentDetailsBundleCache } from "@/lib/loadStudentDetailsBundle";
+import { mergeStudentAfterEdit, sortStudentsForDisplay, toStudentForm } from "./utils";
+import { fetchAllStudents as fetchAllStudentsPaginated } from "@/lib/fetchAllStudents";
+import { downloadStudentListPdf } from "@/lib/studentListPdf";
 
 type Props = {
   classes?: ClassItem[];
@@ -240,7 +236,7 @@ export default function useStudentPage({ classes, reload }: Props) {
   const [classesLoading, setClassesLoading] = useState(false);
   const [selectedClass, setSelectedClass] = useState("");
   const [selectedSection, setSelectedSection] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
+  const [statusFilter, setStatusFilter] = useState<StudentStatusFilter>("Active");
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [students, setStudents] = useState<StudentRow[]>([]);
@@ -274,7 +270,7 @@ export default function useStudentPage({ classes, reload }: Props) {
   const [editSaving, setEditSaving] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [exportingDetails, setExportingDetails] = useState(false);
-  const listFetchGenRef = useRef(0);
+  const [exportingPdf, setExportingPdf] = useState(false);
 
   useEffect(() => {
     if (stableClasses.length) {
@@ -545,6 +541,45 @@ export default function useStudentPage({ classes, reload }: Props) {
       ...sections.map((section) => ({ label: section, value: section })),
     ];
   }, [availableClasses, classesLoading]);
+
+  const filteredStudents = useMemo<StudentRow[]>(() => {
+    let list: StudentRow[] = selectedClassIdForFetch ? students : allStudents;
+    if (selectedClass) {
+      list = list.filter((student) => student.class?.name === selectedClass);
+    }
+    if (selectedSection) {
+      list = list.filter((student) => student.class?.section === selectedSection);
+    }
+    if (statusFilter === "Active") {
+      list = list.filter((student) => (student.status || "Active") === "Active");
+    } else if (statusFilter === "Inactive") {
+      list = list.filter((student) => student.status === "Inactive");
+    }
+    if (searchQuery.trim()) {
+      const query = searchQuery.trim().toLowerCase();
+      list = list.filter((student) => {
+        const name = student.user?.name || student.name || "";
+        const email = student.user?.email || student.email || "";
+        const roll = student.rollNo || "";
+        const phone = student.phoneNo || "";
+        return (
+          name.toLowerCase().includes(query) ||
+          email.toLowerCase().includes(query) ||
+          roll.toLowerCase().includes(query) ||
+          phone.toLowerCase().includes(query)
+        );
+      });
+    }
+    return sortStudentsForDisplay(list);
+  }, [
+    allStudents,
+    searchQuery,
+    selectedClass,
+    selectedSection,
+    selectedClassIdForFetch,
+    statusFilter,
+    students,
+  ]);
 
   const selectedClassObj = availableClasses.find(
     (item) =>
@@ -904,25 +939,26 @@ export default function useStudentPage({ classes, reload }: Props) {
     }
   };
 
-  const handleDownloadReport = async (format: "xlsx" | "pdf" = "xlsx") => {
+  const buildExportParams = () => {
+    const params = new URLSearchParams();
+    if (selectedClassIdForFetch) {
+      params.set("classId", selectedClassIdForFetch);
+    } else {
+      if (selectedClass) params.set("className", selectedClass);
+      if (selectedSection) params.set("section", selectedSection);
+    }
+    if (statusFilter !== "All") {
+      params.set("status", statusFilter);
+    }
+    return params;
+  };
+
+  const handleDownloadExcel = async () => {
     if (exportingDetails) return;
     setExportingDetails(true);
     try {
-      const params = new URLSearchParams();
-      if (statusFilter === "inactive") {
-        params.set("status", "Inactive");
-      } else if (statusFilter === "active") {
-        params.set("status", "Active");
-      }
-      if (format === "pdf") params.set("format", "pdf");
-      if (selectedClassIdForFetch) {
-        params.set("classId", selectedClassIdForFetch);
-      } else {
-        if (selectedClass) params.set("className", selectedClass);
-        if (selectedSection) params.set("section", selectedSection);
-      }
       const res = await fetch(
-        `/api/student/export-details?${params.toString()}`,
+        `/api/student/export-details?${buildExportParams().toString()}`,
         { credentials: "include", cache: "no-store" }
       );
       if (!res.ok) {
@@ -954,13 +990,55 @@ export default function useStudentPage({ classes, reload }: Props) {
       a.click();
       a.remove();
       window.URL.revokeObjectURL(url);
-      toast.success("Report downloaded");
+      toast.success("Excel report downloaded");
     } catch {
       toast.error("Export failed");
     } finally {
       setExportingDetails(false);
     }
   };
+
+  const handleDownloadPdf = async () => {
+    if (exportingPdf) return;
+    if (!filteredStudents.length) {
+      toast.error("No students to export");
+      return;
+    }
+    setExportingPdf(true);
+    try {
+      const schoolRes = await fetch("/api/school/mine", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const schoolPayload = await schoolRes.json().catch(() => ({}));
+      const statusLabel =
+        statusFilter === "All" ? "All Students" : `${statusFilter} Students`;
+      const classLabel = selectedClass
+        ? `Class ${selectedClass}${selectedSection ? ` ${selectedSection}` : ""}`
+        : "All Classes";
+      await downloadStudentListPdf({
+        students: filteredStudents,
+        title: `${statusLabel} (${filteredStudents.length})`,
+        subtitle: classLabel,
+        filename: `students-${statusFilter.toLowerCase()}.pdf`,
+        school: schoolPayload?.school as {
+          name?: string;
+          address?: string;
+          location?: string;
+          affiliationLine?: string;
+          logoUrl?: string | null;
+          admins?: Array<{ photoUrl?: string | null }>;
+        },
+      });
+      toast.success("PDF downloaded");
+    } catch {
+      toast.error("PDF export failed");
+    } finally {
+      setExportingPdf(false);
+    }
+  };
+
+  const handleDownloadReport = handleDownloadExcel;
 
   return {
     filterClassOptions,
@@ -1015,7 +1093,10 @@ export default function useStudentPage({ classes, reload }: Props) {
     handleEditSave,
     handleDelete,
     handleDownloadReport,
+    handleDownloadExcel,
+    handleDownloadPdf,
     exportingDetails,
+    exportingPdf,
     showSuccess,
     setShowSuccess,
   };
