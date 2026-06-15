@@ -5,9 +5,13 @@ import { StatCard } from "../dashboard/components/StatCard";
 import { AttendanceCard } from "./components/AttendanceCard";
 import { SidebarList } from "./components/SidebarList";
 import { CollectionStatCard } from "./components/CollectionStatCard";
+import { DayCollectionByHeadCard } from "./components/DayCollectionByHeadCard";
 import { Users, GraduationCap, UserCheck, Wallet } from "lucide-react";
 import { todayYmdLocal } from "@/lib/schoolDashboardCollection";
-import { loadSchoolDashboardCollection } from "@/lib/loadSchoolDashboardCollection";
+import {
+  loadSchoolDashboardCollectionHeads,
+  loadSchoolDashboardCollectionSummary,
+} from "@/lib/loadSchoolDashboardCollection";
 import {
   fetchSchoolDashboard,
   fetchSchoolDashboardFast,
@@ -32,8 +36,11 @@ export default function Dashboard() {
   const router = useRouter();
   const [selectedCollectionDate, setSelectedCollectionDate] = useState(() => todayYmdLocal());
   const [collectionLoading, setCollectionLoading] = useState(false);
-  const lastFetchedCollectionDateRef = useRef<string | null>(null);
+  const [headsLoading, setHeadsLoading] = useState(false);
+  const lastFetchedSummaryDateRef = useRef<string | null>(null);
+  const lastFetchedHeadsDateRef = useRef<string | null>(null);
   const collectionAbortRef = useRef<AbortController | null>(null);
+  const headsAbortRef = useRef<AbortController | null>(null);
   const { data: session, status: sessionStatus } = useSession();
   const userName = useMemo(() => {
     const n = session?.user?.name?.trim();
@@ -41,6 +48,41 @@ export default function Dashboard() {
   }, [session?.user?.name]);
 
   const schoolId = session?.user?.schoolId ?? null;
+
+  const mergeDashboardShell = useCallback(
+    (
+      prev: SchoolDashboardPayload | null,
+      incoming: SchoolDashboardPayload,
+      headsDateLoaded?: string | null
+    ): SchoolDashboardPayload => {
+      if (!prev) return incoming;
+
+      const merged: SchoolDashboardPayload = { ...incoming };
+
+      if (
+        prev.todayCollectionByHead &&
+        headsDateLoaded === selectedCollectionDate
+      ) {
+        merged.todayCollectionByHead = prev.todayCollectionByHead;
+      }
+
+      if (
+        lastFetchedSummaryDateRef.current === selectedCollectionDate &&
+        selectedCollectionDate !== (incoming.collectionDate ?? "")
+      ) {
+        merged.todayCollectionByMethod = prev.todayCollectionByMethod;
+        merged.collectionDate = prev.collectionDate;
+        merged.stats = {
+          ...incoming.stats,
+          todayCollectionTotal: prev.stats.todayCollectionTotal,
+          todayCollectionTotalRaw: prev.stats.todayCollectionTotalRaw,
+        };
+      }
+
+      return merged;
+    },
+    [selectedCollectionDate]
+  );
 
   useEffect(() => {
     if (sessionStatus !== "authenticated") return;
@@ -53,7 +95,8 @@ export default function Dashboard() {
     if (cached) {
       setData(cached);
       setError(null);
-      lastFetchedCollectionDateRef.current = today;
+      lastFetchedSummaryDateRef.current = today;
+      lastFetchedHeadsDateRef.current = null;
     }
 
     let cancelled = false;
@@ -64,9 +107,10 @@ export default function Dashboard() {
           const fast = await fetchSchoolDashboardFast(today, { schoolId: sid });
           if (cancelled) return;
           shellLoaded = true;
-          setData(fast);
+          const headsDate = lastFetchedHeadsDateRef.current;
+          setData((prev) => mergeDashboardShell(prev, fast, headsDate));
           setError(null);
-          lastFetchedCollectionDateRef.current = today;
+          lastFetchedSummaryDateRef.current = today;
         }
       } catch (err) {
         if (cancelled) return;
@@ -83,9 +127,10 @@ export default function Dashboard() {
     void fetchSchoolDashboard(today, { schoolId: sid, revalidate: true })
       .then((full) => {
         if (cancelled) return;
-        setData(full);
+        const headsDate = lastFetchedHeadsDateRef.current;
+        setData((prev) => mergeDashboardShell(prev, full, headsDate));
         setError(null);
-        lastFetchedCollectionDateRef.current = today;
+        lastFetchedSummaryDateRef.current = today;
       })
       .catch((err) => {
         if (cancelled) return;
@@ -97,15 +142,15 @@ export default function Dashboard() {
     };
     // schoolId is read inside the effect; server resolves school when client id is missing
     // eslint-disable-next-line react-hooks/exhaustive-deps -- avoid restart when schoolId hydrates
-  }, [sessionStatus, today]);
+  }, [sessionStatus, today, mergeDashboardShell]);
 
   useEffect(() => {
     if (!schoolId || !data) return;
     setSchoolDashboardCached(dashboardCacheKey(schoolId, today), data);
   }, [schoolId, data, today]);
 
-  const fetchCollectionForDate = useCallback(async (dateYmd: string) => {
-    if (dateYmd === lastFetchedCollectionDateRef.current) return;
+  const fetchCollectionSummaryForDate = useCallback(async (dateYmd: string) => {
+    if (dateYmd === lastFetchedSummaryDateRef.current) return;
 
     collectionAbortRef.current?.abort();
     const controller = new AbortController();
@@ -113,28 +158,58 @@ export default function Dashboard() {
 
     setCollectionLoading(true);
     try {
-      const collection = await loadSchoolDashboardCollection(dateYmd, controller.signal);
+      const summary = await loadSchoolDashboardCollectionSummary(dateYmd, controller.signal);
       if (controller.signal.aborted) return;
 
-      lastFetchedCollectionDateRef.current = dateYmd;
+      lastFetchedSummaryDateRef.current = dateYmd;
       setData((prev) =>
         prev
           ? {
               ...prev,
-              todayCollectionByMethod: collection.todayCollectionByMethod,
+              todayCollectionByMethod: summary.todayCollectionByMethod,
+              collectionDate: summary.collectionDate,
               stats: {
                 ...prev.stats,
-                todayCollectionTotal: collection.todayCollectionTotal,
-                todayCollectionTotalRaw: collection.todayCollectionTotalRaw,
+                todayCollectionTotal: summary.todayCollectionTotal,
+                todayCollectionTotalRaw: summary.todayCollectionTotalRaw,
               },
             }
           : prev
       );
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      console.error("Collection fetch error:", err);
+      console.error("Collection summary fetch error:", err);
     } finally {
       if (!controller.signal.aborted) setCollectionLoading(false);
+    }
+  }, []);
+
+  const fetchCollectionHeadsForDate = useCallback(async (dateYmd: string, force = false) => {
+    if (!force && dateYmd === lastFetchedHeadsDateRef.current) return;
+
+    headsAbortRef.current?.abort();
+    const controller = new AbortController();
+    headsAbortRef.current = controller;
+
+    setHeadsLoading(true);
+    try {
+      const byHead = await loadSchoolDashboardCollectionHeads(dateYmd, controller.signal);
+      if (controller.signal.aborted) return;
+
+      lastFetchedHeadsDateRef.current = dateYmd;
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              todayCollectionByHead: byHead,
+            }
+          : prev
+      );
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      console.error("Collection heads fetch error:", err);
+    } finally {
+      if (!controller.signal.aborted) setHeadsLoading(false);
     }
   }, []);
 
@@ -142,14 +217,25 @@ export default function Dashboard() {
     (dateYmd: string) => {
       if (!dateYmd || dateYmd === selectedCollectionDate) return;
       setSelectedCollectionDate(dateYmd);
-      void fetchCollectionForDate(dateYmd);
+      lastFetchedHeadsDateRef.current = null;
+      void fetchCollectionSummaryForDate(dateYmd);
+      void fetchCollectionHeadsForDate(dateYmd);
     },
-    [selectedCollectionDate, fetchCollectionForDate]
+    [selectedCollectionDate, fetchCollectionSummaryForDate, fetchCollectionHeadsForDate]
   );
+
+  useEffect(() => {
+    if (!data) return;
+    const headsLoadedForDate = lastFetchedHeadsDateRef.current === selectedCollectionDate;
+    const headsPresent = Boolean(data.todayCollectionByHead);
+    if (headsLoadedForDate && headsPresent) return;
+    void fetchCollectionHeadsForDate(selectedCollectionDate, !headsPresent);
+  }, [data, selectedCollectionDate, fetchCollectionHeadsForDate]);
 
   useEffect(() => {
     return () => {
       collectionAbortRef.current?.abort();
+      headsAbortRef.current?.abort();
     };
   }, []);
 
@@ -279,6 +365,14 @@ export default function Dashboard() {
               />
             </div>
           </div>
+
+          <DayCollectionByHeadCard
+            selectedDate={selectedCollectionDate}
+            onDateChange={handleCollectionDateChange}
+            rows={data.todayCollectionByHead?.rows ?? []}
+            formattedTotal={data.todayCollectionByHead?.formattedTotal ?? "0"}
+            loading={headsLoading}
+          />
         </>
       ) : null}
 

@@ -7,6 +7,7 @@ import {
 } from "@/lib/extraFeeResidencyScope";
 import { feeReportColumnFromGateway, isOfflinePaymentGateway, type FeeReportColumn } from "@/lib/feePaymentGateway";
 import { roundRupee } from "@/lib/formatRupee";
+import { offlineCollectorReportLabel, isAdmissionDayReportTx } from "@/lib/paymentCollectorLabel";
 import { isTuitionNamedExtraFee } from "@/lib/studentRte";
 
 export type DayReportSchool = {
@@ -25,6 +26,7 @@ export type DayReportTx = {
   transactionId?: string | null;
   hyperpgTxnId?: string | null;
   collectedByName?: string | null;
+  collectedByUserId?: string | null;
   feeAllocations?: Array<{ name: string; amount: number }>;
   student?: {
     admissionNumber?: string | null;
@@ -144,6 +146,13 @@ function allocationsForTx(tx: DayReportTx): Array<{ name: string; amount: number
     : [{ name: normalizeAccount(tx.feeTypeName), amount: Number(tx.amount || 0) }];
 }
 
+/** Same allocation rows used by day report Excel / PDF detail lines. */
+export function getDayReportAllocationsForTx(
+  tx: DayReportTx
+): Array<{ name: string; amount: number }> {
+  return allocationsForTx(tx);
+}
+
 /** Map any fee-head label into the fixed collection account row; null = skip matrix row. */
 export function feeHeadSummaryBucket(feeTypeName?: string): CollectionAccountLabel | null {
   const raw = (feeTypeName || "").trim();
@@ -157,6 +166,126 @@ export function feeHeadSummaryBucket(feeTypeName?: string): CollectionAccountLab
   if (isHostelCategoryExtraFeeName(raw)) return "HOSTEL FEE";
   if (lower.includes("transport")) return "TRANSPORTATION FEES";
   return null;
+}
+
+const COLLECTION_HEAD_DISPLAY: Record<CollectionAccountLabel, string> = {
+  "ADMISSION FEE": "Admission Fee",
+  "SCHOOL FEES": "School Fees",
+  "MESS FEE": "Mess Fee",
+  "HOSTEL FEE": "Hostel Fee",
+  "TRANSPORTATION FEES": "Transport Fee",
+};
+
+/** Display label for a fee head — installment suffixes stripped, transport simplified. */
+export function feeHeadCollectionLabel(feeTypeName?: string): string {
+  const base = normalizeAccount(feeTypeName);
+  if (base === "Default") return "Other";
+  const bucket = feeHeadSummaryBucket(feeTypeName || base);
+  if (bucket) return COLLECTION_HEAD_DISPLAY[bucket];
+  if (base.toLowerCase().includes("transport")) return "Transport Fee";
+  return base;
+}
+
+/** Group key for aggregating collections by head (not installment). */
+export function feeHeadCollectionGroupKey(feeTypeName?: string): string {
+  const bucket = feeHeadSummaryBucket(feeTypeName);
+  if (bucket) return bucket;
+  return feeHeadCollectionLabel(feeTypeName).toLowerCase();
+}
+
+export type CollectionByHeadRow = {
+  key: string;
+  label: string;
+  amount: number;
+  formattedAmount: string;
+};
+
+/** Day collection totals by fee head (installments rolled into base head). */
+export function buildCollectionByHeadFromAllocations(
+  allocations: Array<{ name?: string; amount: number }>
+): {
+  rows: CollectionByHeadRow[];
+  total: number;
+  formattedTotal: string;
+} {
+  const totals = new Map<string, { label: string; amount: number }>();
+
+  for (const al of allocations) {
+    const amt = Number(al.amount || 0);
+    if (amt <= 0) continue;
+    const key = feeHeadCollectionGroupKey(al.name);
+    const label = feeHeadCollectionLabel(al.name);
+    const existing = totals.get(key);
+    if (existing) {
+      existing.amount += amt;
+    } else {
+      totals.set(key, { label, amount: amt });
+    }
+  }
+
+  const bucketRows: CollectionByHeadRow[] = [];
+  for (const bucket of COLLECTION_ACCOUNT_LABELS) {
+    const entry = totals.get(bucket);
+    if (!entry || entry.amount <= 0) continue;
+    const amount = roundRupee(entry.amount);
+    bucketRows.push({
+      key: bucket,
+      label: entry.label,
+      amount,
+      formattedAmount: amount.toLocaleString("en-IN"),
+    });
+    totals.delete(bucket);
+  }
+
+  const otherRows = Array.from(totals.entries())
+    .filter(([, v]) => v.amount > 0)
+    .map(([key, v]) => {
+      const amount = roundRupee(v.amount);
+      return {
+        key,
+        label: v.label,
+        amount,
+        formattedAmount: amount.toLocaleString("en-IN"),
+      };
+    })
+    .sort((a, b) => a.label.localeCompare(b.label) || b.amount - a.amount);
+
+  const rows = [...bucketRows, ...otherRows];
+  const total = roundRupee(rows.reduce((sum, r) => sum + r.amount, 0));
+
+  return {
+    rows,
+    total,
+    formattedTotal: total.toLocaleString("en-IN"),
+  };
+}
+
+export function buildCollectionByHeadSummary(transactions: DayReportTx[]): {
+  rows: CollectionByHeadRow[];
+  total: number;
+  formattedTotal: string;
+} {
+  const allocations: Array<{ name?: string; amount: number }> = [];
+  for (const tx of transactions) {
+    for (const al of allocationsForTx(tx)) {
+      allocations.push({ name: al.name || tx.feeTypeName, amount: al.amount });
+    }
+  }
+  return buildCollectionByHeadFromAllocations(allocations);
+}
+
+function offlineCollectionFromColumnTotals(columnTotals: CollectionModeTotals): number {
+  return roundRupee(
+    (columnTotals.Cash ?? 0) +
+      (columnTotals.OTHERS ?? 0) +
+      (columnTotals.Cheque ?? 0) +
+      (columnTotals.DD ?? 0)
+  );
+}
+
+/** Staff / detail label — resolved when transactions are loaded. */
+export function resolvePaymentCollectorLabel(tx: DayReportTx): string {
+  return offlineCollectorReportLabel(tx);
 }
 
 function pushCollectionMatrixTable(
@@ -174,9 +303,24 @@ function pushCollectionMatrixTable(
     ]);
   }
 
+  const otherLabels = Array.from(model.otherAccountRows.keys()).sort((a, b) => a.localeCompare(b));
+  for (const label of otherLabels) {
+    const modes = model.otherAccountRows.get(label) ?? emptyCollectionModeTotals();
+    const hasAmount = COLLECTION_PAYMENT_COLUMNS.some((col) => (modes[col] ?? 0) > 0);
+    if (!hasAmount) continue;
+    pushRow(rows, padRow, [
+      label.toUpperCase(),
+      ...COLLECTION_PAYMENT_COLUMNS.map((col) => roundRupee(modes[col] ?? 0)),
+    ]);
+  }
+
   pushRow(rows, padRow, [
-    "Total",
+    "Total (all modes — day collection)",
     ...COLLECTION_PAYMENT_COLUMNS.map((col) => roundRupee(model.columnTotals[col] ?? 0)),
+  ]);
+  pushRow(rows, padRow, [
+    "Day collection grand total",
+    roundRupee(model.totalCollection),
   ]);
 }
 
@@ -186,12 +330,17 @@ function pushCollectorSummaryTable(
   model: DayReportSummaryModel
 ) {
   if (model.collectorSummary.length === 0) return;
-  pushRow(rows, padRow, ["Offline collections by staff", "Amount collected"]);
+  pushRow(rows, padRow, [
+    "Offline collections by staff (excludes online payments)",
+    "Amount collected",
+  ]);
   for (const row of model.collectorSummary) {
     pushRow(rows, padRow, [row.name, roundRupee(row.totalCollected)]);
   }
-  const collectorGrandTotal = model.collectorSummary.reduce((s, r) => s + r.totalCollected, 0);
-  pushRow(rows, padRow, ["Total (offline staff)", roundRupee(collectorGrandTotal)]);
+  pushRow(rows, padRow, [
+    "Subtotal — offline only (Cash / Cheque / DD / Other)",
+    roundRupee(model.offlineCollectionTotal),
+  ]);
 }
 
 function pushRow(
@@ -205,18 +354,29 @@ function pushRow(
 
 function addToCollectionMatrix(
   matrix: Map<CollectionAccountLabel, CollectionModeTotals>,
+  otherAccounts: Map<string, CollectionModeTotals>,
   feeLabel: string,
   amount: number,
   gateway: string | undefined
 ): void {
-  const key = feeHeadSummaryBucket(feeLabel);
-  if (!key) return;
-  if (!matrix.has(key)) {
-    matrix.set(key, emptyCollectionModeTotals());
-  }
-  const row = matrix.get(key)!;
+  const amt = Number(amount) || 0;
+  if (amt <= 0) return;
   const col = feeReportColumnFromGateway(gateway);
-  row[col] = (row[col] ?? 0) + (Number(amount) || 0);
+  const key = feeHeadSummaryBucket(feeLabel);
+  if (key) {
+    if (!matrix.has(key)) {
+      matrix.set(key, emptyCollectionModeTotals());
+    }
+    const row = matrix.get(key)!;
+    row[col] = (row[col] ?? 0) + amt;
+    return;
+  }
+  const label = feeHeadCollectionLabel(feeLabel);
+  if (!otherAccounts.has(label)) {
+    otherAccounts.set(label, emptyCollectionModeTotals());
+  }
+  const other = otherAccounts.get(label)!;
+  other[col] = (other[col] ?? 0) + amt;
 }
 
 export type DayReportDetailRow = {
@@ -240,8 +400,12 @@ export type CollectorSummaryRow = {
 export type DayReportSummaryModel = {
   detailRows: DayReportDetailRow[];
   collectionMatrix: Map<CollectionAccountLabel, CollectionModeTotals>;
+  /** Fee heads that do not map to the standard account rows (e.g. previous-year dues). */
+  otherAccountRows: Map<string, CollectionModeTotals>;
   columnTotals: CollectionModeTotals;
   totalCollection: number;
+  /** Sum of Cash + Cheque + DD + Other columns (excludes online). */
+  offlineCollectionTotal: number;
   collectorSummary: CollectorSummaryRow[];
 };
 
@@ -264,29 +428,54 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
   };
 
   const collectionMatrix = new Map<CollectionAccountLabel, CollectionModeTotals>();
+  const otherAccountRows = new Map<string, CollectionModeTotals>();
   const detailRows: DayReportDetailRow[] = [];
-  const collectorTotalsRaw = new Map<string, number>();
+  const collectorTotalsRaw = new Map<string, { name: string; total: number; nameVotes: Map<string, number> }>();
 
   for (const tx of sorted) {
     const rec = getReceiptNo(tx.id);
     const gateway = tx.gateway;
-    const collectorLabel = (tx.collectedByName || "").trim() || "—";
+    const collectorLabel = resolvePaymentCollectorLabel(tx);
     const allocations = allocationsForTx(tx);
 
-    if (isOfflinePaymentGateway(gateway)) {
-      const paymentAmt = roundRupee(Number(tx.amount || 0));
-      if (paymentAmt > 0) {
-        collectorTotalsRaw.set(
-          collectorLabel,
-          roundRupee((collectorTotalsRaw.get(collectorLabel) || 0) + paymentAmt)
-        );
+    if (isOfflinePaymentGateway(gateway) && !isAdmissionDayReportTx(tx)) {
+      const bucketKey = tx.collectedByUserId
+        ? `uid:${tx.collectedByUserId}`
+        : collectorLabel === "Other offline collections"
+          ? "other-offline"
+          : `name:${collectorLabel.toLowerCase()}`;
+
+      for (const al of allocations) {
+        const allocAmt = roundRupee(Number(al.amount || 0));
+        if (allocAmt <= 0) continue;
+
+        const existing = collectorTotalsRaw.get(bucketKey);
+        if (existing) {
+          existing.total = roundRupee(existing.total + allocAmt);
+          if (collectorLabel !== "Other offline collections") {
+            existing.nameVotes.set(
+              collectorLabel,
+              (existing.nameVotes.get(collectorLabel) ?? 0) + 1
+            );
+            const bestName = [...existing.nameVotes.entries()].sort(
+              (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
+            )[0]?.[0];
+            if (bestName) existing.name = bestName;
+          }
+        } else {
+          collectorTotalsRaw.set(bucketKey, {
+            name: collectorLabel,
+            total: allocAmt,
+            nameVotes: new Map([[collectorLabel, 1]]),
+          });
+        }
       }
     }
 
     for (const al of allocations) {
       const feeName = normalizeAccount(al.name);
       const amt = Number(al.amount || 0);
-      addToCollectionMatrix(collectionMatrix, al.name || feeName, amt, gateway);
+      addToCollectionMatrix(collectionMatrix, otherAccountRows, al.name || feeName, amt, gateway);
       detailRows.push({
         receiptNo: rec,
         admissionNo: (tx.student?.admissionNumber || "").trim() || "-",
@@ -297,7 +486,7 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
         cashOnline: cashOnlineCell(gateway),
         amount: roundRupee(amt),
         utr: utrForRow(gateway, tx.transactionId, tx.hyperpgTxnId),
-        collectedBy: isOfflinePaymentGateway(gateway) ? collectorLabel : "—",
+        collectedBy: isOfflinePaymentGateway(gateway) ? collectorLabel : "-",
       });
     }
   }
@@ -310,25 +499,34 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
       columnTotals[col] += row[col] ?? 0;
     }
   }
+  for (const row of otherAccountRows.values()) {
+    for (const col of COLLECTION_PAYMENT_COLUMNS) {
+      columnTotals[col] += row[col] ?? 0;
+    }
+  }
 
   const totalCollection = detailRows.reduce((s, r) => s + r.amount, 0);
+  const roundedColumnTotals = {
+    Cash: roundRupee(columnTotals.Cash),
+    OTHERS: roundRupee(columnTotals.OTHERS),
+    "ONLINE PAYMENT": roundRupee(columnTotals["ONLINE PAYMENT"]),
+    Cheque: roundRupee(columnTotals.Cheque),
+    DD: roundRupee(columnTotals.DD),
+  };
+  const offlineCollectionTotal = offlineCollectionFromColumnTotals(roundedColumnTotals);
 
-  const collectorSummary: CollectorSummaryRow[] = Array.from(collectorTotalsRaw.entries())
-    .map(([name, totalCollected]) => ({ name, totalCollected: roundRupee(totalCollected) }))
+  const collectorSummary: CollectorSummaryRow[] = Array.from(collectorTotalsRaw.values())
+    .map(({ name, total }) => ({ name, totalCollected: roundRupee(total) }))
     .filter((r) => r.totalCollected > 0)
     .sort((a, b) => b.totalCollected - a.totalCollected || a.name.localeCompare(b.name));
 
   return {
     detailRows,
     collectionMatrix,
-    columnTotals: {
-      Cash: roundRupee(columnTotals.Cash),
-      OTHERS: roundRupee(columnTotals.OTHERS),
-      "ONLINE PAYMENT": roundRupee(columnTotals["ONLINE PAYMENT"]),
-      Cheque: roundRupee(columnTotals.Cheque),
-      DD: roundRupee(columnTotals.DD),
-    },
+    otherAccountRows,
+    columnTotals: roundedColumnTotals,
     totalCollection: roundRupee(totalCollection),
+    offlineCollectionTotal,
     collectorSummary,
   };
 }
@@ -591,16 +789,31 @@ export async function drawFeeDayReportPdf(args: {
       ]);
     }
 
+    const otherLabels = Array.from(model.otherAccountRows.keys()).sort((a, b) => a.localeCompare(b));
+    for (const label of otherLabels) {
+      const modes = model.otherAccountRows.get(label) ?? emptyCollectionModeTotals();
+      const hasAmount = COLLECTION_PAYMENT_COLUMNS.some((col) => (modes[col] ?? 0) > 0);
+      if (!hasAmount) continue;
+      drawCollectionRow([
+        label.toUpperCase(),
+        ...COLLECTION_PAYMENT_COLUMNS.map((col) => modes[col] ?? 0),
+      ]);
+    }
+
     drawCollectionRow(
-      ["Total", ...COLLECTION_PAYMENT_COLUMNS.map((col) => model.columnTotals[col] ?? 0)],
+      [
+        "Total (all modes — day collection)",
+        ...COLLECTION_PAYMENT_COLUMNS.map((col) => model.columnTotals[col] ?? 0),
+      ],
       true
     );
+    drawCollectionRow(["Day collection grand total", model.totalCollection], true);
 
     if (model.collectorSummary.length > 0) {
       y += 6;
       doc.setFont("helvetica", "bold");
       doc.setFontSize(8.5);
-      doc.text("Offline collections by staff", margin, y);
+      doc.text("Offline collections by staff (excludes online payments)", margin, y);
       y += 5;
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
@@ -620,12 +833,14 @@ export async function drawFeeDayReportPdf(args: {
         );
         y += 4.5;
       }
-      const collectorGrandTotal = model.collectorSummary.reduce((s, r) => s + r.totalCollected, 0);
       doc.setFont("helvetica", "bold");
-      doc.text("Total (offline staff)", margin + 1, y);
-      doc.text(roundRupee(collectorGrandTotal).toLocaleString("en-IN"), margin + colW, y, {
-        align: "right",
-      });
+      doc.text("Subtotal — offline only (Cash / Cheque / DD / Other)", margin + 1, y);
+      doc.text(
+        roundRupee(model.offlineCollectionTotal).toLocaleString("en-IN"),
+        margin + colW,
+        y,
+        { align: "right" }
+      );
       y += 4.5;
     }
 
@@ -642,9 +857,12 @@ export async function drawFeeDayReportPdf(args: {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7.2);
 
+  const otherAccountRowCount = Array.from(model.otherAccountRows.values()).filter((modes) =>
+    COLLECTION_PAYMENT_COLUMNS.some((col) => (modes[col] ?? 0) > 0)
+  ).length;
   const summaryBlockH =
     12 +
-    (COLLECTION_ACCOUNT_LABELS.length + 2) * 6 +
+    (COLLECTION_ACCOUNT_LABELS.length + otherAccountRowCount + 2) * 6 +
     (model.collectorSummary.length > 0 ? 14 + model.collectorSummary.length * 5 : 0);
   const pageBottomMargin = 8;
 

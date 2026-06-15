@@ -36,12 +36,30 @@ export async function GET() {
       _max: { collectedByName: true },
     });
 
+    const userIds = rows
+      .map((r) => r.collectedByUserId)
+      .filter((id): id is string => Boolean(id));
+    const users =
+      userIds.length > 0
+        ? await prisma.user.findMany({
+            where: { id: { in: userIds } },
+            select: { id: true, name: true, email: true },
+          })
+        : [];
+    const userLabelById = new Map(
+      users.map((u) => [u.id, (u.name || "").trim() || (u.email || "").trim() || "Staff"])
+    );
+
     const collectors = rows
       .filter((r) => r.collectedByUserId)
-      .map((r) => ({
-        userId: r.collectedByUserId as string,
-        name: (r._max.collectedByName || "").trim() || "Staff",
-      }))
+      .map((r) => {
+        const userId = r.collectedByUserId as string;
+        const name =
+          (r._max.collectedByName || "").trim() ||
+          userLabelById.get(userId) ||
+          "Staff";
+        return { userId, name };
+      })
       .sort((a, b) => a.name.localeCompare(b.name));
 
     return NextResponse.json({ collectors }, { status: 200 });
