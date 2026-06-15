@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useState, useCallback } from "react";
+import { warmStudentDetailsBundle } from "@/lib/loadStudentDetailsBundle";
 
 type StudentOption = {
   id: string;
@@ -17,7 +18,7 @@ type Props = {
   students: StudentOption[];
   searchQuery: string;
   onSearchChange: (query: string) => void;
-  onSelectStudent: (studentId: string) => void;
+  onSelectStudent: (student: StudentOption) => void;
   selectedId: string | null;
   classFilter?: string;
   sectionFilter?: string;
@@ -102,11 +103,11 @@ export const StudentSearchAutocomplete = ({
     }
 
     const gen = ++searchGenRef.current;
-    setSearching(true);
+    setSearching(localFiltered.length === 0);
     const timer = setTimeout(() => {
       void (async () => {
         try {
-          const params = new URLSearchParams({ q, take: "30" });
+          const params = new URLSearchParams({ take: "20", search: "1", q });
           if (statusFilter === "active") params.set("status", "Active");
           else if (statusFilter === "inactive") params.set("status", "Inactive");
           const res = await fetch(`/api/student/list?${params.toString()}`, {
@@ -123,15 +124,13 @@ export const StudentSearchAutocomplete = ({
           if (gen === searchGenRef.current) setSearching(false);
         }
       })();
-    }, 280);
+    }, 350);
 
     return () => clearTimeout(timer);
   }, [searchQuery, filterByClass, statusFilter]);
 
   const filteredStudents =
-    searchQuery.trim().length >= 2 && remoteResults.length > 0
-      ? remoteResults
-      : localFiltered;
+    remoteResults.length > 0 ? remoteResults : localFiltered;
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -185,7 +184,7 @@ export const StudentSearchAutocomplete = ({
   };
 
   const handleSelectStudent = (student: StudentOption) => {
-    onSelectStudent(student.id);
+    onSelectStudent(student);
     onSearchChange("");
     setShowDropdown(false);
     setHighlightedIndex(-1);
@@ -225,7 +224,10 @@ export const StudentSearchAutocomplete = ({
               <button
                 key={student.id}
                 onClick={() => handleSelectStudent(student)}
-                onMouseEnter={() => setHighlightedIndex(index)}
+                onMouseEnter={() => {
+                  setHighlightedIndex(index);
+                  warmStudentDetailsBundle(student.id);
+                }}
                 className={`w-full px-4 py-3 text-left text-sm border-b border-white/5 last:border-0 transition-colors ${
                   index === highlightedIndex
                     ? "bg-blue-500/20 text-white"

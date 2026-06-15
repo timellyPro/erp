@@ -268,25 +268,30 @@ const studentDetailsInclude = {
 /** Fast path: profile + fee summary only (one student query, no payments/marks/attendance). */
 export async function buildStudentDetailsShellPayload(
   studentId: string,
-  schoolId: string | null
+  schoolId: string | null,
+  options?: { skipApplicationFallback?: boolean }
 ): Promise<StudentDetailsTabPayload | null> {
-  const whereClause = schoolId ? { id: studentId, schoolId } : { id: studentId };
-  const student = await prisma.student.findFirst({
-    where: whereClause,
+  const student = await prisma.student.findUnique({
+    where: { id: studentId },
     include: studentDetailsInclude,
   });
   if (!student) return null;
+  if (schoolId && student.schoolId !== schoolId) return null;
 
-  const fallbackApplication =
-    student.application ??
-    (await prisma.studentApplication.findUnique({
+  let motherPhoneResolved = "";
+  if (student.application?.emergencyMotherNo) {
+    const motherPhoneRaw = String(student.application.emergencyMotherNo).trim();
+    motherPhoneResolved =
+      !motherPhoneRaw || motherPhoneRaw === "-" || motherPhoneRaw === "—" ? "" : motherPhoneRaw;
+  } else if (!options?.skipApplicationFallback) {
+    const fallbackApplication = await prisma.studentApplication.findUnique({
       where: { schoolId_aadharNo: { schoolId: student.schoolId, aadharNo: student.aadhaarNo } },
       select: { emergencyMotherNo: true },
-    }));
-
-  const motherPhoneRaw = String(fallbackApplication?.emergencyMotherNo ?? "").trim();
-  const motherPhoneResolved =
-    !motherPhoneRaw || motherPhoneRaw === "-" || motherPhoneRaw === "—" ? "" : motherPhoneRaw;
+    });
+    const motherPhoneRaw = String(fallbackApplication?.emergencyMotherNo ?? "").trim();
+    motherPhoneResolved =
+      !motherPhoneRaw || motherPhoneRaw === "-" || motherPhoneRaw === "—" ? "" : motherPhoneRaw;
+  }
 
   return mapStudentToTabPayload(student, motherPhoneResolved, student.fee?.amountPaid ?? 0, {
     payments: [],
@@ -505,12 +510,12 @@ export async function buildStudentDetailsCoreBundle(
     if (cached) return cached;
   }
 
-  const whereClause = schoolId ? { id: studentId, schoolId } : { id: studentId };
-  const student = await prisma.student.findFirst({
-    where: whereClause,
+  const student = await prisma.student.findUnique({
+    where: { id: studentId },
     include: studentDetailsInclude,
   });
   if (!student) return null;
+  if (schoolId && student.schoolId !== schoolId) return null;
 
   const fallbackApplication =
     student.application ??
@@ -539,7 +544,7 @@ export async function buildStudentDetailsCoreBundle(
           residencyType: student.residencyType,
           class: student.class,
         },
-        migrateLumps: true,
+        migrateLumps: false,
         cleanupHostelMessDuplicates: false,
         reconcileTotals: false,
       });

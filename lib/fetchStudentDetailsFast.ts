@@ -66,16 +66,6 @@ function writeSessionBundle(studentId: string, value: StudentDetailsFastBundle):
   writeSession(store);
 }
 
-function parseCore(data: unknown): { shell: StudentDetailsTabPayload; feeBreakdown: AdminStudentFeeBreakdownResult | null } {
-  if (!(data as { student?: unknown })?.student) {
-    throw new Error("Invalid student details response");
-  }
-  const shell = parseShell(data);
-  const feeBreakdown =
-    (data as { feeBreakdown?: AdminStudentFeeBreakdownResult | null }).feeBreakdown ?? null;
-  return { shell, feeBreakdown };
-}
-
 function parseShell(data: unknown): StudentDetailsTabPayload {
   const payload = data as StudentDetailsTabPayload;
   return {
@@ -178,9 +168,9 @@ export async function refreshStudentFeesAfterMutation(
   const existingShell = options?.keepShell;
   if (!existingShell?.student) {
     try {
-      const [coreRes, extrasRes, breakdown] = await Promise.all([
+      const [shellRes, extrasRes, breakdown] = await Promise.all([
         fetch(
-          `/api/student/${encodeURIComponent(studentId)}/details-bundle?core=1&refresh=1`,
+          `/api/student/${encodeURIComponent(studentId)}/details-bundle?shell=1&refresh=1`,
           { credentials: "include", cache: "no-store" }
         ),
         fetch(
@@ -190,14 +180,14 @@ export async function refreshStudentFeesAfterMutation(
         fetchFeeBreakdownFast(studentId, { force: true }),
       ]);
 
-      const coreData = await coreRes.json().catch(() => ({}));
-      if (!coreRes.ok || !(coreData as { student?: unknown })?.student) {
+      const shellData = await shellRes.json().catch(() => ({}));
+      if (!shellRes.ok || !(shellData as { student?: unknown })?.student) {
         return null;
       }
 
-      const { shell, feeBreakdown: coreBreakdown } = parseCore(coreData);
+      const shell = parseShell(shellData);
       const extras = extrasRes.ok ? parseExtras(await extrasRes.json().catch(() => ({}))) : emptyExtras();
-      const feeBreakdown = breakdown ?? coreBreakdown ?? null;
+      const feeBreakdown = breakdown ?? null;
       if (feeBreakdown) setFeeBreakdownCache(studentId, feeBreakdown);
 
       const bundle = toBundle(shell, extras, feeBreakdown);
@@ -302,36 +292,43 @@ export async function fetchStudentDetailsFast(
     const cachedBreakdown = getFeeBreakdownCached(studentId);
     if (cachedBreakdown) options?.onBreakdownLoaded?.(cachedBreakdown);
 
-    const coreQuery = options?.force ? "core=1&refresh=1" : "core=1";
-    const [coreRes, extras] = await Promise.all([
-      fetch(
-        `/api/student/${encodeURIComponent(studentId)}/details-bundle?${coreQuery}`,
-        { credentials: "include", cache: "no-store", signal: options?.signal }
-      ),
-      fetchExtras(studentId, options?.signal, options?.force),
-    ]);
-    const coreData = await coreRes.json().catch(() => ({}));
-    if (!coreRes.ok) {
+    const shellQuery = options?.force ? "shell=1&refresh=1" : "shell=1";
+    const breakdownPromise =
+      cachedBreakdown && !options?.force
+        ? Promise.resolve(cachedBreakdown)
+        : fetchFeeBreakdownFast(studentId, {
+            signal: options?.signal,
+            force: options?.force,
+          });
+
+    const shellRes = await fetch(
+      `/api/student/${encodeURIComponent(studentId)}/details-bundle?${shellQuery}`,
+      { credentials: "include", cache: "no-store", signal: options?.signal }
+    );
+    const shellData = await shellRes.json().catch(() => ({}));
+    if (!shellRes.ok) {
       throw new Error(
-        (coreData as { message?: string })?.message || "Failed to load student profile"
+        (shellData as { message?: string })?.message || "Failed to load student profile"
       );
     }
-
-    const { shell, feeBreakdown: coreBreakdown } = parseCore(coreData);
-    let feeBreakdown = coreBreakdown ?? cachedBreakdown ?? null;
-
-    if (!feeBreakdown) {
-      feeBreakdown = await fetchFeeBreakdownFast(studentId, { signal: options?.signal });
+    if (!(shellData as { student?: unknown })?.student) {
+      throw new Error("Invalid student details response");
     }
+
+    const shell = parseShell(shellData);
+    options?.onShellLoaded?.(toBundle(shell, emptyExtras(), cachedBreakdown ?? null));
+
+    // Defer extras until shell is painted — reduces concurrent DB load on remote Postgres.
+    const [extras, feeBreakdown] = await Promise.all([
+      fetchExtras(studentId, options?.signal, options?.force),
+      breakdownPromise,
+    ]);
     if (feeBreakdown) {
       setFeeBreakdownCache(studentId, feeBreakdown);
       options?.onBreakdownLoaded?.(feeBreakdown);
     }
 
-    const shellBundle = toBundle(shell, emptyExtras(), feeBreakdown);
-    options?.onShellLoaded?.(shellBundle);
-
-    const full = toBundle(shell, extras, feeBreakdown);
+    const full = toBundle(shell, extras, feeBreakdown ?? cachedBreakdown ?? null);
     cacheBundle(studentId, full);
     options?.onExtrasLoaded?.(full);
     return full;
