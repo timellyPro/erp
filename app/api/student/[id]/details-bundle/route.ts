@@ -107,7 +107,9 @@ export async function GET(req: Request, context: RouteParams) {
             return NextResponse.json({ ...shellHit, feeBreakdown: null }, { status: 200 });
           }
         }
-        const shell = await buildStudentDetailsShellPayload(id, resolvedSchoolId);
+        const shell = await buildStudentDetailsShellPayload(id, resolvedSchoolId, {
+          skipApplicationFallback: true,
+        });
         if (!shell) {
           return NextResponse.json({ message: "Student not found" }, { status: 404 });
         }
@@ -119,7 +121,7 @@ export async function GET(req: Request, context: RouteParams) {
 
       if (shellOnly && withBreakdown && resolvedSchoolId) {
         const [shell, feeBreakdown] = await Promise.all([
-          buildStudentDetailsShellPayload(id, resolvedSchoolId),
+          buildStudentDetailsShellPayload(id, resolvedSchoolId, { skipApplicationFallback: true }),
           loadFeeBreakdownSafe(resolvedSchoolId, id),
         ]);
         if (!shell) {
@@ -128,7 +130,9 @@ export async function GET(req: Request, context: RouteParams) {
         return NextResponse.json({ ...shell, feeBreakdown }, { status: 200 });
       }
 
-      const shell = await buildStudentDetailsShellPayload(id, resolvedSchoolId);
+      const shell = await buildStudentDetailsShellPayload(id, resolvedSchoolId, {
+        skipApplicationFallback: true,
+      });
       if (!shell) {
         return NextResponse.json({ message: "Student not found" }, { status: 404 });
       }

@@ -13,6 +13,7 @@ import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFe
 import {
   invalidateStudentDetailsBundleCache,
   loadStudentDetailsBundle,
+  peekStudentDetailsBundle,
   refreshStudentFeesAfterMutation,
 } from "@/lib/loadStudentDetailsBundle";
 import { dueHeadRowsFromBreakdown, type DueHeadRow } from "@/lib/feeBreakdownPaymentRows";
@@ -446,7 +447,7 @@ function StudentDetailsPageContent() {
 
     const loadDropdownList = async () => {
       try {
-        const res = await fetch("/api/student/list?take=500&refresh=1", {
+        const res = await fetch("/api/student/list?take=500&search=1", {
           credentials: "include",
           cache: "no-store",
         });
@@ -472,7 +473,8 @@ function StudentDetailsPageContent() {
         }
 
         if (studentIdFromUrl) {
-          void loadDropdownList();
+          // Defer bulk list — don't compete with student profile / search API calls.
+          window.setTimeout(() => void loadDropdownList(), 4000);
           setListLoading(false);
           return;
         }
@@ -499,6 +501,40 @@ function StudentDetailsPageContent() {
     }
   }, [studentIdFromUrl]);
 
+  /** Deep link: fetch one row by id so the sidebar shows name/class immediately (not "Loading…"). */
+  useEffect(() => {
+    if (!studentIdFromUrl) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/student/list?search=1&studentId=${encodeURIComponent(studentIdFromUrl)}&take=1`,
+          { credentials: "include", cache: "no-store" }
+        );
+        if (!res.ok || cancelled) return;
+        const data = await res.json().catch(() => ({}));
+        const row = Array.isArray(data?.students) ? data.students[0] : null;
+        if (!row?.id || cancelled) return;
+        const option = mapListRow(row);
+        setStudents((prev) => {
+          if (prev.some((s) => s.id === option.id)) {
+            return prev.map((s) => (s.id === option.id ? { ...s, ...option } : s));
+          }
+          return [option, ...prev];
+        });
+        setDetail((prev) => {
+          if (prev?.student.id === option.id && prev.student.name !== "Loading…") return prev;
+          return buildPlaceholderDetail(normalizeStudentOption(option));
+        });
+      } catch {
+        /* shell fetch will replace placeholder */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [studentIdFromUrl, mapListRow]);
+
   useEffect(() => {
     if (studentIdFromUrl) return;
     if (students.length === 0) return;
@@ -518,9 +554,15 @@ function StudentDetailsPageContent() {
   );
 
   const selectStudent = useCallback(
-    (id: string) => {
-      setSelectedId(id);
-      syncStudentIdInUrl(id);
+    (student: StudentOption) => {
+      setStudents((prev) => {
+        if (prev.some((s) => s.id === student.id)) {
+          return prev.map((s) => (s.id === student.id ? { ...s, ...student } : s));
+        }
+        return [student, ...prev];
+      });
+      setSelectedId(student.id);
+      syncStudentIdInUrl(student.id);
     },
     [syncStudentIdInUrl]
   );
@@ -657,16 +699,21 @@ function StudentDetailsPageContent() {
     }
 
     let cancelled = false;
-    setTransactionsReady(false);
 
     const cachedBreakdown = getFeeBreakdownCached(selectedId);
-    setDetail((prev) => {
-      if (prev?.student.id === selectedId) return prev;
-      const fromList = students.find((s) => s.id === selectedId);
-      return fromList
-        ? buildPlaceholderDetail(normalizeStudentOption(fromList))
-        : buildPlaceholderById(selectedId);
-    });
+    const cachedBundle = reloadKey === 0 ? peekStudentDetailsBundle(selectedId) : null;
+    if (cachedBundle?.student) {
+      applyDetailsBundle(cachedBundle);
+    } else {
+      setTransactionsReady(false);
+      setDetail((prev) => {
+        if (prev?.student.id === selectedId) return prev;
+        const fromList = students.find((s) => s.id === selectedId);
+        return fromList
+          ? buildPlaceholderDetail(normalizeStudentOption(fromList))
+          : buildPlaceholderById(selectedId);
+      });
+    }
     if (cachedBreakdown) {
       setFeeBreakdown(cachedBreakdown);
       setFeeBreakdownPending(false);
@@ -675,7 +722,7 @@ function StudentDetailsPageContent() {
     }
 
     loadStudentDetailsBundle(selectedId, {
-      force: true,
+      force: reloadKey > 0,
       onShellLoaded: (partial) => {
         if (cancelled) return;
         const { feeBreakdown: bd, ...rest } = partial;

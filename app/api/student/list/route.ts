@@ -37,6 +37,7 @@ export async function GET(req: Request) {
         const { searchParams } = new URL(req.url);
         const rollNo = searchParams.get("rollNo")?.trim();
         const admissionNumber = searchParams.get("admissionNumber")?.trim();
+        const studentId = searchParams.get("studentId")?.trim();
         const q = searchParams.get("q")?.trim();
 
         const takeParam = searchParams.get("take");
@@ -45,6 +46,8 @@ export async function GET(req: Request) {
         // NOTE: fetching everything in one request will not hit the <150ms target at scale.
         const renderAll = searchParams.get("all") === "1";
         const bypassCache = searchParams.get("refresh") === "1";
+        /** Autocomplete / quick lookup — minimal columns, no application join. */
+        const searchMode = searchParams.get("search") === "1" || Boolean(studentId);
         const maxTake = renderAll ? 10000 : 100;
         const take = renderAll
           ? maxTake
@@ -60,6 +63,7 @@ export async function GET(req: Request) {
 
         const where: {
           schoolId: string;
+          id?: string;
           status?: string;
           classId?: string;
           class?: { schoolId: string; name: string; section?: string };
@@ -73,6 +77,7 @@ export async function GET(req: Request) {
         } = { schoolId };
 
         if (statusFilter) where.status = statusFilter;
+        if (studentId) where.id = studentId;
         if (classId) {
           where.classId = classId;
         } else if (className) {
@@ -84,16 +89,21 @@ export async function GET(req: Request) {
         }
 
         if (rollNo) where.rollNo = { contains: rollNo, mode: "insensitive" };
-        if (admissionNumber) where.admissionNumber = { contains: admissionNumber, mode: "insensitive" };
+        if (admissionNumber) where.admissionNumber = admissionNumber;
         if (q) {
-          where.OR = [
-            { admissionNumber: { contains: q, mode: "insensitive" } },
-            { rollNo: { contains: q, mode: "insensitive" } },
-            { user: { name: { contains: q, mode: "insensitive" } } },
-          ];
+          if (searchMode && /^[A-Za-z0-9/-]+$/.test(q)) {
+            // Partial admission no. — single-column filter (faster than OR + user.name on remote DB).
+            where.admissionNumber = { contains: q, mode: "insensitive" };
+          } else {
+            where.OR = [
+              { admissionNumber: { contains: q, mode: "insensitive" } },
+              { rollNo: { contains: q, mode: "insensitive" } },
+              { user: { name: { contains: q, mode: "insensitive" } } },
+            ];
+          }
         }
 
-        const memKey = `students:list:${schoolId}:${take}:${cursor ?? "0"}:${q ?? ""}:${rollNo ?? ""}:${admissionNumber ?? ""}:${statusFilter ?? ""}:${classId}:${className}:${section}`;
+        const memKey = `students:list:${schoolId}:${take}:${cursor ?? "0"}:${searchMode ? "s" : "f"}:${studentId ?? ""}:${q ?? ""}:${rollNo ?? ""}:${admissionNumber ?? ""}:${statusFilter ?? ""}:${classId}:${className}:${section}`;
         if (!renderAll && !bypassCache) {
           const memCached = getSchoolDashboardServerCached<{
             students: unknown[];
@@ -105,33 +115,67 @@ export async function GET(req: Request) {
           }
         }
 
+        const listSelect = searchMode
+          ? {
+              id: true,
+              schoolId: true,
+              admissionNumber: true,
+              fatherName: true,
+              motherName: true,
+              status: true,
+              user: { select: { name: true } },
+              class: { select: { id: true, name: true, section: true } },
+            }
+          : {
+              id: true,
+              admissionNumber: true,
+              rollNo: true,
+              fatherName: true,
+              motherName: true,
+              phoneNo: true,
+              residencyType: true,
+              status: true,
+              dob: true,
+              gender: true,
+              createdAt: true,
+              user: { select: { id: true, name: true, email: true, photoUrl: true } },
+              class: { select: { id: true, name: true, section: true } },
+              application: {
+                select: {
+                  id: true,
+                  createdAt: true,
+                  admissionNo: true,
+                  fedenaNo: true,
+                  workflowStatus: true,
+                  class: { select: { id: true, name: true, section: true } },
+                },
+              },
+            };
+
+        if (studentId) {
+          const row = await prisma.student.findUnique({
+            where: { id: studentId },
+            select: listSelect,
+          });
+          if (!row || row.schoolId !== schoolId) {
+            return NextResponse.json({ students: [], items: [], nextCursor: null }, { status: 200 });
+          }
+          const { schoolId: _schoolId, ...rest } = row;
+          const resolvedClass = searchMode
+            ? rest.class
+            : resolveStudentDisplayClass(
+                rest.class,
+                (rest as { application?: { class?: typeof rest.class } }).application?.class ?? null
+              );
+          const item = { ...rest, class: resolvedClass };
+          const payload = { students: [item], items: [item], nextCursor: null };
+          if (!bypassCache) setSchoolDashboardServerCached(memKey, payload, 180_000);
+          return NextResponse.json(payload, { status: 200 });
+        }
+
         const students = await prisma.student.findMany({
           where,
-          select: {
-            id: true,
-            admissionNumber: true,
-            rollNo: true,
-            fatherName: true,
-            motherName: true,
-            phoneNo: true,
-            residencyType: true,
-            status: true,
-            dob: true,
-            gender: true,
-            createdAt: true,
-            user: { select: { id: true, name: true, email: true, photoUrl: true } },
-            class: { select: { id: true, name: true, section: true } },
-            application: {
-              select: {
-                id: true,
-                createdAt: true,
-                admissionNo: true,
-                fedenaNo: true,
-                workflowStatus: true,
-                class: { select: { id: true, name: true, section: true } },
-              },
-            },
-          },
+          select: listSelect,
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: take + 1,
           ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -140,9 +184,16 @@ export async function GET(req: Request) {
         const hasNext = students.length > take;
         const rawItems = hasNext ? students.slice(0, take) : students;
         const items = rawItems.map((row) => {
-          const appClass = row.application?.class ?? null;
+          if (searchMode) {
+            const { schoolId: _schoolId, ...rest } = row as typeof row & { schoolId?: string };
+            return { ...rest, class: rest.class ?? null };
+          }
+          const appClass =
+            (row as { application?: { class?: typeof row.class } }).application?.class ?? null;
           const resolvedClass = resolveStudentDisplayClass(row.class, appClass);
-          const { application: _app, ...rest } = row;
+          const { application: _app, ...rest } = row as typeof row & {
+            application?: unknown;
+          };
           return { ...rest, class: resolvedClass };
         });
         const nextCursor = hasNext ? items[items.length - 1]?.id ?? null : null;
