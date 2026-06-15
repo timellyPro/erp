@@ -58,7 +58,7 @@ export default function AppLayout({
         </aside>
 
         {/* MAIN */}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col pb-16 xl:pb-0">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col pb-[calc(4rem+env(safe-area-inset-bottom))] xl:pb-0">
           <AppHeader
             title={title}
             profile={profile}

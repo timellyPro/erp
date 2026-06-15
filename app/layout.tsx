@@ -1,8 +1,9 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Inter, Geist, Geist_Mono } from "next/font/google";
 import { AuthProvider } from "@/context/AuthContext";
 import { GlobalBackground } from "./frontend/components/common/GlobalBackground";
+import CapacitorInit from "./frontend/components/common/CapacitorInit";
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",
@@ -27,6 +28,23 @@ export const metadata: Metadata = {
     shortcut: [{ url: "/icon.png?v=3", type: "image/png" }],
     apple: [{ url: "/icon.png?v=3", type: "image/png", sizes: "180x180" }],
   },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Timelly",
+  },
+  formatDetection: {
+    telephone: false,
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
+  themeColor: "#28143F",
 };
 
 export default function RootLayout({
@@ -45,6 +63,7 @@ export default function RootLayout({
         `}
       >
         <GlobalBackground />
+        <CapacitorInit />
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>

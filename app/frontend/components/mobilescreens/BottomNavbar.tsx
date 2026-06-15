@@ -55,6 +55,7 @@ export default function BottomNavBar({
         fixed bottom-0 inset-x-0 z-40 lg:hidden
         bg-[#0b1220]/95 backdrop-blur-xl
         border-t border-white/10
+        pb-[env(safe-area-inset-bottom)]
       "
     >
       <div className="flex items-end py-3 px-2">

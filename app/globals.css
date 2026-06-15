@@ -26,6 +26,9 @@ body {
       #804A5F 70%,
       #3F262F 100%);
   font-family: var(--font-inter), sans-serif;
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 

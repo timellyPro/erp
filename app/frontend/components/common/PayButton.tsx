@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { CreditCard, Loader2 } from "lucide-react";
 import { motion } from "framer-motion";
+import { openExternalUrl } from "@/lib/capacitor";
 
 interface PayButtonProps {
   amount: number;
@@ -41,6 +42,7 @@ export default function PayButton({
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           amount: normalizedAmount,
           ...(returnPath && { return_path: returnPath }),
@@ -64,7 +66,8 @@ export default function PayButton({
         // HyperPG return_url has no query params; store order_id|amount in cookie for verification on return
         const payload = `${order.order_id || order.id}|${order.amount}`;
         document.cookie = `hyperpg_pending=${encodeURIComponent(payload)}; path=/; max-age=600; samesite=lax`;
-        window.location.href = order.payment_url;
+        await openExternalUrl(order.payment_url);
+        setLoading(false);
         return;
       }
 
