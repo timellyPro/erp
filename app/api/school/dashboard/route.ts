@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { purgeExpiredNewsFeeds } from "@/lib/newsfeedRetention";
-import { buildSchoolDashboardCollection } from "@/lib/buildSchoolDashboardCollection";
+import { buildSchoolDashboardCollectionSummary } from "@/lib/buildSchoolDashboardCollection";
 import { buildSchoolDashboardFast } from "@/lib/buildSchoolDashboardFast";
 import { getSchoolDashboardFeeTotals } from "@/lib/schoolDashboardFeeTotals";
 import { resolveSchoolAdminSchoolId } from "@/lib/resolveSchoolAdminSchoolId";
@@ -165,7 +165,7 @@ export async function GET(request: Request) {
         ORDER BY p."createdAt" DESC
         LIMIT 5
       `),
-      buildSchoolDashboardCollection(schoolId, dateParam),
+      buildSchoolDashboardCollectionSummary(schoolId, dateParam),
     ]);
 
     const totalPaid = feeTotals.totalPaid;

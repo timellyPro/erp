@@ -1,14 +1,18 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
-import { buildSchoolDashboardCollection } from "@/lib/buildSchoolDashboardCollection";
+import {
+  buildSchoolDashboardCollection,
+  buildSchoolDashboardCollectionByHead,
+  buildSchoolDashboardCollectionSummary,
+} from "@/lib/buildSchoolDashboardCollection";
 import { resolveSchoolAdminSchoolId } from "@/lib/resolveSchoolAdminSchoolId";
 import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
 } from "@/lib/schoolDashboardServerCache";
 
-/** Fast day collection only — used when calendar date changes (no full dashboard reload). */
+/** Day collection — ?part=summary | heads (fast) or full payload (default). */
 export async function GET(request: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
@@ -26,15 +30,25 @@ export async function GET(request: Request) {
       return NextResponse.json({ message: ctx.error }, { status: ctx.status });
     }
 
-    const date = new URL(request.url).searchParams.get("date")?.trim() || undefined;
-    const cacheKey = `dashboard:collection:${ctx.schoolId}:${date ?? "today"}`;
+    const url = new URL(request.url);
+    const date = url.searchParams.get("date")?.trim() || undefined;
+    const part = url.searchParams.get("part")?.trim() || "full";
+    const cacheKey = `dashboard:collection:${part}:${ctx.schoolId}:${date ?? "today"}`;
     const cached = getSchoolDashboardServerCached(cacheKey);
     if (cached) {
       return NextResponse.json(cached, { status: 200 });
     }
 
-    const payload = await buildSchoolDashboardCollection(ctx.schoolId, date);
-    setSchoolDashboardServerCached(cacheKey, payload, 20_000);
+    let payload: unknown;
+    if (part === "summary") {
+      payload = await buildSchoolDashboardCollectionSummary(ctx.schoolId, date);
+    } else if (part === "heads") {
+      payload = await buildSchoolDashboardCollectionByHead(ctx.schoolId, date);
+    } else {
+      payload = await buildSchoolDashboardCollection(ctx.schoolId, date);
+    }
+
+    setSchoolDashboardServerCached(cacheKey, payload, part === "summary" ? 120_000 : 90_000);
     return NextResponse.json(payload, { status: 200 });
   } catch (error: unknown) {
     console.error("Dashboard collection error:", error);

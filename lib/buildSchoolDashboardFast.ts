@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import prisma from "@/lib/db";
-import { buildSchoolDashboardCollection } from "@/lib/buildSchoolDashboardCollection";
+import { buildSchoolDashboardCollectionSummary } from "@/lib/buildSchoolDashboardCollection";
 import { peekSchoolDashboardFeeTotals } from "@/lib/schoolDashboardFeeTotals";
 import {
   getSchoolDashboardServerCached,
@@ -36,7 +36,7 @@ export async function buildSchoolDashboardFast(schoolId: string, dateParam: stri
         (SELECT COUNT(*)::bigint FROM "Student" WHERE "schoolId" = ${schoolId} AND status = 'Active') AS students,
         (SELECT COUNT(*)::bigint FROM "User" WHERE "schoolId" = ${schoolId} AND role = 'TEACHER') AS teachers
     `),
-    buildSchoolDashboardCollection(schoolId, dateParam),
+    buildSchoolDashboardCollectionSummary(schoolId, dateParam),
     prisma.$queryRaw<Array<{ status: string; count: bigint }>>(Prisma.sql`
       SELECT a.status, COUNT(*)::bigint AS count
       FROM "Attendance" a

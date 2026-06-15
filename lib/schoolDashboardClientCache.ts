@@ -37,6 +37,22 @@ export type SchoolDashboardPayload = {
     formattedAmount: string;
     count: number;
   }>;
+  todayCollectionAdmission?: {
+    amount: number;
+    formattedAmount: string;
+    count: number;
+  };
+  todayCollectionByHead?: {
+    rows: Array<{
+      key: string;
+      label: string;
+      amount: number;
+      formattedAmount: string;
+    }>;
+    total: number;
+    formattedTotal: string;
+  };
+  collectionDate?: string;
   teachersOnLeave: Array<{
     id: string;
     name: string;

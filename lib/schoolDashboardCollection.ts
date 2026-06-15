@@ -27,8 +27,10 @@ export function paymentCollectionBucket(gateway: string | null | undefined): "CA
   return "OTHERS";
 }
 
+/** Same successful fee payments as fee day report (excludes workshops / event registrations). */
 export const FEE_COLLECTION_PAYMENT_WHERE = {
   status: { in: ["SUCCESS", "COMPLETED"] as string[] },
+  purpose: "FEES",
   eventRegistrationId: null,
 };
 
@@ -38,6 +40,16 @@ export type CollectionByMethodRow = {
   amount: number;
   count: number;
 };
+
+export type CollectionAmountRow = {
+  amount: number;
+  formattedAmount: string;
+  count: number;
+};
+
+export function formatCollectionAmount(amount: number): string {
+  return `₹${Math.round(amount).toLocaleString("en-IN")}`;
+}
 
 export function aggregateCollectionByMethod(
   payments: Array<{ amount: unknown; gateway: string | null; count?: number }>

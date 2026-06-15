@@ -1,7 +1,13 @@
-import prisma from "@/lib/db";
+import {
+  buildCollectionByHeadSummary,
+  getDayReportAllocationsForTx,
+  type CollectionByHeadRow,
+} from "@/lib/feeDayReportExcel";
+import { loadFeeReportTransactions } from "@/lib/loadDayFeeCollectionTransactions";
+import type { DayReportTx } from "@/lib/feeDayReportExcel";
 import {
   aggregateCollectionByMethod,
-  FEE_COLLECTION_PAYMENT_WHERE,
+  formatCollectionAmount,
   localDayBoundsFromYmd,
   todayYmdLocal,
 } from "@/lib/schoolDashboardCollection";
@@ -13,35 +19,64 @@ function formatCurrency(n: number) {
   return `₹${Math.round(n)}`;
 }
 
-/** Fast day collection (groupBy gateway, no full payment rows). */
-export async function buildSchoolDashboardCollection(schoolId: string, dateYmd?: string) {
-  const dateParam = dateYmd?.trim() || todayYmdLocal();
-  const bounds = localDayBoundsFromYmd(dateParam);
-  const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const todayEnd = new Date(todayStart);
-  todayEnd.setDate(todayEnd.getDate() + 1);
-  const collectionStart = bounds?.start ?? todayStart;
-  const collectionEnd = bounds?.end ?? todayEnd;
+function collectionDateParam(dateYmd?: string): string {
+  return dateYmd?.trim() || todayYmdLocal();
+}
 
-  const grouped = await prisma.payment.groupBy({
-    by: ["gateway"],
-    where: {
-      student: { schoolId },
-      ...FEE_COLLECTION_PAYMENT_WHERE,
-      createdAt: { gte: collectionStart, lt: collectionEnd },
-    },
-    _sum: { amount: true },
-    _count: { _all: true },
-  });
+async function loadDayReportTransactions(
+  schoolId: string,
+  dateYmd?: string
+): Promise<{ dateParam: string; txs: DayReportTx[] }> {
+  const dateParam = collectionDateParam(dateYmd);
+  if (!localDayBoundsFromYmd(dateParam)) {
+    return { dateParam, txs: [] };
+  }
+  const txs = await loadFeeReportTransactions(schoolId, dateParam, dateParam);
+  return { dateParam, txs };
+}
 
-  const pseudoPayments = grouped.map((g) => ({
-    amount: g._sum.amount ?? 0,
-    gateway: g.gateway,
-    count: g._count._all,
+function buildMethodSummaryFromTransactions(txs: DayReportTx[]) {
+  const pseudoPayments = txs.map((tx) => ({
+    amount: getDayReportAllocationsForTx(tx).reduce(
+      (sum, al) => sum + (Number(al.amount) || 0),
+      0
+    ),
+    gateway: tx.gateway ?? null,
+    count: 1,
   }));
+  return aggregateCollectionByMethod(pseudoPayments);
+}
 
-  const { rows, total } = aggregateCollectionByMethod(pseudoPayments);
+export type SchoolDashboardCollectionSummary = {
+  collectionDate: string;
+  todayCollectionTotal: string;
+  todayCollectionTotalRaw: number;
+  todayCollectionByMethod: Array<{
+    key: string;
+    label: string;
+    amount: number;
+    formattedAmount: string;
+    count: number;
+  }>;
+};
+
+export type SchoolDashboardCollectionByHead = {
+  rows: CollectionByHeadRow[];
+  total: number;
+  formattedTotal: string;
+};
+
+export type SchoolDashboardCollectionPayload = SchoolDashboardCollectionSummary & {
+  todayCollectionByHead: SchoolDashboardCollectionByHead;
+};
+
+/** Cash/online totals — allocation sums (matches day report Excel). */
+export async function buildSchoolDashboardCollectionSummary(
+  schoolId: string,
+  dateYmd?: string
+): Promise<SchoolDashboardCollectionSummary> {
+  const { dateParam, txs } = await loadDayReportTransactions(schoolId, dateYmd);
+  const { rows, total } = buildMethodSummaryFromTransactions(txs);
 
   return {
     collectionDate: dateParam,
@@ -51,8 +86,41 @@ export async function buildSchoolDashboardCollection(schoolId: string, dateYmd?:
       key: m.key,
       label: m.label,
       amount: Math.round(m.amount * 100) / 100,
-      formattedAmount: `₹${Math.round(m.amount).toLocaleString("en-IN")}`,
+      formattedAmount: formatCollectionAmount(m.amount),
       count: m.count,
     })),
+  };
+}
+
+/** Fee-head breakdown — same transactions as day report export. */
+export async function buildSchoolDashboardCollectionByHead(
+  schoolId: string,
+  dateYmd?: string
+): Promise<SchoolDashboardCollectionByHead> {
+  const { txs } = await loadDayReportTransactions(schoolId, dateYmd);
+  return buildCollectionByHeadSummary(txs);
+}
+
+/** Full payload — single load, summary + heads aligned with Excel. */
+export async function buildSchoolDashboardCollection(
+  schoolId: string,
+  dateYmd?: string
+): Promise<SchoolDashboardCollectionPayload> {
+  const { dateParam, txs } = await loadDayReportTransactions(schoolId, dateYmd);
+  const byHead = buildCollectionByHeadSummary(txs);
+  const { rows, total } = buildMethodSummaryFromTransactions(txs);
+
+  return {
+    collectionDate: dateParam,
+    todayCollectionTotal: formatCurrency(total),
+    todayCollectionTotalRaw: total,
+    todayCollectionByMethod: rows.map((m) => ({
+      key: m.key,
+      label: m.label,
+      amount: Math.round(m.amount * 100) / 100,
+      formattedAmount: formatCollectionAmount(m.amount),
+      count: m.count,
+    })),
+    todayCollectionByHead: byHead,
   };
 }

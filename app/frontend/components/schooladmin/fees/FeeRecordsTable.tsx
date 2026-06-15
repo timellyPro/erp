@@ -23,6 +23,7 @@ import {
   type DayReportTx,
 } from "@/lib/feeDayReportExcel";
 import { formatRupee, roundRupee } from "@/lib/formatRupee";
+import { todayYmdLocal } from "@/lib/schoolDashboardCollection";
 
 const PAGE_SIZE = 20;
 
@@ -39,7 +40,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
   const [searchName, setSearchName] = useState("");
   const [selectedClass, setSelectedClass] = useState("");
   const [reportPeriod, setReportPeriod] = useState<ReportPeriod>("DAY_WISE");
-  const [reportDate, setReportDate] = useState(new Date().toISOString().slice(0, 10));
+  const [reportDate, setReportDate] = useState(() => todayYmdLocal());
   const [reportMonth, setReportMonth] = useState(new Date().toISOString().slice(0, 7));
   const [reportYear, setReportYear] = useState(String(new Date().getFullYear()));
   const [academicYear, setAcademicYear] = useState(() => {
