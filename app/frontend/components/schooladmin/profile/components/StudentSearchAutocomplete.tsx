@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import { warmStudentDetailsBundle } from "@/lib/loadStudentDetailsBundle";
 
 type StudentOption = {
@@ -89,7 +89,8 @@ export const StudentSearchAutocomplete = ({
       const q = searchQuery.toLowerCase();
       return (
         s.name.toLowerCase().includes(q) ||
-        s.admissionNumber.toLowerCase().includes(q)
+        s.admissionNumber.toLowerCase().includes(q) ||
+        s.id.toLowerCase().includes(q)
       );
     })
   );
@@ -124,13 +125,17 @@ export const StudentSearchAutocomplete = ({
           if (gen === searchGenRef.current) setSearching(false);
         }
       })();
-    }, 350);
+    }, 200);
 
     return () => clearTimeout(timer);
-  }, [searchQuery, filterByClass, statusFilter]);
+  }, [searchQuery, filterByClass, statusFilter, localFiltered.length]);
 
-  const filteredStudents =
-    remoteResults.length > 0 ? remoteResults : localFiltered;
+  const filteredStudents = useMemo(() => {
+    const byId = new Map<string, StudentOption>();
+    for (const s of localFiltered) byId.set(s.id, s);
+    for (const s of remoteResults) byId.set(s.id, s);
+    return Array.from(byId.values()).slice(0, 20);
+  }, [localFiltered, remoteResults]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -198,7 +203,7 @@ export const StudentSearchAutocomplete = ({
         <input
           ref={inputRef}
           type="text"
-          placeholder="Type name or admission no…"
+          placeholder="Type name, admission no., or ID…"
           value={searchQuery}
           onChange={(e) => {
             onSearchChange(e.target.value);

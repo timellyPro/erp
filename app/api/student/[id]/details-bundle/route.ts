@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import {
   buildStudentDetailsCoreBundle,
+  buildStudentDetailsPaymentsOnly,
   buildStudentDetailsShellPayload,
   buildStudentDetailsTabExtras,
   buildStudentDetailsTabPayload,
@@ -82,6 +83,13 @@ export async function GET(req: Request, context: RouteParams) {
     const resolvedSchoolId = schoolId ?? null;
 
     if (extrasOnly) {
+      if (url.searchParams.get("scope") === "payments") {
+        const { payments } = await buildStudentDetailsPaymentsOnly(id);
+        return NextResponse.json(
+          { payments, attendanceTrends: [], academicPerformance: [], certificates: [] },
+          { status: 200 }
+        );
+      }
       const extras = await buildStudentDetailsTabExtras(id);
       return NextResponse.json(extras, { status: 200 });
     }

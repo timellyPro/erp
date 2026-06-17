@@ -15,6 +15,7 @@ export type StudentDetailsFastBundle = StudentDetailsTabPayload & {
 const bundleMemory = new Map<string, { expiresAt: number; value: StudentDetailsFastBundle }>();
 const bundleInflight = new Map<string, Promise<StudentDetailsFastBundle>>();
 const extrasInflight = new Map<string, Promise<StudentDetailsTabExtras>>();
+const refreshFeesInflight = new Map<string, Promise<StudentDetailsFastBundle | null>>();
 
 const BUNDLE_TTL_MS = 30 * 60 * 1000;
 const SESSION_KEY = "erp:student-details-bundle:v2";
@@ -104,6 +105,52 @@ function toBundle(
   return { ...shell, ...extras, feeBreakdown };
 }
 
+/** Keep optimistic payments until the server extras response includes them. */
+function mergeStudentPayments(
+  primary: StudentDetailsTabPayload["payments"],
+  secondary: StudentDetailsTabPayload["payments"],
+  options?: {
+    excludeIds?: Set<string>;
+    /** After delete — do not re-add stale server rows the client already removed. */
+    trustPrimaryIds?: boolean;
+  }
+): StudentDetailsTabPayload["payments"] {
+  const exclude = options?.excludeIds ?? new Set<string>();
+  const serverById = new Map<string, StudentDetailsTabPayload["payments"][number]>();
+  for (const p of secondary) {
+    if (p?.id && !exclude.has(p.id)) serverById.set(p.id, p);
+  }
+
+  if (options?.trustPrimaryIds) {
+    return primary
+      .filter((p) => p?.id && !exclude.has(p.id))
+      .map((p) => serverById.get(p.id) ?? p)
+      .sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+  }
+
+  const byId = new Map<string, StudentDetailsTabPayload["payments"][number]>(serverById);
+  for (const p of primary) {
+    if (p?.id && !exclude.has(p.id) && !byId.has(p.id)) byId.set(p.id, p);
+  }
+  return [...byId.values()].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+}
+
+function preferFreshBreakdown(
+  server: AdminStudentFeeBreakdownResult | null,
+  patched: AdminStudentFeeBreakdownResult | null
+): AdminStudentFeeBreakdownResult | null {
+  if (!server) return patched;
+  if (!patched) return server;
+  // Stale server cache can still show pre-mutation totals — keep the client patch.
+  if (server.remainingFee > patched.remainingFee + 0.02) return patched;
+  if (server.amountPaid > patched.amountPaid + 0.02) return patched;
+  return server;
+}
+
 function cacheBundle(studentId: string, bundle: StudentDetailsFastBundle): void {
   bundleMemory.set(studentId, { value: bundle, expiresAt: Date.now() + BUNDLE_TTL_MS });
   writeSessionBundle(studentId, bundle);
@@ -154,6 +201,33 @@ export async function refreshStudentFeesAfterMutation(
     keepShell?: StudentDetailsTabPayload | null;
     /** Keep client fee-breakdown cache (already patched optimistically after payment). */
     keepPatchedBreakdown?: boolean;
+    excludePaymentIds?: string[];
+    trustClientPaymentList?: boolean;
+  }
+): Promise<StudentDetailsFastBundle | null> {
+  const inflightKey = `fees-refresh:${studentId}`;
+  const running = refreshFeesInflight.get(inflightKey);
+  if (running) {
+    return running;
+  }
+
+  const promise = refreshStudentFeesAfterMutationInner(studentId, options);
+  refreshFeesInflight.set(inflightKey, promise);
+  try {
+    return await promise;
+  } finally {
+    refreshFeesInflight.delete(inflightKey);
+  }
+}
+
+async function refreshStudentFeesAfterMutationInner(
+  studentId: string,
+  options?: {
+    onPartial?: (bundle: StudentDetailsFastBundle) => void;
+    keepShell?: StudentDetailsTabPayload | null;
+    keepPatchedBreakdown?: boolean;
+    excludePaymentIds?: string[];
+    trustClientPaymentList?: boolean;
   }
 ): Promise<StudentDetailsFastBundle | null> {
   if (options?.keepPatchedBreakdown) {
@@ -174,7 +248,7 @@ export async function refreshStudentFeesAfterMutation(
           { credentials: "include", cache: "no-store" }
         ),
         fetch(
-          `/api/student/${encodeURIComponent(studentId)}/details-bundle?extras=1`,
+          `/api/student/${encodeURIComponent(studentId)}/details-bundle?extras=1&scope=payments&refresh=1`,
           { credentials: "include", cache: "no-store" }
         ),
         fetchFeeBreakdownFast(studentId, { force: true }),
@@ -201,21 +275,42 @@ export async function refreshStudentFeesAfterMutation(
 
   try {
     const extrasRes = await fetch(
-      `/api/student/${encodeURIComponent(studentId)}/details-bundle?extras=1`,
+      `/api/student/${encodeURIComponent(studentId)}/details-bundle?extras=1&scope=payments&refresh=1`,
       { credentials: "include", cache: "no-store" }
     );
     const extras = extrasRes.ok ? parseExtras(await extrasRes.json().catch(() => ({}))) : emptyExtras();
+    const excludeIds = new Set(options?.excludePaymentIds ?? []);
+    const mergedPayments = mergeStudentPayments(existingShell.payments ?? [], extras.payments, {
+      excludeIds,
+      trustPrimaryIds: options?.trustClientPaymentList,
+    });
+    const mergedExtras: StudentDetailsTabExtras = {
+      payments: mergedPayments,
+      attendanceTrends: existingShell.attendanceTrends ?? [],
+      academicPerformance: existingShell.academicPerformance ?? [],
+      certificates: existingShell.certificates ?? [],
+    };
+    const patchedBreakdown = getFeeBreakdownCached(studentId);
 
     // Keep optimistic breakdown visible — only replace UI when fresh server data arrives.
     void fetchFeeBreakdownFast(studentId, { force: true }).then((breakdown) => {
-      if (!breakdown) return;
-      setFeeBreakdownCache(studentId, breakdown);
-      const full = toBundle(existingShell, extras, breakdown);
+      const effectiveBreakdown = preferFreshBreakdown(breakdown, patchedBreakdown);
+      if (!effectiveBreakdown) return;
+      setFeeBreakdownCache(studentId, effectiveBreakdown);
+      const full = toBundle(
+        { ...existingShell, payments: mergedPayments },
+        mergedExtras,
+        effectiveBreakdown
+      );
       cacheBundle(studentId, full);
       options?.onPartial?.(full);
     });
 
-    return toBundle(existingShell, extras, getFeeBreakdownCached(studentId));
+    return toBundle(
+      { ...existingShell, payments: mergedPayments },
+      mergedExtras,
+      patchedBreakdown
+    );
   } catch {
     return null;
   }

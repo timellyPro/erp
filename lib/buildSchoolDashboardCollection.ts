@@ -23,6 +23,13 @@ function collectionDateParam(dateYmd?: string): string {
   return dateYmd?.trim() || todayYmdLocal();
 }
 
+const dayTxsMemory = new Map<
+  string,
+  { at: number; value: { dateParam: string; txs: DayReportTx[] } }
+>();
+const dayTxsInflight = new Map<string, Promise<{ dateParam: string; txs: DayReportTx[] }>>();
+const DAY_TXS_TTL_MS = 90_000;
+
 async function loadDayReportTransactions(
   schoolId: string,
   dateYmd?: string
@@ -31,8 +38,56 @@ async function loadDayReportTransactions(
   if (!localDayBoundsFromYmd(dateParam)) {
     return { dateParam, txs: [] };
   }
-  const txs = await loadFeeReportTransactions(schoolId, dateParam, dateParam);
-  return { dateParam, txs };
+  const cacheKey = `${schoolId}:${dateParam}`;
+  const cached = dayTxsMemory.get(cacheKey);
+  if (cached && Date.now() - cached.at < DAY_TXS_TTL_MS) {
+    return cached.value;
+  }
+
+  const running = dayTxsInflight.get(cacheKey);
+  if (running) return running;
+
+  const run = (async () => {
+    const txs = await loadFeeReportTransactions(schoolId, dateParam, dateParam);
+    const value = { dateParam, txs };
+    dayTxsMemory.set(cacheKey, { at: Date.now(), value });
+    return value;
+  })();
+
+  dayTxsInflight.set(cacheKey, run);
+  try {
+    return await run;
+  } finally {
+    dayTxsInflight.delete(cacheKey);
+  }
+}
+
+/** Summary + fee-head breakdown from one transaction load (dashboard fast path). */
+export async function buildSchoolDashboardDayCollectionBundle(
+  schoolId: string,
+  dateYmd?: string
+): Promise<{
+  summary: SchoolDashboardCollectionSummary;
+  byHead: SchoolDashboardCollectionByHead;
+}> {
+  const { dateParam, txs } = await loadDayReportTransactions(schoolId, dateYmd);
+  const byHead = buildCollectionByHeadSummary(txs);
+  const { rows, total } = buildMethodSummaryFromTransactions(txs);
+  return {
+    summary: {
+      collectionDate: dateParam,
+      todayCollectionTotal: formatCurrency(total),
+      todayCollectionTotalRaw: total,
+      todayCollectionByMethod: rows.map((m) => ({
+        key: m.key,
+        label: m.label,
+        amount: Math.round(m.amount * 100) / 100,
+        formattedAmount: formatCollectionAmount(m.amount),
+        count: m.count,
+      })),
+    },
+    byHead,
+  };
 }
 
 function buildMethodSummaryFromTransactions(txs: DayReportTx[]) {

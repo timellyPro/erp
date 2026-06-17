@@ -2,6 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { AcademicPerformance } from "./components/AcademicPerformance";
 import { FeeTransactions } from "./components/FeeTransactions";
 import { FeesBreakdown } from "./components/FeesBreakdown";
@@ -20,10 +21,12 @@ import { dueHeadRowsFromBreakdown, type DueHeadRow } from "@/lib/feeBreakdownPay
 import {
   fetchFeeBreakdownFast,
   getFeeBreakdownCached,
+  invalidateFeeBreakdownCache,
   setFeeBreakdownCache,
 } from "@/lib/feeBreakdownClientCache";
 import { readStudentListCacheLegacy, writeStudentListCacheLegacy } from "@/lib/studentListSessionCache";
 import { isInactiveStudentStatus } from "@/lib/resolveStudentDisplayClass";
+import { resolveStudentDisplayName } from "@/lib/resolveStudentDisplayName";
 import { StudentSearchAutocomplete } from "./components/StudentSearchAutocomplete";
 import { Calendar, BookOpen, Activity, Clock, FileSpreadsheet, X } from "lucide-react";
 import BulkExtraFeeByTimellyModal from "./components/BulkExtraFeeByTimellyModal";
@@ -75,6 +78,8 @@ type StudentDetail = {
     method: string;
     createdAt: string;
     transactionId: string | null;
+    collectedByName?: string | null;
+    collectedByUserId?: string | null;
     feeTypeName?: string;
     feeTypeAmount?: number;
     feeAllocations?: Array<{ name: string; amount: number }>;
@@ -100,6 +105,24 @@ type StudentOption = {
   section: string | null;
   status?: string;
 };
+
+function StudentNameCard({
+  name,
+  meta,
+  className = "",
+}: {
+  name: string;
+  meta?: string | null;
+  className?: string;
+}) {
+  return (
+    <div className={`rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 min-w-0 ${className}`}>
+      <p className="text-[9px] text-gray-400 font-bold uppercase tracking-tighter">Name</p>
+      <p className="text-xs sm:text-sm font-bold text-white truncate">{name}</p>
+      {meta ? <p className="text-[10px] text-gray-400 truncate mt-0.5">{meta}</p> : null}
+    </div>
+  );
+}
 
 /** List cache may hold fees-page rows (class object) or profile rows (classDisplay). */
 function normalizeStudentOption(raw: {
@@ -230,6 +253,8 @@ type FeePaymentSuccess = {
     gateway?: string;
     createdAt: string;
     transactionId?: string | null;
+    collectedByName?: string | null;
+    collectedByUserId?: string | null;
   };
   updatedFee: {
     amountPaid: number;
@@ -239,6 +264,135 @@ type FeePaymentSuccess = {
   };
   feeAllocations?: Array<{ name: string; amount: number; key?: string }>;
 };
+
+function reconcilePaymentId(
+  prev: StudentDetail | null,
+  tempId: string,
+  result: FeePaymentSuccess
+): StudentDetail | null {
+  if (!prev || !result.payment.id) return prev;
+  return {
+    ...prev,
+    payments: prev.payments.map((p) =>
+      p.id === tempId
+        ? {
+            ...p,
+            id: result.payment.id,
+            amount: result.payment.amount,
+            status: result.payment.status || "SUCCESS",
+            method: String(result.payment.gateway ?? p.method),
+            createdAt:
+              typeof result.payment.createdAt === "string"
+                ? result.payment.createdAt
+                : p.createdAt,
+            transactionId: result.payment.transactionId ?? p.transactionId,
+            collectedByName: result.payment.collectedByName ?? p.collectedByName,
+            collectedByUserId: result.payment.collectedByUserId ?? p.collectedByUserId,
+          }
+        : p
+    ),
+  };
+}
+
+function buildOptimisticPaymentResult(
+  tempId: string,
+  total: number,
+  mode: string,
+  paymentDate: string,
+  referenceNo: string,
+  selectedRows: DueHeadRow[],
+  initialFeeBreakdown?: AdminStudentFeeBreakdownResult | null,
+  collector?: { collectedByName?: string | null; collectedByUserId?: string | null }
+): FeePaymentSuccess {
+  return {
+    payment: {
+      id: tempId,
+      amount: total,
+      status: "SUCCESS",
+      gateway: mode,
+      createdAt: paymentDate ? `${paymentDate}T12:00:00.000Z` : new Date().toISOString(),
+      transactionId: referenceNo.trim() || null,
+      collectedByName: collector?.collectedByName ?? null,
+      collectedByUserId: collector?.collectedByUserId ?? null,
+    },
+    updatedFee: {
+      amountPaid: (initialFeeBreakdown?.amountPaid ?? 0) + total,
+      remainingFee: Math.max((initialFeeBreakdown?.remainingFee ?? 0) - total, 0),
+      finalFee: initialFeeBreakdown?.finalFee,
+      totalFee: initialFeeBreakdown?.totalAmount,
+    },
+    feeAllocations: selectedRows.map((r) => ({
+      name: r.label,
+      amount: Number(r.payAmount),
+      key: r.sourceKey || r.key,
+    })),
+  };
+}
+
+function buildConfirmedPaymentResult(
+  data: Record<string, unknown>,
+  total: number,
+  mode: string,
+  paymentDate: string,
+  referenceNo: string,
+  selectedRows: DueHeadRow[],
+  initialFeeBreakdown?: AdminStudentFeeBreakdownResult | null,
+  collector?: { collectedByName?: string | null; collectedByUserId?: string | null }
+): FeePaymentSuccess {
+  const payment = data.payment as Record<string, unknown> | undefined;
+  const updatedFee = data.updatedFee as Record<string, unknown> | undefined;
+  const apiCollectorName =
+    typeof payment?.collectedByName === "string" ? payment.collectedByName.trim() : "";
+  const apiCollectorUserId =
+    typeof payment?.collectedByUserId === "string" ? payment.collectedByUserId : null;
+  return {
+    payment: {
+      id: String(payment?.id ?? ""),
+      amount: Number(payment?.amount ?? total),
+      status: String(payment?.status ?? "SUCCESS"),
+      gateway: typeof payment?.gateway === "string" ? payment.gateway : mode,
+      createdAt:
+        typeof payment?.createdAt === "string"
+          ? payment.createdAt
+          : paymentDate
+            ? `${paymentDate}T12:00:00.000Z`
+            : new Date().toISOString(),
+      transactionId:
+        typeof payment?.transactionId === "string" ? payment.transactionId : referenceNo.trim() || null,
+      collectedByName: apiCollectorName || collector?.collectedByName || null,
+      collectedByUserId: apiCollectorUserId || collector?.collectedByUserId || null,
+    },
+    updatedFee: {
+      amountPaid: Number(
+        updatedFee?.amountPaid ?? (initialFeeBreakdown?.amountPaid ?? 0) + total
+      ),
+      remainingFee: Number(
+        updatedFee?.remainingFee ?? Math.max((initialFeeBreakdown?.remainingFee ?? 0) - total, 0)
+      ),
+      finalFee:
+        typeof updatedFee?.finalFee === "number"
+          ? updatedFee.finalFee
+          : initialFeeBreakdown?.finalFee,
+      totalFee:
+        typeof updatedFee?.totalFee === "number"
+          ? updatedFee.totalFee
+          : initialFeeBreakdown?.totalAmount,
+    },
+    feeAllocations: Array.isArray(data.feeAllocations)
+      ? (data.feeAllocations as Array<{ name?: string; amount?: number; key?: string }>).map(
+          (line) => ({
+            name: String(line?.name ?? "Fee"),
+            amount: Number(line?.amount ?? 0),
+            key: typeof line?.key === "string" ? line.key : undefined,
+          })
+        )
+      : selectedRows.map((r) => ({
+          name: r.label,
+          amount: Number(r.payAmount),
+          key: r.sourceKey || r.key,
+        })),
+  };
+}
 
 function patchDetailAfterPayment(
   prev: StudentDetail | null,
@@ -274,6 +428,8 @@ function patchDetailAfterPayment(
         method: gateway,
         createdAt,
         transactionId: payment.transactionId ?? null,
+        collectedByName: payment.collectedByName ?? null,
+        collectedByUserId: payment.collectedByUserId ?? null,
         feeAllocations: lines,
       },
       ...prev.payments.filter((p) => p.id !== payment.id),
@@ -365,7 +521,56 @@ type FeeDeleteSuccess = {
     remainingFee: number;
     finalFee?: number;
   } | null;
+  feeAllocations?: Array<{ name: string; amount: number; key?: string }>;
 };
+
+function isSuccessPaymentStatus(status: string) {
+  const u = String(status || "").toUpperCase();
+  return u === "SUCCESS" || u === "COMPLETED";
+}
+
+function computeUpdatedFeeAfterDelete(
+  prev: StudentDetail,
+  payment: { amount: number; status: string }
+): FeeDeleteSuccess["updatedFee"] {
+  if (!prev.fee || !isSuccessPaymentStatus(payment.status)) return null;
+  const amt = Number(payment.amount) || 0;
+  return {
+    amountPaid: Math.max(0, Math.round((prev.fee.amountPaid - amt) * 100) / 100),
+    remainingFee: Math.round((prev.fee.remainingFee + amt) * 100) / 100,
+    finalFee: prev.fee.totalFee,
+  };
+}
+
+function patchBreakdownAfterDeletePayment(
+  prev: AdminStudentFeeBreakdownResult | null,
+  updatedFee: FeeDeleteSuccess["updatedFee"],
+  deletedAllocations?: Array<{ name: string; amount: number; key?: string }>
+): AdminStudentFeeBreakdownResult | null {
+  if (!updatedFee) return prev;
+  const base = patchBreakdownAfterDelete(prev, updatedFee);
+  if (!base || !deletedAllocations?.length) return base;
+
+  const addByKey = new Map<string, number>();
+  for (const line of deletedAllocations) {
+    const key =
+      typeof line.key === "string" && line.key.trim()
+        ? normalizeBreakdownHeadKey(line.key)
+        : "";
+    if (!key) continue;
+    addByKey.set(key, (addByKey.get(key) ?? 0) + (Number(line.amount) || 0));
+  }
+  if (addByKey.size === 0) return base;
+
+  const dueHeads = base.dueHeads.map((h) => {
+    const add = addByKey.get(normalizeBreakdownHeadKey(h.key)) ?? 0;
+    if (add <= 0) return h;
+    const dueBefore = Math.round((h.dueBefore + add) * 100) / 100;
+    return { ...h, dueBefore };
+  });
+
+  return { ...base, dueHeads };
+}
 
 function patchDetailAfterDelete(
   prev: StudentDetail | null,
@@ -413,6 +618,11 @@ function StudentDetailsPageContent() {
   const [classes, setClasses] = useState<{ id: string; name: string; section: string | null }[]>([]);
   const [bulkExtraFeeOpen, setBulkExtraFeeOpen] = useState(false);
   const [feesModalOpen, setFeesModalOpen] = useState(false);
+  const [autoPrintPaymentId, setAutoPrintPaymentId] = useState<string | null>(null);
+  /** Payments removed in-session — stale bundle loads must not restore these. */
+  const deletedPaymentIdsRef = useRef(new Set<string>());
+  const sidebarAsideRef = useRef<HTMLElement>(null);
+  const [showStickyStudentName, setShowStickyStudentName] = useState(false);
 
   const mapListRow = useCallback(
     (s: {
@@ -422,10 +632,20 @@ function StudentDetailsPageContent() {
       fatherName?: string;
       parentName?: string;
       status?: string;
+      application?: {
+        firstName?: string | null;
+        middleName?: string | null;
+        lastName?: string | null;
+      } | null;
       class?: { id: string; name: string; section: string | null };
     }): StudentOption => ({
       id: s.id,
-      name: s.user?.name ?? "Unknown",
+      name: resolveStudentDisplayName({
+        user: s.user,
+        application: s.application,
+        fatherName: s.fatherName,
+        admissionNumber: s.admissionNumber,
+      }),
       admissionNumber: s.admissionNumber ?? "",
       parentName: s.fatherName?.trim() || s.parentName?.trim() || "-",
       classDisplay: s.class ? `${s.class.name}${s.class.section ? `-${s.class.section}` : ""}` : "-",
@@ -592,15 +812,22 @@ function StudentDetailsPageContent() {
     });
   }, [detail, focusFromUrl]);
 
+  useEffect(() => {
+    deletedPaymentIdsRef.current.clear();
+  }, [selectedId]);
+
   const applyDetailsBundle = useCallback(
     (bundle: Awaited<ReturnType<typeof loadStudentDetailsBundle>>) => {
       const { feeBreakdown: breakdown, ...rest } = bundle;
       if (rest?.student) {
+        const payments = (rest.payments ?? []).filter(
+          (p) => !deletedPaymentIdsRef.current.has(p.id)
+        );
         const shell =
           breakdown && rest.fee
             ? {
                 ...rest,
-                payments: rest.payments ?? [],
+                payments,
                 fee: {
                   ...rest.fee,
                   amountPaid: breakdown.amountPaid,
@@ -608,7 +835,7 @@ function StudentDetailsPageContent() {
                   totalFee: breakdown.finalFee ?? rest.fee.totalFee,
                 },
               }
-            : { ...rest, payments: rest.payments ?? [] };
+            : { ...rest, payments };
         setDetail(shell);
         setFeeBreakdown(breakdown ?? null);
         if (breakdown && rest.student.id) setFeeBreakdownCache(rest.student.id, breakdown);
@@ -625,23 +852,24 @@ function StudentDetailsPageContent() {
   const refreshFeesForStudent = useCallback(
     async (studentId: string, paymentResult?: FeePaymentSuccess) => {
       if (paymentResult) {
-        setDetail((prev) => patchDetailAfterPayment(prev, paymentResult));
-        setFeeBreakdown((prev) => {
-          const next = patchBreakdownAfterPayment(prev, paymentResult);
-          if (next) setFeeBreakdownCache(studentId, next);
-          return next;
-        });
+        setTransactionsReady(true);
         setDetail((prev) => {
-          if (prev?.student.id === studentId) {
+          const next = patchDetailAfterPayment(prev, paymentResult);
+          if (next?.student.id === studentId) {
             void refreshStudentFeesAfterMutation(studentId, {
-              keepShell: prev as unknown as StudentDetailsTabPayload,
+              keepShell: next as unknown as StudentDetailsTabPayload,
               keepPatchedBreakdown: true,
               onPartial: (partial) => {
                 if (partial.student?.id === studentId) applyDetailsBundle(partial);
               },
             });
           }
-          return prev;
+          return next;
+        });
+        setFeeBreakdown((prev) => {
+          const next = patchBreakdownAfterPayment(prev, paymentResult) ?? prev;
+          if (next) setFeeBreakdownCache(studentId, next);
+          return next;
         });
         return;
       }
@@ -660,28 +888,44 @@ function StudentDetailsPageContent() {
 
   const removePaymentForStudent = useCallback(
     (studentId: string, deleteResult: FeeDeleteSuccess) => {
-      setDetail((prev) => patchDetailAfterDelete(prev, deleteResult));
-      if (deleteResult.updatedFee) {
-        setFeeBreakdown((prev) => {
-          const next = patchBreakdownAfterDelete(prev, deleteResult.updatedFee!);
-          if (next) setFeeBreakdownCache(studentId, next);
-          return next;
-        });
-      }
+      deletedPaymentIdsRef.current.add(deleteResult.paymentId);
+      invalidateStudentDetailsBundleCache(studentId);
+      invalidateFeeBreakdownCache(studentId);
+
       setDetail((prev) => {
-        if (prev?.student.id === studentId) {
-          void refreshStudentFeesAfterMutation(studentId, {
-            keepShell: prev as unknown as StudentDetailsTabPayload,
-            keepPatchedBreakdown: true,
-            onPartial: (partial) => {
-              if (partial.student?.id === studentId) applyDetailsBundle(partial);
-            },
-          });
-        }
-        return prev;
+        const deletedPayment = prev?.payments.find((p) => p.id === deleteResult.paymentId);
+        const updatedFee =
+          deleteResult.updatedFee ??
+          (prev && deletedPayment ? computeUpdatedFeeAfterDelete(prev, deletedPayment) : null);
+        const fullResult: FeeDeleteSuccess = {
+          ...deleteResult,
+          updatedFee,
+          feeAllocations:
+            deleteResult.feeAllocations ??
+            (deletedPayment as { feeAllocations?: FeeDeleteSuccess["feeAllocations"] })
+              ?.feeAllocations,
+        };
+        const next = patchDetailAfterDelete(prev, fullResult);
+        setFeeBreakdown((bdPrev) => {
+          if (!fullResult.updatedFee) return bdPrev;
+          const nextBd = patchBreakdownAfterDeletePayment(
+            bdPrev,
+            fullResult.updatedFee,
+            fullResult.feeAllocations
+          );
+          if (nextBd) setFeeBreakdownCache(studentId, nextBd);
+          return nextBd ?? bdPrev;
+        });
+        return next;
+      });
+
+      void fetchFeeBreakdownFast(studentId, { force: true }).then((bd) => {
+        if (!bd) return;
+        setFeeBreakdown(bd);
+        setFeeBreakdownCache(studentId, bd);
       });
     },
-    [applyDetailsBundle]
+    []
   );
 
   useEffect(() => {
@@ -784,7 +1028,12 @@ function StudentDetailsPageContent() {
     if (filterStatus === "inactive" && !isInactiveStudentStatus(s.status)) return false;
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
-      if (!s.name.toLowerCase().includes(q) && !s.admissionNumber.toLowerCase().includes(q)) return false;
+      if (
+        !s.name.toLowerCase().includes(q) &&
+        !s.admissionNumber.toLowerCase().includes(q) &&
+        !s.id.toLowerCase().includes(q)
+      )
+        return false;
     }
     if (filterClass && s.classId !== filterClass) return false;
     if (filterSection && s.section !== filterSection) return false;
@@ -817,6 +1066,38 @@ function StudentDetailsPageContent() {
 
   const selectedOption = filtered.find((s) => s.id === selectedId) ?? students.find((s) => s.id === selectedId) ?? filtered[0];
   const isSelectedInactive = detail ? isInactiveStudentStatus(detail.student.status) : false;
+  const pageStudentName = useMemo(() => {
+    const fromDetail = detail?.student.name?.trim();
+    if (fromDetail && fromDetail !== "Loading…") return fromDetail;
+    const fromList = selectedOption?.name?.trim();
+    if (fromList && fromList !== "Unknown") return fromList;
+    return null;
+  }, [detail?.student.name, selectedOption?.name]);
+  const pageStudentMeta = useMemo(() => {
+    if (!detail?.student) return null;
+    const parts = [
+      detail.student.admissionNumber?.trim(),
+      detail.student.class?.displayName?.trim(),
+      detail.student.rollNo?.trim() ? `Roll ${detail.student.rollNo.trim()}` : null,
+    ].filter(Boolean);
+    return parts.length ? parts.join(" · ") : null;
+  }, [detail?.student]);
+  useEffect(() => {
+    const aside = sidebarAsideRef.current;
+    if (!aside || !pageStudentName) {
+      setShowStickyStudentName(false);
+      return;
+    }
+    const scrollRoot = aside.closest("main");
+    const observer = new IntersectionObserver(
+      ([entry]) => setShowStickyStudentName(!entry.isIntersecting),
+      scrollRoot
+        ? { root: scrollRoot, threshold: 0, rootMargin: "-88px 0px 0px 0px" }
+        : { threshold: 0, rootMargin: "-88px 0px 0px 0px" }
+    );
+    observer.observe(aside);
+    return () => observer.disconnect();
+  }, [pageStudentName, selectedId, detail?.student.id]);
   const classOptions = [{ label: "All Classes", value: "" }, ...classes.map((c) => ({ label: `${c.name}${c.section ? ` - ${c.section}` : ""}`, value: c.id }))];
   const statusOptions = [
     { label: "All Students", value: "all" },
@@ -827,10 +1108,11 @@ function StudentDetailsPageContent() {
   const sectionOptions = [{ label: "All Sections", value: "" }, ...sections.map((s) => ({ label: s, value: s }))];
 
   return (
-    <div className="space-y-4 sm:space-y-6 md:space-y-8 max-w-[1600px] mx-auto min-h-0 w-full min-w-0 overflow-y-auto overflow-x-hidden pb-6 sm:pb-8">
+    <div className="space-y-4 sm:space-y-6 md:space-y-8 w-full min-h-0 min-w-0 overflow-y-auto overflow-x-hidden pb-6 sm:pb-8">
       <PageHeader
+        compact
         title="Student Details"
-        subtitle="View comprehensive academic and personal records."
+        subtitle="Search, view records, and manage fees."
         rightSlot={
           <div className="w-full sm:w-auto flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-end">
             <button
@@ -914,14 +1196,36 @@ function StudentDetailsPageContent() {
       )}
 
       {detail && (
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 sm:gap-6 md:gap-8 min-w-0">
+        <>
+          {showStickyStudentName && pageStudentName ? (
+            <div className="hidden lg:block fixed z-30 left-64 top-[5.5rem] w-[252px] xl:w-[268px] px-3 pointer-events-none">
+              <StudentNameCard
+                name={pageStudentName}
+                meta={pageStudentMeta}
+                className="pointer-events-auto bg-[#0a0f1a]/95 backdrop-blur-md shadow-lg border-white/15"
+              />
+            </div>
+          ) : null}
+
+          {showStickyStudentName && pageStudentName ? (
+            <div className="lg:hidden sticky top-0 z-30 -mx-3 sm:-mx-4 md:-mx-6 px-3 sm:px-4 md:px-6 py-2 mb-2 bg-[#070b14]/95 backdrop-blur-md border-b border-white/10">
+              <StudentNameCard name={pageStudentName} meta={pageStudentMeta} className="bg-transparent border-0 px-0 py-0" />
+            </div>
+          ) : null}
+
+        <div className="min-w-0 w-full">
           {isSelectedInactive ? (
-            <div className="lg:col-span-4 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
               <span className="font-semibold text-red-100">Inactive student.</span>{" "}
               This student is inactive — you cannot record new fees, mark attendance, or use the student portal until they are set back to Active. Existing payments and transaction history are unchanged.
             </div>
           ) : null}
-          <div className="lg:col-span-1 min-w-0">
+
+          <div className="flex flex-col lg:flex-row lg:flex-wrap gap-4 sm:gap-6 md:gap-8 min-w-0 w-full items-start">
+            <aside
+              ref={sidebarAsideRef}
+              className="w-full lg:w-[252px] xl:w-[268px] shrink-0 min-w-0 relative z-20 lg:sticky lg:top-[5.5rem] lg:self-start lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto"
+            >
             <ProfileSidebar
               studentId={detail.student.id}
               feesRecordingDisabled={isSelectedInactive}
@@ -991,10 +1295,10 @@ function StudentDetailsPageContent() {
               }}
               onFeesHover={warmFeeBreakdown}
             />
-          </div>
+            </aside>
 
-          <div className="lg:col-span-3 space-y-4 sm:space-y-6 md:space-y-8 min-w-0">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+            <div className="flex-1 min-w-0 basis-full lg:basis-[calc(100%-268px-2rem)] space-y-4 sm:space-y-6 md:space-y-8">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
               <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-2xl p-3 sm:p-4 flex items-center gap-3 sm:gap-4 min-w-0">
                 <div className="p-2 bg-lime-400/10 rounded-xl flex-shrink-0">
                   <Calendar className="w-5 h-5 sm:w-5 sm:h-5 text-lime-400" />
@@ -1053,9 +1357,49 @@ function StudentDetailsPageContent() {
               </div>
             </div>
 
-            <AcademicPerformance data={detail.academicPerformance} />
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-6 min-w-0">
+              <AcademicPerformance data={detail.academicPerformance} />
+              <AttendanceTrends data={detail.attendanceTrends} />
+            </div>
+            </div>
 
-            <AttendanceTrends data={detail.attendanceTrends} />
+            <div className="w-full min-w-0 basis-full space-y-4 sm:space-y-6 md:space-y-8 relative z-0">
+            {detail.fee ? (
+              <FeesBreakdown
+                studentId={detail.student.id}
+                classId={detail.student.class?.id ?? null}
+                feesRecordingDisabled={isSelectedInactive}
+                totalFee={feeBreakdown?.totalAmount ?? detail.fee.totalFee}
+                baseTotalFee={
+                  feeBreakdown?.dueHeads?.length
+                    ? Math.round(
+                        feeBreakdown.dueHeads.reduce((s, h) => s + (Number(h.grossAmount) || 0), 0)
+                      )
+                    : detail.fee.baseTotalFee
+                }
+                discountPercent={detail.fee.discountPercent}
+                amountPaid={feeBreakdown?.amountPaid ?? detail.fee.amountPaid}
+                remainingFee={feeBreakdown?.remainingFee ?? detail.fee.remainingFee}
+                payments={detail.payments}
+                studentName={detail.student.name}
+                admissionNumber={detail.student.admissionNumber}
+                classDisplayName={detail.student.class?.displayName ?? "-"}
+                classSection={detail.student.class?.section ?? null}
+                schoolName={detail.student.schoolName}
+                discountFeeHeadKey={detail.fee.discountFeeHeadKey}
+                discountFeeHeadLabel={detail.fee.discountFeeHeadLabel}
+                discountRemarks={detail.fee.discountRemarks}
+                discountFixedAmount={detail.fee.discountFixedAmount}
+                onFeeModified={(paymentResult) => {
+                  if (paymentResult?.payment.id) setAutoPrintPaymentId(paymentResult.payment.id);
+                  if (detail.student.id) void refreshFeesForStudent(detail.student.id, paymentResult);
+                }}
+                residencyType={detail.student.residencyType ?? null}
+                initialFeeBreakdown={feeBreakdown}
+                feeBreakdownPending={feeBreakdownPending}
+              />
+            ) : null}
+
             <FeeTransactions
               fee={detail.fee}
               feeBreakdown={feeBreakdown}
@@ -1077,6 +1421,8 @@ function StudentDetailsPageContent() {
                 "-"
               }
               feesRecordingDisabled={isSelectedInactive}
+              autoPrintPaymentId={autoPrintPaymentId}
+              onAutoPrintDone={() => setAutoPrintPaymentId(null)}
               onPaymentsChanged={() => {
                 if (detail.student.id) void refreshFeesForStudent(detail.student.id);
               }}
@@ -1085,48 +1431,11 @@ function StudentDetailsPageContent() {
               }}
             />
 
-            {detail.fee && (
-              <>
-                <FeesBreakdown
-                  studentId={detail.student.id}
-                  classId={detail.student.class?.id ?? null}
-                  feesRecordingDisabled={isSelectedInactive}
-                  totalFee={feeBreakdown?.totalAmount ?? detail.fee.totalFee}
-                  baseTotalFee={
-                    feeBreakdown?.dueHeads?.length
-                      ? Math.round(
-                          feeBreakdown.dueHeads.reduce((s, h) => s + (Number(h.grossAmount) || 0), 0)
-                        )
-                      : detail.fee.baseTotalFee
-                  }
-                  discountPercent={detail.fee.discountPercent}
-                  amountPaid={feeBreakdown?.amountPaid ?? detail.fee.amountPaid}
-                  remainingFee={feeBreakdown?.remainingFee ?? detail.fee.remainingFee}
-                  payments={detail.payments}
-                  studentName={detail.student.name}
-                  admissionNumber={detail.student.admissionNumber}
-                  classDisplayName={detail.student.class?.displayName ?? "-"}
-                  classSection={detail.student.class?.section ?? null}
-                  schoolName={detail.student.schoolName}
-                  discountFeeHeadKey={detail.fee.discountFeeHeadKey}
-                  discountFeeHeadLabel={detail.fee.discountFeeHeadLabel}
-                  discountRemarks={detail.fee.discountRemarks}
-                  discountFixedAmount={detail.fee.discountFixedAmount}
-                  onFeeModified={(paymentResult) => {
-                    if (detail.student.id) void refreshFeesForStudent(detail.student.id, paymentResult);
-                  }}
-                  residencyType={detail.student.residencyType ?? null}
-                  initialFeeBreakdown={feeBreakdown}
-                  feeBreakdownPending={feeBreakdownPending}
-                />
-              </>
-            )}
-
-            <div className="mt-8">
-              <Certificates certificates={detail.certificates} />
+            <Certificates certificates={detail.certificates} />
             </div>
           </div>
         </div>
+        </>
       )}
 
       {!detail && selectedId && !listLoading && (
@@ -1142,7 +1451,18 @@ function StudentDetailsPageContent() {
           onClose={() => setFeesModalOpen(false)}
           onSuccess={(result) => {
             setFeesModalOpen(false);
+            if (result.payment.id) setAutoPrintPaymentId(result.payment.id);
             void refreshFeesForStudent(detail.student.id, result);
+          }}
+          onPaymentConfirmed={(result, tempId) => {
+            setDetail((prev) => reconcilePaymentId(prev, tempId, result));
+            if (result.payment.id && result.payment.id !== tempId) {
+              setAutoPrintPaymentId((prev) => (prev === tempId ? result.payment.id : prev));
+            }
+          }}
+          onPaymentFailed={(message) => {
+            alert(message);
+            void refreshFeesForStudent(detail.student.id);
           }}
         />
       ) : null}
@@ -1177,6 +1497,8 @@ function StudentFeesPaymentModal({
   breakdownPending = false,
   onClose,
   onSuccess,
+  onPaymentConfirmed,
+  onPaymentFailed,
 }: {
   studentId: string;
   studentName: string;
@@ -1184,7 +1506,14 @@ function StudentFeesPaymentModal({
   breakdownPending?: boolean;
   onClose: () => void;
   onSuccess: (result: FeePaymentSuccess) => void;
+  onPaymentConfirmed?: (result: FeePaymentSuccess, tempId: string) => void;
+  onPaymentFailed?: (message: string) => void;
 }) {
+  const { data: session } = useSession();
+  const collectorName =
+    (session?.user?.name || session?.user?.email || "").trim() || "Staff";
+  const collectorUserId = session?.user?.id ?? null;
+
   const seedRows = dueHeadRowsFromBreakdown(
     initialFeeBreakdown ?? getFeeBreakdownCached(studentId)
   );
@@ -1358,7 +1687,24 @@ function StudentFeesPaymentModal({
       return;
     }
 
+    const tempId = `pending-${Date.now()}`;
+    const optimisticResult = buildOptimisticPaymentResult(
+      tempId,
+      total,
+      mode,
+      paymentDate,
+      referenceNo,
+      selectedRows,
+      initialFeeBreakdown ?? getFeeBreakdownCached(studentId),
+      {
+        collectedByName: collectorName,
+        collectedByUserId: collectorUserId,
+      }
+    );
+
     setSaving(true);
+    onSuccess(optimisticResult);
+
     try {
       const res = await fetch("/api/fees/offline-payment", {
         method: "POST",
@@ -1379,54 +1725,35 @@ function StudentFeesPaymentModal({
           })),
         }),
       });
-      const data = await res.json().catch(() => ({}));
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       if (!res.ok) {
         throw new Error(typeof data.message === "string" ? data.message : "Payment failed");
       }
-      const paymentResult: FeePaymentSuccess = {
-        payment: {
-          id: String(data.payment?.id ?? ""),
-          amount: Number(data.payment?.amount ?? total),
-          status: String(data.payment?.status ?? "SUCCESS"),
-          gateway: typeof data.payment?.gateway === "string" ? data.payment.gateway : mode,
-          createdAt:
-            typeof data.payment?.createdAt === "string"
-              ? data.payment.createdAt
-              : paymentDate
-                ? `${paymentDate}T12:00:00.000Z`
-                : new Date().toISOString(),
-          transactionId:
-            typeof data.payment?.transactionId === "string" ? data.payment.transactionId : referenceNo.trim() || null,
-        },
-        updatedFee: {
-          amountPaid: Number(data.updatedFee?.amountPaid ?? 0),
-          remainingFee: Number(data.updatedFee?.remainingFee ?? 0),
-          finalFee:
-            typeof data.updatedFee?.finalFee === "number" ? data.updatedFee.finalFee : undefined,
-          totalFee:
-            typeof data.updatedFee?.totalFee === "number" ? data.updatedFee.totalFee : undefined,
-        },
-        feeAllocations: Array.isArray(data.feeAllocations)
-          ? data.feeAllocations.map((line: { name?: string; amount?: number }) => ({
-              name: String(line?.name ?? "Fee"),
-              amount: Number(line?.amount ?? 0),
-            }))
-          : selectedRows.map((r) => ({
-              name: r.label,
-              amount: Number(r.payAmount),
-            })),
-      };
-      onSuccess(paymentResult);
+      const confirmedResult = buildConfirmedPaymentResult(
+        data,
+        total,
+        mode,
+        paymentDate,
+        referenceNo,
+        selectedRows,
+        initialFeeBreakdown ?? getFeeBreakdownCached(studentId),
+        {
+          collectedByName: collectorName,
+          collectedByUserId: collectorUserId,
+        }
+      );
+      onPaymentConfirmed?.(confirmedResult, tempId);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Payment failed");
+      const message = e instanceof Error ? e.message : "Payment failed";
+      onPaymentFailed?.(message);
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/70 p-4">
-      <div className="w-full max-w-4xl rounded-2xl border border-white/10 bg-[#0B1220] p-5 shadow-xl">
+    <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/70 p-3 sm:p-4 overflow-y-auto">
+      <div className="w-full max-w-7xl rounded-2xl border border-white/10 bg-[#0B1220] p-4 sm:p-5 shadow-xl">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <h4 className="text-lg font-semibold text-white">Fees Sheet — {studentName}</h4>
@@ -1435,7 +1762,7 @@ function StudentFeesPaymentModal({
           <button
             type="button"
             onClick={() => !saving && onClose()}
-            className="rounded-lg p-1 text-white/60 hover:bg-white/10 hover:text-white"
+            className="rounded-lg p-1 text-white/60 hover:bg-white/10 hover:text-white shrink-0"
             aria-label="Close"
           >
             <X className="h-5 w-5" />
@@ -1446,30 +1773,30 @@ function StudentFeesPaymentModal({
           <div className="py-10 text-center text-white/70"><Spinner /></div>
         ) : (
           <>
-            <div className="max-h-[360px] overflow-auto rounded-xl border border-white/10">
-              <table className="w-full min-w-[1040px] text-sm">
-                <thead className="bg-white/5 text-left text-white/70">
+            <div className="max-h-[min(360px,50vh)] overflow-y-auto overflow-x-hidden rounded-xl border border-white/10">
+              <table className="w-full text-sm">
+                <thead className="bg-white/5 text-left text-white/70 sticky top-0 z-[1]">
                   <tr>
-                    <th className="px-3 py-2">Fee Type</th>
-                    <th className="px-3 py-2">Total Amount</th>
-                    <th className="px-3 py-2">Discount</th>
-                    <th className="px-3 py-2">Paid Amount</th>
-                    <th className="px-3 py-2">Balance</th>
-                    <th className="w-14 px-2 py-2 text-center" title="Pay full balance for this head">
+                    <th className="px-3 py-2 min-w-[10rem]">Fee Type</th>
+                    <th className="px-2 py-2 whitespace-nowrap text-right w-[6.5rem]">Total</th>
+                    <th className="px-2 py-2 whitespace-nowrap text-right w-[6rem]">Discount</th>
+                    <th className="px-2 py-2 whitespace-nowrap text-right w-[6rem]">Paid</th>
+                    <th className="px-2 py-2 whitespace-nowrap text-right w-[6rem]">Balance</th>
+                    <th className="w-11 px-1 py-2 text-center" title="Pay full balance for this head">
                       All
                     </th>
-                    <th className="px-3 py-2">Record Fee</th>
+                    <th className="px-2 py-2 whitespace-nowrap w-[7.5rem]">Record Fee</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((r) => (
                     <tr key={r.key} className="border-t border-white/5">
-                      <td className="px-3 py-2 text-white">{r.label}</td>
-                      <td className="px-3 py-2 text-white">₹{Math.round(r.totalAmount).toLocaleString("en-IN")}</td>
-                      <td className="px-3 py-2 text-cyan-300">₹{Math.round(r.discountAmount).toLocaleString("en-IN")}</td>
-                      <td className="px-3 py-2 text-lime-300">₹{Math.round(r.paidAmount).toLocaleString("en-IN")}</td>
-                      <td className="px-3 py-2 text-amber-300">₹{Math.round(r.dueBefore).toLocaleString("en-IN")}</td>
-                      <td className="px-2 py-2 text-center align-middle">
+                      <td className="px-3 py-2 text-white align-top leading-snug break-words">{r.label}</td>
+                      <td className="px-2 py-2 text-white whitespace-nowrap text-right align-top">₹{Math.round(r.totalAmount).toLocaleString("en-IN")}</td>
+                      <td className="px-2 py-2 text-cyan-300 whitespace-nowrap text-right align-top">₹{Math.round(r.discountAmount).toLocaleString("en-IN")}</td>
+                      <td className="px-2 py-2 text-lime-300 whitespace-nowrap text-right align-top">₹{Math.round(r.paidAmount).toLocaleString("en-IN")}</td>
+                      <td className="px-2 py-2 text-amber-300 whitespace-nowrap text-right align-top">₹{Math.round(r.dueBefore).toLocaleString("en-IN")}</td>
+                      <td className="px-1 py-2 text-center align-top">
                         <input
                           type="checkbox"
                           className="h-4 w-4 cursor-pointer accent-lime-400 disabled:cursor-not-allowed disabled:opacity-40"
@@ -1479,14 +1806,14 @@ function StudentFeesPaymentModal({
                           aria-label={`Pay full balance for ${r.label}`}
                         />
                       </td>
-                      <td className="px-3 py-2">
+                      <td className="px-2 py-2 align-top">
                         <input
                           type="text"
                           inputMode="decimal"
                           autoComplete="off"
                           value={r.payAmount}
                           onChange={(e) => setRowAmount(r.key, e.target.value)}
-                          className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-white"
+                          className="w-full min-w-[5.5rem] rounded-lg border border-white/10 bg-black/30 px-2 py-2 text-white"
                           placeholder="0.00"
                           aria-label={`Record fee for ${r.label}`}
                         />
@@ -1495,12 +1822,12 @@ function StudentFeesPaymentModal({
                   ))}
                   <tr className="border-t border-white/10 bg-white/5 font-semibold">
                     <td className="px-3 py-2 text-white">Total</td>
-                    <td className="px-3 py-2 text-white">₹{Math.round(totals.totalAmount).toLocaleString("en-IN")}</td>
-                    <td className="px-3 py-2 text-cyan-300">₹{Math.round(totals.discountAmount).toLocaleString("en-IN")}</td>
-                    <td className="px-3 py-2 text-lime-300">₹{Math.round(totals.paidAmount).toLocaleString("en-IN")}</td>
-                    <td className="px-3 py-2 text-amber-300">₹{Math.round(totals.balance).toLocaleString("en-IN")}</td>
-                    <td className="px-2 py-2" />
-                    <td className="px-3 py-2 text-blue-300">₹{total.toLocaleString("en-IN")}</td>
+                    <td className="px-2 py-2 text-white whitespace-nowrap text-right">₹{Math.round(totals.totalAmount).toLocaleString("en-IN")}</td>
+                    <td className="px-2 py-2 text-cyan-300 whitespace-nowrap text-right">₹{Math.round(totals.discountAmount).toLocaleString("en-IN")}</td>
+                    <td className="px-2 py-2 text-lime-300 whitespace-nowrap text-right">₹{Math.round(totals.paidAmount).toLocaleString("en-IN")}</td>
+                    <td className="px-2 py-2 text-amber-300 whitespace-nowrap text-right">₹{Math.round(totals.balance).toLocaleString("en-IN")}</td>
+                    <td className="px-1 py-2" />
+                    <td className="px-2 py-2 text-blue-300 whitespace-nowrap">₹{total.toLocaleString("en-IN")}</td>
                   </tr>
                 </tbody>
               </table>

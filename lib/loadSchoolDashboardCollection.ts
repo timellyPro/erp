@@ -94,6 +94,27 @@ export async function loadSchoolDashboardCollectionHeads(
   return value;
 }
 
+export function peekSchoolDashboardCollectionHeads(
+  dateYmd: string
+): SchoolDashboardCollectionByHead | null {
+  return readCache(headsCache, cacheKey(dateYmd, "heads"));
+}
+
+/** Prefetch day-wise collection (non-blocking). */
+export function warmSchoolDashboardCollectionHeads(dateYmd: string): void {
+  const key = cacheKey(dateYmd, "heads");
+  if (readCache(headsCache, key)) return;
+  if (inflight.has(key)) return;
+  void loadSchoolDashboardCollectionHeads(dateYmd).catch(() => {});
+}
+
+export function setSchoolDashboardCollectionHeadsCached(
+  dateYmd: string,
+  value: SchoolDashboardCollectionByHead
+): void {
+  headsCache.set(cacheKey(dateYmd, "heads"), { at: Date.now(), value });
+}
+
 /** @deprecated Prefer split summary + heads loaders for faster UI. */
 export async function loadSchoolDashboardCollection(
   dateYmd: string,

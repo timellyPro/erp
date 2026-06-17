@@ -12,6 +12,16 @@ import {
 import { activeStudentWhere, studentStatusFilter } from "@/lib/studentStatus";
 import { resolveStudentDisplayClass } from "@/lib/resolveStudentDisplayClass";
 
+/** Admission / roll tokens usually include digits; pure letter queries are treated as names. */
+function studentSearchQueryLooksLikeAdmissionOrRoll(q: string): boolean {
+  return /\d/.test(q);
+}
+
+/** Exact student row lookup by cuid (autocomplete paste). */
+function studentSearchQueryLooksLikeCuid(q: string): boolean {
+  return /^c[a-z0-9]{20,}$/i.test(q);
+}
+
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -91,9 +101,14 @@ export async function GET(req: Request) {
         if (rollNo) where.rollNo = { contains: rollNo, mode: "insensitive" };
         if (admissionNumber) where.admissionNumber = admissionNumber;
         if (q) {
-          if (searchMode && /^[A-Za-z0-9/-]+$/.test(q)) {
-            // Partial admission no. — single-column filter (faster than OR + user.name on remote DB).
-            where.admissionNumber = { contains: q, mode: "insensitive" };
+          if (searchMode && studentSearchQueryLooksLikeCuid(q)) {
+            where.id = q;
+          } else if (searchMode && studentSearchQueryLooksLikeAdmissionOrRoll(q)) {
+            // Partial admission / roll no. — skip user.name join on remote DB.
+            where.OR = [
+              { admissionNumber: { contains: q, mode: "insensitive" } },
+              { rollNo: { contains: q, mode: "insensitive" } },
+            ];
           } else {
             where.OR = [
               { admissionNumber: { contains: q, mode: "insensitive" } },
@@ -124,6 +139,9 @@ export async function GET(req: Request) {
               motherName: true,
               status: true,
               user: { select: { name: true } },
+              application: {
+                select: { firstName: true, middleName: true, lastName: true },
+              },
               class: { select: { id: true, name: true, section: true } },
             }
           : {

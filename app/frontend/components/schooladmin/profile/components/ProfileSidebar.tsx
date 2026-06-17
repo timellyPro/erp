@@ -1,10 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Users, Mail, Phone, MapPin, Bookmark, Pencil, X, CircleDollarSign } from "lucide-react";
+import { Users, Mail, Phone, MapPin, Pencil, X, CircleDollarSign } from "lucide-react";
 import SelectInput from "../../../common/SelectInput";
 import { formatStoredAddressForDisplay } from "@/lib/studentAddressFormat";
-import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
+import {
+  canonicalizeResidencyType,
+  formatResidencyTypeForDisplay,
+} from "@/lib/residencyDisplay";
+
+const RESIDENCY_OPTIONS = [
+  { label: "Day Scholar", value: "Day Scholar" },
+  { label: "Hostel", value: "Hosteller" },
+  { label: "RTE", value: "RTE" },
+] as const;
+
+function residencySelectValue(value?: string | null): string {
+  return canonicalizeResidencyType(value);
+}
 
 const getResidencyLabel = (value?: string) => {
   const raw = (value || "").trim();
@@ -86,7 +99,7 @@ export const ProfileSidebar = ({
   const [sRoll, setSRoll] = useState(student.rollNo);
   const [sClassId, setSClassId] = useState(classId ?? "");
   const [sGender, setSGender] = useState(gender);
-  const [sResidency, setSResidency] = useState(residencyType || "Day Scholar");
+  const [sResidency, setSResidency] = useState(() => residencySelectValue(residencyType));
 
   const [pFatherName, setPFatherName] = useState(fatherName);
   const [pFatherPhone, setPFatherPhone] = useState(fatherPhone || student.phone || "");
@@ -102,7 +115,7 @@ export const ProfileSidebar = ({
     setSRoll(student.rollNo);
     setSClassId(classId ?? "");
     setSGender(gender);
-    setSResidency(residencyType || "Day Scholar");
+    setSResidency(residencySelectValue(residencyType));
   }, [student, classId, gender, residencyType, studentModalOpen]);
 
   useEffect(() => {
@@ -114,6 +127,18 @@ export const ProfileSidebar = ({
   }, [fatherName, fatherPhone, motherName, motherPhone, student.phone, parentModalOpen]);
 
   const canEdit = Boolean(studentId.trim());
+
+  const openStudentModal = () => {
+    setSName(student.name);
+    setSEmail(student.email);
+    setSPhone(student.phone);
+    setSAddress(student.address === "—" ? "" : student.address);
+    setSRoll(student.rollNo);
+    setSClassId(classId ?? "");
+    setSGender(gender);
+    setSResidency(residencySelectValue(residencyType));
+    setStudentModalOpen(true);
+  };
 
   const classOptions = [
     { label: "No class", value: "" },
@@ -141,7 +166,7 @@ export const ProfileSidebar = ({
           rollNo: sRoll.trim() || null,
           classId: sClassId || null,
           gender: sGender.trim() || null,
-          residencyType: sResidency.trim() || "Day Scholar",
+          residencyType: residencySelectValue(sResidency),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -151,6 +176,7 @@ export const ProfileSidebar = ({
       }
       setStudentModalOpen(false);
       const resolvedClass = classes.find((c) => c.id === sClassId);
+      const savedResidency = residencySelectValue(sResidency);
       onSaved?.({
         name,
         email: sEmail.trim(),
@@ -159,7 +185,7 @@ export const ProfileSidebar = ({
         rollNo: sRoll.trim(),
         classId: sClassId || null,
         gender: sGender.trim(),
-        residencyType: sResidency.trim() || "Day Scholar",
+        residencyType: savedResidency,
         ...(resolvedClass
           ? {
               classDisplayName: resolvedClass.label,
@@ -208,10 +234,10 @@ export const ProfileSidebar = ({
   };
 
   return (
-    <div className="space-y-4 sm:space-y-6 min-w-0">
+    <div className="space-y-4 min-w-0">
       {/* Student Identity Card */}
-      <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl sm:rounded-[2rem] p-4 sm:p-5 text-center shadow-xl">
-        <div className="flex items-center justify-between gap-2 mb-3 text-left">
+      <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-4 shadow-lg text-left">
+        <div className="flex items-center justify-between gap-2 mb-3">
           <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">Student</span>
           <div className="flex items-center gap-1.5">
             <button
@@ -228,7 +254,7 @@ export const ProfileSidebar = ({
             </button>
             <button
               type="button"
-              onClick={() => setStudentModalOpen(true)}
+              onClick={openStudentModal}
               disabled={!canEdit}
               className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-lime-500/40 bg-lime-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-lime-300 hover:bg-lime-500/25 disabled:cursor-not-allowed disabled:opacity-40"
               title="Edit student details"
@@ -238,77 +264,67 @@ export const ProfileSidebar = ({
             </button>
           </div>
         </div>
-        <div className="relative w-24 h-24 sm:w-32 sm:h-32 mx-auto mb-4 sm:mb-6">
-          <img
-            src={student.photoUrl || "/avatar.jpg"}
-            className="rounded-[2rem] border-2 border-[#b4f44d] object-cover w-full h-full shadow-lg"
-            alt={student.name}
-          />
-          <span className="absolute -bottom-2 -right-2 bg-[#b4f44d] text-[#2d243a] p-2 rounded-xl shadow-md">
-            <Bookmark size={16} fill="currentColor" />
-          </span>
+
+        <div className="flex gap-3 mb-3">
+          <div className="relative w-[4.5rem] h-[4.5rem] shrink-0">
+            <img
+              src={student.photoUrl || "/avatar.jpg"}
+              className="rounded-2xl border-2 border-[#b4f44d]/90 object-cover w-full h-full shadow-md"
+              alt={student.name}
+            />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Name</p>
+            <p className="text-sm font-bold text-white break-words leading-snug line-clamp-2">{student.name}</p>
+            <p className="text-[11px] text-[#b4f44d] font-mono truncate mt-1 opacity-90" title={student.id}>
+              {student.id}
+            </p>
+          </div>
         </div>
 
-        <h3 className="text-xl sm:text-2xl font-bold text-white mb-1 break-words px-1">{student.name}</h3>
-        <p className="text-[#b4f44d] text-xs sm:text-sm font-mono tracking-widest mb-6 sm:mb-8 uppercase opacity-80 break-all px-1">
-          {student.id}
-        </p>
-
-        <div className="mb-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left">
-          <p className="text-[9px] sm:text-[10px] text-gray-400 font-bold uppercase tracking-tighter inline-flex items-center gap-1.5">
-            <Bookmark size={12} className="text-[#b4f44d]" />
-            Type
-          </p>
-          <p className="text-xs sm:text-sm font-bold text-white">{getResidencyLabel(residencyType)}</p>
+        <div className="mb-2.5 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Type</p>
+          <p className="text-xs font-semibold text-white">{getResidencyLabel(residencyType)}</p>
         </div>
 
-        <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-6 sm:mb-8">
-          <div className="bg-white/5 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl border border-white/5 min-w-0 px-1">
-            <p className="text-[9px] sm:text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Class</p>
-            <p
-              className="text-xs sm:text-sm font-bold text-white break-words whitespace-normal leading-snug"
-              title={student.className}
-            >
+        <div className="grid grid-cols-3 gap-2 mb-3">
+          <div className="bg-white/5 py-2 px-1.5 rounded-xl border border-white/5 min-w-0 text-center">
+            <p className="text-[9px] text-gray-400 font-bold uppercase tracking-tighter">Class</p>
+            <p className="text-xs font-bold text-white truncate" title={student.className}>
               {student.className}
             </p>
           </div>
-          <div className="bg-white/5 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl border border-white/5 min-w-0 px-1">
-            <p className="text-[9px] sm:text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Roll No</p>
-            <p className="text-xs sm:text-sm font-bold text-white truncate">{student.rollNo}</p>
+          <div className="bg-white/5 py-2 px-1.5 rounded-xl border border-white/5 min-w-0 text-center">
+            <p className="text-[9px] text-gray-400 font-bold uppercase tracking-tighter">Roll</p>
+            <p className="text-xs font-bold text-white truncate">{student.rollNo || "—"}</p>
           </div>
-          <div className="bg-white/5 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl border border-white/5 min-w-0 px-1">
-            <p className="text-[9px] sm:text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Age</p>
-            <p className="text-xs sm:text-sm font-bold text-white">{student.age}</p>
+          <div className="bg-white/5 py-2 px-1.5 rounded-xl border border-white/5 min-w-0 text-center">
+            <p className="text-[9px] text-gray-400 font-bold uppercase tracking-tighter">Age</p>
+            <p className="text-xs font-bold text-white">{student.age}</p>
           </div>
         </div>
 
-        <div className="text-left space-y-3 pt-4 sm:pt-6 border-t border-white/5">
-          <div className="flex items-start gap-3 text-gray-300 min-w-0">
-            <div className="rounded-lg flex-shrink-0 mt-0.5">
-              <Mail size={16} className="text-[#b4f44d]" />
-            </div>
-            <span className="text-xs sm:text-sm break-all min-w-0">{student.email}</span>
+        <div className="space-y-2 pt-3 border-t border-white/5 text-xs text-gray-300">
+          <div className="flex items-start gap-2.5 min-w-0">
+            <Mail size={14} className="text-[#b4f44d] shrink-0 mt-0.5" />
+            <span className="break-all line-clamp-2 min-w-0">{student.email || "—"}</span>
           </div>
-          <div className="flex items-start gap-3 text-gray-300 min-w-0">
-            <div className="rounded-lg flex-shrink-0 mt-0.5">
-              <Phone size={16} className="text-[#b4f44d]" />
-            </div>
-            <span className="text-xs sm:text-sm break-all">{student.phone}</span>
+          <div className="flex items-start gap-2.5 min-w-0">
+            <Phone size={14} className="text-[#b4f44d] shrink-0 mt-0.5" />
+            <span className="break-all">{student.phone || "—"}</span>
           </div>
-          <div className="flex items-start gap-3 text-gray-300 min-w-0">
-            <div className="rounded-lg flex-shrink-0 mt-0.5">
-              <MapPin size={16} className="text-[#b4f44d]" />
-            </div>
-            <span className="text-xs sm:text-sm leading-snug break-words">{normalizedAddress}</span>
+          <div className="flex items-start gap-2.5 min-w-0">
+            <MapPin size={14} className="text-[#b4f44d] shrink-0 mt-0.5" />
+            <span className="leading-snug line-clamp-4 break-words">{normalizedAddress || "—"}</span>
           </div>
         </div>
       </div>
 
       {/* Parent Details Card */}
-      <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl sm:rounded-[2rem] p-4 shadow-xl min-w-0">
-        <div className="flex items-center justify-between gap-3 mb-4 sm:mb-6">
-          <h4 className="text-[#b4f44d] font-bold flex items-center gap-2 sm:gap-3 text-base sm:text-lg min-w-0">
-            <Users className="w-6 h-6 shrink-0" /> Parents Details
+      <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-4 shadow-lg min-w-0">
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <h4 className="text-[#b4f44d] font-bold flex items-center gap-2 text-sm min-w-0">
+            <Users className="w-5 h-5 shrink-0" /> Parents Details
           </h4>
           <button
             type="button"
@@ -322,33 +338,16 @@ export const ProfileSidebar = ({
           </button>
         </div>
 
-        <div className="space-y-6">
-          <div className="space-y-3">
-            <label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest ml-1">Father / Guardian</label>
-            <div className="grid grid-cols-1 gap-2">
-              <div className="bg-white/5 py-2 px-2 rounded-2xl border border-white/5">
-                <p className="text-[10px] text-gray-500 font-bold uppercase">Name</p>
-                <p className="text-xs font-bold text-white">{fatherName || "Not Provided"}</p>
-              </div>
-              <div className="bg-white/5 py-2 px-2 rounded-2xl border border-white/5">
-                <p className="text-[10px] text-gray-500 font-bold uppercase">Mobile</p>
-                <p className="text-xs font-bold text-white">{fatherPhone || "-"}</p>
-              </div>
-            </div>
+        <div className="space-y-3">
+          <div className="rounded-xl border border-white/5 bg-white/5 p-2.5">
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter mb-1.5">Father / Guardian</p>
+            <p className="text-xs font-bold text-white break-words">{fatherName || "Not Provided"}</p>
+            <p className="text-[11px] text-gray-400 mt-1">{fatherPhone || "—"}</p>
           </div>
-
-          <div className="space-y-3">
-            <label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest ml-1">Mother</label>
-            <div className="grid grid-cols-1 gap-2">
-              <div className="bg-white/5 py-2 px-2 rounded-2xl border border-white/5">
-                <p className="text-[10px] text-gray-500 font-bold uppercase">Name</p>
-                <p className="text-xs font-bold text-white">{motherName || "Not Provided"}</p>
-              </div>
-              <div className="bg-white/5 py-2 px-2 rounded-2xl border border-white/5">
-                <p className="text-[10px] text-gray-500 font-bold uppercase">Mobile</p>
-                <p className="text-xs font-bold text-white">{motherPhone || "-"}</p>
-              </div>
-            </div>
+          <div className="rounded-xl border border-white/5 bg-white/5 p-2.5">
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter mb-1.5">Mother</p>
+            <p className="text-xs font-bold text-white break-words">{motherName || "Not Provided"}</p>
+            <p className="text-[11px] text-gray-400 mt-1">{motherPhone || "—"}</p>
           </div>
         </div>
       </div>
@@ -440,11 +439,7 @@ export const ProfileSidebar = ({
                 <SelectInput
                   value={sResidency}
                   onChange={setSResidency}
-                  options={[
-                    { label: "Day Scholar", value: "Day Scholar" },
-                    { label: "Hostel", value: "Hosteller" },
-                    { label: "RTE", value: "RTE" },
-                  ]}
+                  options={[...RESIDENCY_OPTIONS]}
                   bgColor="black"
                 />
               </div>
