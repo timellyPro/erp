@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useState, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { warmStudentDetailsBundle } from "@/lib/loadStudentDetailsBundle";
 
 type StudentOption = {
@@ -71,6 +72,27 @@ export const StudentSearchAutocomplete = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const searchGenRef = useRef(0);
+  const [dropdownRect, setDropdownRect] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const syncDropdownRect = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setDropdownRect({
+      top: rect.bottom + 8,
+      left: rect.left,
+      width: rect.width,
+    });
+  }, []);
 
   const filterByClass = useCallback(
     (list: StudentOption[]) =>
@@ -138,6 +160,20 @@ export const StudentSearchAutocomplete = ({
   }, [localFiltered, remoteResults]);
 
   useEffect(() => {
+    if (!showDropdown) {
+      setDropdownRect(null);
+      return;
+    }
+    syncDropdownRect();
+    window.addEventListener("resize", syncDropdownRect);
+    window.addEventListener("scroll", syncDropdownRect, true);
+    return () => {
+      window.removeEventListener("resize", syncDropdownRect);
+      window.removeEventListener("scroll", syncDropdownRect, true);
+    };
+  }, [showDropdown, syncDropdownRect, filteredStudents.length, searchQuery]);
+
+  useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (
         dropdownRef.current &&
@@ -196,10 +232,69 @@ export const StudentSearchAutocomplete = ({
     setRemoteResults([]);
   };
 
+  const dropdownPanel =
+    showDropdown && dropdownRect && searchQuery.trim() ? (
+      filteredStudents.length > 0 ? (
+        <div
+          ref={dropdownRef}
+          style={{
+            position: "fixed",
+            top: dropdownRect.top,
+            left: dropdownRect.left,
+            width: dropdownRect.width,
+            zIndex: 200,
+          }}
+          className="bg-[#0F172A] border border-white/10 rounded-xl shadow-2xl max-h-80 overflow-y-auto"
+        >
+          {filteredStudents.map((student, index) => (
+            <button
+              key={student.id}
+              type="button"
+              onClick={() => handleSelectStudent(student)}
+              onMouseEnter={() => {
+                setHighlightedIndex(index);
+                warmStudentDetailsBundle(student.id);
+              }}
+              className={`w-full px-4 py-3 text-left text-sm border-b border-white/5 last:border-0 transition-colors ${
+                index === highlightedIndex
+                  ? "bg-blue-500/20 text-white"
+                  : selectedId === student.id
+                    ? "bg-lime-400/10 text-lime-300"
+                    : "text-gray-300 hover:bg-white/5"
+              }`}
+            >
+              <div className="font-semibold text-white break-words">
+                {`${student.name} -${student.admissionNumber || "-"} | ${student.classDisplay || "-"} | ${student.parentName || "-"}`}
+                {(student.status ?? "Active").trim().toLowerCase() === "inactive" ? (
+                  <span className="ml-2 text-[11px] font-bold uppercase tracking-wide text-red-300">
+                    Inactive
+                  </span>
+                ) : null}
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div
+          ref={dropdownRef}
+          style={{
+            position: "fixed",
+            top: dropdownRect.top,
+            left: dropdownRect.left,
+            width: dropdownRect.width,
+            zIndex: 200,
+          }}
+          className="bg-[#0F172A] border border-white/10 rounded-xl p-3 text-sm text-gray-400 text-center shadow-2xl"
+        >
+          {searching ? "Searching…" : `No students found matching "${searchQuery}"`}
+        </div>
+      )
+    ) : null;
+
   return (
-    <div ref={containerRef} className="relative z-10">
+    <div ref={containerRef} className="relative z-[60]">
       <label className="text-xs text-gray-500 mb-2 block">Search Student</label>
-      <div className="relative overflow-visible">
+      <div className="relative">
         <input
           ref={inputRef}
           type="text"
@@ -219,46 +314,7 @@ export const StudentSearchAutocomplete = ({
           className="w-full bg-[#0F172A]/40 border border-white/10 rounded-xl px-4 py-2.5 text-sm outline-none text-gray-200 min-h-11 touch-manipulation focus:ring-1 focus:ring-blue-400/50 focus:border-transparent"
           autoComplete="off"
         />
-
-        {showDropdown && filteredStudents.length > 0 && (
-          <div
-            ref={dropdownRef}
-            className="absolute top-full left-0 right-0 mt-2 bg-[#0F172A] border border-white/10 rounded-xl shadow-2xl z-50 max-h-80 overflow-y-auto"
-          >
-            {filteredStudents.map((student, index) => (
-              <button
-                key={student.id}
-                onClick={() => handleSelectStudent(student)}
-                onMouseEnter={() => {
-                  setHighlightedIndex(index);
-                  warmStudentDetailsBundle(student.id);
-                }}
-                className={`w-full px-4 py-3 text-left text-sm border-b border-white/5 last:border-0 transition-colors ${
-                  index === highlightedIndex
-                    ? "bg-blue-500/20 text-white"
-                    : selectedId === student.id
-                      ? "bg-lime-400/10 text-lime-300"
-                      : "text-gray-300 hover:bg-white/5"
-                }`}
-              >
-                <div className="font-semibold text-white">
-                  {`${student.name} -${student.admissionNumber || "-"} | ${student.classDisplay || "-"} | ${student.parentName || "-"}`}
-                  {(student.status ?? "Active").trim().toLowerCase() === "inactive" ? (
-                    <span className="ml-2 text-[11px] font-bold uppercase tracking-wide text-red-300">
-                      Inactive
-                    </span>
-                  ) : null}
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {showDropdown && searchQuery.trim() && filteredStudents.length === 0 && (
-          <div className="absolute top-full left-0 right-0 mt-2 bg-[#0F172A] border border-white/10 rounded-xl p-3 z-50 text-sm text-gray-400 text-center">
-            {searching ? "Searching…" : `No students found matching "${searchQuery}"`}
-          </div>
-        )}
+        {mounted && dropdownPanel ? createPortal(dropdownPanel, document.body) : null}
       </div>
     </div>
   );

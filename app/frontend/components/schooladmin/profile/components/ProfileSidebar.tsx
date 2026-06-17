@@ -234,9 +234,9 @@ export const ProfileSidebar = ({
   };
 
   return (
-    <div className="space-y-4 min-w-0">
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-1 gap-4 min-w-0 w-full">
       {/* Student Identity Card */}
-      <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-4 shadow-lg text-left">
+      <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-4 sm:p-5 shadow-lg text-left min-w-0 w-full">
         <div className="flex items-center justify-between gap-2 mb-3">
           <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">Student</span>
           <div className="flex items-center gap-1.5">
@@ -275,8 +275,8 @@ export const ProfileSidebar = ({
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Name</p>
-            <p className="text-sm font-bold text-white break-words leading-snug line-clamp-2">{student.name}</p>
-            <p className="text-[11px] text-[#b4f44d] font-mono truncate mt-1 opacity-90" title={student.id}>
+            <p className="text-sm font-bold text-white break-words leading-snug">{student.name}</p>
+            <p className="text-[11px] text-[#b4f44d] font-mono break-all mt-1 opacity-90" title={student.id}>
               {student.id}
             </p>
           </div>
@@ -287,20 +287,20 @@ export const ProfileSidebar = ({
           <p className="text-xs font-semibold text-white">{getResidencyLabel(residencyType)}</p>
         </div>
 
-        <div className="grid grid-cols-3 gap-2 mb-3">
-          <div className="bg-white/5 py-2 px-1.5 rounded-xl border border-white/5 min-w-0 text-center">
-            <p className="text-[9px] text-gray-400 font-bold uppercase tracking-tighter">Class</p>
-            <p className="text-xs font-bold text-white truncate" title={student.className}>
+        <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-3">
+          <div className="bg-white/5 py-2 px-2 sm:px-2.5 rounded-xl border border-white/5 min-w-0 text-center">
+            <p className="text-[9px] sm:text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Class</p>
+            <p className="text-[11px] sm:text-xs font-bold text-white break-words leading-tight" title={student.className}>
               {student.className}
             </p>
           </div>
-          <div className="bg-white/5 py-2 px-1.5 rounded-xl border border-white/5 min-w-0 text-center">
-            <p className="text-[9px] text-gray-400 font-bold uppercase tracking-tighter">Roll</p>
-            <p className="text-xs font-bold text-white truncate">{student.rollNo || "—"}</p>
+          <div className="bg-white/5 py-2 px-2 sm:px-2.5 rounded-xl border border-white/5 min-w-0 text-center">
+            <p className="text-[9px] sm:text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Roll</p>
+            <p className="text-[11px] sm:text-xs font-bold text-white break-words leading-tight">{student.rollNo || "—"}</p>
           </div>
-          <div className="bg-white/5 py-2 px-1.5 rounded-xl border border-white/5 min-w-0 text-center">
-            <p className="text-[9px] text-gray-400 font-bold uppercase tracking-tighter">Age</p>
-            <p className="text-xs font-bold text-white">{student.age}</p>
+          <div className="bg-white/5 py-2 px-2 sm:px-2.5 rounded-xl border border-white/5 min-w-0 text-center">
+            <p className="text-[9px] sm:text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Age</p>
+            <p className="text-[11px] sm:text-xs font-bold text-white">{student.age}</p>
           </div>
         </div>
 
@@ -321,7 +321,7 @@ export const ProfileSidebar = ({
       </div>
 
       {/* Parent Details Card */}
-      <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-4 shadow-lg min-w-0">
+      <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-4 sm:p-5 shadow-lg min-w-0 w-full">
         <div className="flex items-center justify-between gap-2 mb-3">
           <h4 className="text-[#b4f44d] font-bold flex items-center gap-2 text-sm min-w-0">
             <Users className="w-5 h-5 shrink-0" /> Parents Details
