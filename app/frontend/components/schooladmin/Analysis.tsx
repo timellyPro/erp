@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSession } from "next-auth/react";
 import { motion } from "framer-motion";
 import {
   AreaChart,
@@ -100,75 +101,57 @@ type EnrollmentByClassSectionRow = {
 
 type GenderViewMode = "CLASS_WISE" | "SECTION_WISE";
 
-type AnalysisResponse = {
-  availableYears: number[];
-  classes?: { id: string; name: string; section: string | null }[];
-  selectedYear: number;
-  enrollmentByClassSection?: EnrollmentByClassSectionRow[];
-  enrollmentByClassSectionTotals?: { male: number; female: number; total: number };
-  admissionComparison?: Array<{
-    classLabel: string;
-    existingDayScholarMale: number;
-    existingDayScholarFemale: number;
-    existingHostelMale: number;
-    existingHostelFemale: number;
-    newDayScholarMale: number;
-    newDayScholarFemale: number;
-    newHostelMale: number;
-    newHostelFemale: number;
-  }>;
-  admissionComparisonTotals?: {
-    existingDayScholarMale: number;
-    existingDayScholarFemale: number;
-    existingHostelMale: number;
-    existingHostelFemale: number;
-    newDayScholarMale: number;
-    newDayScholarFemale: number;
-    newHostelMale: number;
-    newHostelFemale: number;
-  };
-  feeCollectionByClass?: FeeCollectionRow[];
-  feeCollectionTotals?: Omit<FeeCollectionRow, "classId">;
-  stats: {
-    feesCollected: number;
-    totalEnrollment: number;
-    avgTeacherRating: number;
-    avgExamScore: number;
-  };
-  charts: {
-    monthlyFeesCollection: { month: string; amount: number }[];
-    enrollmentGrowth: { year: number; count: number }[];
-    attendance: { students: number; teachers: number };
-    subjectPerformance: { subject: string; percentage: number }[];
-  };
-  topTeachers: { id: string; name: string; subject: string; rating: number }[];
-};
-
 import Spinner from "../common/Spinner";
 import SelectInput from "../common/SelectInput";
 import AnalysisSectionNav from "./AnalysisSectionNav";
 import StudentCredentialsPanel from "./analysis/student-credentials/StudentCredentialsPanel";
+import {
+  analysisHasTables,
+  defaultAnalysisStartYear,
+  fetchSchoolAnalysisFast,
+  fetchSchoolAnalysisTables,
+  peekSchoolAnalysis,
+  peekSchoolAnalysisAny,
+  type AnalysisSection,
+} from "@/lib/loadSchoolAnalysis";
+import {
+  analysisCacheKey,
+  setSchoolAnalysisCached,
+} from "@/lib/schoolAnalysisClientCache";
+import type { SchoolAnalysisPayload } from "@/lib/schoolAnalysisTypes";
 
-export type AnalysisSection =
-  | "overview"
-  | "gender-enrollment"
-  | "admission-comparison"
-  | "fee-collection"
-  | "student-credentials";
+type AnalysisResponse = SchoolAnalysisPayload;
+
+export type { AnalysisSection };
 
 type AnalysisDashboardProps = {
   section?: AnalysisSection;
 };
 
+function sectionNeedsTables(section: AnalysisSection): boolean {
+  return (
+    section === "gender-enrollment" ||
+    section === "admission-comparison" ||
+    section === "fee-collection"
+  );
+}
+
 /* ---------------- Component ---------------- */
 
 export default function AnalysisDashboard({ section = "overview" }: AnalysisDashboardProps) {
-  const [data, setData] = useState<AnalysisResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const defaultYear = defaultAnalysisStartYear();
+  const initialCached = peekSchoolAnalysisAny(defaultYear);
+  const [data, setData] = useState<AnalysisResponse | null>(initialCached);
+  const [shellLoading, setShellLoading] = useState(() => !initialCached?.stats);
+  const [tablesLoading, setTablesLoading] = useState(
+    () => sectionNeedsTables(section) && !analysisHasTables(initialCached)
+  );
   const [error, setError] = useState<string | null>(null);
-  // year is the start academic year; 0 indicates not yet loaded
-  const [year, setYear] = useState<number>(0);
+  const [year, setYear] = useState<number>(() => initialCached?.selectedYear ?? defaultYear);
   const [classId, setClassId] = useState("");
+  const { data: session, status: sessionStatus } = useSession();
+  const schoolId = session?.user?.schoolId ?? null;
+  const fetchAbortRef = useRef<AbortController | null>(null);
   const [enrollmentPage, setEnrollmentPage] = useState(1);
   const [feePage, setFeePage] = useState(1);
   const [genderViewMode, setGenderViewMode] = useState<GenderViewMode>("CLASS_WISE");
@@ -178,42 +161,96 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
   const [feeClassSectionFilter, setFeeClassSectionFilter] = useState("");
 
   useEffect(() => {
-    if (section === "student-credentials") {
-      setLoading(false);
+    if (section === "student-credentials") return;
+    if (sessionStatus !== "authenticated") return;
+
+    const sid = schoolId;
+    const cached =
+      (sid ? peekSchoolAnalysis(sid, year, classId) : null) ??
+      peekSchoolAnalysisAny(year, classId);
+
+    let shellReady = Boolean(cached?.stats);
+    if (cached) {
+      setData(cached);
       setError(null);
-      return;
+      setShellLoading(false);
+      setTablesLoading(sectionNeedsTables(section) && !analysisHasTables(cached));
     }
 
-    setLoading(true);
-    setError(null);
+    fetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
 
-    const params = new URLSearchParams();
-    if (year !== 0) params.set("year", String(year));
-    if (classId) params.set("classId", classId);
+    (async () => {
+      try {
+        if (!shellReady) {
+          const fast = await fetchSchoolAnalysisFast(year, {
+            schoolId: sid,
+            classId,
+            signal: controller.signal,
+          });
+          if (controller.signal.aborted) return;
+          shellReady = true;
+          setData((prev) => ({ ...(prev ?? {}), ...fast } as AnalysisResponse));
+          setShellLoading(false);
+          setError(null);
 
-    fetch(`/api/school/analysis?${params}`, {
-      credentials: "include",
-      cache: "no-store",
-    })
-      .then((res) => res.json())
-      .then((res: AnalysisResponse & { message?: string }) => {
-        if (res.message && !res.stats) {
-          setError(res.message ?? "Failed to load");
-          setData(null);
+          if (sectionNeedsTables(section) && !analysisHasTables(fast)) {
+            setTablesLoading(true);
+            const tables = await fetchSchoolAnalysisTables(year, {
+              schoolId: sid,
+              classId,
+              signal: controller.signal,
+            });
+            if (controller.signal.aborted) return;
+            setData((prev) => ({ ...(prev ?? {}), ...tables } as AnalysisResponse));
+            setTablesLoading(false);
+            return;
+          }
+        } else if (sectionNeedsTables(section) && !analysisHasTables(cached)) {
+          setTablesLoading(true);
+          const tables = await fetchSchoolAnalysisTables(year, {
+            schoolId: sid,
+            classId,
+            signal: controller.signal,
+          });
+          if (controller.signal.aborted) return;
+          setData((prev) => ({ ...(prev ?? {}), ...tables } as AnalysisResponse));
+          setTablesLoading(false);
           return;
         }
-        setData(res as AnalysisResponse);
-        // ensure year matches server suggestion
-        if (year === 0 && res.selectedYear) {
-          setYear(res.selectedYear);
+
+        if (!analysisHasTables(cached)) {
+          void fetchSchoolAnalysisTables(year, {
+            schoolId: sid,
+            classId,
+          })
+            .then((tables) => {
+              if (controller.signal.aborted) return;
+              setData((prev) => ({ ...(prev ?? {}), ...tables } as AnalysisResponse));
+              setTablesLoading(false);
+            })
+            .catch(() => {});
         }
-      })
-      .catch(() => {
-        setError("Failed to load analysis");
-        setData(null);
-      })
-      .finally(() => setLoading(false));
-  }, [year, classId, section]);
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("Analysis fetch error:", err);
+        if (!shellReady) {
+          setError(err instanceof Error ? err.message : "Failed to load analysis");
+          setData(null);
+        }
+      } finally {
+        if (!controller.signal.aborted) setShellLoading(false);
+      }
+    })();
+
+    return () => controller.abort();
+  }, [sessionStatus, schoolId, year, classId, section]);
+
+  useEffect(() => {
+    if (!schoolId || !data) return;
+    setSchoolAnalysisCached(analysisCacheKey(schoolId, year, classId), data);
+  }, [schoolId, data, year, classId]);
 
   useEffect(() => {
     setEnrollmentPage(1);
@@ -254,7 +291,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
     );
   }
 
-  if (loading) {
+  if (shellLoading && !data) {
     return (
       <div className="p-4 sm:p-6 text-white">
         <Spinner />
@@ -787,7 +824,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
 
       {/* Stats - responsive grid (overview only) */}
       {section === "overview" ? (
-      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6">
+      <div className={`grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6 ${shellLoading ? "animate-pulse" : ""}`}>
         {stats.map((stat, i) => (
           <div
             key={i}
@@ -1017,6 +1054,11 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
 
       {/* Enrollment by gender: class & section */}
       {section === "gender-enrollment" ? (
+      tablesLoading ? (
+        <div className="mt-4 flex min-h-[240px] items-center justify-center rounded-xl border border-white/10 bg-white/5">
+          <Spinner />
+        </div>
+      ) : (
       <div className="mt-0 sm:mt-0 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -1143,10 +1185,16 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
           onPageChange={setEnrollmentPage}
         />
       </div>
+      )
       ) : null}
 
       {/* New admission comparison report */}
       {section === "admission-comparison" ? (
+      tablesLoading ? (
+        <div className="mt-4 flex min-h-[240px] items-center justify-center rounded-xl border border-white/10 bg-white/5">
+          <Spinner />
+        </div>
+      ) : (
       <div className="mt-0 sm:mt-0 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
         <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -1237,10 +1285,16 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
           </table>
         </div>
       </div>
+      )
       ) : null}
 
       {/* Fee collection: class & section */}
       {section === "fee-collection" ? (
+      tablesLoading ? (
+        <div className="mt-4 flex min-h-[240px] items-center justify-center rounded-xl border border-white/10 bg-white/5">
+          <Spinner />
+        </div>
+      ) : (
       <div className="mt-0 sm:mt-0 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
         <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -1367,6 +1421,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
           onPageChange={setFeePage}
         />
       </div>
+      )
       ) : null}
     </div>
   );

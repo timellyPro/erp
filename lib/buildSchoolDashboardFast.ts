@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import prisma from "@/lib/db";
-import { buildSchoolDashboardCollectionSummary } from "@/lib/buildSchoolDashboardCollection";
+import { buildSchoolDashboardDayCollectionBundle } from "@/lib/buildSchoolDashboardCollection";
 import { peekSchoolDashboardFeeTotals } from "@/lib/schoolDashboardFeeTotals";
 import {
   getSchoolDashboardServerCached,
@@ -14,29 +14,25 @@ function formatCurrency(n: number) {
   return `₹${Math.round(n)}`;
 }
 
-/** Fast dashboard shell — counts, attendance, day collection only (no fee DB scan). */
+/** Fast dashboard shell — counts, attendance, day collection + fee-head breakdown. */
 export async function buildSchoolDashboardFast(schoolId: string, dateParam: string) {
-  const fullKey = `dashboard:${schoolId}:${dateParam}`;
-  const fullCached = getSchoolDashboardServerCached<Record<string, unknown>>(fullKey);
-  if (fullCached) return fullCached;
-
   const cacheKey = `dashboard:fast:${schoolId}:${dateParam}`;
   const cached = getSchoolDashboardServerCached<Record<string, unknown>>(cacheKey);
-  if (cached) return cached;
+  if (cached?.todayCollectionByHead) return cached;
 
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const todayEnd = new Date(todayStart);
   todayEnd.setDate(todayEnd.getDate() + 1);
 
-  const [countsRows, collection, todayAttendance, feeCached] = await Promise.all([
+  const [countsRows, dayCollection, todayAttendance, feeCached] = await Promise.all([
     prisma.$queryRaw<Array<{ classes: bigint; students: bigint; teachers: bigint }>>(Prisma.sql`
       SELECT
         (SELECT COUNT(*)::bigint FROM "Class" WHERE "schoolId" = ${schoolId}) AS classes,
         (SELECT COUNT(*)::bigint FROM "Student" WHERE "schoolId" = ${schoolId} AND status = 'Active') AS students,
         (SELECT COUNT(*)::bigint FROM "User" WHERE "schoolId" = ${schoolId} AND role = 'TEACHER') AS teachers
     `),
-    buildSchoolDashboardCollectionSummary(schoolId, dateParam),
+    buildSchoolDashboardDayCollectionBundle(schoolId, dateParam),
     prisma.$queryRaw<Array<{ status: string; count: bigint }>>(Prisma.sql`
       SELECT a.status, COUNT(*)::bigint AS count
       FROM "Attendance" a
@@ -69,6 +65,9 @@ export async function buildSchoolDashboardFast(schoolId: string, dateParam: stri
   const totalToday = present + absent + late;
   const overallPct = totalToday > 0 ? ((present + late) / totalToday) * 100 : 0;
 
+  const collection = dayCollection.summary;
+  const byHead = dayCollection.byHead;
+
   const payload = {
     stats: {
       totalClasses: classCount,
@@ -98,6 +97,7 @@ export async function buildSchoolDashboardFast(schoolId: string, dateParam: stri
     workshops: [],
     todayCollectionByMethod: collection.todayCollectionByMethod,
     collectionDate: collection.collectionDate,
+    todayCollectionByHead: byHead,
     teachersOnLeave: [],
     recentActivities: [],
     latestNews: [],

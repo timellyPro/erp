@@ -13,6 +13,7 @@ import {
   feeHeadLinesFromMap,
 } from "@/lib/paymentFeeHeadLines";
 import { resolveStudentDisplayClass } from "@/lib/resolveStudentDisplayClass";
+import { resolveStudentDisplayName } from "@/lib/resolveStudentDisplayName";
 import {
   loadStudentAdmissionApplicationPayments,
   mergeStudentProfilePayments,
@@ -238,6 +239,9 @@ const studentDetailsInclude = {
   },
   application: {
     select: {
+      firstName: true,
+      middleName: true,
+      lastName: true,
       parentEmail: true,
       officeAddress: true,
       parentAadharNo: true,
@@ -299,6 +303,14 @@ export async function buildStudentDetailsShellPayload(
     academicPerformance: [],
     certificates: [],
   });
+}
+
+/** After fee payment — payments list only (skips attendance/marks/certificates). */
+export async function buildStudentDetailsPaymentsOnly(
+  studentId: string
+): Promise<Pick<StudentDetailsTabExtras, "payments">> {
+  const bundle = await loadPaymentsWithFeeTypes(studentId);
+  return { payments: bundle.payments };
 }
 
 /** Deferred load: payments, attendance, marks, certificates. */
@@ -409,7 +421,7 @@ function mapStudentToTabPayload(
   return {
     student: {
       id: student.id,
-      name: student.user?.name ?? "",
+      name: resolveStudentDisplayName(student),
       schoolName: student.school?.name ?? "",
       admissionNumber: student.admissionNumber,
       email: student.user?.email ?? "",

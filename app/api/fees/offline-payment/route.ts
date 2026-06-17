@@ -20,7 +20,10 @@ import {
 } from "@/lib/recordFastOfflineFeePayment";
 
 export async function POST(req: Request) {
-  const session = await getServerSession(authOptions);
+  const [session, body] = await Promise.all([
+    getServerSession(authOptions),
+    req.json().catch(() => null),
+  ]);
   if (!session?.user) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
@@ -33,14 +36,17 @@ export async function POST(req: Request) {
   }
 
   try {
-    const schoolId = await resolveFeesSchoolId(session);
+    const schoolId = session.user.schoolId ?? (await resolveFeesSchoolId(session));
     if (!schoolId) {
       return NextResponse.json({ message: "School not found in session" }, { status: 400 });
     }
 
     const collector = resolveOfflinePaymentCollectorFromSession(session);
 
-    const body = await req.json();
+    if (!body || typeof body !== "object") {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+
     const {
       studentId,
       amount: rawAmount,

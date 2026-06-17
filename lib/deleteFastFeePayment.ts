@@ -27,10 +27,14 @@ export type DeleteFeePaymentResult = {
  */
 export async function deleteFastFeePayment(
   paymentId: string,
-  schoolId: string
+  schoolId: string,
+  expectedStudentId?: string
 ): Promise<DeleteFeePaymentResult> {
   const payment = await prisma.payment.findFirst({
-    where: { id: paymentId, student: { schoolId } },
+    where: {
+      id: paymentId,
+      ...(expectedStudentId ? { studentId: expectedStudentId } : {}),
+    },
     select: {
       id: true,
       studentId: true,
@@ -38,10 +42,11 @@ export async function deleteFastFeePayment(
       status: true,
       purpose: true,
       eventRegistrationId: true,
+      student: { select: { schoolId: true } },
     },
   });
 
-  if (!payment) {
+  if (!payment || payment.student.schoolId !== schoolId) {
     throw new Error("Payment not found");
   }
 

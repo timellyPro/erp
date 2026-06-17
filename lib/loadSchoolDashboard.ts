@@ -5,6 +5,7 @@ import {
   setSchoolDashboardCached,
   type SchoolDashboardPayload,
 } from "@/lib/schoolDashboardClientCache";
+import { setSchoolDashboardCollectionHeadsCached } from "@/lib/loadSchoolDashboardCollection";
 
 export { peekSchoolDashboardAny };
 
@@ -39,6 +40,9 @@ export async function fetchSchoolDashboardFast(
 
   const run = (async () => {
     const payload = await fetchDashboardUrl(dateYmd, { ...options, fast: true });
+    if (payload.todayCollectionByHead) {
+      setSchoolDashboardCollectionHeadsCached(dateYmd, payload.todayCollectionByHead);
+    }
     const cacheId = options?.schoolId;
     if (cacheId) {
       setSchoolDashboardCached(dashboardCacheKey(cacheId, dateYmd), payload);

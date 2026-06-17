@@ -12,7 +12,7 @@ export const AcademicPerformance = ({ data = [], rightAction }: Props) => {
   const chartData = data.length > 0 ? data : [];
 
   return (
-    <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl sm:rounded-[32px] p-4 sm:p-8 w-full max-w-3xl min-w-0 overflow-hidden">
+    <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl sm:rounded-[32px] p-4 sm:p-8 w-full min-w-0 overflow-hidden">
       <div className="flex flex-col gap-4 mb-6 sm:mb-10 min-w-0">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h3 className="text-white text-lg sm:text-2xl font-bold flex items-center gap-2 sm:gap-3 min-w-0">

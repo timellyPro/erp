@@ -23,6 +23,8 @@ import SchoolAdminTeacherTab from "../../components/schooladmin/TeachersTab";
 import SchoolAdminCircularsTab from "../../components/schooladmin/circularTab";
 import AdmissionTab from "../../components/teacher/admission/Admission";
 import { fetchSchoolDashboardFast } from "@/lib/loadSchoolDashboard";
+import { warmSchoolDashboardCollectionHeads } from "@/lib/loadSchoolDashboardCollection";
+import { warmSchoolAnalysisPage } from "@/lib/loadSchoolAnalysis";
 import { warmSchoolFeesPage } from "@/lib/loadSchoolFeesPage";
 import { warmAddUserPage } from "@/lib/fetchAddUserPage";
 import { warmTeachersPage } from "@/lib/fetchTeachersPage";
@@ -77,7 +79,10 @@ function SchoolAdminContent() {
   useEffect(() => {
     const sid = session?.user?.schoolId;
     if (!sid) return;
-    void fetchSchoolDashboardFast(todayYmdLocal(), { schoolId: sid }).catch(() => {});
+    const today = todayYmdLocal();
+    void fetchSchoolDashboardFast(today, { schoolId: sid }).catch(() => {});
+    warmSchoolDashboardCollectionHeads(today);
+    warmSchoolAnalysisPage(sid);
     warmSchoolFeesPage(sid);
     warmAddUserPage(sid);
     warmTeachersPage(sid);

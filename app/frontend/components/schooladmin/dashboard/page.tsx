@@ -11,6 +11,9 @@ import { todayYmdLocal } from "@/lib/schoolDashboardCollection";
 import {
   loadSchoolDashboardCollectionHeads,
   loadSchoolDashboardCollectionSummary,
+  peekSchoolDashboardCollectionHeads,
+  setSchoolDashboardCollectionHeadsCached,
+  warmSchoolDashboardCollectionHeads,
 } from "@/lib/loadSchoolDashboardCollection";
 import {
   fetchSchoolDashboard,
@@ -31,14 +34,25 @@ import { useSession } from "next-auth/react";
 export default function Dashboard() {
   const today = todayYmdLocal();
   const initialCached = peekSchoolDashboardAny(today);
-  const [data, setData] = useState<SchoolDashboardPayload | null>(initialCached);
+  const initialHeads =
+    initialCached?.todayCollectionByHead ?? peekSchoolDashboardCollectionHeads(today);
+  const [data, setData] = useState<SchoolDashboardPayload | null>(() =>
+    initialCached
+      ? {
+          ...initialCached,
+          ...(initialHeads ? { todayCollectionByHead: initialHeads } : {}),
+        }
+      : null
+  );
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const [selectedCollectionDate, setSelectedCollectionDate] = useState(() => todayYmdLocal());
   const [collectionLoading, setCollectionLoading] = useState(false);
-  const [headsLoading, setHeadsLoading] = useState(false);
+  const [headsLoading, setHeadsLoading] = useState(() => !initialHeads);
   const lastFetchedSummaryDateRef = useRef<string | null>(null);
-  const lastFetchedHeadsDateRef = useRef<string | null>(null);
+  const lastFetchedHeadsDateRef = useRef<string | null>(
+    initialHeads ? today : null
+  );
   const collectionAbortRef = useRef<AbortController | null>(null);
   const headsAbortRef = useRef<AbortController | null>(null);
   const { data: session, status: sessionStatus } = useSession();
@@ -59,7 +73,9 @@ export default function Dashboard() {
 
       const merged: SchoolDashboardPayload = { ...incoming };
 
-      if (
+      if (incoming.todayCollectionByHead) {
+        merged.todayCollectionByHead = incoming.todayCollectionByHead;
+      } else if (
         prev.todayCollectionByHead &&
         headsDateLoaded === selectedCollectionDate
       ) {
@@ -93,11 +109,20 @@ export default function Dashboard() {
 
     let shellLoaded = Boolean(cached);
     if (cached) {
-      setData(cached);
+      const cachedHeads =
+        cached.todayCollectionByHead ?? peekSchoolDashboardCollectionHeads(today);
+      setData(
+        cachedHeads
+          ? { ...cached, todayCollectionByHead: cachedHeads }
+          : cached
+      );
       setError(null);
       lastFetchedSummaryDateRef.current = today;
-      lastFetchedHeadsDateRef.current = null;
+      lastFetchedHeadsDateRef.current = cachedHeads ? today : null;
+      setHeadsLoading(!cachedHeads);
     }
+
+    warmSchoolDashboardCollectionHeads(today);
 
     let cancelled = false;
 
@@ -108,7 +133,15 @@ export default function Dashboard() {
           if (cancelled) return;
           shellLoaded = true;
           const headsDate = lastFetchedHeadsDateRef.current;
-          setData((prev) => mergeDashboardShell(prev, fast, headsDate));
+          setData((prev) => {
+            const merged = mergeDashboardShell(prev, fast, headsDate);
+            if (fast.todayCollectionByHead) {
+              setSchoolDashboardCollectionHeadsCached(today, fast.todayCollectionByHead);
+              lastFetchedHeadsDateRef.current = today;
+              setHeadsLoading(false);
+            }
+            return merged;
+          });
           setError(null);
           lastFetchedSummaryDateRef.current = today;
         }
@@ -128,7 +161,15 @@ export default function Dashboard() {
       .then((full) => {
         if (cancelled) return;
         const headsDate = lastFetchedHeadsDateRef.current;
-        setData((prev) => mergeDashboardShell(prev, full, headsDate));
+        setData((prev) => {
+          const merged = mergeDashboardShell(prev, full, headsDate);
+          if (full.todayCollectionByHead) {
+            setSchoolDashboardCollectionHeadsCached(today, full.todayCollectionByHead);
+            lastFetchedHeadsDateRef.current = today;
+            setHeadsLoading(false);
+          }
+          return merged;
+        });
         setError(null);
         lastFetchedSummaryDateRef.current = today;
       })
@@ -225,12 +266,23 @@ export default function Dashboard() {
   );
 
   useEffect(() => {
-    if (!data) return;
+    if (sessionStatus !== "authenticated") return;
+    warmSchoolDashboardCollectionHeads(selectedCollectionDate);
     const headsLoadedForDate = lastFetchedHeadsDateRef.current === selectedCollectionDate;
-    const headsPresent = Boolean(data.todayCollectionByHead);
-    if (headsLoadedForDate && headsPresent) return;
+    const headsPresent = Boolean(
+      data?.todayCollectionByHead ?? peekSchoolDashboardCollectionHeads(selectedCollectionDate)
+    );
+    if (headsLoadedForDate && headsPresent) {
+      const peeked = peekSchoolDashboardCollectionHeads(selectedCollectionDate);
+      if (peeked && !data?.todayCollectionByHead) {
+        setData((prev) => (prev ? { ...prev, todayCollectionByHead: peeked } : prev));
+        lastFetchedHeadsDateRef.current = selectedCollectionDate;
+        setHeadsLoading(false);
+      }
+      return;
+    }
     void fetchCollectionHeadsForDate(selectedCollectionDate, !headsPresent);
-  }, [data, selectedCollectionDate, fetchCollectionHeadsForDate]);
+  }, [sessionStatus, data, selectedCollectionDate, fetchCollectionHeadsForDate]);
 
   useEffect(() => {
     return () => {

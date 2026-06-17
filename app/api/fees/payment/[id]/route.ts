@@ -231,7 +231,7 @@ export async function PATCH(req: Request, context: RouteParams) {
  * DELETE /api/fees/payment/:id
  * Removes a fee payment row and reverses its effect on StudentFee when it was successful.
  */
-export async function DELETE(_req: Request, context: RouteParams) {
+export async function DELETE(req: Request, context: RouteParams) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
@@ -245,9 +245,9 @@ export async function DELETE(_req: Request, context: RouteParams) {
   }
 
   try {
-    const schoolId = await resolveFeesSchoolId(session);
+    const schoolId = session.user.schoolId ?? (await resolveFeesSchoolId(session));
     if (!schoolId) {
-      return NextResponse.json({ message: "School not found" }, { status: 400 });
+      return NextResponse.json({ message: "School not found in session" }, { status: 400 });
     }
 
     const { id: paymentId } = await context.params;
@@ -255,7 +255,10 @@ export async function DELETE(_req: Request, context: RouteParams) {
       return NextResponse.json({ message: "Invalid payment id" }, { status: 400 });
     }
 
-    const result = await deleteFastFeePayment(paymentId, schoolId);
+    const expectedStudentId =
+      new URL(req.url).searchParams.get("studentId")?.trim() || undefined;
+
+    const result = await deleteFastFeePayment(paymentId, schoolId, expectedStudentId);
     return NextResponse.json({ success: true, ...result }, { status: 200 });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Internal server error";
