@@ -113,6 +113,8 @@ function mergeStudentPayments(
     excludeIds?: Set<string>;
     /** After delete — do not re-add stale server rows the client already removed. */
     trustPrimaryIds?: boolean;
+    /** Drop a pending-* row once the server returns the confirmed payment. */
+    optimisticPendingId?: string;
   }
 ): StudentDetailsTabPayload["payments"] {
   const exclude = options?.excludeIds ?? new Set<string>();
@@ -121,9 +123,34 @@ function mergeStudentPayments(
     if (p?.id && !exclude.has(p.id)) serverById.set(p.id, p);
   }
 
+  const serverMatchesPending = (pending: StudentDetailsTabPayload["payments"][number]) =>
+    [...serverById.values()].some((s) => {
+      if (Math.abs(s.amount - pending.amount) > 0.01) return false;
+      const pendingTxn = (pending.transactionId ?? "").trim();
+      const serverTxn = (s.transactionId ?? "").trim();
+      if (pendingTxn && serverTxn) return pendingTxn === serverTxn;
+      if (!pendingTxn && !serverTxn) {
+        return (
+          Math.abs(new Date(s.createdAt).getTime() - new Date(pending.createdAt).getTime()) <
+          5 * 60 * 1000
+        );
+      }
+      return false;
+    });
+
+  const filteredPrimary = primary.filter((p) => {
+    if (!p?.id || exclude.has(p.id)) return false;
+    if (options?.optimisticPendingId && p.id === options.optimisticPendingId) {
+      return !serverMatchesPending(p);
+    }
+    if (p.id.startsWith("pending-")) {
+      return !serverMatchesPending(p);
+    }
+    return true;
+  });
+
   if (options?.trustPrimaryIds) {
-    return primary
-      .filter((p) => p?.id && !exclude.has(p.id))
+    return filteredPrimary
       .map((p) => serverById.get(p.id) ?? p)
       .sort(
         (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
@@ -131,10 +158,44 @@ function mergeStudentPayments(
   }
 
   const byId = new Map<string, StudentDetailsTabPayload["payments"][number]>(serverById);
-  for (const p of primary) {
-    if (p?.id && !exclude.has(p.id) && !byId.has(p.id)) byId.set(p.id, p);
+  for (const p of filteredPrimary) {
+    if (p?.id && !byId.has(p.id)) byId.set(p.id, p);
   }
-  return [...byId.values()].sort(
+
+  const byTxn = new Map<string, StudentDetailsTabPayload["payments"][number]>();
+  const deduped: StudentDetailsTabPayload["payments"] = [];
+  for (const p of byId.values()) {
+    const txn = (p.transactionId ?? "").trim();
+    if (!txn || txn === "N/A") {
+      deduped.push(p);
+      continue;
+    }
+    const prev = byTxn.get(txn);
+    if (!prev) {
+      byTxn.set(txn, p);
+      deduped.push(p);
+      continue;
+    }
+    if (Math.abs(prev.amount - p.amount) > 0.01) {
+      deduped.push(p);
+      continue;
+    }
+    const keep =
+      prev.id.startsWith("pending-") && !p.id.startsWith("pending-")
+        ? p
+        : !prev.id.startsWith("pending-") && p.id.startsWith("pending-")
+          ? prev
+          : new Date(p.createdAt).getTime() >= new Date(prev.createdAt).getTime()
+            ? p
+            : prev;
+    const drop = keep.id === prev.id ? p : prev;
+    const dropIdx = deduped.findIndex((row) => row.id === drop.id);
+    if (dropIdx >= 0) deduped.splice(dropIdx, 1);
+    byTxn.set(txn, keep);
+    if (!deduped.some((row) => row.id === keep.id)) deduped.push(keep);
+  }
+
+  return deduped.sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
 }
@@ -203,6 +264,7 @@ export async function refreshStudentFeesAfterMutation(
     keepPatchedBreakdown?: boolean;
     excludePaymentIds?: string[];
     trustClientPaymentList?: boolean;
+    optimisticPendingId?: string;
   }
 ): Promise<StudentDetailsFastBundle | null> {
   const inflightKey = `fees-refresh:${studentId}`;
@@ -228,6 +290,7 @@ async function refreshStudentFeesAfterMutationInner(
     keepPatchedBreakdown?: boolean;
     excludePaymentIds?: string[];
     trustClientPaymentList?: boolean;
+    optimisticPendingId?: string;
   }
 ): Promise<StudentDetailsFastBundle | null> {
   if (options?.keepPatchedBreakdown) {
@@ -283,6 +346,7 @@ async function refreshStudentFeesAfterMutationInner(
     const mergedPayments = mergeStudentPayments(existingShell.payments ?? [], extras.payments, {
       excludeIds,
       trustPrimaryIds: options?.trustClientPaymentList,
+      optimisticPendingId: options?.optimisticPendingId,
     });
     const mergedExtras: StudentDetailsTabExtras = {
       payments: mergedPayments,
@@ -293,13 +357,37 @@ async function refreshStudentFeesAfterMutationInner(
     const patchedBreakdown = getFeeBreakdownCached(studentId);
 
     // Keep optimistic breakdown visible — only replace UI when fresh server data arrives.
-    void fetchFeeBreakdownFast(studentId, { force: true }).then((breakdown) => {
+    void fetchFeeBreakdownFast(studentId, { force: true }).then(async (breakdown) => {
       const effectiveBreakdown = preferFreshBreakdown(breakdown, patchedBreakdown);
       if (!effectiveBreakdown) return;
       setFeeBreakdownCache(studentId, effectiveBreakdown);
+
+      let latestPayments = mergedPayments;
+      try {
+        const extrasRes = await fetch(
+          `/api/student/${encodeURIComponent(studentId)}/details-bundle?extras=1&scope=payments&refresh=1`,
+          { credentials: "include", cache: "no-store" }
+        );
+        if (extrasRes.ok) {
+          const freshExtras = parseExtras(await extrasRes.json().catch(() => ({})));
+          latestPayments = mergeStudentPayments(existingShell.payments ?? [], freshExtras.payments, {
+            excludeIds,
+            trustPrimaryIds: options?.trustClientPaymentList,
+            optimisticPendingId: options?.optimisticPendingId,
+          });
+        }
+      } catch {
+        /* keep first merge */
+      }
+
       const full = toBundle(
-        { ...existingShell, payments: mergedPayments },
-        mergedExtras,
+        { ...existingShell, payments: latestPayments },
+        {
+          payments: latestPayments,
+          attendanceTrends: existingShell.attendanceTrends ?? [],
+          academicPerformance: existingShell.academicPerformance ?? [],
+          certificates: existingShell.certificates ?? [],
+        },
         effectiveBreakdown
       );
       cacheBundle(studentId, full);

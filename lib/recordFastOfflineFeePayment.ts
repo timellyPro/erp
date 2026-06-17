@@ -1,5 +1,9 @@
 import prisma from "@/lib/db";
 import { canonicalizeGatewayForStorage } from "@/lib/feePaymentGateway";
+import {
+  findExistingOfflinePaymentByRef,
+  resolveOfflinePaymentTransactionId,
+} from "@/lib/offlinePaymentIdempotency";
 import { FEE_MUTATION_TX } from "@/lib/prismaFeeMutationTx";
 import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
 
@@ -175,16 +179,51 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
   const newRemaining = Math.max(Math.round((fee.remainingFee - amount) * 100) / 100, 0);
 
   const offlineGateway = resolveGateway(paymentMode);
-  const normalizedRef = typeof refNo === "string" ? refNo.trim() : "";
-  const normalizedTxn = typeof transactionId === "string" ? transactionId.trim() : "";
-  const txId = normalizedTxn || normalizedRef || null;
+  const txId = resolveOfflinePaymentTransactionId(transactionId, refNo);
   const selectedPaymentDate = parsePaymentDate(paymentDate);
   if (paymentDate?.trim() && !selectedPaymentDate) {
     throw new Error("Invalid paymentDate");
   }
 
-    const result = await prisma.$transaction(
+  const result = await prisma.$transaction(
     async (tx) => {
+      if (txId) {
+        const existing = await findExistingOfflinePaymentByRef(tx, studentId, txId);
+        if (existing) {
+          const allocations = await tx.paymentFeeAllocation.findMany({
+            where: { paymentId: existing.id, allocationType: "PAYMENT" },
+            select: {
+              componentName: true,
+              allocatedAmount: true,
+              headType: true,
+              extraFeeId: true,
+            },
+          });
+          const extraIds = allocations
+            .filter((a) => a.headType === "EXTRA_FEE" && a.extraFeeId)
+            .map((a) => a.extraFeeId as string);
+          const extraNameById = new Map<string, string>();
+          if (extraIds.length > 0) {
+            const extras = await tx.extraFee.findMany({
+              where: { id: { in: extraIds }, schoolId },
+              select: { id: true, name: true },
+            });
+            for (const ef of extras) extraNameById.set(ef.id, ef.name);
+          }
+          return {
+            payment: existing,
+            idempotent: true as const,
+            feeAllocations: allocations.map((a) => ({
+              name:
+                a.headType === "EXTRA_FEE"
+                  ? extraNameById.get(a.extraFeeId as string) ?? "Extra Fee"
+                  : String(a.componentName ?? "Fee"),
+              amount: a.allocatedAmount,
+            })),
+          };
+        }
+      }
+
       const payment = await tx.payment.create({
         data: {
           studentId,
@@ -225,26 +264,32 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
         throw new Error("Amount exceeds remaining due or fee was updated concurrently");
       }
 
-      return { payment };
+      return { payment, idempotent: false as const, feeAllocations: null as null };
     },
     FEE_MUTATION_TX
   );
 
-  invalidateStudentFeeReadCaches({ studentId, schoolId });
+  if (!result.idempotent) {
+    invalidateStudentFeeReadCaches({ studentId, schoolId });
+  }
+
+  const allocationLines =
+    result.feeAllocations ??
+    paymentAllocationsData.map((d, index) => ({
+      name: d.lineName,
+      amount: d.allocatedAmount,
+      key: normalizedAllocations[index]?.key,
+    }));
 
   return {
     payment: result.payment,
     updatedFee: {
-      amountPaid: newAmountPaid,
-      remainingFee: newRemaining,
+      amountPaid: result.idempotent ? fee.amountPaid : newAmountPaid,
+      remainingFee: result.idempotent ? fee.remainingFee : newRemaining,
       finalFee: fee.finalFee,
       totalFee: fee.totalFee,
     },
-    feeAllocations: paymentAllocationsData.map((d, index) => ({
-      name: d.lineName,
-      amount: d.allocatedAmount,
-      key: normalizedAllocations[index]?.key,
-    })),
+    feeAllocations: allocationLines,
   };
 }
 

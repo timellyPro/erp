@@ -271,27 +271,29 @@ function reconcilePaymentId(
   result: FeePaymentSuccess
 ): StudentDetail | null {
   if (!prev || !result.payment.id) return prev;
-  return {
-    ...prev,
-    payments: prev.payments.map((p) =>
-      p.id === tempId
-        ? {
-            ...p,
-            id: result.payment.id,
-            amount: result.payment.amount,
-            status: result.payment.status || "SUCCESS",
-            method: String(result.payment.gateway ?? p.method),
-            createdAt:
-              typeof result.payment.createdAt === "string"
-                ? result.payment.createdAt
-                : p.createdAt,
-            transactionId: result.payment.transactionId ?? p.transactionId,
-            collectedByName: result.payment.collectedByName ?? p.collectedByName,
-            collectedByUserId: result.payment.collectedByUserId ?? p.collectedByUserId,
-          }
-        : p
-    ),
+  const realId = result.payment.id;
+  const reconciledRow = {
+    id: realId,
+    amount: result.payment.amount,
+    status: result.payment.status || "SUCCESS",
+    method: String(result.payment.gateway ?? "OFFLINE_CASH"),
+    createdAt:
+      typeof result.payment.createdAt === "string"
+        ? result.payment.createdAt
+        : new Date().toISOString(),
+    transactionId: result.payment.transactionId ?? null,
+    collectedByName: result.payment.collectedByName ?? null,
+    collectedByUserId: result.payment.collectedByUserId ?? null,
+    feeAllocations: result.feeAllocations,
   };
+
+  const withoutTemp = prev.payments.filter((p) => p.id !== tempId);
+  const hasReal = withoutTemp.some((p) => p.id === realId);
+  const payments = hasReal
+    ? withoutTemp
+    : [reconciledRow, ...withoutTemp.filter((p) => p.id !== realId)];
+
+  return { ...prev, payments };
 }
 
 function buildOptimisticPaymentResult(
@@ -859,6 +861,9 @@ function StudentDetailsPageContent() {
             void refreshStudentFeesAfterMutation(studentId, {
               keepShell: next as unknown as StudentDetailsTabPayload,
               keepPatchedBreakdown: true,
+              optimisticPendingId: paymentResult.payment.id.startsWith("pending-")
+                ? paymentResult.payment.id
+                : undefined,
               onPartial: (partial) => {
                 if (partial.student?.id === studentId) applyDetailsBundle(partial);
               },
