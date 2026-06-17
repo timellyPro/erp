@@ -12,6 +12,10 @@ import { discountedSnapshotDueForHead, studentFeeDiscountFromRecord } from "@/li
 import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 import { canonicalizeGatewayForStorage } from "@/lib/feePaymentGateway";
+import {
+  findExistingOfflinePaymentByRef,
+  resolveOfflinePaymentTransactionId,
+} from "@/lib/offlinePaymentIdempotency";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import { resolveOfflinePaymentCollectorFromSession } from "@/lib/offlinePaymentCollector";
 import {
@@ -416,9 +420,7 @@ export async function POST(req: Request) {
     const offlineGateway = token.startsWith("OFFLINE_")
       ? canonicalizeGatewayForStorage(token)
       : canonicalizeGatewayForStorage(`OFFLINE_${token}`);
-    const normalizedRef = typeof refNo === "string" ? refNo.trim() : "";
-    const normalizedTxn = typeof transactionId === "string" ? transactionId.trim() : "";
-    const txId = normalizedTxn || normalizedRef || null;
+    const txId = resolveOfflinePaymentTransactionId(transactionId, refNo);
     const selectedPaymentDate =
       typeof paymentDate === "string" && paymentDate.trim()
         ? new Date(`${paymentDate.trim()}T12:00:00.000Z`)
@@ -429,6 +431,14 @@ export async function POST(req: Request) {
 
     const paymentAndAllocations = await prisma.$transaction(
       async (tx) => {
+        if (txId) {
+          const existing = await findExistingOfflinePaymentByRef(tx, studentId, txId);
+          if (existing) {
+            const updatedFee = await tx.studentFee.findUnique({ where: { studentId } });
+            return { payment: existing, updatedFee, idempotent: true as const };
+          }
+        }
+
         const payment = await tx.payment.create({
           data: {
             studentId,
@@ -462,14 +472,16 @@ export async function POST(req: Request) {
           data: { amountPaid: newAmountPaid, remainingFee: newRemaining },
         });
 
-        return { payment, updatedFee };
+        return { payment, updatedFee, idempotent: false as const };
       },
       FEE_MUTATION_TX
     );
 
-    invalidateStudentFeeReadCaches({ studentId, schoolId });
+    if (!paymentAndAllocations.idempotent) {
+      invalidateStudentFeeReadCaches({ studentId, schoolId });
+    }
 
-    const allocationLines = paymentAllocationsData
+    let allocationLines = paymentAllocationsData
       .filter((d) => d.allocatedAmount > 0.00001)
       .map((d) => ({
         name:
@@ -479,19 +491,56 @@ export async function POST(req: Request) {
         amount: d.allocatedAmount,
       }));
 
+    if (paymentAndAllocations.idempotent) {
+      const existingAllocations = await prisma.paymentFeeAllocation.findMany({
+        where: { paymentId: paymentAndAllocations.payment.id, allocationType: "PAYMENT" },
+        select: {
+          headType: true,
+          componentName: true,
+          extraFeeId: true,
+          allocatedAmount: true,
+        },
+      });
+      const extraIds = existingAllocations
+        .filter((a) => a.headType === "EXTRA_FEE" && a.extraFeeId)
+        .map((a) => a.extraFeeId as string);
+      const extraNameById = new Map<string, string>();
+      if (extraIds.length > 0) {
+        const extras = await prisma.extraFee.findMany({
+          where: { id: { in: extraIds }, schoolId },
+          select: { id: true, name: true },
+        });
+        for (const ef of extras) extraNameById.set(ef.id, ef.name);
+      }
+      allocationLines = existingAllocations.map((a) => ({
+        name:
+          a.headType === "EXTRA_FEE"
+            ? extraNameById.get(a.extraFeeId as string) ?? "Extra Fee"
+            : String(a.componentName ?? "Fee"),
+        amount: a.allocatedAmount,
+      }));
+    }
+
+    const updatedFeeRow = paymentAndAllocations.updatedFee;
+    if (!updatedFeeRow) {
+      return NextResponse.json({ message: "Fee record not found for this student" }, { status: 404 });
+    }
+
     return NextResponse.json(
       {
         payment: paymentAndAllocations.payment,
         updatedFee: {
-          amountPaid: paymentAndAllocations.updatedFee.amountPaid,
-          remainingFee: paymentAndAllocations.updatedFee.remainingFee,
-          finalFee: paymentAndAllocations.updatedFee.finalFee,
-          totalFee: paymentAndAllocations.updatedFee.totalFee,
+          amountPaid: updatedFeeRow.amountPaid,
+          remainingFee: updatedFeeRow.remainingFee,
+          finalFee: updatedFeeRow.finalFee,
+          totalFee: updatedFeeRow.totalFee,
         },
         feeAllocations: allocationLines,
-        message: "Payment recorded successfully",
+        message: paymentAndAllocations.idempotent
+          ? "Payment already recorded for this reference"
+          : "Payment recorded successfully",
       },
-      { status: 201 }
+      { status: paymentAndAllocations.idempotent ? 200 : 201 }
     );
   } catch (error: any) {
     console.error("Offline payment error:", error);
