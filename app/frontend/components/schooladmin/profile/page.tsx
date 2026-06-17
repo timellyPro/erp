@@ -1108,7 +1108,7 @@ function StudentDetailsPageContent() {
   const sectionOptions = [{ label: "All Sections", value: "" }, ...sections.map((s) => ({ label: s, value: s }))];
 
   return (
-    <div className="space-y-4 sm:space-y-6 md:space-y-8 w-full min-h-0 min-w-0 overflow-y-auto overflow-x-hidden pb-6 sm:pb-8">
+    <div className="space-y-4 sm:space-y-6 md:space-y-8 w-full min-h-0 min-w-0 overflow-x-hidden pb-6 sm:pb-8">
       <PageHeader
         compact
         title="Student Details"
@@ -1134,9 +1134,9 @@ function StudentDetailsPageContent() {
         onClose={() => setBulkExtraFeeOpen(false)}
         onApplied={() => setReloadKey((k) => k + 1)}
       />
-      <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-xl sm:rounded-2xl p-3 sm:p-6 overflow-visible relative z-20 min-w-0">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 md:gap-6 overflow-visible">
-          <div>
+      <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-xl sm:rounded-2xl p-3 sm:p-6 overflow-visible relative z-[60] isolate min-w-0">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4 md:gap-6 overflow-visible">
+          <div className="relative z-[60] min-w-0">
             <StudentSearchAutocomplete
               students={students}
               searchQuery={searchQuery}
@@ -1198,7 +1198,7 @@ function StudentDetailsPageContent() {
       {detail && (
         <>
           {showStickyStudentName && pageStudentName ? (
-            <div className="hidden lg:block fixed z-30 left-64 top-[5.5rem] w-[252px] xl:w-[268px] px-3 pointer-events-none">
+            <div className="hidden xl:block fixed z-30 left-64 top-[5.5rem] w-[280px] 2xl:w-[300px] px-2 pointer-events-none">
               <StudentNameCard
                 name={pageStudentName}
                 meta={pageStudentMeta}
@@ -1208,7 +1208,7 @@ function StudentDetailsPageContent() {
           ) : null}
 
           {showStickyStudentName && pageStudentName ? (
-            <div className="lg:hidden sticky top-0 z-30 -mx-3 sm:-mx-4 md:-mx-6 px-3 sm:px-4 md:px-6 py-2 mb-2 bg-[#070b14]/95 backdrop-blur-md border-b border-white/10">
+            <div className="xl:hidden sticky top-0 z-30 -mx-3 sm:-mx-4 md:-mx-6 px-3 sm:px-4 md:px-6 py-2 mb-2 bg-[#070b14]/95 backdrop-blur-md border-b border-white/10">
               <StudentNameCard name={pageStudentName} meta={pageStudentMeta} className="bg-transparent border-0 px-0 py-0" />
             </div>
           ) : null}
@@ -1221,10 +1221,10 @@ function StudentDetailsPageContent() {
             </div>
           ) : null}
 
-          <div className="flex flex-col lg:flex-row lg:flex-wrap gap-4 sm:gap-6 md:gap-8 min-w-0 w-full items-start">
+          <div className="flex flex-col xl:flex-row xl:flex-wrap gap-4 sm:gap-6 md:gap-8 min-w-0 w-full items-start">
             <aside
               ref={sidebarAsideRef}
-              className="w-full lg:w-[252px] xl:w-[268px] shrink-0 min-w-0 relative z-20 lg:sticky lg:top-[5.5rem] lg:self-start lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto"
+              className="w-full xl:w-[280px] 2xl:w-[300px] shrink-0 min-w-0 relative z-10 xl:sticky xl:top-[5.5rem] xl:self-start"
             >
             <ProfileSidebar
               studentId={detail.student.id}
@@ -1297,8 +1297,8 @@ function StudentDetailsPageContent() {
             />
             </aside>
 
-            <div className="flex-1 min-w-0 basis-full lg:basis-[calc(100%-268px-2rem)] space-y-4 sm:space-y-6 md:space-y-8">
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
+            <div className="flex-1 min-w-0 w-full xl:basis-[calc(100%-300px-2rem)] 2xl:basis-[calc(100%-320px-2rem)] space-y-4 sm:space-y-6 md:space-y-8">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
               <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-2xl p-3 sm:p-4 flex items-center gap-3 sm:gap-4 min-w-0">
                 <div className="p-2 bg-lime-400/10 rounded-xl flex-shrink-0">
                   <Calendar className="w-5 h-5 sm:w-5 sm:h-5 text-lime-400" />
@@ -1357,7 +1357,7 @@ function StudentDetailsPageContent() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-6 min-w-0">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 min-w-0">
               <AcademicPerformance data={detail.academicPerformance} />
               <AttendanceTrends data={detail.attendanceTrends} />
             </div>

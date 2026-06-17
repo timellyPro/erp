@@ -216,10 +216,10 @@ export default function AppSidebar({ menuItems, profile, activeTab = "dashboard"
     <aside
       className="
         hidden lg:flex
-        w-64 h-full flex-col
+        w-64 shrink-0 h-full flex-col
         bg-white/10 backdrop-blur-2xl
         border-r border-white/10
-        shadow-[8px_0_32px_rgba(0,0,0,0.35)]
+        shadow-[2px_0_12px_rgba(0,0,0,0.2)]
       "
     >
       {/* Logo */}
