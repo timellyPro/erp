@@ -17,6 +17,7 @@ export type AnalysisSection =
   | "gender-enrollment"
   | "admission-comparison"
   | "fee-collection"
+  | "fees-comparison"
   | "student-credentials";
 
 const inflight = new Map<string, Promise<SchoolAnalysisPayload>>();

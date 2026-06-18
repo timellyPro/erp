@@ -22,59 +22,10 @@ import {
   Award,
   Download,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   CalendarCheck,
   TrendingUp,
   BookOpen,
 } from "lucide-react";
-
-const TABLE_PAGE_SIZE = 5;
-
-function TablePagination({
-  page,
-  totalPages,
-  totalRows,
-  onPageChange,
-}: {
-  page: number;
-  totalPages: number;
-  totalRows: number;
-  onPageChange: (p: number) => void;
-}) {
-  if (totalRows <= TABLE_PAGE_SIZE) return null;
-
-  const from = (page - 1) * TABLE_PAGE_SIZE + 1;
-  const to = Math.min(page * TABLE_PAGE_SIZE, totalRows);
-
-  return (
-    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3 text-xs text-white/70">
-      <button
-        type="button"
-        disabled={page <= 1}
-        onClick={() => onPageChange(page - 1)}
-        className="inline-flex items-center gap-1 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1.5 font-medium text-white/90 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        <ChevronLeft className="h-3.5 w-3.5" />
-        Previous
-      </button>
-      <span className="tabular-nums text-center text-white/60">
-        Page {page} of {totalPages}
-        <span className="text-white/40"> · </span>
-        Showing {from}–{to} of {totalRows}
-      </span>
-      <button
-        type="button"
-        disabled={page >= totalPages}
-        onClick={() => onPageChange(page + 1)}
-        className="inline-flex items-center gap-1 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1.5 font-medium text-white/90 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        Next
-        <ChevronRight className="h-3.5 w-3.5" />
-      </button>
-    </div>
-  );
-}
 
 /* ---------------- Types ---------------- */
 
@@ -104,6 +55,7 @@ type GenderViewMode = "CLASS_WISE" | "SECTION_WISE";
 import Spinner from "../common/Spinner";
 import SelectInput from "../common/SelectInput";
 import AnalysisSectionNav from "./AnalysisSectionNav";
+import FeesComparisonPanel from "./analysis/fees-comparison/FeesComparisonPanel";
 import StudentCredentialsPanel from "./analysis/student-credentials/StudentCredentialsPanel";
 import {
   analysisHasTables,
@@ -152,8 +104,6 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
   const { data: session, status: sessionStatus } = useSession();
   const schoolId = session?.user?.schoolId ?? null;
   const fetchAbortRef = useRef<AbortController | null>(null);
-  const [enrollmentPage, setEnrollmentPage] = useState(1);
-  const [feePage, setFeePage] = useState(1);
   const [genderViewMode, setGenderViewMode] = useState<GenderViewMode>("CLASS_WISE");
   const [enrollmentSearch, setEnrollmentSearch] = useState("");
   const [enrollmentGroupFilter, setEnrollmentGroupFilter] = useState("");
@@ -161,7 +111,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
   const [feeClassSectionFilter, setFeeClassSectionFilter] = useState("");
 
   useEffect(() => {
-    if (section === "student-credentials") return;
+    if (section === "student-credentials" || section === "fees-comparison") return;
     if (sessionStatus !== "authenticated") return;
 
     const sid = schoolId;
@@ -252,20 +202,9 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
     setSchoolAnalysisCached(analysisCacheKey(schoolId, year, classId), data);
   }, [schoolId, data, year, classId]);
 
-  useEffect(() => {
-    setEnrollmentPage(1);
-    setFeePage(1);
-  }, [year, classId, enrollmentSearch, enrollmentGroupFilter, feeSearch, feeClassSectionFilter, genderViewMode]);
-
-  useEffect(() => {
-    if (!data) return;
-    const er = Array.isArray(data.enrollmentByClassSection) ? data.enrollmentByClassSection : [];
-    const fr = Array.isArray(data.feeCollectionByClass) ? data.feeCollectionByClass : [];
-    const ep = Math.max(1, Math.ceil(er.length / TABLE_PAGE_SIZE));
-    const fp = Math.max(1, Math.ceil(fr.length / TABLE_PAGE_SIZE));
-    setEnrollmentPage((p) => Math.min(Math.max(1, p), ep));
-    setFeePage((p) => Math.min(Math.max(1, p), fp));
-  }, [data]);
+  if (section === "fees-comparison") {
+    return <FeesComparisonPanel />;
+  }
 
   if (section === "student-credentials") {
     return (
@@ -726,16 +665,6 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
     }
   };
 
-  const enrollmentTotalPages = Math.max(1, Math.ceil(enrollmentRowsFiltered.length / TABLE_PAGE_SIZE));
-  const feeTotalPages = Math.max(1, Math.ceil(feeRowsFiltered.length / TABLE_PAGE_SIZE));
-  const enrollmentPageEff = Math.min(Math.max(1, enrollmentPage), enrollmentTotalPages);
-  const feePageEff = Math.min(Math.max(1, feePage), feeTotalPages);
-  const enrollmentPaged = enrollmentRowsFiltered.slice(
-    (enrollmentPageEff - 1) * TABLE_PAGE_SIZE,
-    enrollmentPageEff * TABLE_PAGE_SIZE
-  );
-  const feePaged = feeRowsFiltered.slice((feePageEff - 1) * TABLE_PAGE_SIZE, feePageEff * TABLE_PAGE_SIZE);
-
   /* ---------------- UI ---------------- */
 
   return (
@@ -1141,7 +1070,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
                   </td>
                 </tr>
               ) : (
-                enrollmentPaged.map((row) => (
+                enrollmentRowsFiltered.map((row) => (
                   <tr
                     key={row.groupLabel}
                     className="border-b border-white/5 last:border-0 hover:bg-white/[0.03]"
@@ -1178,12 +1107,6 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
             </tbody>
           </table>
         </div>
-        <TablePagination
-          page={enrollmentPageEff}
-          totalPages={enrollmentTotalPages}
-          totalRows={enrollmentRowsFiltered.length}
-          onPageChange={setEnrollmentPage}
-        />
       </div>
       )
       ) : null}
@@ -1359,7 +1282,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
                   </td>
                 </tr>
               ) : (
-                feePaged.map((row) => (
+                feeRowsFiltered.map((row) => (
                   <tr
                     key={row.classId}
                     className="border-b border-white/5 last:border-0 hover:bg-white/[0.03]"
@@ -1414,12 +1337,6 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
             </tbody>
           </table>
         </div>
-        <TablePagination
-          page={feePageEff}
-          totalPages={feeTotalPages}
-          totalRows={feeRowsFiltered.length}
-          onPageChange={setFeePage}
-        />
       </div>
       )
       ) : null}
