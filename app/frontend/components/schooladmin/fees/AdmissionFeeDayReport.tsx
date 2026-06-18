@@ -32,12 +32,10 @@ type ReportPayload = {
 };
 
 function defaultDateRange() {
-  const to = new Date();
-  const from = new Date(to);
-  from.setDate(from.getDate() - 89);
+  const today = new Date().toISOString().slice(0, 10);
   return {
-    from: from.toISOString().slice(0, 10),
-    to: to.toISOString().slice(0, 10),
+    from: today,
+    to: today,
   };
 }
 
