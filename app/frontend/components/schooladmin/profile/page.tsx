@@ -1139,9 +1139,9 @@ function StudentDetailsPageContent() {
         onClose={() => setBulkExtraFeeOpen(false)}
         onApplied={() => setReloadKey((k) => k + 1)}
       />
-      <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-xl sm:rounded-2xl p-3 sm:p-6 overflow-visible relative z-[60] isolate min-w-0">
+      <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-xl sm:rounded-2xl p-3 sm:p-6 overflow-visible relative z-20 isolate min-w-0">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4 md:gap-6 overflow-visible">
-          <div className="relative z-[60] min-w-0">
+          <div className="relative z-20 min-w-0">
             <StudentSearchAutocomplete
               students={students}
               searchQuery={searchQuery}

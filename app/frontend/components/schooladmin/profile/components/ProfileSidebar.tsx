@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Users, Mail, Phone, MapPin, Pencil, X, CircleDollarSign } from "lucide-react";
 import SelectInput from "../../../common/SelectInput";
 import { formatStoredAddressForDisplay } from "@/lib/studentAddressFormat";
@@ -352,14 +353,14 @@ export const ProfileSidebar = ({
         </div>
       </div>
 
-      {studentModalOpen ? (
+      {studentModalOpen && typeof document !== "undefined" ? createPortal(
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4"
+          className="fixed inset-0 z-9999 flex items-center justify-center bg-black/80 p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="edit-student-sidebar-title"
         >
-          <div className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-white/10 bg-zinc-900 p-5 shadow-xl">
+          <div className="relative w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950 p-5 shadow-2xl">
             <div className="mb-4 flex items-start justify-between gap-3">
               <h4 id="edit-student-sidebar-title" className="text-lg font-semibold text-white">
                 Edit student details
@@ -463,17 +464,18 @@ export const ProfileSidebar = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       ) : null}
 
-      {parentModalOpen ? (
+      {parentModalOpen && typeof document !== "undefined" ? createPortal(
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4"
+          className="fixed inset-0 z-9999 flex items-center justify-center bg-black/80 p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="edit-parent-sidebar-title"
         >
-          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-zinc-900 p-5 shadow-xl">
+          <div className="relative w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950 p-5 shadow-2xl">
             <div className="mb-4 flex items-start justify-between gap-3">
               <h4 id="edit-parent-sidebar-title" className="text-lg font-semibold text-white">
                 Edit parent details
@@ -543,7 +545,8 @@ export const ProfileSidebar = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       ) : null}
     </div>
   );
