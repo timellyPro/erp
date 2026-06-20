@@ -7,12 +7,12 @@ import {
 } from "@/lib/feeDayReportExcel";
 
 /** Download day-wise fee report Excel for one calendar date. */
-export async function exportDayReportXlsx(dateYmd: string): Promise<boolean> {
+export async function exportDayReportXlsx(fromYmd: string, toYmd = fromYmd): Promise<boolean> {
   const qs = new URLSearchParams({
     limit: "10000",
     forFeeReport: "1",
-    from: dateYmd,
-    to: dateYmd,
+    from: fromYmd,
+    to: toYmd,
   });
 
   const [txRes, schoolRes] = await Promise.all([
@@ -33,9 +33,12 @@ export async function exportDayReportXlsx(dateYmd: string): Promise<boolean> {
   }
 
   const school = (schoolPayload?.school ?? null) as DayReportSchool | null;
-  const headerDateLabel = formatDdMmYyyyFromYmdInput(dateYmd);
+  const headerDateLabel =
+    fromYmd === toYmd
+      ? formatDdMmYyyyFromYmdInput(fromYmd)
+      : `${formatDdMmYyyyFromYmdInput(fromYmd)} - ${formatDdMmYyyyFromYmdInput(toYmd)}`;
   const workbook = XLSX.utils.book_new();
   appendDayReportSheet(workbook, "Day Report", school, "Day Report", headerDateLabel, transactions);
-  XLSX.writeFile(workbook, `fee-report-day_wise-${dateYmd}.xlsx`);
+  XLSX.writeFile(workbook, `fee-report-day_wise-${fromYmd}${toYmd === fromYmd ? "" : `_to_${toYmd}`}.xlsx`);
   return true;
 }

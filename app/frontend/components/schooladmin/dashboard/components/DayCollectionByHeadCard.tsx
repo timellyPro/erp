@@ -7,8 +7,9 @@ import type { CollectionByHeadRow } from "@/lib/feeDayReportExcel";
 import { exportDayReportXlsx } from "@/lib/exportDayReportXlsx";
 
 type Props = {
-  selectedDate: string;
-  onDateChange: (ymd: string) => void;
+  fromDate: string;
+  toDate: string;
+  onDateRangeChange: (range: { from: string; to: string }) => void;
   rows: CollectionByHeadRow[];
   formattedTotal: string;
   loading?: boolean;
@@ -16,22 +17,25 @@ type Props = {
 
 /** Day-wise fee collection broken down by fee head (installments merged). */
 export function DayCollectionByHeadCard({
-  selectedDate,
-  onDateChange,
+  fromDate,
+  toDate,
+  onDateRangeChange,
   rows,
   formattedTotal,
   loading = false,
 }: Props) {
   const [downloading, setDownloading] = useState(false);
-  const dateLabel = formatDdMmYyyyFromYmdInput(selectedDate);
+  const fromLabel = formatDdMmYyyyFromYmdInput(fromDate);
+  const toLabel = formatDdMmYyyyFromYmdInput(toDate);
+  const dateLabel = fromDate === toDate ? fromLabel : `${fromLabel} - ${toLabel}`;
 
   const handleDownload = async () => {
     if (downloading) return;
     setDownloading(true);
     try {
-      const ok = await exportDayReportXlsx(selectedDate);
+      const ok = await exportDayReportXlsx(fromDate, toDate);
       if (!ok) {
-        alert("No fee transactions found for the selected date.");
+        alert("No fee transactions found for the selected date range.");
       }
     } catch (err) {
       console.error(err);
@@ -53,18 +57,37 @@ export function DayCollectionByHeadCard({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:gap-3 sm:justify-end">
-          <div className="inline-flex items-center gap-1.5">
+          <div className="flex flex-wrap items-end gap-1.5">
             <label
-              className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-2.5 py-2 cursor-pointer hover:bg-white/10"
-              title="Select date"
+              className="inline-flex flex-col gap-1 rounded-xl border border-white/15 bg-white/5 px-2.5 py-1.5 cursor-pointer hover:bg-white/10"
+              title="Select from date"
             >
-              <CalendarDays className="w-4 h-4 text-lime-400 shrink-0" />
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                <CalendarDays className="w-3.5 h-3.5 text-lime-400 shrink-0" />
+                From
+              </span>
               <input
                 type="date"
-                value={selectedDate}
-                onChange={(e) => onDateChange(e.target.value)}
-                className="bg-transparent text-white text-xs sm:text-sm font-medium outline-none [color-scheme:dark] w-[8.5rem] sm:w-[9rem]"
-                aria-label="Select collection date"
+                value={fromDate}
+                onChange={(e) => onDateRangeChange({ from: e.target.value, to: toDate })}
+                className="w-34 bg-transparent text-xs font-medium text-white outline-none scheme-dark sm:w-36 sm:text-sm"
+                aria-label="Select collection from date"
+              />
+            </label>
+            <label
+              className="inline-flex flex-col gap-1 rounded-xl border border-white/15 bg-white/5 px-2.5 py-1.5 cursor-pointer hover:bg-white/10"
+              title="Select to date"
+            >
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                <CalendarDays className="w-3.5 h-3.5 text-lime-400 shrink-0" />
+                To
+              </span>
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => onDateRangeChange({ from: fromDate, to: e.target.value })}
+                className="w-34 bg-transparent text-xs font-medium text-white outline-none scheme-dark sm:w-36 sm:text-sm"
+                aria-label="Select collection to date"
               />
             </label>
             <button

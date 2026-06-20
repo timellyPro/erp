@@ -53,6 +53,8 @@ export type SchoolDashboardPayload = {
     formattedTotal: string;
   };
   collectionDate?: string;
+  collectionFrom?: string;
+  collectionTo?: string;
   teachersOnLeave: Array<{
     id: string;
     name: string;

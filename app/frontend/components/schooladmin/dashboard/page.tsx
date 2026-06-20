@@ -46,12 +46,17 @@ export default function Dashboard() {
   );
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
-  const [selectedCollectionDate, setSelectedCollectionDate] = useState(() => todayYmdLocal());
+  const [selectedCollectionFrom, setSelectedCollectionFrom] = useState(() => todayYmdLocal());
+  const [selectedCollectionTo, setSelectedCollectionTo] = useState(() => todayYmdLocal());
+  const selectedCollectionRangeKey = useMemo(
+    () => `${selectedCollectionFrom}:${selectedCollectionTo}`,
+    [selectedCollectionFrom, selectedCollectionTo]
+  );
   const [collectionLoading, setCollectionLoading] = useState(false);
   const [headsLoading, setHeadsLoading] = useState(() => !initialHeads);
   const lastFetchedSummaryDateRef = useRef<string | null>(null);
   const lastFetchedHeadsDateRef = useRef<string | null>(
-    initialHeads ? today : null
+    initialHeads ? `${today}:${today}` : null
   );
   const collectionAbortRef = useRef<AbortController | null>(null);
   const headsAbortRef = useRef<AbortController | null>(null);
@@ -62,6 +67,12 @@ export default function Dashboard() {
   }, [session?.user?.name]);
 
   const schoolId = session?.user?.schoolId ?? null;
+
+  const payloadCollectionRangeKey = useCallback((payload: SchoolDashboardPayload) => {
+    const from = payload.collectionFrom ?? payload.collectionDate ?? today;
+    const to = payload.collectionTo ?? payload.collectionDate ?? from;
+    return `${from}:${to}`;
+  }, [today]);
 
   const mergeDashboardShell = useCallback(
     (
@@ -77,17 +88,19 @@ export default function Dashboard() {
         merged.todayCollectionByHead = incoming.todayCollectionByHead;
       } else if (
         prev.todayCollectionByHead &&
-        headsDateLoaded === selectedCollectionDate
+        headsDateLoaded === selectedCollectionRangeKey
       ) {
         merged.todayCollectionByHead = prev.todayCollectionByHead;
       }
 
       if (
-        lastFetchedSummaryDateRef.current === selectedCollectionDate &&
-        selectedCollectionDate !== (incoming.collectionDate ?? "")
+        lastFetchedSummaryDateRef.current === selectedCollectionRangeKey &&
+        selectedCollectionRangeKey !== payloadCollectionRangeKey(incoming)
       ) {
         merged.todayCollectionByMethod = prev.todayCollectionByMethod;
         merged.collectionDate = prev.collectionDate;
+        merged.collectionFrom = prev.collectionFrom;
+        merged.collectionTo = prev.collectionTo;
         merged.stats = {
           ...incoming.stats,
           todayCollectionTotal: prev.stats.todayCollectionTotal,
@@ -97,7 +110,7 @@ export default function Dashboard() {
 
       return merged;
     },
-    [selectedCollectionDate]
+    [payloadCollectionRangeKey, selectedCollectionRangeKey]
   );
 
   useEffect(() => {
@@ -117,8 +130,8 @@ export default function Dashboard() {
           : cached
       );
       setError(null);
-      lastFetchedSummaryDateRef.current = today;
-      lastFetchedHeadsDateRef.current = cachedHeads ? today : null;
+      lastFetchedSummaryDateRef.current = `${today}:${today}`;
+      lastFetchedHeadsDateRef.current = cachedHeads ? `${today}:${today}` : null;
       setHeadsLoading(!cachedHeads);
     }
 
@@ -137,13 +150,13 @@ export default function Dashboard() {
             const merged = mergeDashboardShell(prev, fast, headsDate);
             if (fast.todayCollectionByHead) {
               setSchoolDashboardCollectionHeadsCached(today, fast.todayCollectionByHead);
-              lastFetchedHeadsDateRef.current = today;
+              lastFetchedHeadsDateRef.current = `${today}:${today}`;
               setHeadsLoading(false);
             }
             return merged;
           });
           setError(null);
-          lastFetchedSummaryDateRef.current = today;
+          lastFetchedSummaryDateRef.current = `${today}:${today}`;
         }
       } catch (err) {
         if (cancelled) return;
@@ -165,13 +178,13 @@ export default function Dashboard() {
           const merged = mergeDashboardShell(prev, full, headsDate);
           if (full.todayCollectionByHead) {
             setSchoolDashboardCollectionHeadsCached(today, full.todayCollectionByHead);
-            lastFetchedHeadsDateRef.current = today;
+            lastFetchedHeadsDateRef.current = `${today}:${today}`;
             setHeadsLoading(false);
           }
           return merged;
         });
         setError(null);
-        lastFetchedSummaryDateRef.current = today;
+        lastFetchedSummaryDateRef.current = `${today}:${today}`;
       })
       .catch((err) => {
         if (cancelled) return;
@@ -190,8 +203,9 @@ export default function Dashboard() {
     setSchoolDashboardCached(dashboardCacheKey(schoolId, today), data);
   }, [schoolId, data, today]);
 
-  const fetchCollectionSummaryForDate = useCallback(async (dateYmd: string) => {
-    if (dateYmd === lastFetchedSummaryDateRef.current) return;
+  const fetchCollectionSummaryForDate = useCallback(async (fromYmd: string, toYmd: string) => {
+    const rangeKey = `${fromYmd}:${toYmd}`;
+    if (rangeKey === lastFetchedSummaryDateRef.current) return;
 
     collectionAbortRef.current?.abort();
     const controller = new AbortController();
@@ -199,16 +213,18 @@ export default function Dashboard() {
 
     setCollectionLoading(true);
     try {
-      const summary = await loadSchoolDashboardCollectionSummary(dateYmd, controller.signal);
+      const summary = await loadSchoolDashboardCollectionSummary(fromYmd, toYmd, controller.signal);
       if (controller.signal.aborted) return;
 
-      lastFetchedSummaryDateRef.current = dateYmd;
+      lastFetchedSummaryDateRef.current = rangeKey;
       setData((prev) =>
         prev
           ? {
               ...prev,
               todayCollectionByMethod: summary.todayCollectionByMethod,
               collectionDate: summary.collectionDate,
+              collectionFrom: summary.collectionFrom,
+              collectionTo: summary.collectionTo,
               stats: {
                 ...prev.stats,
                 todayCollectionTotal: summary.todayCollectionTotal,
@@ -225,8 +241,9 @@ export default function Dashboard() {
     }
   }, []);
 
-  const fetchCollectionHeadsForDate = useCallback(async (dateYmd: string, force = false) => {
-    if (!force && dateYmd === lastFetchedHeadsDateRef.current) return;
+  const fetchCollectionHeadsForDate = useCallback(async (fromYmd: string, toYmd: string, force = false) => {
+    const rangeKey = `${fromYmd}:${toYmd}`;
+    if (!force && rangeKey === lastFetchedHeadsDateRef.current) return;
 
     headsAbortRef.current?.abort();
     const controller = new AbortController();
@@ -234,10 +251,10 @@ export default function Dashboard() {
 
     setHeadsLoading(true);
     try {
-      const byHead = await loadSchoolDashboardCollectionHeads(dateYmd, controller.signal);
+      const byHead = await loadSchoolDashboardCollectionHeads(fromYmd, toYmd, controller.signal);
       if (controller.signal.aborted) return;
 
-      lastFetchedHeadsDateRef.current = dateYmd;
+      lastFetchedHeadsDateRef.current = rangeKey;
       setData((prev) =>
         prev
           ? {
@@ -254,35 +271,40 @@ export default function Dashboard() {
     }
   }, []);
 
-  const handleCollectionDateChange = useCallback(
-    (dateYmd: string) => {
-      if (!dateYmd || dateYmd === selectedCollectionDate) return;
-      setSelectedCollectionDate(dateYmd);
+  const handleCollectionDateRangeChange = useCallback(
+    (range: { from: string; to: string }) => {
+      const from = range.from || today;
+      let to = range.to || from;
+      if (from > to) to = from;
+      const nextRangeKey = `${from}:${to}`;
+      if (nextRangeKey === selectedCollectionRangeKey) return;
+      setSelectedCollectionFrom(from);
+      setSelectedCollectionTo(to);
       lastFetchedHeadsDateRef.current = null;
-      void fetchCollectionSummaryForDate(dateYmd);
-      void fetchCollectionHeadsForDate(dateYmd);
+      void fetchCollectionSummaryForDate(from, to);
+      void fetchCollectionHeadsForDate(from, to);
     },
-    [selectedCollectionDate, fetchCollectionSummaryForDate, fetchCollectionHeadsForDate]
+    [selectedCollectionRangeKey, fetchCollectionSummaryForDate, fetchCollectionHeadsForDate, today]
   );
 
   useEffect(() => {
     if (sessionStatus !== "authenticated") return;
-    warmSchoolDashboardCollectionHeads(selectedCollectionDate);
-    const headsLoadedForDate = lastFetchedHeadsDateRef.current === selectedCollectionDate;
+    warmSchoolDashboardCollectionHeads(selectedCollectionFrom, selectedCollectionTo);
+    const headsLoadedForDate = lastFetchedHeadsDateRef.current === selectedCollectionRangeKey;
     const headsPresent = Boolean(
-      data?.todayCollectionByHead ?? peekSchoolDashboardCollectionHeads(selectedCollectionDate)
+      data?.todayCollectionByHead ?? peekSchoolDashboardCollectionHeads(selectedCollectionFrom, selectedCollectionTo)
     );
     if (headsLoadedForDate && headsPresent) {
-      const peeked = peekSchoolDashboardCollectionHeads(selectedCollectionDate);
+      const peeked = peekSchoolDashboardCollectionHeads(selectedCollectionFrom, selectedCollectionTo);
       if (peeked && !data?.todayCollectionByHead) {
         setData((prev) => (prev ? { ...prev, todayCollectionByHead: peeked } : prev));
-        lastFetchedHeadsDateRef.current = selectedCollectionDate;
+        lastFetchedHeadsDateRef.current = selectedCollectionRangeKey;
         setHeadsLoading(false);
       }
       return;
     }
-    void fetchCollectionHeadsForDate(selectedCollectionDate, !headsPresent);
-  }, [sessionStatus, data, selectedCollectionDate, fetchCollectionHeadsForDate]);
+    void fetchCollectionHeadsForDate(selectedCollectionFrom, selectedCollectionTo, !headsPresent);
+  }, [sessionStatus, data, selectedCollectionFrom, selectedCollectionTo, selectedCollectionRangeKey, fetchCollectionHeadsForDate]);
 
   useEffect(() => {
     return () => {
@@ -357,8 +379,8 @@ export default function Dashboard() {
             Icon={Wallet}
           />
           <CollectionStatCard
-            selectedDate={selectedCollectionDate}
-            onDateChange={handleCollectionDateChange}
+            selectedDate={selectedCollectionTo}
+            onDateChange={(dateYmd) => handleCollectionDateRangeChange({ from: dateYmd, to: dateYmd })}
             totalFormatted={isInitialLoading ? "…" : data?.stats.todayCollectionTotal ?? "₹0"}
             cash={collectionCash}
             online={collectionOnline}
@@ -419,8 +441,9 @@ export default function Dashboard() {
           </div>
 
           <DayCollectionByHeadCard
-            selectedDate={selectedCollectionDate}
-            onDateChange={handleCollectionDateChange}
+            fromDate={selectedCollectionFrom}
+            toDate={selectedCollectionTo}
+            onDateRangeChange={handleCollectionDateRangeChange}
             rows={data.todayCollectionByHead?.rows ?? []}
             formattedTotal={data.todayCollectionByHead?.formattedTotal ?? "0"}
             loading={headsLoading}

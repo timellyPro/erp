@@ -11,8 +11,12 @@ const summaryCache = new Map<string, { at: number; value: SchoolDashboardCollect
 const headsCache = new Map<string, { at: number; value: SchoolDashboardCollectionByHead }>();
 const inflight = new Map<string, Promise<unknown>>();
 
-function cacheKey(dateYmd: string, part: "summary" | "heads" | "full") {
-  return `${part}:${dateYmd}`;
+function rangeKey(fromYmd: string, toYmd?: string) {
+  return `${fromYmd}:${toYmd || fromYmd}`;
+}
+
+function cacheKey(fromYmd: string, part: "summary" | "heads" | "full", toYmd?: string) {
+  return `${part}:${rangeKey(fromYmd, toYmd)}`;
 }
 
 function readCache<T>(map: Map<string, { at: number; value: T }>, key: string): T | null {
@@ -25,15 +29,16 @@ function readCache<T>(map: Map<string, { at: number; value: T }>, key: string): 
 }
 
 async function fetchCollectionPart<T>(
-  dateYmd: string,
+  fromYmd: string,
   part: "summary" | "heads" | "full",
+  toYmd?: string,
   signal?: AbortSignal
 ): Promise<T> {
-  const key = cacheKey(dateYmd, part);
+  const key = cacheKey(fromYmd, part, toYmd);
   const running = inflight.get(key);
   if (running) return running as Promise<T>;
 
-  const qs = new URLSearchParams({ date: dateYmd });
+  const qs = new URLSearchParams({ from: fromYmd, to: toYmd || fromYmd });
   if (part === "summary") qs.set("part", "summary");
   else if (part === "heads") qs.set("part", "heads");
 
@@ -60,16 +65,18 @@ async function fetchCollectionPart<T>(
 
 /** Fast header totals (cash / online / total). */
 export async function loadSchoolDashboardCollectionSummary(
-  dateYmd: string,
+  fromYmd: string,
+  toYmd?: string,
   signal?: AbortSignal
 ): Promise<SchoolDashboardCollectionSummary> {
-  const key = cacheKey(dateYmd, "summary");
+  const key = cacheKey(fromYmd, "summary", toYmd);
   const cached = readCache(summaryCache, key);
   if (cached) return cached;
 
   const value = await fetchCollectionPart<SchoolDashboardCollectionSummary>(
-    dateYmd,
+    fromYmd,
     "summary",
+    toYmd,
     signal
   );
   summaryCache.set(key, { at: Date.now(), value });
@@ -78,16 +85,18 @@ export async function loadSchoolDashboardCollectionSummary(
 
 /** Fee-head table for the selected day. */
 export async function loadSchoolDashboardCollectionHeads(
-  dateYmd: string,
+  fromYmd: string,
+  toYmd?: string,
   signal?: AbortSignal
 ): Promise<SchoolDashboardCollectionByHead> {
-  const key = cacheKey(dateYmd, "heads");
+  const key = cacheKey(fromYmd, "heads", toYmd);
   const cached = readCache(headsCache, key);
   if (cached) return cached;
 
   const value = await fetchCollectionPart<SchoolDashboardCollectionByHead>(
-    dateYmd,
+    fromYmd,
     "heads",
+    toYmd,
     signal
   );
   headsCache.set(key, { at: Date.now(), value });
@@ -95,33 +104,35 @@ export async function loadSchoolDashboardCollectionHeads(
 }
 
 export function peekSchoolDashboardCollectionHeads(
-  dateYmd: string
+  fromYmd: string,
+  toYmd?: string
 ): SchoolDashboardCollectionByHead | null {
-  return readCache(headsCache, cacheKey(dateYmd, "heads"));
+  return readCache(headsCache, cacheKey(fromYmd, "heads", toYmd));
 }
 
 /** Prefetch day-wise collection (non-blocking). */
-export function warmSchoolDashboardCollectionHeads(dateYmd: string): void {
-  const key = cacheKey(dateYmd, "heads");
+export function warmSchoolDashboardCollectionHeads(fromYmd: string, toYmd?: string): void {
+  const key = cacheKey(fromYmd, "heads", toYmd);
   if (readCache(headsCache, key)) return;
   if (inflight.has(key)) return;
-  void loadSchoolDashboardCollectionHeads(dateYmd).catch(() => {});
+  void loadSchoolDashboardCollectionHeads(fromYmd, toYmd).catch(() => {});
 }
 
 export function setSchoolDashboardCollectionHeadsCached(
-  dateYmd: string,
+  fromYmd: string,
   value: SchoolDashboardCollectionByHead
 ): void {
-  headsCache.set(cacheKey(dateYmd, "heads"), { at: Date.now(), value });
+  headsCache.set(cacheKey(fromYmd, "heads"), { at: Date.now(), value });
 }
 
 /** @deprecated Prefer split summary + heads loaders for faster UI. */
 export async function loadSchoolDashboardCollection(
-  dateYmd: string,
+  fromYmd: string,
+  toYmd?: string,
   signal?: AbortSignal
 ): Promise<SchoolDashboardCollectionPayload> {
-  const summaryKey = cacheKey(dateYmd, "summary");
-  const headsKey = cacheKey(dateYmd, "heads");
+  const summaryKey = cacheKey(fromYmd, "summary", toYmd);
+  const headsKey = cacheKey(fromYmd, "heads", toYmd);
   const cachedSummary = readCache(summaryCache, summaryKey);
   const cachedHeads = readCache(headsCache, headsKey);
   if (cachedSummary && cachedHeads) {
@@ -129,8 +140,8 @@ export async function loadSchoolDashboardCollection(
   }
 
   const [summary, heads] = await Promise.all([
-    cachedSummary ?? loadSchoolDashboardCollectionSummary(dateYmd, signal),
-    cachedHeads ?? loadSchoolDashboardCollectionHeads(dateYmd, signal),
+    cachedSummary ?? loadSchoolDashboardCollectionSummary(fromYmd, toYmd, signal),
+    cachedHeads ?? loadSchoolDashboardCollectionHeads(fromYmd, toYmd, signal),
   ]);
   return { ...summary, todayCollectionByHead: heads };
 }

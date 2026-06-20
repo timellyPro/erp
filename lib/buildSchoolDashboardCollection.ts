@@ -8,7 +8,6 @@ import type { DayReportTx } from "@/lib/feeDayReportExcel";
 import {
   aggregateCollectionByMethod,
   formatCollectionAmount,
-  localDayBoundsFromYmd,
   todayYmdLocal,
 } from "@/lib/schoolDashboardCollection";
 
@@ -19,26 +18,26 @@ function formatCurrency(n: number) {
   return `₹${Math.round(n)}`;
 }
 
-function collectionDateParam(dateYmd?: string): string {
-  return dateYmd?.trim() || todayYmdLocal();
+function collectionDateRange(fromYmd?: string, toYmd?: string): { from: string; to: string } {
+  const from = fromYmd?.trim() || todayYmdLocal();
+  const to = toYmd?.trim() || from;
+  return { from, to };
 }
 
 const dayTxsMemory = new Map<
   string,
-  { at: number; value: { dateParam: string; txs: DayReportTx[] } }
+  { at: number; value: { from: string; to: string; txs: DayReportTx[] } }
 >();
-const dayTxsInflight = new Map<string, Promise<{ dateParam: string; txs: DayReportTx[] }>>();
+const dayTxsInflight = new Map<string, Promise<{ from: string; to: string; txs: DayReportTx[] }>>();
 const DAY_TXS_TTL_MS = 90_000;
 
 async function loadDayReportTransactions(
   schoolId: string,
-  dateYmd?: string
-): Promise<{ dateParam: string; txs: DayReportTx[] }> {
-  const dateParam = collectionDateParam(dateYmd);
-  if (!localDayBoundsFromYmd(dateParam)) {
-    return { dateParam, txs: [] };
-  }
-  const cacheKey = `${schoolId}:${dateParam}`;
+  fromYmd?: string,
+  toYmd?: string
+): Promise<{ from: string; to: string; txs: DayReportTx[] }> {
+  const range = collectionDateRange(fromYmd, toYmd);
+  const cacheKey = `${schoolId}:${range.from}:${range.to}`;
   const cached = dayTxsMemory.get(cacheKey);
   if (cached && Date.now() - cached.at < DAY_TXS_TTL_MS) {
     return cached.value;
@@ -48,8 +47,8 @@ async function loadDayReportTransactions(
   if (running) return running;
 
   const run = (async () => {
-    const txs = await loadFeeReportTransactions(schoolId, dateParam, dateParam);
-    const value = { dateParam, txs };
+    const txs = await loadFeeReportTransactions(schoolId, range.from, range.to);
+    const value = { ...range, txs };
     dayTxsMemory.set(cacheKey, { at: Date.now(), value });
     return value;
   })();
@@ -65,17 +64,20 @@ async function loadDayReportTransactions(
 /** Summary + fee-head breakdown from one transaction load (dashboard fast path). */
 export async function buildSchoolDashboardDayCollectionBundle(
   schoolId: string,
-  dateYmd?: string
+  fromYmd?: string,
+  toYmd?: string
 ): Promise<{
   summary: SchoolDashboardCollectionSummary;
   byHead: SchoolDashboardCollectionByHead;
 }> {
-  const { dateParam, txs } = await loadDayReportTransactions(schoolId, dateYmd);
+  const { from, to, txs } = await loadDayReportTransactions(schoolId, fromYmd, toYmd);
   const byHead = buildCollectionByHeadSummary(txs);
   const { rows, total } = buildMethodSummaryFromTransactions(txs);
   return {
     summary: {
-      collectionDate: dateParam,
+      collectionDate: from,
+      collectionFrom: from,
+      collectionTo: to,
       todayCollectionTotal: formatCurrency(total),
       todayCollectionTotalRaw: total,
       todayCollectionByMethod: rows.map((m) => ({
@@ -104,6 +106,8 @@ function buildMethodSummaryFromTransactions(txs: DayReportTx[]) {
 
 export type SchoolDashboardCollectionSummary = {
   collectionDate: string;
+  collectionFrom?: string;
+  collectionTo?: string;
   todayCollectionTotal: string;
   todayCollectionTotalRaw: number;
   todayCollectionByMethod: Array<{
@@ -128,13 +132,16 @@ export type SchoolDashboardCollectionPayload = SchoolDashboardCollectionSummary 
 /** Cash/online totals — allocation sums (matches day report Excel). */
 export async function buildSchoolDashboardCollectionSummary(
   schoolId: string,
-  dateYmd?: string
+  fromYmd?: string,
+  toYmd?: string
 ): Promise<SchoolDashboardCollectionSummary> {
-  const { dateParam, txs } = await loadDayReportTransactions(schoolId, dateYmd);
+  const { from, to, txs } = await loadDayReportTransactions(schoolId, fromYmd, toYmd);
   const { rows, total } = buildMethodSummaryFromTransactions(txs);
 
   return {
-    collectionDate: dateParam,
+    collectionDate: from,
+    collectionFrom: from,
+    collectionTo: to,
     todayCollectionTotal: formatCurrency(total),
     todayCollectionTotalRaw: total,
     todayCollectionByMethod: rows.map((m) => ({
@@ -150,23 +157,27 @@ export async function buildSchoolDashboardCollectionSummary(
 /** Fee-head breakdown — same transactions as day report export. */
 export async function buildSchoolDashboardCollectionByHead(
   schoolId: string,
-  dateYmd?: string
+  fromYmd?: string,
+  toYmd?: string
 ): Promise<SchoolDashboardCollectionByHead> {
-  const { txs } = await loadDayReportTransactions(schoolId, dateYmd);
+  const { txs } = await loadDayReportTransactions(schoolId, fromYmd, toYmd);
   return buildCollectionByHeadSummary(txs);
 }
 
 /** Full payload — single load, summary + heads aligned with Excel. */
 export async function buildSchoolDashboardCollection(
   schoolId: string,
-  dateYmd?: string
+  fromYmd?: string,
+  toYmd?: string
 ): Promise<SchoolDashboardCollectionPayload> {
-  const { dateParam, txs } = await loadDayReportTransactions(schoolId, dateYmd);
+  const { from, to, txs } = await loadDayReportTransactions(schoolId, fromYmd, toYmd);
   const byHead = buildCollectionByHeadSummary(txs);
   const { rows, total } = buildMethodSummaryFromTransactions(txs);
 
   return {
-    collectionDate: dateParam,
+    collectionDate: from,
+    collectionFrom: from,
+    collectionTo: to,
     todayCollectionTotal: formatCurrency(total),
     todayCollectionTotalRaw: total,
     todayCollectionByMethod: rows.map((m) => ({
