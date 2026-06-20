@@ -1,12 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Download, Search, UserRound, X } from "lucide-react";
+import { Download, Search } from "lucide-react";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import SelectInput from "../../common/SelectInput";
-import SearchInput from "../../common/SearchInput";
 import type { Class, FeeRecord } from "./types";
 import {
   schoolAdminStudentDetailsFeesUrl,
@@ -15,11 +14,9 @@ import {
 import InlinePagination from "../schooladmincomponents/InlinePagination";
 import {
   appendDayReportSheet,
-  buildDayReportSummaryModel,
   drawFeeDayReportPdf,
   formatDdMmYyyyFromYmdInput,
   formatStudentClassForReport,
-  type CollectorSummaryRow,
   type DayReportTx,
 } from "@/lib/feeDayReportExcel";
 import { formatRupee, roundRupee } from "@/lib/formatRupee";
@@ -50,95 +47,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
   });
   const [exportFormat, setExportFormat] = useState<ExportFormat>("xlsx");
   const [feeDueExporting, setFeeDueExporting] = useState(false);
-  const [collectorSummary, setCollectorSummary] = useState<CollectorSummaryRow[]>([]);
-  const [collectorSummaryLoading, setCollectorSummaryLoading] = useState(false);
-  const [reportCollectorUserId, setReportCollectorUserId] = useState("");
-  const [staffSearchQuery, setStaffSearchQuery] = useState("");
-  const [staffSearchOpen, setStaffSearchOpen] = useState(false);
-  const [staffSummarySearch, setStaffSummarySearch] = useState("");
-  const [collectorOptions, setCollectorOptions] = useState<Array<{ label: string; value: string }>>([
-    { label: "All staff", value: "" },
-  ]);
-  const staffSearchRef = useRef<HTMLDivElement>(null);
   const [page, setPage] = useState(1);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetch("/api/fees/collectors", { credentials: "include", signal: controller.signal })
-      .then((res) => res.json())
-      .then((data) => {
-        const rows = Array.isArray(data?.collectors) ? data.collectors : [];
-        setCollectorOptions([
-          { label: "All staff", value: "" },
-          ...rows.map((c: { userId: string; name: string }) => ({
-            label: c.name,
-            value: c.userId,
-          })),
-        ]);
-      })
-      .catch(() => {
-        /* ignore */
-      });
-    return () => controller.abort();
-  }, []);
-
-  useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (!staffSearchRef.current?.contains(e.target as Node)) {
-        setStaffSearchOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, []);
-
-  const staffCollectors = useMemo(
-    () => collectorOptions.filter((o) => o.value !== ""),
-    [collectorOptions]
-  );
-
-  const selectedStaffLabel = useMemo(
-    () => collectorOptions.find((o) => o.value === reportCollectorUserId)?.label ?? "",
-    [collectorOptions, reportCollectorUserId]
-  );
-
-  const filteredStaffForSearch = useMemo(() => {
-    const q = staffSearchQuery.trim().toLowerCase();
-    if (!q) return staffCollectors.slice(0, 10);
-    return staffCollectors.filter((c) => c.label.toLowerCase().includes(q)).slice(0, 12);
-  }, [staffCollectors, staffSearchQuery]);
-
-  const clearStaffFilter = () => {
-    setReportCollectorUserId("");
-    setStaffSearchQuery("");
-    setStaffSearchOpen(false);
-  };
-
-  const selectStaffCollector = (userId: string, label: string) => {
-    setReportCollectorUserId(userId);
-    setStaffSearchQuery(label);
-    setStaffSearchOpen(false);
-  };
-
-  const displayedCollectorSummary = useMemo(() => {
-    let rows = collectorSummary;
-    if (reportCollectorUserId) {
-      const selected = collectorOptions.find((o) => o.value === reportCollectorUserId);
-      if (selected?.label) {
-        rows = rows.filter((row) => row.name === selected.label);
-      }
-    }
-    const q = staffSummarySearch.trim().toLowerCase();
-    if (q) {
-      rows = rows.filter((row) => row.name.toLowerCase().includes(q));
-    }
-    return rows;
-  }, [collectorSummary, reportCollectorUserId, collectorOptions, staffSummarySearch]);
-
-  const collectorSummaryTotal = useMemo(
-    () => roundRupee(displayedCollectorSummary.reduce((s, r) => s + r.totalCollected, 0)),
-    [displayedCollectorSummary]
-  );
 
   const filteredFees = fees.filter((f) => {
     const name = (f.student.user?.name || "").toLowerCase();
@@ -576,16 +485,12 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
 
   const buildReportTxQueryParams = () => {
     const { from, to } = getReportDateRange();
-    const txQs = new URLSearchParams({
+    return new URLSearchParams({
       limit: "10000",
       forFeeReport: "1",
       from,
       to,
     });
-    if (reportCollectorUserId) {
-      txQs.set("collectedByUserId", reportCollectorUserId);
-    }
-    return txQs;
   };
 
   const filterReportTransactions = (transactions: DayReportTx[]): DayReportTx[] =>
@@ -595,26 +500,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
       return inSelectedPeriod(t.createdAt);
     });
 
-  const loadStaffCollectionSummary = async () => {
-    setCollectorSummaryLoading(true);
-    try {
-      const res = await fetch(`/api/fees/transactions?${buildReportTxQueryParams().toString()}`, {
-        credentials: "include",
-      });
-      const txData = await res.json().catch(() => ({}));
-      const transactions: DayReportTx[] = Array.isArray(txData?.transactions) ? txData.transactions : [];
-      const filteredTx = filterReportTransactions(transactions);
-      setCollectorSummary(buildDayReportSummaryModel(filteredTx).collectorSummary);
-    } catch (e) {
-      console.error(e);
-      setCollectorSummary([]);
-    } finally {
-      setCollectorSummaryLoading(false);
-    }
-  };
-
   const exportFinalTemplate = async () => {
-    const { from: reportFrom, to: reportTo } = getReportDateRange();
     const txQs = buildReportTxQueryParams();
     const [txRes, schoolRes] = await Promise.all([
       fetch(`/api/fees/transactions?${txQs.toString()}`, { credentials: "include" }),
@@ -647,8 +533,6 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
       alert("No fee transactions found for the selected report period.");
       return;
     }
-
-    setCollectorSummary(buildDayReportSummaryModel(filteredTx).collectorSummary);
 
     const headerDateLabel =
       reportPeriod === "DAY_WISE" ? formatDdMmYyyyFromYmdInput(reportDate) : getReportPeriodValue();
@@ -812,7 +696,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
           <div>
             <p className="text-sm font-semibold text-white">Fee collection report</p>
             <p className="mt-0.5 text-xs text-gray-400">
-              Pick a period, filter by staff, then export or view collections.
+              Pick a period, then export or view collections.
             </p>
           </div>
         </div>
@@ -879,107 +763,6 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
           )}
         </div>
 
-        <div className="mt-4 rounded-xl border border-cyan-500/20 bg-cyan-500/[0.06] p-3 sm:p-4">
-          <div className="mb-2 flex items-center gap-2">
-            <UserRound className="h-4 w-4 shrink-0 text-cyan-300" aria-hidden />
-            <p className="text-xs font-semibold uppercase tracking-wide text-cyan-200/90">
-              Staff collector filter
-            </p>
-          </div>
-
-          {reportCollectorUserId ? (
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <span className="inline-flex max-w-full items-center gap-2 rounded-full border border-cyan-400/35 bg-cyan-500/15 px-3 py-1.5 text-sm text-cyan-50">
-                <UserRound className="h-3.5 w-3.5 shrink-0 text-cyan-300" aria-hidden />
-                <span className="truncate">{selectedStaffLabel}</span>
-                <button
-                  type="button"
-                  onClick={clearStaffFilter}
-                  className="rounded-full p-0.5 text-cyan-200/80 hover:bg-cyan-400/20 hover:text-white"
-                  aria-label="Clear staff filter"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </span>
-              <button
-                type="button"
-                onClick={clearStaffFilter}
-                className="text-xs text-cyan-200/70 underline-offset-2 hover:text-cyan-100 hover:underline"
-              >
-                Show all staff
-              </button>
-            </div>
-          ) : null}
-
-          <div
-            ref={staffSearchRef}
-            className="relative"
-            onFocusCapture={() => setStaffSearchOpen(true)}
-          >
-            <SearchInput
-              label="Search staff by name"
-              value={staffSearchQuery}
-              onChange={(value) => {
-                setStaffSearchQuery(value);
-                setStaffSearchOpen(true);
-                if (!value.trim()) setReportCollectorUserId("");
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") setStaffSearchOpen(false);
-              }}
-              placeholder="Type staff name…"
-              variant="glass"
-              icon={Search}
-              showSearchIcon
-            />
-            {staffSearchOpen && (staffSearchQuery.trim() || staffCollectors.length > 0) && (
-              <ul
-                className="absolute z-30 mt-1 max-h-52 w-full overflow-y-auto rounded-xl border border-white/10 bg-zinc-900/95 py-1 shadow-xl backdrop-blur-md"
-                role="listbox"
-              >
-                {!staffSearchQuery.trim() && (
-                  <li>
-                    <button
-                      type="button"
-                      onClick={clearStaffFilter}
-                      className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-gray-300 transition-colors hover:bg-white/10"
-                    >
-                      All staff
-                    </button>
-                  </li>
-                )}
-                {filteredStaffForSearch.length === 0 ? (
-                  <li className="px-3 py-2.5 text-sm text-gray-500">No staff found</li>
-                ) : (
-                  filteredStaffForSearch.map((c) => (
-                    <li key={c.value}>
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={reportCollectorUserId === c.value}
-                        onClick={() => selectStaffCollector(c.value, c.label)}
-                        className={`flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm transition-colors hover:bg-cyan-500/15 ${
-                          reportCollectorUserId === c.value
-                            ? "bg-cyan-500/20 text-cyan-100"
-                            : "text-white"
-                        }`}
-                      >
-                        <UserRound className="h-4 w-4 shrink-0 text-cyan-400/80" aria-hidden />
-                        <span className="truncate">{c.label}</span>
-                      </button>
-                    </li>
-                  ))
-                )}
-              </ul>
-            )}
-          </div>
-          {staffCollectors.length === 0 ? (
-            <p className="mt-2 text-xs text-gray-500">
-              No staff collectors yet — record an offline payment while logged in.
-            </p>
-          ) : null}
-        </div>
-
         <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
           <SelectInput
             label="Export format"
@@ -999,99 +782,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
             <Download size={16} />
             Export Fee Report
           </button>
-          <button
-            type="button"
-            onClick={() => void loadStaffCollectionSummary()}
-            disabled={collectorSummaryLoading}
-            className="inline-flex h-[42px] w-full items-center justify-center gap-2 self-end rounded-xl border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50 sm:col-span-2 lg:col-span-1 sm:h-auto sm:min-h-[42px]"
-          >
-            {collectorSummaryLoading ? "Loading…" : "Staff collection summary"}
-          </button>
         </div>
-
-        {(collectorSummary.length > 0 || collectorSummaryLoading) && (
-          <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3 sm:p-4">
-            <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <p className="text-sm font-semibold text-white">Offline collections by staff</p>
-                {reportCollectorUserId && selectedStaffLabel ? (
-                  <p className="mt-0.5 text-xs text-cyan-200/80">Showing: {selectedStaffLabel}</p>
-                ) : null}
-              </div>
-              <div className="w-full sm:max-w-xs">
-                <SearchInput
-                  label="Search in summary"
-                  value={staffSummarySearch}
-                  onChange={setStaffSummarySearch}
-                  placeholder="Filter by name…"
-                  variant="glass"
-                  icon={Search}
-                  showSearchIcon
-                />
-              </div>
-            </div>
-
-            {collectorSummaryLoading ? (
-              <p className="py-6 text-center text-sm text-gray-400">Loading staff collections…</p>
-            ) : displayedCollectorSummary.length === 0 ? (
-              <p className="py-6 text-center text-sm text-gray-500">
-                {staffSummarySearch.trim() ? "No staff match your search." : "No collections for this period."}
-              </p>
-            ) : (
-              <>
-                <div className="space-y-2 sm:hidden">
-                  {displayedCollectorSummary.map((row) => (
-                    <div
-                      key={row.name}
-                      className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-3"
-                    >
-                      <div className="flex min-w-0 items-center gap-2">
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-cyan-500/15">
-                          <UserRound className="h-4 w-4 text-cyan-300" aria-hidden />
-                        </div>
-                        <span className="truncate text-sm font-medium text-white">{row.name}</span>
-                      </div>
-                      <span className="shrink-0 text-sm font-semibold text-emerald-400">
-                        ₹{formatRupee(row.totalCollected)}
-                      </span>
-                    </div>
-                  ))}
-                  <div className="flex items-center justify-between rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-3">
-                    <span className="text-sm font-semibold text-emerald-100">Total</span>
-                    <span className="text-sm font-bold text-emerald-300">₹{formatRupee(collectorSummaryTotal)}</span>
-                  </div>
-                </div>
-
-                <div className="hidden overflow-x-auto sm:block">
-                  <table className="w-full min-w-[280px] text-sm">
-                    <thead>
-                      <tr className="border-b border-white/10 text-left text-gray-400">
-                        <th className="pb-2 pr-4 font-medium">Staff name</th>
-                        <th className="pb-2 font-medium text-right">Amount collected</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {displayedCollectorSummary.map((row) => (
-                        <tr key={row.name} className="border-b border-white/5 last:border-0">
-                          <td className="py-2.5 pr-4 text-white">{row.name}</td>
-                          <td className="py-2.5 text-right font-medium text-emerald-400">
-                            ₹{formatRupee(row.totalCollected)}
-                          </td>
-                        </tr>
-                      ))}
-                      <tr className="border-t border-white/10">
-                        <td className="pt-2.5 pr-4 font-semibold text-white">Total</td>
-                        <td className="pt-2.5 text-right font-bold text-emerald-300">
-                          ₹{formatRupee(collectorSummaryTotal)}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-          </div>
-        )}
       </div>
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
         <div className="relative min-w-0 flex-1 sm:min-w-[180px]">

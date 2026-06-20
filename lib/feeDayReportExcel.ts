@@ -315,31 +315,12 @@ function pushCollectionMatrixTable(
   }
 
   pushRow(rows, padRow, [
-    "Total (all modes — day collection)",
+    "Total",
     ...COLLECTION_PAYMENT_COLUMNS.map((col) => roundRupee(model.columnTotals[col] ?? 0)),
   ]);
   pushRow(rows, padRow, [
-    "Day collection grand total",
+    "Collection grand total",
     roundRupee(model.totalCollection),
-  ]);
-}
-
-function pushCollectorSummaryTable(
-  rows: (string | number)[][],
-  padRow: (cells: (string | number)[]) => (string | number)[],
-  model: DayReportSummaryModel
-) {
-  if (model.collectorSummary.length === 0) return;
-  pushRow(rows, padRow, [
-    "Offline collections by staff (excludes online payments)",
-    "Amount collected",
-  ]);
-  for (const row of model.collectorSummary) {
-    pushRow(rows, padRow, [row.name, roundRupee(row.totalCollected)]);
-  }
-  pushRow(rows, padRow, [
-    "Subtotal — offline only (Cash / Cheque / DD / Other)",
-    roundRupee(model.offlineCollectionTotal),
   ]);
 }
 
@@ -802,49 +783,14 @@ export async function drawFeeDayReportPdf(args: {
 
     drawCollectionRow(
       [
-        "Total (all modes — day collection)",
+        "Total",
         ...COLLECTION_PAYMENT_COLUMNS.map((col) => model.columnTotals[col] ?? 0),
       ],
       true
     );
-    drawCollectionRow(["Day collection grand total", model.totalCollection], true);
+    drawCollectionRow(["Collection grand total", model.totalCollection], true);
 
-    if (model.collectorSummary.length > 0) {
-      y += 6;
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(8.5);
-      doc.text("Offline collections by staff (excludes online payments)", margin, y);
-      y += 5;
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(8);
-      const colW = contentW / 2;
-      doc.setFont("helvetica", "bold");
-      doc.text("Staff name", margin + 1, y);
-      doc.text("Amount collected", margin + colW, y, { align: "right" });
-      y += 4.5;
-      doc.setFont("helvetica", "normal");
-      for (const row of model.collectorSummary) {
-        doc.text(row.name, margin + 1, y);
-        doc.text(
-          roundRupee(row.totalCollected).toLocaleString("en-IN"),
-          margin + colW,
-          y,
-          { align: "right" }
-        );
-        y += 4.5;
-      }
-      doc.setFont("helvetica", "bold");
-      doc.text("Subtotal — offline only (Cash / Cheque / DD / Other)", margin + 1, y);
-      doc.text(
-        roundRupee(model.offlineCollectionTotal).toLocaleString("en-IN"),
-        margin + colW,
-        y,
-        { align: "right" }
-      );
-      y += 4.5;
-    }
-
-    y += 4;
+    y += 24;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.text("Signature of Chairman", margin, y);
@@ -863,7 +809,7 @@ export async function drawFeeDayReportPdf(args: {
   const summaryBlockH =
     12 +
     (COLLECTION_ACCOUNT_LABELS.length + otherAccountRowCount + 2) * 6 +
-    (model.collectorSummary.length > 0 ? 14 + model.collectorSummary.length * 5 : 0);
+    24;
   const pageBottomMargin = 8;
 
   for (let i = 0; i < model.detailRows.length; i++) {
@@ -1005,11 +951,6 @@ export function appendDayReportSheet(
   push(Array(TABLE_COLS).fill(""));
 
   pushCollectionMatrixTable(rows, padRow, model);
-
-  if (model.collectorSummary.length > 0) {
-    push(Array(TABLE_COLS).fill(""));
-    pushCollectorSummaryTable(rows, padRow, model);
-  }
 
   push(Array(TABLE_COLS).fill(""));
   push(["Signature of Chairman", "", "", "", "", "", "", "", "Signature of Cashier"]);

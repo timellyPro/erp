@@ -12,7 +12,7 @@ import {
   setSchoolDashboardServerCached,
 } from "@/lib/schoolDashboardServerCache";
 
-/** Day collection — ?part=summary | heads (fast) or full payload (default). */
+/** Day collection — ?from=YYYY-MM-DD&to=YYYY-MM-DD&part=summary | heads (fast) or full payload. */
 export async function GET(request: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
@@ -32,8 +32,10 @@ export async function GET(request: Request) {
 
     const url = new URL(request.url);
     const date = url.searchParams.get("date")?.trim() || undefined;
+    const from = url.searchParams.get("from")?.trim() || date;
+    const to = url.searchParams.get("to")?.trim() || from;
     const part = url.searchParams.get("part")?.trim() || "full";
-    const cacheKey = `dashboard:collection:${part}:${ctx.schoolId}:${date ?? "today"}`;
+    const cacheKey = `dashboard:collection:${part}:${ctx.schoolId}:${from ?? "today"}:${to ?? from ?? "today"}`;
     const cached = getSchoolDashboardServerCached(cacheKey);
     if (cached) {
       return NextResponse.json(cached, { status: 200 });
@@ -41,11 +43,11 @@ export async function GET(request: Request) {
 
     let payload: unknown;
     if (part === "summary") {
-      payload = await buildSchoolDashboardCollectionSummary(ctx.schoolId, date);
+      payload = await buildSchoolDashboardCollectionSummary(ctx.schoolId, from, to);
     } else if (part === "heads") {
-      payload = await buildSchoolDashboardCollectionByHead(ctx.schoolId, date);
+      payload = await buildSchoolDashboardCollectionByHead(ctx.schoolId, from, to);
     } else {
-      payload = await buildSchoolDashboardCollection(ctx.schoolId, date);
+      payload = await buildSchoolDashboardCollection(ctx.schoolId, from, to);
     }
 
     setSchoolDashboardServerCached(cacheKey, payload, part === "summary" ? 120_000 : 90_000);
