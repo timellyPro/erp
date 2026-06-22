@@ -26,6 +26,7 @@ const TAB_TO_FEATURE_MAP: Record<string, string> = {
   "marks-view": "marks-view",
   "marks-entry": "marks-entry",
   homework: "homework",
+  timetable: "timetable",
   classes: "classes",
   students: "students",
   teachers: "teachers",

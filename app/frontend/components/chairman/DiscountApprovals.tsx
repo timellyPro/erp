@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckCircle2, XCircle, RefreshCcw } from "lucide-react";
+import { CheckCircle2, XCircle, RefreshCcw, Search } from "lucide-react";
 import TimellyLoader from "../common/TimellyLoader";
 
 type ApprovalStatus = "ALL" | "PENDING" | "APPROVED" | "REJECTED";
@@ -21,6 +21,7 @@ type ApprovalRow = {
   student: {
     id: string;
     admissionNumber: string;
+    fatherName?: string | null;
     user: { name: string | null } | null;
     class: { name: string; section: string | null } | null;
   };
@@ -122,6 +123,8 @@ export default function DiscountApprovals() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
   const [reviewRemarks, setReviewRemarks] = useState<Record<string, string>>({});
 
   const fetchApprovals = useCallback(async (opts?: { force?: boolean }) => {
@@ -156,6 +159,58 @@ export default function DiscountApprovals() {
     () => approvals.filter((approval) => approval.status === "PENDING").length,
     [approvals]
   );
+  const visibleDiscountTotal = useMemo(
+    () =>
+      approvals.reduce(
+        (sum, approval) =>
+          sum + (approval.discountFixedAmount ?? Math.max(approval.totalFee - approval.finalFee, 0)),
+        0
+      ),
+    [approvals]
+  );
+  const filteredApprovals = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return approvals;
+    return approvals.filter((approval) => {
+      const haystack = [
+        approval.student.user?.name,
+        approval.student.admissionNumber,
+        approval.student.fatherName,
+        approval.student.class?.name,
+        approval.student.class?.section,
+        approval.discountFeeHeadLabel,
+        approval.discountRemarks,
+        approval.requestedBy?.name,
+        approval.requestedBy?.email,
+        approval.status,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [approvals, search]);
+  const studentSuggestions = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q || !searchFocused) return [];
+    const byId = new Map<string, ApprovalRow>();
+    for (const approval of approvals) {
+      const haystack = [
+        approval.student.user?.name,
+        approval.student.admissionNumber,
+        approval.student.fatherName,
+        approval.student.class?.name,
+        approval.student.class?.section,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      if (haystack.includes(q) && !byId.has(approval.student.id)) {
+        byId.set(approval.student.id, approval);
+      }
+    }
+    return Array.from(byId.values()).slice(0, 8);
+  }, [approvals, search, searchFocused]);
 
   const review = async (id: string, action: "APPROVE" | "REJECT" | "REVERT") => {
     if (
@@ -211,7 +266,49 @@ export default function DiscountApprovals() {
 
   return (
     <div className="space-y-5">
-      <div className="flex justify-end">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-3xl font-black tracking-tight text-white">Discount Approvals</h2>
+          <p className="mt-1 text-sm text-white/45">Review fee discounts requested by school admin.</p>
+        </div>
+        <div className="flex items-center justify-end gap-2">
+          <div className="relative w-full max-w-[220px] sm:w-[220px]">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/35" />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => window.setTimeout(() => setSearchFocused(false), 120)}
+              placeholder="Search student..."
+              className="h-9 w-full rounded-full border border-white/10 bg-white/5 pl-9 pr-3 text-xs font-medium text-white outline-none placeholder:text-white/30 focus:border-lime-400/60"
+            />
+            {studentSuggestions.length > 0 ? (
+              <div className="absolute right-0 top-11 z-40 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-white/10 bg-[#0F172A] shadow-2xl">
+                {studentSuggestions.map((approval) => {
+                  const name = approval.student.user?.name || "Student";
+                  const klass = classLabel(approval);
+                  const father = approval.student.fatherName?.trim() || "-";
+                  return (
+                    <button
+                      key={approval.student.id}
+                      type="button"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        setSearch(name);
+                        setSearchFocused(false);
+                      }}
+                      className="w-full border-b border-white/5 px-4 py-3 text-left last:border-0 hover:bg-white/5"
+                    >
+                      <p className="text-sm font-bold text-white">{name}</p>
+                      <p className="mt-1 text-xs text-white/50">
+                        {approval.student.admissionNumber || "-"} | {klass} | Father: {father}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
           <button
             type="button"
           onClick={() => void fetchApprovals({ force: true })}
@@ -221,17 +318,18 @@ export default function DiscountApprovals() {
           >
             <RefreshCcw className="h-3.5 w-3.5" />
           </button>
+        </div>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex gap-2 overflow-x-auto pb-1">
         {(["PENDING", "APPROVED", "REJECTED", "ALL"] as ApprovalStatus[]).map((item) => (
           <button
             key={item}
             type="button"
             onClick={() => setStatus(item)}
-            className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+            className={`shrink-0 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
               status === item
-                ? "bg-lime-400 text-black"
+                ? "bg-lime-400 text-black shadow-lg shadow-lime-950/25"
                 : "border border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
             }`}
           >
@@ -254,79 +352,84 @@ export default function DiscountApprovals() {
           steps={["Requests", "Students", "Approval status"]}
           compact
         />
-      ) : approvals.length === 0 ? (
+      ) : filteredApprovals.length === 0 ? (
         <div className="rounded-2xl border border-white/10 bg-white/3 p-8 text-center text-white/60">
-          No {status === "ALL" ? "history" : status.toLowerCase()} discount requests found.
+          {search.trim()
+            ? "No discount requests match your search."
+            : `No ${status === "ALL" ? "history" : status.toLowerCase()} discount requests found.`}
         </div>
       ) : (
-        <div className="space-y-3">
-          {approvals.map((approval) => {
+        <div className="space-y-4">
+          {filteredApprovals.map((approval) => {
             const discountAmount =
               approval.discountFixedAmount ?? Math.max(approval.totalFee - approval.finalFee, 0);
             return (
-              <div key={approval.id} className="rounded-2xl border border-white/10 bg-white/4 p-4">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="min-w-0">
+              <div
+                key={approval.id}
+                className="relative overflow-hidden rounded-[1.6rem] border border-lime-400/20 bg-white/5 p-4 shadow-xl backdrop-blur-xl sm:p-5"
+              >
+                <div className="relative flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-lg font-bold text-white">
+                      <h2 className="text-xl font-black text-white">
                         {approval.student.user?.name || "Student"}
                       </h2>
-                      <span className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-white/60">
-                        {approval.student.admissionNumber}
-                      </span>
-                      <span className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-white/60">
+                      <span className="rounded-full border border-sky-400/20 bg-sky-400/10 px-2.5 py-1 text-xs font-semibold text-sky-200">
                         {classLabel(approval)}
                       </span>
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-white/55">
+                        {approval.student.admissionNumber}
+                      </span>
                     </div>
-                    <p className="mt-2 text-sm text-white/60">
+                    <p className="mt-4 text-sm text-white/55">
                       Requested by {approval.requestedBy?.name || approval.requestedBy?.email || "-"} on{" "}
                       {new Date(approval.createdAt).toLocaleDateString("en-IN")}
                     </p>
-                    <p className="mt-2 text-sm text-white/70">
-                      Head: <span className="text-white">{approval.discountFeeHeadLabel || "Overall"}</span>
+                    <p className="mt-2 text-sm text-white/55">
+                      Head: <span className="font-semibold text-lime-200">{approval.discountFeeHeadLabel || "Overall"}</span>
                     </p>
                     {approval.discountRemarks ? (
-                      <p className="mt-1 text-sm text-white/60">Reason: {approval.discountRemarks}</p>
+                      <p className="mt-1 text-sm text-white/55">Reason: <span className="text-white/70">{approval.discountRemarks}</span></p>
                     ) : null}
                   </div>
 
-                  <div className="grid min-w-[260px] grid-cols-2 gap-2 text-sm">
-                    <div className="rounded-xl bg-black/20 p-3">
+                  <div className="grid min-w-full grid-cols-2 gap-2 text-sm sm:min-w-[300px]">
+                    <div className="rounded-2xl bg-black/20 p-3">
                       <p className="text-white/50">Total Fee</p>
                       <p className="font-semibold text-white">{formatMoney(approval.totalFee)}</p>
                     </div>
-                    <div className="rounded-xl bg-black/20 p-3">
+                    <div className="rounded-2xl bg-black/20 p-3">
                       <p className="text-white/50">Discount</p>
-                      <p className="font-semibold text-cyan-200">
+                      <p className="font-semibold text-amber-200">
                         {formatMoney(discountAmount)} ({approval.discountPercent.toFixed(2)}%)
                       </p>
                     </div>
-                    <div className="rounded-xl bg-black/20 p-3">
+                    <div className="rounded-2xl bg-black/20 p-3">
                       <p className="text-white/50">Final Fee</p>
                       <p className="font-semibold text-lime-200">{formatMoney(approval.finalFee)}</p>
                     </div>
-                    <div className="rounded-xl bg-black/20 p-3">
+                    <div className="rounded-2xl bg-black/20 p-3">
                       <p className="text-white/50">Status</p>
-                      <p className="font-semibold text-white">{approval.status}</p>
+                      <p className="font-black text-amber-200">{approval.status}</p>
                     </div>
                   </div>
                 </div>
 
                 {approval.status === "PENDING" ? (
-                  <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center">
+                  <div className="relative mt-4 grid gap-3 lg:grid-cols-[1fr_auto_auto] lg:items-center">
                     <input
                       value={reviewRemarks[approval.id] || ""}
                       onChange={(e) =>
                         setReviewRemarks((prev) => ({ ...prev, [approval.id]: e.target.value }))
                       }
                       placeholder="Chairman remarks (optional)"
-                      className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/30 px-4 py-2.5 text-sm text-white outline-none placeholder:text-white/30 focus:border-lime-400/70"
+                      className="min-w-0 rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white outline-none placeholder:text-white/30 focus:border-lime-400/70"
                     />
                     <button
                       type="button"
                       disabled={busyId === approval.id}
                       onClick={() => void review(approval.id, "APPROVE")}
-                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-lime-400 px-4 py-2.5 text-sm font-bold text-black disabled:opacity-60"
+                      className="inline-flex items-center justify-center gap-2 rounded-2xl bg-lime-400 px-6 py-3 text-sm font-bold text-black shadow-lg shadow-lime-950/25 disabled:opacity-60"
                     >
                       <CheckCircle2 className="h-4 w-4" />
                       Approve
@@ -335,15 +438,15 @@ export default function DiscountApprovals() {
                       type="button"
                       disabled={busyId === approval.id}
                       onClick={() => void review(approval.id, "REJECT")}
-                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-red-500 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60"
+                      className="inline-flex items-center justify-center gap-2 rounded-2xl bg-red-500 px-6 py-3 text-sm font-bold text-white shadow-lg shadow-red-950/25 disabled:opacity-60"
                     >
                       <XCircle className="h-4 w-4" />
                       Reject
                     </button>
                   </div>
                 ) : (
-                  <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div className="rounded-xl border border-white/10 bg-black/20 p-3 text-sm text-white/60">
+                  <div className="relative mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white/60">
                       Reviewed by {approval.reviewedBy?.name || approval.reviewedBy?.email || "-"}
                       {approval.reviewedAt ? ` on ${new Date(approval.reviewedAt).toLocaleDateString("en-IN")}` : ""}
                       {approval.reviewRemarks ? `: ${approval.reviewRemarks}` : ""}
@@ -353,7 +456,7 @@ export default function DiscountApprovals() {
                         type="button"
                         disabled={busyId === approval.id}
                         onClick={() => void review(approval.id, "REVERT")}
-                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-400/30 bg-amber-400/15 px-4 py-2.5 text-sm font-bold text-amber-100 hover:bg-amber-400/25 disabled:opacity-60"
+                        className="inline-flex items-center justify-center gap-2 rounded-2xl border border-amber-400/30 bg-amber-400/15 px-4 py-3 text-sm font-bold text-amber-100 hover:bg-amber-400/25 disabled:opacity-60"
                       >
                         <RefreshCcw className="h-4 w-4" />
                         Revert Discount
@@ -366,6 +469,26 @@ export default function DiscountApprovals() {
           })}
         </div>
       )}
+      {!loading ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+            <p className="text-xs text-white/40">Showing</p>
+            <p className="mt-1 text-2xl font-black text-white">{filteredApprovals.length}</p>
+          </div>
+          <div className="rounded-2xl border border-amber-400/20 bg-white/5 p-4">
+            <p className="text-xs text-white/40">Discount Value</p>
+            <p className="mt-1 text-lg font-black text-amber-200">{formatMoney(visibleDiscountTotal)}</p>
+          </div>
+          <div className="rounded-2xl border border-lime-400/20 bg-white/5 p-4">
+            <p className="text-xs text-white/40">Current Filter</p>
+            <p className="mt-1 text-lg font-black text-lime-200">{status === "ALL" ? "History" : status}</p>
+          </div>
+          <div className="rounded-2xl border border-sky-400/20 bg-white/5 p-4">
+            <p className="text-xs text-white/40">Pending Here</p>
+            <p className="mt-1 text-2xl font-black text-sky-200">{pendingCount}</p>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

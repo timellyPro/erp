@@ -22,6 +22,7 @@ type ApprovalListRow = {
   createdAt: Date;
   studentId: string;
   admissionNumber: string;
+  fatherName: string | null;
   studentName: string | null;
   className: string | null;
   section: string | null;
@@ -47,6 +48,7 @@ function mapApprovals(rows: ApprovalListRow[]) {
     student: {
       id: row.studentId,
       admissionNumber: row.admissionNumber,
+      fatherName: row.fatherName,
       user: { name: row.studentName },
       class: row.className ? { name: row.className, section: row.section } : null,
     },
@@ -104,6 +106,7 @@ export async function GET(req: NextRequest) {
       fda."createdAt",
       s.id AS "studentId",
       s."admissionNumber",
+      s."fatherName",
       su.name AS "studentName",
       c.name AS "className",
       c.section,
@@ -136,6 +139,7 @@ export async function GET(req: NextRequest) {
       fda."createdAt",
       s.id AS "studentId",
       s."admissionNumber",
+      s."fatherName",
       su.name AS "studentName",
       c.name AS "className",
       c.section,

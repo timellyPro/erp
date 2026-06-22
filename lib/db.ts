@@ -185,10 +185,14 @@ const createPrisma = () => {
 let prisma: ReturnType<typeof createPrisma> = globalThis.prismaGlobal ?? createPrisma();
 
 // Next.js dev HMR can keep a Prisma singleton from before `prisma generate`; new models are then undefined.
-const delegate = prisma as unknown as { extraFeeHeadTemplate?: { create?: unknown } };
+const delegate = prisma as unknown as {
+  extraFeeHeadTemplate?: { create?: unknown };
+  timetable?: { create?: unknown };
+};
 if (
   process.env.NODE_ENV === "development" &&
-  typeof delegate.extraFeeHeadTemplate?.create !== "function"
+  (typeof delegate.extraFeeHeadTemplate?.create !== "function" ||
+    typeof delegate.timetable?.create !== "function")
 ) {
   prisma = createPrisma();
 }

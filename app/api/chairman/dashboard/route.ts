@@ -57,57 +57,65 @@ export async function GET(req: NextRequest) {
         rejectedDiscounts: bigint;
       }>
     >`
+      WITH school_students AS (
+        SELECT id, status
+        FROM "Student"
+        WHERE "schoolId" = ${schoolId}
+      ),
+      student_counts AS (
+        SELECT
+          COUNT(*) AS "totalStudents",
+          COUNT(*) FILTER (WHERE COALESCE(status, 'Active') = 'Active') AS "activeStudents"
+        FROM school_students
+      ),
+      fee_totals AS (
+        SELECT
+          COALESCE(SUM(sf."totalFee"), 0) AS "grossFees",
+          COALESCE(SUM(sf."finalFee"), 0) AS "netFees",
+          COALESCE(SUM(GREATEST(sf."totalFee" - sf."finalFee", 0)), 0) AS "totalDiscount",
+          COALESCE(SUM(sf."remainingFee"), 0) AS "remainingFees"
+        FROM "StudentFee" sf
+        JOIN school_students s ON s.id = sf."studentId"
+      ),
+      payment_totals AS (
+        SELECT
+          COALESCE(SUM(p.amount) FILTER (
+            WHERE p."createdAt" >= ${collectionDate.start}
+              AND p."createdAt" < ${collectionDate.end}
+          ), 0) AS "todayCollection",
+          COALESCE(SUM(p.amount), 0) AS "totalCollection"
+        FROM "Payment" p
+        JOIN school_students s ON s.id = p."studentId"
+        WHERE p.status = 'SUCCESS'
+          AND p.purpose = 'FEES'
+      ),
+      discount_counts AS (
+        SELECT
+          COUNT(*) FILTER (WHERE status = CAST('PENDING' AS "DiscountApprovalStatus")) AS "pendingDiscounts",
+          COUNT(*) FILTER (WHERE status = CAST('APPROVED' AS "DiscountApprovalStatus")) AS "approvedDiscounts",
+          COUNT(*) FILTER (WHERE status = CAST('REJECTED' AS "DiscountApprovalStatus")) AS "rejectedDiscounts"
+        FROM "FeeDiscountApproval"
+        WHERE "schoolId" = ${schoolId}
+      )
       SELECT
         (SELECT name FROM "School" WHERE id = ${schoolId} LIMIT 1) AS "schoolName",
-        (SELECT COUNT(*) FROM "Student" WHERE "schoolId" = ${schoolId}) AS "totalStudents",
-        (SELECT COUNT(*) FROM "Student" WHERE "schoolId" = ${schoolId} AND COALESCE(status, 'Active') = 'Active') AS "activeStudents",
+        sc."totalStudents",
+        sc."activeStudents",
         (SELECT COUNT(*) FROM "Class" WHERE "schoolId" = ${schoolId}) AS "totalClasses",
-        (SELECT COUNT(*) FROM "User" WHERE "schoolId" = ${schoolId} AND role::text = 'TEACHER') AS "totalTeachers",
-        (
-          SELECT COALESCE(SUM(sf."totalFee"), 0)
-          FROM "StudentFee" sf
-          JOIN "Student" s ON s.id = sf."studentId"
-          WHERE s."schoolId" = ${schoolId}
-        ) AS "grossFees",
-        (
-          SELECT COALESCE(SUM(sf."finalFee"), 0)
-          FROM "StudentFee" sf
-          JOIN "Student" s ON s.id = sf."studentId"
-          WHERE s."schoolId" = ${schoolId}
-        ) AS "netFees",
-        (
-          SELECT COALESCE(SUM(GREATEST(sf."totalFee" - sf."finalFee", 0)), 0)
-          FROM "StudentFee" sf
-          JOIN "Student" s ON s.id = sf."studentId"
-          WHERE s."schoolId" = ${schoolId}
-        ) AS "totalDiscount",
-        (
-          SELECT COALESCE(SUM(sf."remainingFee"), 0)
-          FROM "StudentFee" sf
-          JOIN "Student" s ON s.id = sf."studentId"
-          WHERE s."schoolId" = ${schoolId}
-        ) AS "remainingFees",
-        (
-          SELECT COALESCE(SUM(p.amount), 0)
-          FROM "Payment" p
-          JOIN "Student" s ON s.id = p."studentId"
-          WHERE s."schoolId" = ${schoolId}
-            AND p.status = 'SUCCESS'
-            AND p.purpose = 'FEES'
-            AND p."createdAt" >= ${collectionDate.start}
-            AND p."createdAt" < ${collectionDate.end}
-        ) AS "todayCollection",
-        (
-          SELECT COALESCE(SUM(p.amount), 0)
-          FROM "Payment" p
-          JOIN "Student" s ON s.id = p."studentId"
-          WHERE s."schoolId" = ${schoolId}
-            AND p.status = 'SUCCESS'
-            AND p.purpose = 'FEES'
-        ) AS "totalCollection",
-        (SELECT COUNT(*) FROM "FeeDiscountApproval" WHERE "schoolId" = ${schoolId} AND status::text = 'PENDING') AS "pendingDiscounts",
-        (SELECT COUNT(*) FROM "FeeDiscountApproval" WHERE "schoolId" = ${schoolId} AND status::text = 'APPROVED') AS "approvedDiscounts",
-        (SELECT COUNT(*) FROM "FeeDiscountApproval" WHERE "schoolId" = ${schoolId} AND status::text = 'REJECTED') AS "rejectedDiscounts"
+        (SELECT COUNT(*) FROM "User" WHERE "schoolId" = ${schoolId} AND role = CAST('TEACHER' AS "Role")) AS "totalTeachers",
+        ft."grossFees",
+        ft."netFees",
+        ft."totalDiscount",
+        ft."remainingFees",
+        pt."todayCollection",
+        pt."totalCollection",
+        dc."pendingDiscounts",
+        dc."approvedDiscounts",
+        dc."rejectedDiscounts"
+      FROM student_counts sc
+      CROSS JOIN fee_totals ft
+      CROSS JOIN payment_totals pt
+      CROSS JOIN discount_counts dc
     `;
 
     const responseSummary = {

@@ -60,10 +60,10 @@ function ChairmanContent() {
 
   useEffect(() => {
     if (status === "authenticated") {
-      warmDiscountApprovals("PENDING");
-      warmChairmanDashboard();
+      if (tab !== "discount-approvals") warmDiscountApprovals("PENDING");
+      if (tab !== "dashboard") warmChairmanDashboard();
     }
-  }, [status]);
+  }, [status, tab]);
 
   if (status === "loading") {
     return (
