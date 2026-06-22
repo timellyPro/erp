@@ -4,7 +4,7 @@ import { ReactNode, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
-type UserRole = "SUPERADMIN" | "SCHOOLADMIN" | "TEACHER" | "STUDENT";
+type UserRole = "SUPERADMIN" | "SCHOOLADMIN" | "CHAIRMAN" | "TEACHER" | "STUDENT";
 
 type Props = {
   children: ReactNode;

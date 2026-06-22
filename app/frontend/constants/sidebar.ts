@@ -478,6 +478,14 @@ export const SUPERADMIN_SIDEBAR_ITEMS: SidebarItem[] = [
         permission: Permission.SCHOOLS,
     },
     {
+        label: "Add Chairman",
+        mobileLabel: "Chairman",
+        href: "/frontend/pages/superadmin?tab=addchairman",
+        tab: "addchairman",
+        icon: UserCheck,
+        permission: Permission.SCHOOLS,
+    },
+    {
         label: "Remove schools",
         mobileLabel: "Remove",
         href: "/frontend/pages/superadmin?tab=removeschools",
@@ -499,6 +507,35 @@ export const SUPERADMIN_SIDEBAR_ITEMS: SidebarItem[] = [
         tab: "transactions",
         icon: CreditCard,
         permission: Permission.FEES_TRANSACTIONS,
+    },
+    {
+        label: "Sign Out",
+        action: "logout",
+        icon: LogOut,
+    },
+];
+
+export const CHAIRMAN_MENU_ITEMS: SidebarItem[] = [
+    {
+        label: "Dashboard",
+        tab: "dashboard",
+        href: "/frontend/pages/chairman?tab=dashboard",
+        icon: LayoutDashboard,
+        permission: Permission.DASHBOARD,
+    },
+    {
+        label: "Discount Approvals",
+        tab: "discount-approvals",
+        href: "/frontend/pages/chairman?tab=discount-approvals",
+        icon: DollarSign,
+        permission: Permission.FEES,
+    },
+    {
+        label: "Settings",
+        tab: "settings",
+        href: "/frontend/pages/chairman?tab=settings",
+        icon: Settings,
+        permission: Permission.SETTINGS,
     },
     {
         label: "Sign Out",

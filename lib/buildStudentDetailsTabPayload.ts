@@ -86,6 +86,15 @@ export type StudentDetailsTabPayload = {
     discountFeeHeadKey: string | null;
     discountFeeHeadLabel: string | null;
     discountRemarks: string | null;
+    discountApprovals?: Array<{
+      id: string;
+      status: "PENDING" | "APPROVED" | "REJECTED";
+      discountFixedAmount: number | null;
+      discountFeeHeadKey: string | null;
+      discountFeeHeadLabel: string | null;
+      discountRemarks: string | null;
+      createdAt: string;
+    }>;
   } | null;
   payments: Array<{
     id: string;
@@ -235,6 +244,19 @@ const studentDetailsInclude = {
       discountFeeHeadKey: true,
       discountFeeHeadLabel: true,
       discountRemarks: true,
+      discountApprovals: {
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        select: {
+          id: true,
+          status: true,
+          discountFixedAmount: true,
+          discountFeeHeadKey: true,
+          discountFeeHeadLabel: true,
+          discountRemarks: true,
+          createdAt: true,
+        },
+      },
     },
   },
   application: {
@@ -499,6 +521,19 @@ function mapStudentToTabPayload(
           discountFeeHeadLabel:
             (student.fee as { discountFeeHeadLabel?: string | null }).discountFeeHeadLabel ?? null,
           discountRemarks: (student.fee as { discountRemarks?: string | null }).discountRemarks ?? null,
+          discountApprovals:
+            student.fee.discountApprovals?.map((approval) => ({
+              id: approval.id,
+              status: approval.status,
+              discountFixedAmount: approval.discountFixedAmount,
+              discountFeeHeadKey: approval.discountFeeHeadKey,
+              discountFeeHeadLabel: approval.discountFeeHeadLabel,
+              discountRemarks: approval.discountRemarks,
+              createdAt:
+                approval.createdAt instanceof Date
+                  ? approval.createdAt.toISOString()
+                  : String(approval.createdAt),
+            })) ?? [],
         }
       : null,
     ...extras,

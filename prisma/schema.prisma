@@ -18,8 +18,15 @@ datasource db {
 enum Role {
   SUPERADMIN
   SCHOOLADMIN
+  CHAIRMAN
   TEACHER
   STUDENT
+}
+
+enum DiscountApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 enum LeaveStatus {
@@ -144,6 +151,8 @@ model User {
   teacherSchools School[] @relation("SchoolTeacher")
 
   offlinePaymentsCollected Payment[] @relation("PaymentCollector")
+  feeDiscountRequestsCreated FeeDiscountApproval[] @relation("FeeDiscountRequestCreator")
+  feeDiscountRequestsReviewed FeeDiscountApproval[] @relation("FeeDiscountApprover")
 
   @@unique([schoolId, email])
 }
@@ -262,6 +271,7 @@ model School {
   extraFeeHeadTemplates ExtraFeeHeadTemplate[]
   pettyCashExpenses     PettyCashExpense[]
   studentApplications   StudentApplication[]
+  feeDiscountApprovals  FeeDiscountApproval[]
 }
 
 model SchoolSettings {
@@ -481,8 +491,9 @@ model Student {
   studentLeaveRequests StudentLeaveRequest[]
 
   // Payments / Fees
-  fee      StudentFee?
-  payments Payment[]
+  fee                  StudentFee?
+  payments             Payment[]
+  feeDiscountApprovals FeeDiscountApproval[]
 
   // Parent SaaS subscription entries for this student/parent
   subscriptions ParentSubscription[]
@@ -990,10 +1001,52 @@ model StudentFee {
   amountPaid   Float @default(0)
   remainingFee Float
 
+  discountApprovals FeeDiscountApproval[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([studentId])
+}
+
+model FeeDiscountApproval {
+  id String @id @default(cuid())
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  studentFeeId String
+  studentFee   StudentFee @relation(fields: [studentFeeId], references: [id], onDelete: Cascade)
+
+  requestedById String
+  requestedBy   User @relation("FeeDiscountRequestCreator", fields: [requestedById], references: [id], onDelete: Cascade)
+
+  reviewedById String?
+  reviewedBy   User? @relation("FeeDiscountApprover", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  status DiscountApprovalStatus @default(PENDING)
+
+  totalFee              Float
+  discountPercent       Float
+  discountFixedAmount   Float?
+  finalFee              Float
+  discountFeeHeadKey    String?
+  discountFeeHeadLabel  String?
+  discountRemarks       String? @db.Text
+  reviewRemarks         String? @db.Text
+
+  reviewedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([schoolId, status, createdAt])
+  @@index([studentId])
+  @@index([studentFeeId])
+  @@index([requestedById])
+  @@index([reviewedById])
 }
 
 // Global fee breakdown per class (Tuition, Transport, Lab, etc.)

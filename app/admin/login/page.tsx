@@ -26,6 +26,9 @@ export default function LoginPage() {
       case "SCHOOLADMIN":
         router.replace(ROUTES.SCHOOLADMIN);
         break;
+      case "CHAIRMAN":
+        router.replace(ROUTES.CHAIRMAN);
+        break;
       case "TEACHER":
         router.replace(ROUTES.TEACHER);
         break;

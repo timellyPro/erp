@@ -70,6 +70,14 @@ type StudentDetail = {
     discountFeeHeadKey?: string | null;
     discountFeeHeadLabel?: string | null;
     discountRemarks?: string | null;
+    discountApprovals?: Array<{
+      id: string;
+      status: "PENDING" | "APPROVED" | "REJECTED";
+      discountFixedAmount?: number | null;
+      discountFeeHeadLabel?: string | null;
+      discountRemarks?: string | null;
+      createdAt?: string;
+    }>;
   } | null;
   payments: Array<{
     id: string;
@@ -1395,6 +1403,8 @@ function StudentDetailsPageContent() {
                 discountFeeHeadLabel={detail.fee.discountFeeHeadLabel}
                 discountRemarks={detail.fee.discountRemarks}
                 discountFixedAmount={detail.fee.discountFixedAmount}
+                latestDiscountApproval={detail.fee.discountApprovals?.[0] ?? null}
+                discountApprovals={detail.fee.discountApprovals ?? []}
                 onFeeModified={(paymentResult) => {
                   if (paymentResult?.payment.id) setAutoPrintPaymentId(paymentResult.payment.id);
                   if (detail.student.id) void refreshFeesForStudent(detail.student.id, paymentResult);

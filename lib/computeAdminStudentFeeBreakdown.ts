@@ -249,7 +249,13 @@ export async function computeAdminStudentFeeBreakdown(
     return rows as ExtraFeeBreakdownRow[];
   };
 
-  let [fee, classFeeStructure, extraFeesRawFirst, groupedAllocations] = await Promise.all([
+  const [
+    studentFeeRecord,
+    classFeeStructure,
+    extraFeesRawFirst,
+    groupedAllocations,
+    approvedDiscounts,
+  ] = await Promise.all([
     prisma.studentFee.findUnique({
       where: { studentId: student.id },
       select: {
@@ -273,7 +279,21 @@ export async function computeAdminStudentFeeBreakdown(
       },
       _sum: { allocatedAmount: true },
     }),
+    prisma.feeDiscountApproval.findMany({
+      where: {
+        studentId: student.id,
+        status: "APPROVED",
+      },
+      orderBy: { reviewedAt: "asc" },
+      select: {
+        discountPercent: true,
+        discountFixedAmount: true,
+        discountFeeHeadKey: true,
+        discountFeeHeadLabel: true,
+      },
+    }),
   ]);
+  let fee = studentFeeRecord;
 
   if (reconcileTotals && fee) {
     const paymentSum = await sumSuccessfulFeePayments(student.id);
@@ -314,7 +334,18 @@ export async function computeAdminStudentFeeBreakdown(
       })
     );
 
-  const discount = studentFeeDiscountFromRecord(fee, baseComps);
+  const fallbackDiscount = studentFeeDiscountFromRecord(fee, baseComps);
+  const approvedDiscountInputs = approvedDiscounts.map((approval) => ({
+    discountPercent: approval.discountPercent,
+    discountFeeHeadKey: approval.discountFeeHeadKey,
+    discountFixedAmount: approval.discountFixedAmount,
+  }));
+  const discountInputs = approvedDiscountInputs.length > 0 ? approvedDiscountInputs : [fallbackDiscount];
+  const discountedDue = (key: string, preDue: number) =>
+    discountInputs.reduce(
+      (due, discount) => discountedSnapshotDueForHead(key, due, discount),
+      preDue
+    );
 
   if (migrateLumps) {
     const lumpsToMigrate = extraFeesRaw.filter((ef) =>
@@ -367,7 +398,7 @@ export async function computeAdminStudentFeeBreakdown(
         headType: "BASE_COMPONENT",
         label: c.name,
         grossDue: preDue,
-        snapshotDue: discountedSnapshotDueForHead(key, preDue, discount),
+        snapshotDue: discountedDue(key, preDue),
       };
     }),
     ...extraFees.map((ef): InternalHead => {
@@ -378,7 +409,7 @@ export async function computeAdminStudentFeeBreakdown(
         headType: "EXTRA_FEE",
         label: formatFeeHeadDisplayLabel(ef.name),
         grossDue: preDue,
-        snapshotDue: discountedSnapshotDueForHead(key, preDue, discount),
+        snapshotDue: discountedDue(key, preDue),
         extraFeeId: ef.id,
         canDeleteOnStudentProfile: ef.targetType === "STUDENT" && ef.targetStudentId === student.id,
         splitIntoTwoInstallments:
@@ -410,7 +441,6 @@ export async function computeAdminStudentFeeBreakdown(
     extraFeesById
   );
 
-  const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);
   /** Per-head paid comes from allocations only — never spread leftover amountPaid across all heads. */
   const legacyPaidTotal = 0;
   const totalSnapshotDue = Math.max(allHeads.reduce((s, h) => s + h.snapshotDue, 0), 0);
@@ -449,7 +479,7 @@ export async function computeAdminStudentFeeBreakdown(
   const totalDueBefore = roundMoney(dueHeads.reduce((s, h) => s + h.dueBefore, 0));
   const totalAmount = roundMoney(dueHeads.reduce((s, h) => s + h.snapshotAmount, 0));
 
-  let amountPaid = fee.amountPaid;
+  const amountPaid = fee.amountPaid;
   let finalFee = fee.finalFee;
   let remainingFee = totalDueBefore;
 

@@ -36,7 +36,7 @@ export async function requireSchoolId(session: Session): Promise<TenantContext> 
   if (!user?.id) return { ok: false, status: 401, message: "Unauthorized" };
 
   const role = user.role;
-  const isStaff = role === "SCHOOLADMIN" || role === "SUPERADMIN" || role === "TEACHER";
+  const isStaff = role === "SCHOOLADMIN" || role === "SUPERADMIN" || role === "CHAIRMAN" || role === "TEACHER";
   if (!isStaff) return { ok: false, status: 403, message: "Forbidden" };
 
   const fromToken = typeof user.schoolId === "string" && user.schoolId.trim() ? user.schoolId : null;

@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
-import { isOverallDiscountKey } from "@/lib/studentFeeHeadDiscount";
 import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
 
 type RouteParams =
@@ -22,6 +21,12 @@ export async function GET(_req: Request, context: RouteParams) {
   try {
     const fee = await prisma.studentFee.findUnique({
       where: { studentId: id },
+      include: {
+        discountApprovals: {
+          orderBy: { createdAt: "desc" },
+          take: 10,
+        },
+      },
     });
 
     if (!fee) {
@@ -65,12 +70,27 @@ export async function PATCH(req: Request, context: RouteParams) {
   try {
     const existing = await prisma.studentFee.findUnique({
       where: { studentId: id },
+      include: {
+        student: { select: { schoolId: true } },
+      },
     });
 
     if (!existing) {
       return NextResponse.json(
         { message: "Fee details not found for this student" },
         { status: 404 }
+      );
+    }
+
+    const schoolId = existing.student.schoolId;
+    const sessionSchoolId =
+      typeof session.user.schoolId === "string" && session.user.schoolId.trim()
+        ? session.user.schoolId
+        : null;
+    if (session.user.role !== "SUPERADMIN" && sessionSchoolId && sessionSchoolId !== schoolId) {
+      return NextResponse.json(
+        { message: "Forbidden" },
+        { status: 403 }
       );
     }
 
@@ -140,11 +160,70 @@ export async function PATCH(req: Request, context: RouteParams) {
           ? Math.round(newTotalFee * (newDiscount / 100) * 100) / 100
           : 0;
 
-    const discountFixedAmount =
-      hasDiscount && !isOverallDiscountKey(headKey) ? discountRupee : null;
-
     const finalFee = Math.max(0, Math.round((newTotalFee - discountRupee) * 100) / 100);
     const remainingFee = Math.max(finalFee - existing.amountPaid, 0);
+
+    if (hasDiscount) {
+      const approvalData = {
+        schoolId,
+        studentId: id,
+        studentFeeId: existing.id,
+        requestedById: session.user.id,
+        totalFee: newTotalFee,
+        discountPercent: newDiscount,
+        discountFixedAmount: discountRupee,
+        finalFee,
+        discountFeeHeadKey: headKey,
+        discountFeeHeadLabel: headLabel,
+        discountRemarks: remarksVal,
+      } as const;
+
+      const pending = await prisma.feeDiscountApproval.findFirst({
+        where: {
+          studentId: id,
+          schoolId,
+          status: "PENDING",
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true },
+      });
+
+      const approvalRequest = pending
+        ? await prisma.feeDiscountApproval.update({
+            where: { id: pending.id },
+            data: {
+              ...approvalData,
+              reviewedById: null,
+              reviewRemarks: null,
+              reviewedAt: null,
+            },
+          })
+        : await prisma.feeDiscountApproval.create({
+            data: approvalData,
+          });
+
+      const approvalRequests = await prisma.feeDiscountApproval.findMany({
+        where: { studentId: id, schoolId },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        select: {
+          id: true,
+          status: true,
+          discountFixedAmount: true,
+          discountFeeHeadLabel: true,
+          discountRemarks: true,
+          createdAt: true,
+        },
+      });
+
+      return NextResponse.json({
+        fee: existing,
+        approvalRequest,
+        approvalRequests,
+        pendingApproval: true,
+        message: "Discount submitted for chairman approval.",
+      });
+    }
 
     const updated = await prisma.studentFee.update({
       where: { studentId: id },
