@@ -159,8 +159,29 @@ function labelFromLegacyBaseGroupId(id: string): string {
   return `${name} (${num})`;
 }
 
+function previousYearDueLabel(name: string): string | null {
+  const compact = name.trim().replace(/\s+/g, " ");
+  const lower = compact.toLowerCase();
+  if (!lower.includes("last year") || !lower.includes("fee due")) return null;
+
+  const yearRange = lower.match(/20\d{2}\s*[-/]\s*(?:20)?\d{2}/)?.[0];
+  if (!yearRange) return "Previous Year Fee Due";
+
+  const parts = yearRange.split(/[-/]/).map((part) => part.trim());
+  const start = parts[0] ?? "";
+  const rawEnd = parts[1] ?? "";
+  const end = rawEnd.length === 2 ? `${start.slice(0, 2)}${rawEnd}` : rawEnd;
+  return `Previous Year ${start}-${end} Fee Due`;
+}
+
+function isPreviousYearGroupId(groupId: string): boolean {
+  return groupId.startsWith("EXTRA_NAME@previous_year_");
+}
+
 /** Same display name → one column (many DB rows often share a title). */
 function normalizeExtraNameKey(name: string): string {
+  const previousYear = previousYearDueLabel(name);
+  if (previousYear) return previousYear.toLowerCase();
   return name.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
@@ -366,7 +387,7 @@ export function buildFeeDueReportPayload(args: {
   for (const ef of rosterExtras) {
     const nk = normalizeExtraNameKey(ef.name);
     const slug = extraNameSlugFromNorm(nk);
-    const nm = ef.name.trim();
+    const nm = previousYearDueLabel(ef.name) ?? ef.name.trim();
     const prev = extraDisplayBySlug.get(slug);
     if (!prev || nm.length > prev.length) extraDisplayBySlug.set(slug, nm);
   }
@@ -391,7 +412,13 @@ export function buildFeeDueReportPayload(args: {
         orderedGroupIds.push(gid);
       }
     }
-    const totalDiscount = Math.max(s.totalFee - s.finalFee, 0);
+    const currentYearCells = Object.entries(cells)
+      .filter(([groupId]) => !isPreviousYearGroupId(groupId))
+      .map(([, cell]) => cell);
+    const currentYearTotalFee = currentYearCells.reduce((sum, cell) => sum + cell.fee, 0);
+    const currentYearTotalDiscount = currentYearCells.reduce((sum, cell) => sum + cell.concession, 0);
+    const currentYearFeesPaid = currentYearCells.reduce((sum, cell) => sum + cell.paid, 0);
+    const currentYearFeesDue = currentYearCells.reduce((sum, cell) => sum + cell.due, 0);
     rows.push({
       studentId: s.studentId,
       no: no++,
@@ -401,10 +428,10 @@ export function buildFeeDueReportPayload(args: {
       parent: s.parent,
       mobile: s.mobile,
       category: (s.category || "Day Scholar").trim() || "Day Scholar",
-      totalFee: s.totalFee,
-      totalDiscount,
-      feesPaid: s.amountPaid,
-      feesDue: s.remainingFee,
+      totalFee: currentYearTotalFee,
+      totalDiscount: currentYearTotalDiscount,
+      feesPaid: currentYearFeesPaid,
+      feesDue: currentYearFeesDue,
       cellsByGroupId: cells,
     });
   }

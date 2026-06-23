@@ -9,10 +9,10 @@ const STATIC_HEADERS = [
   "Parent",
   "mobile",
   "Category",
-  "Total fees",
-  "Total discount",
-  "Fees paid",
-  "Fees Due",
+  "Current Year Total fees",
+  "Current Year Total discount",
+  "Current Year Fees paid",
+  "Current Year Fees Due",
 ] as const;
 
 const GROUP_FILL_COLORS = ["FFF2CC", "DDEBF7", "B4C6E7", "E2D5F7", "C6E0B4", "F8CBAD", "D9D9D9", "FCE4D6"];
