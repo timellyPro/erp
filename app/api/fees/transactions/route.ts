@@ -38,13 +38,14 @@ export async function GET(req: Request) {
     const reportFrom = searchParams.get("from")?.trim() || "";
     const reportTo = searchParams.get("to")?.trim() || reportFrom;
     const collectedByUserId = searchParams.get("collectedByUserId")?.trim() || undefined;
+    const refresh = searchParams.get("refresh") === "1";
     /** Fee-report exports need a high cap; default list views stay small. */
     const limit = Math.min(Math.max(rawLimit, 1), forFeeReport ? 25000 : 200);
 
     if (forFeeReport && reportFrom) {
       const cacheKey = `fees:report:${schoolId}:${reportFrom}:${reportTo}:${collectedByUserId ?? ""}`;
       const cached = getSchoolDashboardServerCached<{ transactions: unknown[] }>(cacheKey);
-      if (cached) {
+      if (!refresh && cached) {
         return NextResponse.json(cached, { status: 200 });
       }
 
@@ -59,7 +60,7 @@ export async function GET(req: Request) {
       return NextResponse.json(payload, { status: 200 });
     }
 
-    if (!forFeeReport && !studentId && !collectedByUserId) {
+    if (!refresh && !forFeeReport && !studentId && !collectedByUserId) {
       const memKey = `fees:transactions:${schoolId}:${limit}`;
       const cached = getSchoolDashboardServerCached<{ transactions: unknown[] }>(memKey);
       if (cached && Array.isArray(cached.transactions) && cached.transactions.length > 0) {

@@ -104,8 +104,8 @@ export default function FeeTransactionsList({
 
   useEffect(() => {
     const key = resolveFeesTransactionsCacheKey(schoolId);
+    const cached = !selectedCollectorUserId ? peekFeesTransactions(key) : null;
     if (!selectedCollectorUserId) {
-      const cached = peekFeesTransactions(key);
       if (cached && cached.length > 0) {
         setTransactions(cached);
         setLoading(false);
@@ -118,7 +118,7 @@ export default function FeeTransactionsList({
 
     const controller = new AbortController();
     void fetchFeesTransactions(schoolId, {
-      revalidate: Boolean(selectedCollectorUserId),
+      revalidate: Boolean(selectedCollectorUserId) || Boolean(cached?.length),
       collectedByUserId: selectedCollectorUserId || undefined,
       limit: selectedCollectorUserId ? 500 : 200,
       signal: controller.signal,
@@ -396,7 +396,7 @@ export default function FeeTransactionsList({
               {paginatedTransactions.map((t) => (
                 <tr
                   key={t.id}
-                  className="border-b border-white/5 last:border-0 hover:bg-white/[0.02]"
+                  className="border-b border-white/5 last:border-0 hover:bg-white/2"
                 >
                   <td className="py-3 text-gray-400 whitespace-nowrap">
                     {new Date(t.createdAt).toLocaleDateString("en-IN", {

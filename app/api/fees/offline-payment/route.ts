@@ -128,12 +128,12 @@ export async function POST(req: Request) {
       }
     }
 
-    const student = await prisma.student.findFirst({
-      where: { id: studentId, schoolId },
+    const student = await prisma.student.findUnique({
+      where: { id: studentId },
       include: { fee: true, class: true },
     });
 
-    if (!student) {
+    if (!student || student.schoolId !== schoolId) {
       return NextResponse.json({ message: "Student not found in your school" }, { status: 404 });
     }
 

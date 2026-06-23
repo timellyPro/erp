@@ -103,10 +103,11 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
     );
   }
 
-  const student = await prisma.student.findFirst({
-    where: { id: studentId, schoolId },
+  const student = await prisma.student.findUnique({
+    where: { id: studentId },
     select: {
       id: true,
+      schoolId: true,
       fee: {
         select: {
           amountPaid: true,
@@ -118,7 +119,7 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
     },
   });
 
-  if (!student?.fee) {
+  if (!student || student.schoolId !== schoolId || !student.fee) {
     throw new Error("Student or fee record not found");
   }
 
