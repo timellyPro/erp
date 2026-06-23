@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Download, Zap, Settings, PlusCircle, Trash2, Pencil, X, Tag, AlertCircle } from "lucide-react";
 import { generatePDF } from "@/lib/pdfUtils";
-import { ModifyFeeModal, DISCOUNT_HEAD_OVERALL_KEY, type FeeHeadOption } from "./ModifyFeeModal";
+import { ModifyFeeModal, DISCOUNT_HEAD_OVERALL_KEY, type FeeHeadOption, type FeeModifyResult } from "./ModifyFeeModal";
 import { AddExtraFeeModal } from "./AddExtraFeeModal";
 import { AssignFeeHeadsCatalogModal } from "./AssignFeeHeadsCatalogModal";
 import { EditExtraFeeModal } from "./EditExtraFeeModal";
@@ -25,6 +25,31 @@ function baseComponentIndexFromHead(head: {
   const idxPart = rest.split("::")[0];
   const n = Number(idxPart);
   return Number.isFinite(n) ? n : null;
+}
+
+type DiscountApprovalStatus = "PENDING" | "APPROVED" | "REJECTED";
+type DiscountApprovalSummary = {
+  id: string;
+  status: DiscountApprovalStatus;
+  discountFixedAmount?: number | null;
+  discountFeeHeadKey?: string | null;
+  discountFeeHeadLabel?: string | null;
+  discountRemarks?: string | null;
+  createdAt?: string;
+};
+
+function mergeDiscountApprovals(
+  current: DiscountApprovalSummary[],
+  incoming: DiscountApprovalSummary[]
+): DiscountApprovalSummary[] {
+  const byId = new Map<string, DiscountApprovalSummary>();
+  for (const approval of current) byId.set(approval.id, approval);
+  for (const approval of incoming) byId.set(approval.id, approval);
+  return [...byId.values()].sort((a, b) => {
+    const at = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return bt - at;
+  });
 }
 
 type Props = {
@@ -57,6 +82,8 @@ type Props = {
   discountFeeHeadLabel?: string | null;
   discountRemarks?: string | null;
   discountFixedAmount?: number | null;
+  latestDiscountApproval?: DiscountApprovalSummary | null;
+  discountApprovals?: DiscountApprovalSummary[];
   onFeeModified?: (paymentResult?: {
     payment: {
       id: string;
@@ -97,6 +124,8 @@ export const FeesBreakdown = ({
   discountFeeHeadLabel,
   discountRemarks,
   discountFixedAmount,
+  latestDiscountApproval,
+  discountApprovals,
   onFeeModified,
   residencyType,
   classSection = null,
@@ -107,6 +136,7 @@ export const FeesBreakdown = ({
   const receiptRef = useRef<HTMLDivElement>(null);
   const [isGeneratingReceipt, setIsGeneratingReceipt] = useState(false);
   const [showModifyFee, setShowModifyFee] = useState(false);
+  const [modifyFeeOpening, setModifyFeeOpening] = useState(false);
   const [showAddExtraFee, setShowAddExtraFee] = useState(false);
   const [showAssignFeeHeadsCatalog, setShowAssignFeeHeadsCatalog] = useState(false);
   const [editExtra, setEditExtra] = useState<{
@@ -166,6 +196,57 @@ export const FeesBreakdown = ({
   });
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [approvalState, setApprovalState] = useState<DiscountApprovalSummary[]>(
+    discountApprovals?.length ? discountApprovals : latestDiscountApproval ? [latestDiscountApproval] : []
+  );
+  const approvalStudentRef = useRef(studentId);
+  const refreshedApprovedDiscountsRef = useRef("");
+
+  useEffect(() => {
+    const incoming = discountApprovals?.length ? discountApprovals : latestDiscountApproval ? [latestDiscountApproval] : [];
+    setApprovalState((prev) => {
+      if (approvalStudentRef.current !== studentId) {
+        approvalStudentRef.current = studentId;
+        return incoming;
+      }
+      return incoming.length > 0 ? mergeDiscountApprovals(prev, incoming) : prev;
+    });
+  }, [studentId, discountApprovals, latestDiscountApproval]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/fees/student/${studentId}/discount-approvals`, {
+          credentials: "include",
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        const approvals = Array.isArray(data?.approvals) ? data.approvals : [];
+        setApprovalState(approvals);
+      } catch {
+        // Keep bundled/local approval state.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
+  const approvedDiscountRefreshKey = approvalState
+    .filter((approval) => approval.status === "APPROVED")
+    .map((approval) => approval.id)
+    .sort()
+    .join("|");
+
+  useEffect(() => {
+    if (!approvedDiscountRefreshKey || !onFeeModified) return;
+    const key = `${studentId}:${approvedDiscountRefreshKey}`;
+    if (refreshedApprovedDiscountsRef.current === key) return;
+    refreshedApprovedDiscountsRef.current = key;
+    onFeeModified();
+  }, [approvedDiscountRefreshKey, onFeeModified, studentId]);
 
   // Paid-by-type from payments (PDF fallback only; table uses headCards / paymentProgressRows).
   const feeBreakdown = new Map<string, { amount: number; paidAmount: number }>();
@@ -204,11 +285,11 @@ export const FeesBreakdown = ({
   );
 
   const breakdownGrossTotal = useMemo(() => {
-    const fromBundle = grossTotalFromBreakdown(initialFeeBreakdown);
-    if (fromBundle != null && fromBundle > 0) return fromBundle;
     if (headCards.length > 0) {
       return roundRupee(headCards.reduce((s, h) => s + (Number(h.gross ?? h.amount) || 0), 0));
     }
+    const fromBundle = grossTotalFromBreakdown(initialFeeBreakdown);
+    if (fromBundle != null && fromBundle > 0) return fromBundle;
     return baseTotalFee > 0 ? baseTotalFee : 0;
   }, [initialFeeBreakdown, headCards, baseTotalFee]);
 
@@ -223,6 +304,41 @@ export const FeesBreakdown = ({
     typeof discountFixedAmount === "number" && discountFixedAmount > 0
       ? discountFixedAmount
       : storedDiscountRupeeAmount(displayPreDiscountTotal, totalFee, discountFixedAmount);
+  const raisedDiscountAmount =
+    typeof approvalState[0]?.discountFixedAmount === "number" && approvalState[0].discountFixedAmount > 0
+      ? approvalState[0].discountFixedAmount
+      : null;
+  const latestApprovalState = approvalState[0] ?? null;
+  const approvalStatus = latestApprovalState?.status ?? (discountAmount > 0 ? "APPROVED" : null);
+  const approvalUi =
+    approvalStatus === "PENDING"
+      ? {
+          label: "Pending chairman approval",
+          chip: "Discount approval pending",
+          border: "border-sky-400/25",
+          bg: "bg-sky-400/10",
+          text: "text-sky-200",
+          dot: "bg-sky-300",
+        }
+      : approvalStatus === "REJECTED"
+        ? {
+            label: "Rejected by chairman",
+            chip: "Discount rejected",
+            border: "border-red-400/25",
+            bg: "bg-red-400/10",
+            text: "text-red-200",
+            dot: "bg-red-300",
+          }
+        : approvalStatus === "APPROVED"
+          ? {
+              label: "Approved",
+              chip: "Discount approved",
+              border: "border-lime-400/25",
+              bg: "bg-lime-400/10",
+              text: "text-lime-200",
+              dot: "bg-lime-300",
+            }
+          : null;
   /** Prefer breakdown head sum when loaded — stored StudentFee can be stale after bulk extra cleanup. */
   const displayTotalAmount =
     headsTotalAmount != null && headsTotalAmount > 0
@@ -279,6 +395,17 @@ export const FeesBreakdown = ({
       )
     );
     setHeadsRemainingAmount(roundRupee(splitHeads.reduce((s: number, h: { due: number }) => s + h.due, 0)));
+  };
+
+  const openModifyFeeModal = async () => {
+    if (feesRecordingDisabled || modifyFeeOpening) return;
+    try {
+      setModifyFeeOpening(true);
+      await Promise.resolve(onFeeModified?.());
+      setShowModifyFee(true);
+    } finally {
+      setModifyFeeOpening(false);
+    }
   };
 
   useEffect(() => {
@@ -574,12 +701,12 @@ export const FeesBreakdown = ({
           </button>
           <button
             type="button"
-            onClick={() => !feesRecordingDisabled && setShowModifyFee(true)}
-            disabled={feesRecordingDisabled}
+            onClick={() => void openModifyFeeModal()}
+            disabled={feesRecordingDisabled || modifyFeeOpening}
             className="inline-flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] touch-manipulation bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-lg text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Settings className="w-4 h-4 flex-shrink-0" />
-            Edit Fee Setup
+            {modifyFeeOpening ? "Refreshing..." : "Edit Fee Setup"}
           </button>
           {/* {payments.length > 0 && (
             <button
@@ -603,8 +730,46 @@ export const FeesBreakdown = ({
             Pre-discount (all heads): ₹{formatRupee(displayPreDiscountTotal)}
           </p>
           <p className="text-xs text-amber-300 mt-1 font-semibold">
-            Discount: ₹{formatRupee(discountAmount)}
+            {raisedDiscountAmount != null ? "Raised discount" : "Discount"}: ₹
+            {formatRupee(raisedDiscountAmount ?? discountAmount)}
           </p>
+          {approvalUi ? (
+            <p className={`text-[11px] mt-1 font-semibold ${approvalUi.text}`}>
+              Status: {approvalUi.label}
+            </p>
+          ) : null}
+          {approvalUi ? (
+            <div className={`mt-2 inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${approvalUi.border} ${approvalUi.bg} ${approvalUi.text}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${approvalUi.dot}`} />
+              <span>{approvalUi.chip}</span>
+              {raisedDiscountAmount ? (
+                <span>₹{formatRupee(raisedDiscountAmount)}</span>
+              ) : null}
+            </div>
+          ) : null}
+          {approvalState.length > 1 ? (
+            <div className="mt-2 space-y-1 rounded-lg border border-white/10 bg-black/20 px-2.5 py-2">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-white/45">Raised discount history</p>
+              {approvalState.map((approval, index) => {
+                const statusStyle =
+                  approval.status === "PENDING"
+                    ? "text-sky-200"
+                    : approval.status === "REJECTED"
+                      ? "text-red-200"
+                      : "text-lime-200";
+                return (
+                  <div key={approval.id} className="flex items-center justify-between gap-2 text-[11px]">
+                    <span className="min-w-0 truncate text-amber-100/80">
+                      #{index + 1} {approval.discountFeeHeadLabel || "Discount"}
+                    </span>
+                    <span className={`shrink-0 font-semibold ${statusStyle}`}>
+                      {approval.status} · ₹{formatRupee(approval.discountFixedAmount ?? 0)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
           {(discountFeeHeadLabel?.trim() ||
             discountRemarks?.trim() ||
             discountFeeHeadKey?.trim()) ? (
@@ -1108,8 +1273,8 @@ export const FeesBreakdown = ({
       {showModifyFee && (
         <ModifyFeeModal
           studentId={studentId}
-          currentTotalFee={displayPreDiscountTotal}
-          currentNetTotal={breakdownNetTotal ?? displayTotalAmount}
+          currentTotalFee={breakdownNetTotal ?? displayTotalAmount}
+          preDiscountTotal={displayPreDiscountTotal}
           currentDiscountPercent={discountPercent}
           feeHeadOptions={feeHeadOptionsForDiscount}
           initialDiscountFeeHeadKey={discountFeeHeadKey ?? null}
@@ -1117,9 +1282,27 @@ export const FeesBreakdown = ({
           initialDiscountRemarks={discountRemarks ?? null}
           initialDiscountFixedAmount={discountFixedAmount ?? null}
           onClose={() => setShowModifyFee(false)}
-          onSuccess={() => {
+          onSuccess={(result?: FeeModifyResult) => {
+            if (Array.isArray(result?.approvalRequests) && result.approvalRequests.length > 0) {
+              setApprovalState((prev) => mergeDiscountApprovals(prev, result.approvalRequests ?? []));
+            } else if (result?.approvalRequest) {
+              setApprovalState((prev) =>
+                mergeDiscountApprovals(prev, [
+                  {
+                  id: result.approvalRequest!.id,
+                  status: result.approvalRequest!.status,
+                  discountFixedAmount: result.approvalRequest!.discountFixedAmount ?? null,
+                  discountFeeHeadLabel: result.approvalRequest!.discountFeeHeadLabel ?? null,
+                  discountRemarks: result.approvalRequest!.discountRemarks ?? null,
+                  createdAt: result.approvalRequest!.createdAt,
+                  },
+                ])
+              );
+            }
             setShowModifyFee(false);
-            onFeeModified?.();
+            if (!result?.pendingApproval) {
+              onFeeModified?.();
+            }
           }}
         />
       )}

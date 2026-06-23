@@ -476,7 +476,7 @@ export async function fetchStudentDetailsFast(
     if (cachedBreakdown) options?.onBreakdownLoaded?.(cachedBreakdown);
 
     const shellQuery = options?.force ? "shell=1&refresh=1" : "shell=1";
-    const breakdownPromise =
+    let breakdownPromise =
       cachedBreakdown && !options?.force
         ? Promise.resolve(cachedBreakdown)
         : fetchFeeBreakdownFast(studentId, {
@@ -500,6 +500,15 @@ export async function fetchStudentDetailsFast(
 
     const shell = parseShell(shellData);
     options?.onShellLoaded?.(toBundle(shell, emptyExtras(), cachedBreakdown ?? null));
+    const hasApprovedDiscount =
+      shell.fee?.discountApprovals?.some((approval) => approval.status === "APPROVED") ?? false;
+    if (cachedBreakdown && !options?.force && hasApprovedDiscount) {
+      invalidateFeeBreakdownCache(studentId);
+      breakdownPromise = fetchFeeBreakdownFast(studentId, {
+        signal: options?.signal,
+        force: true,
+      });
+    }
 
     // Defer extras until shell is painted — reduces concurrent DB load on remote Postgres.
     const [extras, feeBreakdown] = await Promise.all([

@@ -70,6 +70,14 @@ type StudentDetail = {
     discountFeeHeadKey?: string | null;
     discountFeeHeadLabel?: string | null;
     discountRemarks?: string | null;
+    discountApprovals?: Array<{
+      id: string;
+      status: "PENDING" | "APPROVED" | "REJECTED";
+      discountFixedAmount?: number | null;
+      discountFeeHeadLabel?: string | null;
+      discountRemarks?: string | null;
+      createdAt?: string;
+    }>;
   } | null;
   payments: Array<{
     id: string;
@@ -265,72 +273,6 @@ type FeePaymentSuccess = {
   feeAllocations?: Array<{ name: string; amount: number; key?: string }>;
 };
 
-function reconcilePaymentId(
-  prev: StudentDetail | null,
-  tempId: string,
-  result: FeePaymentSuccess
-): StudentDetail | null {
-  if (!prev || !result.payment.id) return prev;
-  const realId = result.payment.id;
-  const reconciledRow = {
-    id: realId,
-    amount: result.payment.amount,
-    status: result.payment.status || "SUCCESS",
-    method: String(result.payment.gateway ?? "OFFLINE_CASH"),
-    createdAt:
-      typeof result.payment.createdAt === "string"
-        ? result.payment.createdAt
-        : new Date().toISOString(),
-    transactionId: result.payment.transactionId ?? null,
-    collectedByName: result.payment.collectedByName ?? null,
-    collectedByUserId: result.payment.collectedByUserId ?? null,
-    feeAllocations: result.feeAllocations,
-  };
-
-  const withoutTemp = prev.payments.filter((p) => p.id !== tempId);
-  const hasReal = withoutTemp.some((p) => p.id === realId);
-  const payments = hasReal
-    ? withoutTemp
-    : [reconciledRow, ...withoutTemp.filter((p) => p.id !== realId)];
-
-  return { ...prev, payments };
-}
-
-function buildOptimisticPaymentResult(
-  tempId: string,
-  total: number,
-  mode: string,
-  paymentDate: string,
-  referenceNo: string,
-  selectedRows: DueHeadRow[],
-  initialFeeBreakdown?: AdminStudentFeeBreakdownResult | null,
-  collector?: { collectedByName?: string | null; collectedByUserId?: string | null }
-): FeePaymentSuccess {
-  return {
-    payment: {
-      id: tempId,
-      amount: total,
-      status: "SUCCESS",
-      gateway: mode,
-      createdAt: paymentDate ? `${paymentDate}T12:00:00.000Z` : new Date().toISOString(),
-      transactionId: referenceNo.trim() || null,
-      collectedByName: collector?.collectedByName ?? null,
-      collectedByUserId: collector?.collectedByUserId ?? null,
-    },
-    updatedFee: {
-      amountPaid: (initialFeeBreakdown?.amountPaid ?? 0) + total,
-      remainingFee: Math.max((initialFeeBreakdown?.remainingFee ?? 0) - total, 0),
-      finalFee: initialFeeBreakdown?.finalFee,
-      totalFee: initialFeeBreakdown?.totalAmount,
-    },
-    feeAllocations: selectedRows.map((r) => ({
-      name: r.label,
-      amount: Number(r.payAmount),
-      key: r.sourceKey || r.key,
-    })),
-  };
-}
-
 function buildConfirmedPaymentResult(
   data: Record<string, unknown>,
   total: number,
@@ -444,20 +386,6 @@ function normalizeBreakdownHeadKey(raw: string): string {
   if (key.startsWith("BASE:")) return key.split("::")[0]!;
   if (key.startsWith("EXTRA:")) return key.split("::")[0]!;
   return key;
-}
-
-function patchBreakdownTotalsOnly(
-  prev: AdminStudentFeeBreakdownResult | null,
-  updatedFee: FeePaymentSuccess["updatedFee"]
-): AdminStudentFeeBreakdownResult | null {
-  if (!prev) return prev;
-  return {
-    ...prev,
-    amountPaid: updatedFee.amountPaid,
-    remainingFee: updatedFee.remainingFee,
-    finalFee: updatedFee.finalFee ?? prev.finalFee,
-    totalAmount: prev.totalAmount,
-  };
 }
 
 function patchBreakdownAfterDelete(
@@ -712,7 +640,6 @@ function StudentDetailsPageContent() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- deep link skips bulk list
   }, [studentIdFromUrl, mapListRow]);
 
   // Deep link (?studentId=…): follow the URL when it changes. Do NOT depend on `students` here — that
@@ -1395,6 +1322,8 @@ function StudentDetailsPageContent() {
                 discountFeeHeadLabel={detail.fee.discountFeeHeadLabel}
                 discountRemarks={detail.fee.discountRemarks}
                 discountFixedAmount={detail.fee.discountFixedAmount}
+                latestDiscountApproval={detail.fee.discountApprovals?.[0] ?? null}
+                discountApprovals={detail.fee.discountApprovals ?? []}
                 onFeeModified={(paymentResult) => {
                   if (paymentResult?.payment.id) setAutoPrintPaymentId(paymentResult.payment.id);
                   if (detail.student.id) void refreshFeesForStudent(detail.student.id, paymentResult);
@@ -1459,12 +1388,6 @@ function StudentDetailsPageContent() {
             if (result.payment.id) setAutoPrintPaymentId(result.payment.id);
             void refreshFeesForStudent(detail.student.id, result);
           }}
-          onPaymentConfirmed={(result, tempId) => {
-            setDetail((prev) => reconcilePaymentId(prev, tempId, result));
-            if (result.payment.id && result.payment.id !== tempId) {
-              setAutoPrintPaymentId((prev) => (prev === tempId ? result.payment.id : prev));
-            }
-          }}
           onPaymentFailed={(message) => {
             alert(message);
             void refreshFeesForStudent(detail.student.id);
@@ -1502,7 +1425,6 @@ function StudentFeesPaymentModal({
   breakdownPending = false,
   onClose,
   onSuccess,
-  onPaymentConfirmed,
   onPaymentFailed,
 }: {
   studentId: string;
@@ -1511,7 +1433,6 @@ function StudentFeesPaymentModal({
   breakdownPending?: boolean;
   onClose: () => void;
   onSuccess: (result: FeePaymentSuccess) => void;
-  onPaymentConfirmed?: (result: FeePaymentSuccess, tempId: string) => void;
   onPaymentFailed?: (message: string) => void;
 }) {
   const { data: session } = useSession();
@@ -1692,23 +1613,7 @@ function StudentFeesPaymentModal({
       return;
     }
 
-    const tempId = `pending-${Date.now()}`;
-    const optimisticResult = buildOptimisticPaymentResult(
-      tempId,
-      total,
-      mode,
-      paymentDate,
-      referenceNo,
-      selectedRows,
-      initialFeeBreakdown ?? getFeeBreakdownCached(studentId),
-      {
-        collectedByName: collectorName,
-        collectedByUserId: collectorUserId,
-      }
-    );
-
     setSaving(true);
-    onSuccess(optimisticResult);
 
     try {
       const res = await fetch("/api/fees/offline-payment", {
@@ -1747,7 +1652,7 @@ function StudentFeesPaymentModal({
           collectedByUserId: collectorUserId,
         }
       );
-      onPaymentConfirmed?.(confirmedResult, tempId);
+      onSuccess(confirmedResult);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Payment failed";
       onPaymentFailed?.(message);

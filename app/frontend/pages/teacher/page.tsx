@@ -14,6 +14,7 @@ import TeacherMarksTab from "../../components/teacher/marks/Marks";
 import TeacherHomeworkTab from "../../components/teacher/homework/Homework";
 import TeacherAttendanceTab from "../../components/teacher/attendance/Attendance";
 import TeacherExamsTab from "../../components/teacher/exams/Exams";
+import TeacherTimetableTab from "../../components/teacher/timetable/TeacherTimetable";
 import TeacherWorkshopsTab from "../../components/teacher/workshops/WorkShops";
 import TeacherParentChatTab from "../../components/teacher/parentchat/ParentChat";
 import TeacherLeavesTab from "../../components/teacher/leave/Leave";
@@ -32,6 +33,7 @@ const TEACHER_TAB_TITLES = {
   dashboard: "Dashboard",
   admission: "Admission",
   attendance: "Attendance",
+  timetable: "Timetable",
   marks: "Marks",
   classes: "Classes",
   homework: "Homework",
@@ -79,6 +81,8 @@ function TeacherDashboardInner() {
         return <TeacherHomeworkTab />;
       case "attendance":
         return <TeacherAttendanceTab />;
+      case "timetable":
+        return <TeacherTimetableTab />;
       case "exams":
         return <TeacherExamsTab />;
       case "workshops":

@@ -10,6 +10,7 @@ import ParentHomeTab from "../../components/parent/home/ParentHome";
 import ParentProfileTab from "../../components/parent/profile/ParentProfile";
 import ParentAttendanceTab from "../../components/parent/attendance/ParentAttendance";
 import ParentHomeworkTab from "../../components/parent/homework/ParentHomework";
+import ParentTimetableTab from "../../components/parent/timetable/ParentTimetable";
 import ParentMarksTab from "../../components/parent/marks/ParentMarksTab";
 import ParentExamsTab from "../../components/parent/examsSyllabus/ParentExamsTab";
 import ParentFeesTab from "../../components/parent/fees/ParentFeesTab";
@@ -31,6 +32,7 @@ const PARENT_TAB_TITLES: Record<string, string> = {
   dashboard: "Home",
   profile: "Profile",
   homework: "Homework",
+  timetable: "Timetable",
   attendance: "Attendance",
   marks: "Marks",
   exams: "Exams & Syllabus",
@@ -83,6 +85,8 @@ function ParentDashboardInner() {
         return <ParentProfileTab />;
       case "homework":
         return <ParentHomeworkTab />;
+      case "timetable":
+        return <ParentTimetableTab />;
       case "attendance":
         return <ParentAttendanceTab />;
       case "marks":

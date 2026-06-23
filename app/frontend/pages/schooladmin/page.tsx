@@ -21,6 +21,7 @@ import ExamsPage from "../../components/schooladmin/exams/exams";
 import SchoolAdminSettingsTab from "../../components/schooladmin/Settings";
 import SchoolAdminTeacherTab from "../../components/schooladmin/TeachersTab";
 import SchoolAdminCircularsTab from "../../components/schooladmin/circularTab";
+import SchoolAdminTimetableTab from "../../components/schooladmin/Timetable";
 import AdmissionTab from "../../components/teacher/admission/Admission";
 import { fetchSchoolDashboardFast } from "@/lib/loadSchoolDashboard";
 import { warmSchoolDashboardCollectionHeads } from "@/lib/loadSchoolDashboardCollection";
@@ -138,6 +139,8 @@ function SchoolAdminContent() {
         return <StudentDetails />;
       case "teachers":
         return <SchoolAdminTeacherTab />
+      case "timetable":
+        return <SchoolAdminTimetableTab />;
       case "teacher-leaves":
         return <SchoolTeacherLeavesTab />;
       case "teacher-audit":

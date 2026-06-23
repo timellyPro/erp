@@ -83,6 +83,9 @@ export async function fetchFeesTransactions(
     if (options?.collectedByUserId) {
       qs.set("collectedByUserId", options.collectedByUserId);
     }
+    if (options?.revalidate) {
+      qs.set("refresh", "1");
+    }
     const res = await fetch(`/api/fees/transactions?${qs.toString()}`, {
       credentials: "include",
       cache: "no-store",

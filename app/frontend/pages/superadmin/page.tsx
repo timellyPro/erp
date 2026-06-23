@@ -7,6 +7,7 @@ import AppLayout from "../../AppLayout";
 import { SUPERADMIN_SIDEBAR_ITEMS } from "../../constants/sidebar";
 import Dashboard from "../../components/superadmin/Dashboard";
 import AddSchool from "../../components/superadmin/AddSchool";
+import AddChairman from "../../components/superadmin/AddChairman";
 import Schools from "../../components/superadmin/Schools";
 import Transactions from "../../components/superadmin/Transactions";
 import Subscriptions from "../../components/superadmin/Subscriptions";
@@ -15,6 +16,7 @@ import RequiredRoles from "../../auth/RequiredRoles";
 const SUPERADMIN_TAB_TITLES: Record<string, string> = {
   dashboard: "Dashboard",
   addschool: "Add School",
+  addchairman: "Add Chairman",
   schools: "Schools",
   removeschools: "Remove schools",
   subscriptions: "Subscriptions",
@@ -73,7 +75,7 @@ function SuperAdminContent() {
     let cancelled = false;
     fetchProfile().then(() => { if (cancelled) return; });
     return () => { cancelled = true; };
-  }, [status, session?.user?.name, session?.user?.image, fetchProfile]);
+  }, [status, session?.user, fetchProfile]);
 
   // 2) Refetch when user returns from settings (window focus) so profile updates after save
   useEffect(() => {
@@ -90,6 +92,8 @@ function SuperAdminContent() {
         return <Dashboard />;
       case "addschool":
         return <AddSchool />;
+      case "addchairman":
+        return <AddChairman />;
       case "schools":
         return <Schools />;
       case "removeschools":

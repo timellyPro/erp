@@ -146,7 +146,7 @@ export const authOptions: NextAuthOptions = {
       if (user.role === "SUPERADMIN") {
         token.sessionOnly = true;
       }
-      (token as any)._dbSyncAt = Date.now();
+      token._dbSyncAt = Date.now();
     }
 
     // Keep schoolId/allowedFeatures/image in sync, but NOT on every request.
@@ -157,7 +157,7 @@ export const authOptions: NextAuthOptions = {
     const shouldSyncFromDb = (() => {
       if (!token.id) return false;
       const now = Date.now();
-      const last = typeof (token as any)._dbSyncAt === "number" ? (token as any)._dbSyncAt : 0;
+      const last = typeof token._dbSyncAt === "number" ? token._dbSyncAt : 0;
       const stale = now - last > 5 * 60 * 1000; // 5 minutes
       const missingCritical =
         token.schoolId == null ||
@@ -191,7 +191,7 @@ export const authOptions: NextAuthOptions = {
         }
         token.image = dbUser.photoUrl ?? token.image ?? null;
         token.schoolIsActive = true;
-        (token as any)._dbSyncAt = Date.now();
+        token._dbSyncAt = Date.now();
       }
     }
 
@@ -202,7 +202,7 @@ export const authOptions: NextAuthOptions = {
     session.user = {
       ...session.user,
       id: token.id as string,
-      role: token.role as "SUPERADMIN" | "SCHOOLADMIN" | "TEACHER" | "STUDENT",
+      role: token.role as "SUPERADMIN" | "SCHOOLADMIN" | "CHAIRMAN" | "TEACHER" | "STUDENT",
       schoolId: token.schoolId as string | null,
       mobile: token.mobile as string | null,
       studentId: token.studentId as string | null,

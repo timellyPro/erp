@@ -18,8 +18,15 @@ datasource db {
 enum Role {
   SUPERADMIN
   SCHOOLADMIN
+  CHAIRMAN
   TEACHER
   STUDENT
+}
+
+enum DiscountApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 enum LeaveStatus {
@@ -82,23 +89,25 @@ model User {
   school          School?  @relation(fields: [schoolId], references: [id])
 
   // Teacher-specific fields
-  mobile          String? // teacher mobile
-  photoUrl        String?
-  language        String?      @default("English")
-  teacherId       String? // e.g. TCH001
-  subject         String? // e.g. Mathematics (primary/legacy)
-  subjects        String[]     @default([]) // multiple subjects e.g. Mathematics, Physics
-  qualification   String? // e.g. M.Sc, B.Ed
-  experience      String? // e.g. 5 Years
-  joiningDate     DateTime?    @db.Date
-  teacherStatus   String?      @default("Active") // Active, Inactive
-  address         String?      @db.Text
-  leaveAprrover   Boolean      @default(false)
-  assignedClasses Class[]      @relation("TeacherClass")
-  attendances     Attendance[] @relation("TeacherAttendance")
-  marks           Mark[]       @relation("TeacherMarks")
-  events          Event[]
-  homeworks       Homework[]   @relation("HomeworkCreator")
+  mobile            String? // teacher mobile
+  photoUrl          String?
+  language          String?          @default("English")
+  teacherId         String? // e.g. TCH001
+  subject           String? // e.g. Mathematics (primary/legacy)
+  subjects          String[]         @default([]) // multiple subjects e.g. Mathematics, Physics
+  qualification     String? // e.g. M.Sc, B.Ed
+  experience        String? // e.g. 5 Years
+  joiningDate       DateTime?        @db.Date
+  teacherStatus     String?          @default("Active") // Active, Inactive
+  address           String?          @db.Text
+  leaveAprrover     Boolean          @default(false)
+  assignedClasses   Class[]          @relation("TeacherClass")
+  attendances       Attendance[]     @relation("TeacherAttendance")
+  marks             Mark[]           @relation("TeacherMarks")
+  events            Event[]
+  homeworks         Homework[]       @relation("HomeworkCreator")
+  timetableEntries  TimetableEntry[] @relation("TimetableEntryTeacher")
+  timetablesCreated Timetable[]      @relation("TimetableCreator")
 
   // Student-specific fields
   student Student?
@@ -143,7 +152,9 @@ model User {
 
   teacherSchools School[] @relation("SchoolTeacher")
 
-  offlinePaymentsCollected Payment[] @relation("PaymentCollector")
+  offlinePaymentsCollected    Payment[]             @relation("PaymentCollector")
+  feeDiscountRequestsCreated  FeeDiscountApproval[] @relation("FeeDiscountRequestCreator")
+  feeDiscountRequestsReviewed FeeDiscountApproval[] @relation("FeeDiscountApprover")
 
   @@unique([schoolId, email])
 }
@@ -262,6 +273,8 @@ model School {
   extraFeeHeadTemplates ExtraFeeHeadTemplate[]
   pettyCashExpenses     PettyCashExpense[]
   studentApplications   StudentApplication[]
+  feeDiscountApprovals  FeeDiscountApproval[]
+  timetables            Timetable[]
 }
 
 model SchoolSettings {
@@ -357,12 +370,68 @@ model Class {
   examTerms         ExamTerm[]
   feeStructure      ClassFeeStructure?
   circularsTargeted Circular[]         @relation("CircularTargetClass")
+  timetable         Timetable?
 
   createdAt DateTime @default(now())
 
   @@index([schoolId])
   @@index([teacherId])
   @@index([schoolId, teacherId])
+}
+
+model Timetable {
+  id String @id @default(cuid())
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  classId String @unique
+  class   Class  @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  title String  @default("Weekly Timetable")
+  notes String? @db.Text
+
+  createdById String?
+  createdBy   User?   @relation("TimetableCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  entries TimetableEntry[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([schoolId])
+  @@index([classId])
+  @@index([schoolId, classId])
+}
+
+model TimetableEntry {
+  id String @id @default(cuid())
+
+  timetableId String
+  timetable   Timetable @relation(fields: [timetableId], references: [id], onDelete: Cascade)
+
+  dayOfWeek Int
+  dayLabel  String
+  slotOrder Int
+  slotType  String @default("PERIOD") // PERIOD | BREAK
+
+  title     String
+  subject   String?
+  startTime String
+  endTime   String
+  room      String?
+  notes     String? @db.Text
+
+  teacherId String?
+  teacher   User?   @relation("TimetableEntryTeacher", fields: [teacherId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([timetableId, dayOfWeek, slotOrder])
+  @@index([timetableId])
+  @@index([teacherId])
+  @@index([dayOfWeek])
 }
 
 model ExamTerm {
@@ -481,8 +550,9 @@ model Student {
   studentLeaveRequests StudentLeaveRequest[]
 
   // Payments / Fees
-  fee      StudentFee?
-  payments Payment[]
+  fee                  StudentFee?
+  payments             Payment[]
+  feeDiscountApprovals FeeDiscountApproval[]
 
   // Parent SaaS subscription entries for this student/parent
   subscriptions ParentSubscription[]
@@ -990,10 +1060,52 @@ model StudentFee {
   amountPaid   Float @default(0)
   remainingFee Float
 
+  discountApprovals FeeDiscountApproval[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([studentId])
+}
+
+model FeeDiscountApproval {
+  id String @id @default(cuid())
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  studentFeeId String
+  studentFee   StudentFee @relation(fields: [studentFeeId], references: [id], onDelete: Cascade)
+
+  requestedById String
+  requestedBy   User   @relation("FeeDiscountRequestCreator", fields: [requestedById], references: [id], onDelete: Cascade)
+
+  reviewedById String?
+  reviewedBy   User?   @relation("FeeDiscountApprover", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  status DiscountApprovalStatus @default(PENDING)
+
+  totalFee             Float
+  discountPercent      Float
+  discountFixedAmount  Float?
+  finalFee             Float
+  discountFeeHeadKey   String?
+  discountFeeHeadLabel String?
+  discountRemarks      String? @db.Text
+  reviewRemarks        String? @db.Text
+
+  reviewedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([schoolId, status, createdAt])
+  @@index([studentId])
+  @@index([studentFeeId])
+  @@index([requestedById])
+  @@index([reviewedById])
 }
 
 // Global fee breakdown per class (Tuition, Transport, Lab, etc.)

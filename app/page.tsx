@@ -24,6 +24,7 @@ export default function Home() {
       const roleRoutes: Record<string, string> = {
         SUPERADMIN: ROUTES.SUPERADMIN,
         SCHOOLADMIN: ROUTES.SCHOOLADMIN,
+        CHAIRMAN: ROUTES.CHAIRMAN,
         STUDENT: ROUTES.PARENT,
         TEACHER: ROUTES.TEACHER,
       };

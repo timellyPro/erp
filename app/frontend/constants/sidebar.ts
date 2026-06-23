@@ -31,6 +31,7 @@ import {
     MessageSquare,
     House,
     CalendarClock,
+    CalendarDays,
     Trash2,
 } from "lucide-react";
 import { SidebarItem } from "../types/sidebar";
@@ -68,6 +69,14 @@ export const PARENT_MENU_ITEMS: SidebarItem[] = [
         href: "/frontend/pages/parent?tab=homework",
         icon: BookOpen,
         permission: Permission.HOMEWORK,
+    requiresSubscription: true,
+    },
+    {
+        label: "Timetable",
+        tab: "timetable",
+        href: "/frontend/pages/parent?tab=timetable",
+        icon: CalendarDays,
+        permission: Permission.TIMETABLE,
     requiresSubscription: true,
     },
     {
@@ -209,6 +218,13 @@ export const SCHOOLADMIN_MENU_ITEMS: SidebarItem[] = [
         permission: Permission.TEACHERS,
     },
     {
+        label: "Timetable",
+        tab: "timetable",
+        href: "/frontend/pages/schooladmin?tab=timetable",
+        icon: CalendarDays,
+        permission: Permission.TIMETABLE,
+    },
+    {
         label: "Teacher Leaves",
         tab: "teacher-leaves",
         href: "/frontend/pages/schooladmin?tab=teacher-leaves",
@@ -300,6 +316,7 @@ export const SCHOOLADMIN_TAB_TITLES: Record<string, string> = {
     "student-details": "Student Details",
     "add-user": "Add User",
     "teacher-audit": "Teacher Audit",
+    timetable: "Timetable",
     circulars: "Circulars",
     certificates: "Certificate Requests",
     fees: "Fees",
@@ -383,6 +400,13 @@ export const TEACHER_MENU_ITEMS: SidebarItem[] = [
         href: "/frontend/pages/teacher?tab=homework",
         icon: BookOpen,
         permission: Permission.HOMEWORK,
+    },
+    {
+        label: "Timetable",
+        tab: "timetable",
+        href: "/frontend/pages/teacher?tab=timetable",
+        icon: CalendarDays,
+        permission: Permission.TIMETABLE,
     },
     {
         label: "Marks",
@@ -478,6 +502,14 @@ export const SUPERADMIN_SIDEBAR_ITEMS: SidebarItem[] = [
         permission: Permission.SCHOOLS,
     },
     {
+        label: "Add Chairman",
+        mobileLabel: "Chairman",
+        href: "/frontend/pages/superadmin?tab=addchairman",
+        tab: "addchairman",
+        icon: UserCheck,
+        permission: Permission.SCHOOLS,
+    },
+    {
         label: "Remove schools",
         mobileLabel: "Remove",
         href: "/frontend/pages/superadmin?tab=removeschools",
@@ -499,6 +531,35 @@ export const SUPERADMIN_SIDEBAR_ITEMS: SidebarItem[] = [
         tab: "transactions",
         icon: CreditCard,
         permission: Permission.FEES_TRANSACTIONS,
+    },
+    {
+        label: "Sign Out",
+        action: "logout",
+        icon: LogOut,
+    },
+];
+
+export const CHAIRMAN_MENU_ITEMS: SidebarItem[] = [
+    {
+        label: "Dashboard",
+        tab: "dashboard",
+        href: "/frontend/pages/chairman?tab=dashboard",
+        icon: LayoutDashboard,
+        permission: Permission.DASHBOARD,
+    },
+    {
+        label: "Discount Approvals",
+        tab: "discount-approvals",
+        href: "/frontend/pages/chairman?tab=discount-approvals",
+        icon: DollarSign,
+        permission: Permission.FEES,
+    },
+    {
+        label: "Settings",
+        tab: "settings",
+        href: "/frontend/pages/chairman?tab=settings",
+        icon: Settings,
+        permission: Permission.SETTINGS,
     },
     {
         label: "Sign Out",

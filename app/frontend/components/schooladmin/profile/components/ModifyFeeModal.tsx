@@ -1,19 +1,41 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DollarSign, Tag, AlertCircle, ListTree, FileText } from "lucide-react";
 
 export type FeeHeadOption = { key: string; label: string };
+export type FeeModifyResult = {
+  pendingApproval?: boolean;
+  approvalRequest?: {
+    id: string;
+    status: "PENDING" | "APPROVED" | "REJECTED";
+    discountFixedAmount?: number | null;
+    discountFeeHeadKey?: string | null;
+    discountFeeHeadLabel?: string | null;
+    discountRemarks?: string | null;
+    createdAt?: string;
+  };
+  approvalRequests?: Array<{
+    id: string;
+    status: "PENDING" | "APPROVED" | "REJECTED";
+    discountFixedAmount?: number | null;
+    discountFeeHeadKey?: string | null;
+    discountFeeHeadLabel?: string | null;
+    discountRemarks?: string | null;
+    createdAt?: string;
+  }>;
+  message?: string;
+};
 
 /** Sentinel stored when no class breakdown head applies; still requires remarks when discount &gt; 0. */
 export const DISCOUNT_HEAD_OVERALL_KEY = "__DISCOUNT_OVERALL__";
 
 type Props = {
   studentId: string;
-  /** Pre-discount total (sum of all fee head gross amounts). */
+  /** Current total shown on the profile after approved discounts. */
   currentTotalFee: number;
-  /** Net total from fee breakdown — should match Total Fees on the profile. */
-  currentNetTotal?: number;
+  /** Gross total before approved discounts, shown only for context. */
+  preDiscountTotal?: number;
   currentDiscountPercent: number;
   /** Fee heads from admin breakdown (BASE:n / EXTRA:id). */
   feeHeadOptions: FeeHeadOption[];
@@ -22,13 +44,13 @@ type Props = {
   initialDiscountRemarks?: string | null;
   initialDiscountFixedAmount?: number | null;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (result?: FeeModifyResult) => void;
 };
 
 export const ModifyFeeModal = ({
   studentId,
   currentTotalFee,
-  currentNetTotal,
+  preDiscountTotal,
   currentDiscountPercent,
   feeHeadOptions,
   initialDiscountFeeHeadKey,
@@ -39,12 +61,14 @@ export const ModifyFeeModal = ({
   onSuccess,
 }: Props) => {
   const [totalFee, setTotalFee] = useState<string>(String(currentTotalFee));
+  const [totalFeeTouched, setTotalFeeTouched] = useState(false);
   const initialDiscountAmount = (
     typeof initialDiscountFixedAmount === "number" && initialDiscountFixedAmount > 0
       ? initialDiscountFixedAmount
       : currentTotalFee * (currentDiscountPercent / 100)
   ).toFixed(2);
   const [discountAmount, setDiscountAmount] = useState<string>(initialDiscountAmount);
+  const [discountTouched, setDiscountTouched] = useState(false);
   const [discountHeadKey, setDiscountHeadKey] = useState<string>(initialDiscountFeeHeadKey?.trim() ?? "");
   const [remarks, setRemarks] = useState<string>(initialDiscountRemarks ?? "");
   const [loading, setLoading] = useState(false);
@@ -65,6 +89,18 @@ export const ModifyFeeModal = ({
     }
     return opts;
   }, [feeHeadOptions, initialDiscountFeeHeadKey, initialDiscountFeeHeadLabel]);
+
+  useEffect(() => {
+    if (!totalFeeTouched) {
+      setTotalFee(String(currentTotalFee));
+    }
+  }, [currentTotalFee, totalFeeTouched]);
+
+  useEffect(() => {
+    if (!discountTouched) {
+      setDiscountAmount(initialDiscountAmount);
+    }
+  }, [discountTouched, initialDiscountAmount]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -129,12 +165,16 @@ export const ModifyFeeModal = ({
         }),
       });
 
+      const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const body = await res.json();
         throw new Error(body.message || "Failed to update fee");
       }
 
-      onSuccess();
+      if (body?.pendingApproval) {
+        alert(body.message || "Discount submitted for chairman approval.");
+      }
+
+      onSuccess(body as FeeModifyResult);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "An unexpected error occurred");
     } finally {
@@ -153,8 +193,8 @@ export const ModifyFeeModal = ({
         <div className="p-6">
           <h2 className="text-2xl font-bold text-white mb-2">Modify Fee Setup</h2>
           <p className="text-gray-400 text-sm mb-6">
-            Set the pre-discount total (all assigned fee heads) and any concession. When discount is applied, choose
-            which fee head it relates to and record approval / remarks.
+            Set the current total and any concession. Discounts are sent to the chairman for approval before they are
+            applied to the student.
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -167,7 +207,7 @@ export const ModifyFeeModal = ({
 
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1.5">
-                Pre-discount total — all fee heads (₹)
+                Current total — after approved discounts (₹)
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -178,12 +218,20 @@ export const ModifyFeeModal = ({
                   step="0.01"
                   min="0"
                   value={totalFee}
-                  onChange={(e) => setTotalFee(e.target.value)}
+                  onChange={(e) => {
+                    setTotalFeeTouched(true);
+                    setTotalFee(e.target.value);
+                  }}
                   className="w-full bg-black/40 border-white/10 border text-white rounded-xl pl-10 pr-4 py-2.5 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all placeholder:text-gray-600"
                   placeholder="e.g. 50000"
                   required
                 />
               </div>
+              {typeof preDiscountTotal === "number" && preDiscountTotal > currentTotalFee ? (
+                <p className="mt-1 text-[11px] text-amber-300/70">
+                  Pre-discount all-heads total: ₹{preDiscountTotal.toLocaleString("en-IN")}
+                </p>
+              ) : null}
             </div>
 
             <div>
@@ -197,7 +245,10 @@ export const ModifyFeeModal = ({
                   step="0.01"
                   min="0"
                   value={discountAmount}
-                  onChange={(e) => setDiscountAmount(e.target.value)}
+                  onChange={(e) => {
+                    setDiscountTouched(true);
+                    setDiscountAmount(e.target.value);
+                  }}
                   className="w-full bg-black/40 border-white/10 border text-white rounded-xl pl-10 pr-4 py-2.5 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all placeholder:text-gray-600"
                   placeholder="e.g. 5000"
                   required
@@ -208,7 +259,7 @@ export const ModifyFeeModal = ({
             <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 space-y-1">
               <p className="text-[11px] text-gray-400 leading-snug">
                 When <span className="font-semibold text-gray-300">discount amount is greater than zero</span>, choose
-                which fee head the discount applies to and record who approved it.
+                which fee head the discount applies to and record the reason for chairman approval.
               </p>
               {!showDiscountMeta ? (
                 <p className="text-[11px] text-amber-400/90">Increase the discount above ₹0 to enable saving head + remarks.</p>
@@ -255,11 +306,9 @@ export const ModifyFeeModal = ({
               <p className="text-2xl font-bold text-white mt-1">
                 ₹{isNaN(currentFinalFee) ? "-" : currentFinalFee.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
               </p>
-              {typeof currentNetTotal === "number" && currentNetTotal > 0 ? (
-                <p className="text-[11px] text-blue-300/60">
-                  Profile total (all heads): ₹{currentNetTotal.toLocaleString("en-IN")}
-                </p>
-              ) : null}
+              <p className="text-[11px] text-blue-300/60">
+                Current profile total: ₹{currentTotalFee.toLocaleString("en-IN")}
+              </p>
             </div>
 
             <div className="flex items-center gap-3 pt-2">
@@ -276,7 +325,7 @@ export const ModifyFeeModal = ({
                 className="flex-1 py-3 px-4 rounded-xl font-semibold text-white bg-blue-500 hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={loading}
               >
-                {loading ? "Saving..." : "Save Changes"}
+                {loading ? "Saving..." : showDiscountMeta ? "Submit for Approval" : "Save Changes"}
               </button>
             </div>
           </form>
