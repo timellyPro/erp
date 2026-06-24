@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import prisma from "@/lib/db";
 import { isStudentHosteller } from "@/lib/extraFeeResidencyScope";
 import { admissionWorkflowByIds, studentApplicationHasWorkflowColumn } from "@/lib/admissionsListQuery";
+import { activeStudentWhere } from "@/lib/studentStatus";
 import type {
   SchoolAnalysisAdmissionRow,
   SchoolAnalysisAdmissionTotals,
@@ -39,6 +40,7 @@ export async function buildSchoolAnalysisFast(
   const { yearStart, yearEnd } = yearBounds(startYear);
   const baseStudentWhere = {
     schoolId,
+    ...activeStudentWhere,
     ...(classId ? { classId } : {}),
   };
 
@@ -269,6 +271,7 @@ export async function buildSchoolAnalysisTables(
   const students = await prisma.student.findMany({
     where: {
       schoolId,
+      ...activeStudentWhere,
       classId: { not: null },
       ...(classId ? { classId } : {}),
     },
