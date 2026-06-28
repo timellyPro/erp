@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CalendarDays, Plus, Save, Trash2 } from "lucide-react";
 import PageHeader from "../common/PageHeader";
-import Spinner from "../common/Spinner";
+import TimellyLoader from "../common/TimellyLoader";
 import TimetableGrid, { TimetableEntry, TimetablePayload } from "../timetable/TimetableGrid";
 
 type ClassOption = {
@@ -289,9 +289,10 @@ export default function SchoolAdminTimetableTab() {
 
   if (loading) {
     return (
-      <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
-        <Spinner label="Loading timetable..." />
-      </div>
+      <TimellyLoader
+        title="Loading timetable"
+        steps={["Classes", "Teachers", "Schedules"]}
+      />
     );
   }
 

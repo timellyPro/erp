@@ -3,6 +3,8 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 
+const SCORE_BASELINE = 50;
+
 function clampScore(score: number) {
   return Math.max(0, Math.min(100, score));
 }
@@ -60,6 +62,7 @@ export async function GET(req: Request) {
                 { email: { contains: q, mode: "insensitive" } },
                 { teacherId: { contains: q, mode: "insensitive" } },
                 { subject: { contains: q, mode: "insensitive" } },
+                { subjects: { has: q } },
               ],
             }
           : {}),
@@ -76,31 +79,35 @@ export async function GET(req: Request) {
       take: 50,
     });
 
-    // Compute performance scores (baseline 50 + sum impacts, clamped 0..100)
-    // Optionally filter by academic year
-    const scores = await Promise.all(
-      teachers.map(async (t) => {
-        const where = yearRange
-          ? { teacherId: t.id, createdAt: { gte: yearRange.start, lte: yearRange.end } }
-          : { teacherId: t.id };
-        const agg = await prisma.teacherAuditRecord.aggregate({
-          where,
-          _sum: { scoreImpact: true },
-          _count: { _all: true },
-        });
-        const impact = agg._sum.scoreImpact ?? 0;
-        const score = clampScore(impact);
-        return { teacherId: t.id, score, recordCount: agg._count._all };
-      })
-    );
+    const teacherIds = teachers.map((t) => t.id);
+    const scores =
+      teacherIds.length > 0
+        ? await prisma.teacherAuditRecord.groupBy({
+            by: ["teacherId"],
+            where: {
+              teacherId: { in: teacherIds },
+              ...(yearRange ? { createdAt: { gte: yearRange.start, lte: yearRange.end } } : {}),
+            },
+            _sum: { scoreImpact: true },
+            _count: { _all: true },
+          })
+        : [];
 
-    const scoreMap = new Map(scores.map((s) => [s.teacherId, s]));
+    const scoreMap = new Map(
+      scores.map((s) => [
+        s.teacherId,
+        {
+          score: clampScore(SCORE_BASELINE + (s._sum.scoreImpact ?? 0)),
+          recordCount: s._count._all,
+        },
+      ])
+    );
 
     return NextResponse.json(
       {
         teachers: teachers.map((t) => ({
           ...t,
-          performanceScore: scoreMap.get(t.id)?.score ?? 0,
+          performanceScore: scoreMap.get(t.id)?.score ?? SCORE_BASELINE,
           recordCount: scoreMap.get(t.id)?.recordCount ?? 0,
         })),
       },

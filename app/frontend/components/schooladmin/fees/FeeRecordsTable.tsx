@@ -12,6 +12,7 @@ import {
   warmSchoolAdminStudentDetails,
 } from "./studentDetailsNav";
 import InlinePagination from "../schooladmincomponents/InlinePagination";
+import { isInactiveStudentStatus } from "@/lib/resolveStudentDisplayClass";
 import {
   appendDayReportSheet,
   drawFeeDayReportPdf,
@@ -31,11 +32,13 @@ interface FeeRecordsTableProps {
 
 type ReportPeriod = "DAY_WISE" | "MONTH_WISE" | "YEAR_WISE" | "ACADEMIC_YEAR_WISE";
 type ExportFormat = "xlsx" | "csv" | "pdf";
+type StudentStatusFilter = "Active" | "Inactive" | "All";
 
 export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps) {
   const router = useRouter();
   const [searchName, setSearchName] = useState("");
   const [selectedClass, setSelectedClass] = useState("");
+  const [studentStatusFilter, setStudentStatusFilter] = useState<StudentStatusFilter>("Active");
   const [reportPeriod, setReportPeriod] = useState<ReportPeriod>("DAY_WISE");
   const [reportDate, setReportDate] = useState(() => todayYmdLocal());
   const [reportMonth, setReportMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -49,7 +52,14 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
   const [feeDueExporting, setFeeDueExporting] = useState(false);
   const [page, setPage] = useState(1);
 
-  const filteredFees = fees.filter((f) => {
+  const statusFilteredFees = fees.filter((f) => {
+    const inactive = isInactiveStudentStatus(f.student.status);
+    if (studentStatusFilter === "Active") return !inactive;
+    if (studentStatusFilter === "Inactive") return inactive;
+    return true;
+  });
+
+  const filteredFees = statusFilteredFees.filter((f) => {
     const name = (f.student.user?.name || "").toLowerCase();
     const q = searchName.toLowerCase();
     if (q && !name.includes(q)) return false;
@@ -59,7 +69,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
 
   useEffect(() => {
     setPage(1);
-  }, [searchName, selectedClass]);
+  }, [searchName, selectedClass, studentStatusFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredFees.length / PAGE_SIZE));
   const paginatedFees = useMemo(
@@ -580,17 +590,17 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
   };
 
   const exportAllClasses = async () => {
-    if (fees.length === 0) {
+    if (statusFilteredFees.length === 0) {
       alert("No fee records available to export.");
       return;
     }
     const fileDate = new Date().toISOString().slice(0, 10);
     const baseName = `fee-records-all-classes-${fileDate}`;
     if (exportFormat === "xlsx") {
-      downloadExcel(`${baseName}.xlsx`, fees);
+      downloadExcel(`${baseName}.xlsx`, statusFilteredFees);
       return;
     }
-    const rows = toSheetRows(fees);
+    const rows = toSheetRows(statusFilteredFees);
     if (exportFormat === "csv") {
       downloadCsv(`${baseName}.csv`, rows);
       return;
@@ -612,13 +622,16 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
   };
 
   const exportFeeDueReport = async () => {
-    if (fees.length === 0) {
+    if (statusFilteredFees.length === 0) {
       alert("No fee records available for this report.");
       return;
     }
     setFeeDueExporting(true);
     try {
-      const q = selectedClass ? `?classId=${encodeURIComponent(selectedClass)}` : "";
+      const params = new URLSearchParams();
+      if (selectedClass) params.set("classId", selectedClass);
+      if (studentStatusFilter !== "All") params.set("status", studentStatusFilter);
+      const q = params.toString() ? `?${params.toString()}` : "";
       const res = await fetch(`/api/fees/export/fee-due-report${q}`, {
         credentials: "include",
         cache: "no-store",
@@ -648,7 +661,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
       alert("Please select a class for class-wise export.");
       return;
     }
-    const rows = fees.filter((f) => f.student.class?.id === selectedClass);
+    const rows = statusFilteredFees.filter((f) => f.student.class?.id === selectedClass);
     if (rows.length === 0) {
       alert("No fee records found for the selected class.");
       return;
@@ -808,6 +821,17 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
             ]}
           />
         </div>
+        <div className="w-full sm:w-auto sm:min-w-[190px]">
+          <SelectInput
+            value={studentStatusFilter}
+            onChange={(value) => setStudentStatusFilter(value as StudentStatusFilter)}
+            options={[
+              { label: "Active Students", value: "Active" },
+              { label: "Inactive Students", value: "Inactive" },
+              { label: "All Students", value: "All" },
+            ]}
+          />
+        </div>
         <button
           type="button"
           onClick={() => void exportFeeDueReport()}
@@ -853,6 +877,11 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
               >
                 {f.student.user?.name || "-"}
               </button>
+              {isInactiveStudentStatus(f.student.status) ? (
+                <span className="ml-2 inline-flex rounded-full border border-red-400/30 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-200">
+                  Inactive
+                </span>
+              ) : null}
               <div className="mt-3 space-y-2 text-sm">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-gray-400">Class</span>
@@ -932,6 +961,11 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
                   onDoubleClick={() => router.push(schoolAdminStudentDetailsFeesUrl(f.student.id))}
                 >
                   {f.student.user?.name || "-"}
+                  {isInactiveStudentStatus(f.student.status) ? (
+                    <span className="ml-2 inline-flex rounded-full border border-red-400/30 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-200">
+                      Inactive
+                    </span>
+                  ) : null}
                 </td>
                 <td className="py-3">
                   {f.student.class

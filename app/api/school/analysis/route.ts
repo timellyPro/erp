@@ -5,6 +5,7 @@ import {
   buildSchoolAnalysisFast,
   buildSchoolAnalysisFull,
   buildSchoolAnalysisTables,
+  type SchoolAnalysisTableSection,
 } from "@/lib/buildSchoolAnalysis";
 import { resolveAnalysisStartYear } from "@/lib/schoolAnalysisYear";
 import { resolveSchoolAdminSchoolId } from "@/lib/resolveSchoolAdminSchoolId";
@@ -43,8 +44,15 @@ export async function GET(req: Request) {
     const classId = classIdParam && classIdParam.trim() ? classIdParam.trim() : null;
     const fastOnly = searchParams.get("fast") === "1";
     const tablesOnly = searchParams.get("part") === "tables";
+    const sectionParam = searchParams.get("section");
+    const tableSection: SchoolAnalysisTableSection | null =
+      sectionParam === "gender-enrollment" ||
+      sectionParam === "admission-comparison" ||
+      sectionParam === "fee-collection"
+        ? sectionParam
+        : null;
 
-    const cacheKey = `analysis:${schoolId}:${startYear}:${classId ?? "all"}:${fastOnly ? "fast" : tablesOnly ? "tables" : "full"}`;
+    const cacheKey = `analysis:${schoolId}:${startYear}:${classId ?? "all"}:${fastOnly ? "fast" : tablesOnly ? `tables:${tableSection ?? "all"}` : "full"}`;
     const cached = getSchoolDashboardServerCached<Record<string, unknown>>(cacheKey);
     if (cached) {
       return NextResponse.json(cached, { status: 200 });
@@ -56,7 +64,7 @@ export async function GET(req: Request) {
     if (fastOnly) {
       payload = await buildSchoolAnalysisFast(schoolId, startYear, classId);
     } else if (tablesOnly) {
-      payload = await buildSchoolAnalysisTables(schoolId, startYear, classId);
+      payload = await buildSchoolAnalysisTables(schoolId, startYear, classId, undefined, tableSection);
     } else {
       payload = await buildSchoolAnalysisFull(schoolId, startYear, classId);
     }

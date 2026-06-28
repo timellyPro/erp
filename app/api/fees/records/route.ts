@@ -33,7 +33,7 @@ export async function GET(req: Request) {
     const take = Math.min(10000, Math.max(1, Number.isFinite(takeRaw) ? takeRaw : 5000));
     const cursor = searchParams.get("cursor")?.trim() || null;
 
-    const memKey = `fees:records:${schoolId}:${take}:${cursor ?? "0"}`;
+    const memKey = `fees:records:v2:${schoolId}:${take}:${cursor ?? "0"}`;
     const cached = getSchoolDashboardServerCached<{ fees: unknown[]; nextCursor: string | null }>(memKey);
     if (cached) {
       return NextResponse.json(cached, { status: 200 });
@@ -52,6 +52,7 @@ export async function GET(req: Request) {
         student: {
           select: {
             id: true,
+            status: true,
             user: { select: { name: true, email: true } },
             class: { select: { id: true, name: true, section: true } },
           },

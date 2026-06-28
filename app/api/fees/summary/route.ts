@@ -13,6 +13,7 @@ import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
 } from "@/lib/schoolDashboardServerCache";
+import { activeStudentWhere } from "@/lib/studentStatus";
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -47,7 +48,7 @@ export async function GET(req: Request) {
         const statsOnly = searchParams.get("statsOnly") === "1";
 
         if (statsOnly) {
-          const memKey = `fees:summary:stats:${schoolId}`;
+          const memKey = `fees:summary:stats:active:${schoolId}`;
           const memCached = getSchoolDashboardServerCached<{
             fees: unknown[];
             stats: unknown;
@@ -59,12 +60,12 @@ export async function GET(req: Request) {
 
           const [agg, pendingCount] = await Promise.all([
             prisma.studentFee.aggregate({
-              where: { student: { schoolId } },
+              where: { student: { schoolId, ...activeStudentWhere } },
               _sum: { totalFee: true, finalFee: true, amountPaid: true, remainingFee: true },
               _count: { _all: true },
             }),
             prisma.studentFee.count({
-              where: { student: { schoolId }, remainingFee: { gt: 0.01 } },
+              where: { student: { schoolId, ...activeStudentWhere }, remainingFee: { gt: 0.01 } },
             }),
           ]);
 
@@ -88,13 +89,13 @@ export async function GET(req: Request) {
         const take = Math.min(100, Math.max(1, Number.isFinite(takeRaw) ? takeRaw : 50));
         const cursor = searchParams.get("cursor")?.trim() || null;
 
-        const memPageKey = `fees:summary:page:${schoolId}:${take}:${cursor ?? "0"}`;
+        const memPageKey = `fees:summary:page:active:${schoolId}:${take}:${cursor ?? "0"}`;
         const memPage = getSchoolDashboardServerCached(memPageKey);
         if (memPage) {
           return NextResponse.json(memPage, { status: 200 });
         }
 
-        const cacheKey = await tenantCacheKey(schoolId, "api", "fees:summary:page", { take, cursor });
+        const cacheKey = await tenantCacheKey(schoolId, "api", "fees:summary:page:active", { take, cursor });
         const cached = await swrGet<{ fees: unknown[]; stats: unknown; nextCursor: string | null }>(cacheKey);
         const now = Date.now();
         if (cached && now < cached.freshUntil) {
@@ -102,11 +103,12 @@ export async function GET(req: Request) {
         }
 
         const fees = await prisma.studentFee.findMany({
-          where: { student: { schoolId } },
+          where: { student: { schoolId, ...activeStudentWhere } },
           include: {
             student: {
               select: {
                 id: true,
+                status: true,
                 residencyType: true,
                 class: { select: { id: true, name: true, section: true } },
                 user: { select: { id: true, name: true, email: true } },
@@ -165,7 +167,7 @@ export async function GET(req: Request) {
       // Stats are computed for the full school, not just the current page.
       // Keep this as a fast aggregate (single query).
       prisma.studentFee.aggregate({
-        where: { student: { schoolId } },
+        where: { student: { schoolId, ...activeStudentWhere } },
         _sum: { totalFee: true, finalFee: true, amountPaid: true, remainingFee: true },
         _count: { _all: true },
       }),

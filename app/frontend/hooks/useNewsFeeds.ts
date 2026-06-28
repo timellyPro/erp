@@ -1,6 +1,11 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import {
+  loadNewsFeeds,
+  peekNewsFeeds,
+  setNewsFeedsCache,
+} from "@/lib/loadSchoolAdminFastTabs";
 
 export interface NewsFeedItem {
   id: string;
@@ -30,41 +35,27 @@ export function useNewsFeeds() {
     likingIdsRef.current = likingIds;
   }, [likingIds]);
 
-  const fetchFeeds = useCallback(async () => {
-    setLoading(true);
+  const fetchFeeds = useCallback(async (revalidate = false) => {
+    if (!revalidate) {
+      const cached = peekNewsFeeds();
+      if (cached) {
+        feedsRef.current = cached;
+        setFeeds(cached);
+        setLoading(false);
+        void fetchFeeds(true);
+        return;
+      }
+    }
+
+    setLoading(feedsRef.current.length === 0);
     setError(null);
     try {
-      const res = await fetch("/api/newsfeed/list", {
-        credentials: "same-origin",
-        cache: "no-store",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Failed to load news feed");
-      const list = Array.isArray(data.newsFeeds) ? data.newsFeeds : [];
-      setFeeds(
-        list.map((f: Record<string, unknown>) => ({
-          id: String(f.id ?? ""),
-          title: String(f.title ?? ""),
-          description: String(f.description ?? ""),
-          photo: typeof f.photo === "string" ? f.photo : typeof f.mediaUrl === "string" ? f.mediaUrl : null,
-          photos: Array.isArray(f.photos) ? f.photos : undefined,
-          likes: typeof f.likes === "number" ? f.likes : 0,
-          likedByMe: Boolean(f.likedByMe),
-          createdBy:
-            f.createdBy && typeof f.createdBy === "object"
-              ? {
-                  id: String((f.createdBy as { id?: unknown }).id ?? ""),
-                  name: (f.createdBy as { name?: string | null }).name ?? null,
-                  email: (f.createdBy as { email?: string | null }).email ?? null,
-                  photoUrl: (f.createdBy as { photoUrl?: string | null }).photoUrl ?? null,
-                }
-              : { id: "", name: null, email: null },
-          createdAt: typeof f.createdAt === "string" ? f.createdAt : new Date().toISOString(),
-        }))
-      );
+      const list = await loadNewsFeeds({ revalidate });
+      feedsRef.current = list;
+      setFeeds(list);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error loading news feed");
-      setFeeds([]);
+      if (feedsRef.current.length === 0) setFeeds([]);
     } finally {
       setLoading(false);
     }
@@ -83,11 +74,15 @@ export function useNewsFeeds() {
 
     setLikingIds((prev) => ({ ...prev, [id]: true }));
     setFeeds((prev) =>
-      prev.map((f) =>
-        f.id === id
-          ? { ...f, likedByMe: nextLiked, likes: nextLikes }
-          : f
-      )
+      {
+        const next = prev.map((f) =>
+          f.id === id
+            ? { ...f, likedByMe: nextLiked, likes: nextLikes }
+            : f
+        );
+        setNewsFeedsCache(next);
+        return next;
+      }
     );
 
     try {
@@ -98,23 +93,31 @@ export function useNewsFeeds() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Failed to update like");
       setFeeds((prev) =>
-        prev.map((f) =>
-          f.id === id
-            ? {
-                ...f,
-                likes: typeof data.likes === "number" ? data.likes : nextLikes,
-                likedByMe: typeof data.liked === "boolean" ? data.liked : nextLiked,
-              }
-            : f
-        )
+        {
+          const next = prev.map((f) =>
+            f.id === id
+              ? {
+                  ...f,
+                  likes: typeof data.likes === "number" ? data.likes : nextLikes,
+                  likedByMe: typeof data.liked === "boolean" ? data.liked : nextLiked,
+                }
+              : f
+          );
+          setNewsFeedsCache(next);
+          return next;
+        }
       );
     } catch {
       setFeeds((prev) =>
-        prev.map((f) =>
-          f.id === id
-            ? { ...f, likedByMe: currentFeed.likedByMe, likes: currentFeed.likes }
-            : f
-        )
+        {
+          const next = prev.map((f) =>
+            f.id === id
+              ? { ...f, likedByMe: currentFeed.likedByMe, likes: currentFeed.likes }
+              : f
+          );
+          setNewsFeedsCache(next);
+          return next;
+        }
       );
     } finally {
       setLikingIds((prev) => {

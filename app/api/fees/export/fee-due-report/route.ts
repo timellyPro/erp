@@ -10,6 +10,7 @@ import {
   type StudentFeeDueInput,
 } from "@/lib/feeDueReportCompute";
 import { buildFeeDueReportWorkbook } from "@/lib/feeDueReportExcel";
+import { studentStatusFilter } from "@/lib/studentStatus";
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -31,6 +32,7 @@ export async function GET(req: Request) {
 
     const { searchParams } = new URL(req.url);
     const classIdFilter = searchParams.get("classId")?.trim() || undefined;
+    const statusFilter = studentStatusFilter(searchParams.get("status"));
     const includeSchoolWideExtras =
       searchParams.get("schoolWideExtras") === "1" || searchParams.get("schoolWideExtras") === "true";
 
@@ -41,6 +43,7 @@ export async function GET(req: Request) {
           student: {
             schoolId,
             ...(classIdFilter ? { classId: classIdFilter } : {}),
+            ...(statusFilter ? { status: statusFilter } : {}),
           },
         },
         include: {

@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../lib/authOptions";
 import prisma from "../../../../lib/db";
 import bcrypt from "bcryptjs";
+import { purgeSchoolDashboardServerCacheMatching } from "@/lib/schoolDashboardServerCache";
 
 type Params = Promise<{ id: string }>;
 
@@ -214,6 +215,10 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
 
       return userRow;
     });
+    if (user.role === "TEACHER") {
+      purgeSchoolDashboardServerCacheMatching(`teacher:list:${schoolId}`);
+      purgeSchoolDashboardServerCacheMatching(`class:list:lite:${schoolId}`);
+    }
 
     return NextResponse.json({
       message: "User updated successfully",
@@ -280,6 +285,10 @@ export async function DELETE(
     await prisma.user.delete({
       where: { id },
     });
+    if (user.role === "TEACHER" && user.schoolId) {
+      purgeSchoolDashboardServerCacheMatching(`teacher:list:${user.schoolId}`);
+      purgeSchoolDashboardServerCacheMatching(`class:list:lite:${user.schoolId}`);
+    }
 
     return NextResponse.json({
       message: "User deleted successfully",

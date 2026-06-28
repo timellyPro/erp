@@ -3,8 +3,13 @@
 import { useEffect, useState, useMemo } from "react";
 import { BookOpen, Calendar, CheckCircle2, Plus, Trash2 } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
-import Spinner from "../../common/Spinner";
+import TimellyLoader from "../../common/TimellyLoader";
 import { ChevronDown } from "lucide-react";
+import {
+    loadExamsPage,
+    peekExamsPage,
+    setExamsPageCache,
+} from "@/lib/loadSchoolAdminFastTabs";
 
 interface SyllabusUnit {
     id: string;
@@ -68,19 +73,13 @@ export default function ExamsTab() {
     const [loading, setLoading] = useState(true);
     const [showAllSchedules, setShowAllSchedules] = useState(false);
 
-    const fetchExamTypes = async () => {
-        setExamTypesLoading(true);
-        try {
-            const res = await fetch("/api/exam-types", { cache: "no-store", credentials: "include" });
-            const data = await res.json();
-            const list: string[] = Array.isArray(data.examTypes) ? data.examTypes : [];
-            setExamTypes(list);
-        } catch (e) {
-            console.error("Failed to load exam types", e);
-            setExamTypes([]);
-        } finally {
-            setExamTypesLoading(false);
-        }
+    const updateExamsCache = (partial: Partial<{ examTypes: string[]; subjects: string[]; terms: TermData[]; classes: ClassData[] }>) => {
+        setExamsPageCache({
+            terms: partial.terms ?? rawData,
+            classes: partial.classes ?? classes,
+            examTypes: partial.examTypes ?? examTypes,
+            subjects: partial.subjects ?? subjects,
+        });
     };
 
     const deleteExamType = async (name: string) => {
@@ -115,7 +114,9 @@ export default function ExamsTab() {
                 return;
             }
 
-            await fetchExamTypes();
+            const next = examTypes.filter((type) => type.toUpperCase() !== upperName);
+            setExamTypes(next);
+            updateExamsCache({ examTypes: next });
         } catch (e) {
             console.error("Failed to delete exam type", e);
             setExamTypeError("Failed to delete exam type");
@@ -154,27 +155,14 @@ export default function ExamsTab() {
                 return;
             }
             setNewExamType("");
-            await fetchExamTypes();
+            const next = Array.from(new Set([...examTypes, name])).sort();
+            setExamTypes(next);
+            updateExamsCache({ examTypes: next });
         } catch (e) {
             console.error("Failed to add exam type", e);
             setExamTypeError("Failed to add exam type");
         } finally {
             setExamTypeSaving(false);
-        }
-    };
-
-    const fetchSubjects = async () => {
-        setSubjectsLoading(true);
-        try {
-            const res = await fetch("/api/exam-subjects", { cache: "no-store", credentials: "include" });
-            const data = await res.json();
-            const list: string[] = Array.isArray(data.subjects) ? data.subjects : [];
-            setSubjects(list);
-        } catch (e) {
-            console.error("Failed to load subjects", e);
-            setSubjects([]);
-        } finally {
-            setSubjectsLoading(false);
         }
     };
 
@@ -210,7 +198,9 @@ export default function ExamsTab() {
                 return;
             }
 
-            await fetchSubjects();
+            const next = subjects.filter((subject) => subject.toUpperCase() !== upperName);
+            setSubjects(next);
+            updateExamsCache({ subjects: next });
         } catch (e) {
             console.error("Failed to delete subject", e);
             setSubjectError("Failed to delete subject");
@@ -249,7 +239,9 @@ export default function ExamsTab() {
                 return;
             }
             setNewSubject("");
-            await fetchSubjects();
+            const next = Array.from(new Set([...subjects, name])).sort();
+            setSubjects(next);
+            updateExamsCache({ subjects: next });
         } catch (e) {
             console.error("Failed to add subject", e);
             setSubjectError("Failed to add subject");
@@ -259,39 +251,53 @@ export default function ExamsTab() {
     };
 
     useEffect(() => {
-        const fetchExams = async () => {
+        const applyPayload = (payload: { terms: unknown[]; classes: unknown[]; examTypes: string[]; subjects: string[] }) => {
+            const data = payload.terms as TermData[];
+            const classData = payload.classes as ClassData[];
+            setRawData(data);
+            setClasses(classData);
+            setExamTypes(payload.examTypes);
+            setSubjects(payload.subjects);
+            setExamTypesLoading(false);
+            setSubjectsLoading(false);
+
+            if (!selectedClassId && classData.length > 0) {
+                setSelectedClassId(classData[0].id);
+            }
+
+            if (!selectedTermName && data.length > 0) {
+                const firstUpcoming = data.find((t) => t.status === "UPCOMING");
+                setSelectedTermName(firstUpcoming ? firstUpcoming.name : data[0].name);
+            }
+        };
+
+        const fetchExams = async (revalidate = false) => {
+            if (!revalidate) {
+                const cached = peekExamsPage();
+                if (cached) {
+                    applyPayload(cached);
+                    setLoading(false);
+                    void fetchExams(true);
+                    return;
+                }
+            }
+
             try {
-                const res = await fetch("/api/exams/terms");
-                const result = await res.json();
-                const data: TermData[] = result.terms || [];
-                const classData: ClassData[] = result.classes || [];
-                setRawData(data);
-                setClasses(classData);
-
-                if (classData.length > 0) {
-                    setSelectedClassId(classData[0].id);
-                }
-
-                if (data.length > 0) {
-                    const firstUpcoming = data.find((t) => t.status === "UPCOMING");
-                    setSelectedTermName(firstUpcoming ? firstUpcoming.name : data[0].name);
-                }
+                setLoading(rawData.length === 0);
+                setExamTypesLoading(examTypes.length === 0);
+                setSubjectsLoading(subjects.length === 0);
+                const payload = await loadExamsPage({ revalidate });
+                applyPayload(payload);
             } catch (e) {
                 console.error("Fetch failed", e);
             } finally {
                 setLoading(false);
+                setExamTypesLoading(false);
+                setSubjectsLoading(false);
             }
         };
         fetchExams();
-    }, []);
-
-    useEffect(() => {
-        fetchExamTypes();
-    }, []);
-
-    useEffect(() => {
-        fetchSubjects();
-    }, []);
+    }, [examTypes.length, rawData.length, selectedClassId, selectedTermName, subjects.length]);
 
     const filteredDataByClass = useMemo(() => {
         return selectedClassId
@@ -334,9 +340,10 @@ export default function ExamsTab() {
 
     if (loading)
         return (
-            <div className="p-10 flex justify-center">
-                <Spinner />
-            </div>
+            <TimellyLoader
+                title="Loading exams"
+                steps={["Terms", "Schedules", "Subjects"]}
+            />
         );
 
     return (
@@ -370,11 +377,11 @@ export default function ExamsTab() {
                         </div>
                     </div>
                 }
-                className="somu border-none !bg-white/5 mb-6"
+                className="somu border-none bg-white/5! mb-6"
             />
 
             {/* EXAM TYPES MANAGER */}
-            <div className="somu border-none !bg-white/5 rounded-3xl p-5 mb-6">
+            <div className="somu border-none bg-white/5! rounded-3xl p-5 mb-6">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <div>
                         <h3 className="text-lg font-bold">Exam Types</h3>
@@ -432,7 +439,7 @@ export default function ExamsTab() {
             </div>
 
             {/* SUBJECTS MANAGER */}
-            <div className="somu border-none !bg-white/5 rounded-3xl p-5 mb-6">
+            <div className="somu border-none bg-white/5! rounded-3xl p-5 mb-6">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <div>
                         <h3 className="text-lg font-bold">Subjects</h3>

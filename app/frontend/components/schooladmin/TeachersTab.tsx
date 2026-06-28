@@ -14,7 +14,7 @@ import TeacherStatCard from "./teachersTab/teacherStatCard";
 import AppointTeacher from "./teachersTab/AppointTeacher";
 import TeachersList, { TeacherRow } from "./teachersTab/TeachersList";
 import EditTeacher from "./teachersTab/EditTeacher";
-import Spinner from "../common/Spinner";
+import TimellyLoader from "../common/TimellyLoader";
 import {
   fetchTeacherAttendance,
   fetchTeachersList,
@@ -39,7 +39,7 @@ const MobileTeacherCard = ({ teacher, onEdit, onDelete }: {
   onEdit: (t: TeacherRow) => void;
   onDelete: (id: string) => void;
 }) => (
-  <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-[2rem] p-5 space-y-4 shadow-xl">
+  <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-4xl p-5 space-y-4 shadow-xl">
     <div className="flex items-center gap-4">
       <img src={teacher.avatar} alt="" className="w-14 h-14 rounded-2xl border border-white/10 object-cover" />
       <div className="flex-1">
@@ -490,7 +490,7 @@ const SchoolAdminTeacherTab = () => {
       </div>
 
       {/* Attendance Card */}
-      <div className=" bg-white/[0.04]
+      <div className=" bg-white/4
   backdrop-blur-2xl
   rounded-3xl
   border border-white/10
@@ -527,7 +527,11 @@ const SchoolAdminTeacherTab = () => {
 
         <div className="p-4 md:p-5">
           {attendanceLoading && teachers.length === 0 ? (
-            <div className="text-center py-8 text-gray-400"><Spinner/></div>
+            <TimellyLoader
+              compact
+              title="Loading teachers"
+              steps={["Teacher list", "Attendance", "Roster"]}
+            />
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {teachers.map((t) => {
