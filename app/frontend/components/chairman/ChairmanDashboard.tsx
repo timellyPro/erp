@@ -26,7 +26,7 @@ type ChairmanSummary = {
 const money = (value: number) => `₹${Math.round(value || 0).toLocaleString("en-IN")}`;
 const todayYmd = () => new Date().toISOString().slice(0, 10);
 const clampPct = (value: number) => Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
-const DASHBOARD_SESSION_KEY = "chairman:dashboard:v1";
+const DASHBOARD_SESSION_KEY = "chairman:dashboard:v2";
 const DASHBOARD_SESSION_TTL_MS = 5 * 60_000;
 
 function readCachedSummary(date: string): ChairmanSummary | null {
@@ -224,7 +224,7 @@ export default function ChairmanDashboard() {
       </div>
 
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <Card title="Students" value={String(summary.totalStudents)} subtitle={`${summary.activeStudents} active students`} tone="cyan" icon={<Users className="h-5 w-5" />} />
+        <Card title="Active Students" value={String(summary.activeStudents)} subtitle="Active students only" tone="cyan" icon={<Users className="h-5 w-5" />} />
         <Card title="Classes" value={String(summary.totalClasses)} subtitle="Total classes in school" tone="violet" icon={<GraduationCap className="h-5 w-5" />} />
         <Card title="Teachers" value={String(summary.totalTeachers)} subtitle="Teacher accounts" tone="lime" icon={<UserCheck className="h-5 w-5" />} />
         <Card title="Pending Discounts" value={String(summary.pendingDiscounts)} subtitle={`${summary.approvedDiscounts} approved, ${summary.rejectedDiscounts} rejected`} tone="rose" icon={<Clock3 className="h-5 w-5" />} />

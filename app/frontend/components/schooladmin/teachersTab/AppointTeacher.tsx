@@ -7,6 +7,7 @@ import {
   invalidateTeachersPageCache,
 } from "@/lib/fetchTeachersPage";
 import { peekAppointTeacherData } from "@/lib/teachersPageClientCache";
+import TimellyLoader from "../../common/TimellyLoader";
 
 const DEFAULT_AVATAR =
   "https://randomuser.me/api/portraits/lego/1.jpg";
@@ -253,7 +254,12 @@ export default function AppointTeacher({ schoolId, onRosterChange }: AppointTeac
       {/* FORM */}
       <div className="border-t border-white/10 p-4 sm:p-5 md:p-6 bg-[#0F172A]/50">
         {loading && classes.length === 0 ? (
-          <p className="text-white/50 text-sm">Loading...</p>
+          <TimellyLoader
+            compact
+            bare
+            title="Loading appointments"
+            steps={["Classes", "Teachers", "Assignments"]}
+          />
         ) : (
           <div className="flex flex-col gap-3 sm:gap-4">
             <select
@@ -261,9 +267,9 @@ export default function AppointTeacher({ schoolId, onRosterChange }: AppointTeac
               onChange={(e) => setSelectedClassId(e.target.value)}
               className="flex-1 bg-black/20 border border-white/10 rounded-xl px-4 py-3"
             >
-              <option value="" className="text-white bg-gray-900 text-white">-- Select Class --</option>
+              <option value="" className="bg-gray-900 text-white">-- Select Class --</option>
               {classOptions.map((opt) => (
-                <option key={opt.value} value={opt.value} className=" bg-gray-900 text-white  text-white" >
+                <option key={opt.value} value={opt.value} className="bg-gray-900 text-white" >
                   {opt.label}
                 </option>
               ))}
@@ -274,9 +280,9 @@ export default function AppointTeacher({ schoolId, onRosterChange }: AppointTeac
               onChange={(e) => setSelectedTeacherId(e.target.value)}
               className="flex-1 border border-white/10 rounded-xl px-4 py-3  bg-black/20"
             >
-              <option value="" className="text-white bg-gray-900 text-white">-- Select Teacher --</option>
+              <option value="" className="bg-gray-900 text-white">-- Select Teacher --</option>
               {teacherOptions.map((opt) => (
-                <option key={opt.value} value={opt.value} className="text-white bg-gray-900 text-white ">
+                <option key={opt.value} value={opt.value} className="bg-gray-900 text-white">
                   {opt.label}
                 </option>
               ))}

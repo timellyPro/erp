@@ -5,6 +5,7 @@ import prisma from "@/lib/db";
 import bcrypt from "bcryptjs";
 import { Role } from "@prisma/client";
 import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
+import { purgeSchoolDashboardServerCacheMatching } from "@/lib/schoolDashboardServerCache";
 
 export async function POST(req: Request) {
   try {
@@ -81,6 +82,7 @@ export async function POST(req: Request) {
         role: true,
       },
     });
+    purgeSchoolDashboardServerCacheMatching(`teacher:list:${schoolId}`);
 
     return NextResponse.json(
       { message: "Teacher created successfully", teacher },

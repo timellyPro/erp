@@ -16,6 +16,7 @@ import type {
 export { defaultAnalysisStartYear, resolveAnalysisStartYear } from "@/lib/schoolAnalysisYear";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+export type SchoolAnalysisTableSection = "gender-enrollment" | "admission-comparison" | "fee-collection";
 
 function yearBounds(startYear: number) {
   return {
@@ -200,9 +201,13 @@ export async function buildSchoolAnalysisTables(
   schoolId: string,
   startYear: number,
   classId: string | null,
-  existingClasses?: SchoolAnalysisClass[]
+  existingClasses?: SchoolAnalysisClass[],
+  tableSection?: SchoolAnalysisTableSection | null
 ): Promise<SchoolAnalysisTablesPayload> {
   void startYear;
+  const includeEnrollment = !tableSection || tableSection === "gender-enrollment";
+  const includeAdmission = !tableSection || tableSection === "admission-comparison";
+  const includeFees = !tableSection || tableSection === "fee-collection";
   const classes =
     existingClasses ??
     (await prisma.class.findMany({
@@ -279,31 +284,42 @@ export async function buildSchoolAnalysisTables(
       classId: true,
       gender: true,
       residencyType: true,
-      application: {
-        select: {
-          id: true,
-          admissionNo: true,
-          fedenaNo: true,
-        },
-      },
       class: { select: { id: true, name: true, section: true } },
-      fee: {
-        select: {
-          totalFee: true,
-          discountPercent: true,
-          finalFee: true,
-          amountPaid: true,
-          remainingFee: true,
-        },
-      },
+      ...(includeAdmission
+        ? {
+            application: {
+              select: {
+                id: true,
+                admissionNo: true,
+                fedenaNo: true,
+              },
+            },
+          }
+        : {}),
+      ...(includeFees
+        ? {
+            fee: {
+              select: {
+                totalFee: true,
+                discountPercent: true,
+                finalFee: true,
+                amountPaid: true,
+                remainingFee: true,
+              },
+            },
+          }
+        : {}),
     },
   });
 
-  const applicationIds = students
-    .map((s) => s.application?.id)
-    .filter((id): id is string => Boolean(id));
-  const hasWorkflowColumn = await studentApplicationHasWorkflowColumn();
-  const appWorkflowMap = await admissionWorkflowByIds(applicationIds, hasWorkflowColumn);
+  const applicationIds = includeAdmission
+    ? students
+        .map((s) => s.application?.id)
+        .filter((id): id is string => Boolean(id))
+    : [];
+  const appWorkflowMap = includeAdmission
+    ? await admissionWorkflowByIds(applicationIds, await studentApplicationHasWorkflowColumn())
+    : new Map<string, string>();
 
   const seenClassIds = new Set<string>(feeAgg.keys());
 
@@ -322,7 +338,7 @@ export async function buildSchoolAnalysisTables(
       enrollAgg.set(s.classId, emptyEnroll(c?.name ?? "Unknown", c?.section ?? ""));
     }
 
-    const feeRow = feeAgg.get(s.classId);
+    const feeRow = includeFees ? feeAgg.get(s.classId) : undefined;
     if (feeRow && s.fee) {
       const f = s.fee;
       feeRow.withFee += 1;
@@ -333,18 +349,21 @@ export async function buildSchoolAnalysisTables(
       feeRow.sumPending += f.remainingFee ?? 0;
     }
 
-    const enrollRow = enrollAgg.get(s.classId)!;
-    enrollRow.total += 1;
-    const bucket = genderBucket(s.gender);
-    if (bucket === "male") enrollRow.male += 1;
-    else if (bucket === "female") enrollRow.female += 1;
-
-    const classLabel = (s.class?.name ?? "Unknown class").trim() || "Unknown class";
-    if (!admissionComparisonMap.has(classLabel)) {
-      admissionComparisonMap.set(classLabel, emptyAdmissionComparisonAgg(classLabel));
+    if (includeEnrollment) {
+      const enrollRow = enrollAgg.get(s.classId)!;
+      enrollRow.total += 1;
+      const bucket = genderBucket(s.gender);
+      if (bucket === "male") enrollRow.male += 1;
+      else if (bucket === "female") enrollRow.female += 1;
     }
-    const admissionRow = admissionComparisonMap.get(classLabel);
-    if (admissionRow) {
+
+    if (includeAdmission) {
+      const classLabel = (s.class?.name ?? "Unknown class").trim() || "Unknown class";
+      if (!admissionComparisonMap.has(classLabel)) {
+        admissionComparisonMap.set(classLabel, emptyAdmissionComparisonAgg(classLabel));
+      }
+      const admissionRow = admissionComparisonMap.get(classLabel);
+      if (admissionRow) {
       const normalizedGender = (s.gender ?? "").trim().toLowerCase();
       const isMale = ["male", "m", "boy", "boys"].includes(normalizedGender);
       const isFemale = ["female", "f", "girl", "girls"].includes(normalizedGender);
@@ -376,10 +395,11 @@ export async function buildSchoolAnalysisTables(
           }
         }
       }
+      }
     }
   }
 
-  const feeCollectionByClass: SchoolAnalysisFeeCollectionRow[] = Array.from(feeAgg.entries())
+  const feeCollectionByClass: SchoolAnalysisFeeCollectionRow[] | undefined = includeFees ? Array.from(feeAgg.entries())
     .map(([id, r]) => {
       const totalFees = Math.round(r.sumTotalFee * 100) / 100;
       const finalFees = Math.round(r.sumFinalFee * 100) / 100;
@@ -404,7 +424,7 @@ export async function buildSchoolAnalysisTables(
         duePercent,
       };
     })
-    .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })) : undefined;
 
   let sumTotalFeesAll = 0;
   let sumFinalFeesAll = 0;
@@ -421,7 +441,7 @@ export async function buildSchoolAnalysisTables(
     sumDiscountPercentAll += r.sumDiscountPercent;
   }
 
-  const feeCollectionTotals: Omit<SchoolAnalysisFeeCollectionRow, "classId"> = {
+  const feeCollectionTotals: Omit<SchoolAnalysisFeeCollectionRow, "classId"> | undefined = includeFees ? {
     label: classId ? "Selected class total" : "School total",
     totalFees: Math.round(sumTotalFeesAll * 100) / 100,
     avgDiscountPercent:
@@ -439,9 +459,9 @@ export async function buildSchoolAnalysisTables(
       sumFinalFeesAll > 0.01
         ? Math.min(100, Math.round((sumPendingAll / sumFinalFeesAll) * 1000) / 10)
         : 0,
-  };
+  } : undefined;
 
-  const enrollmentByClassSection: SchoolAnalysisEnrollmentRow[] = Array.from(enrollAgg.entries())
+  const enrollmentByClassSection: SchoolAnalysisEnrollmentRow[] | undefined = includeEnrollment ? Array.from(enrollAgg.entries())
     .map(([id, r]) => ({
       classId: id,
       className: r.className,
@@ -454,9 +474,9 @@ export async function buildSchoolAnalysisTables(
       const cn = a.className.localeCompare(b.className, undefined, { numeric: true });
       if (cn !== 0) return cn;
       return (a.section || "").localeCompare(b.section || "", undefined, { numeric: true });
-    });
+    }) : undefined;
 
-  const enrollmentByClassSectionTotals = enrollmentByClassSection.reduce(
+  const enrollmentByClassSectionTotals = enrollmentByClassSection?.reduce(
     (acc, r) => {
       acc.male += r.male;
       acc.female += r.female;
@@ -466,11 +486,13 @@ export async function buildSchoolAnalysisTables(
     { male: 0, female: 0, total: 0 }
   );
 
-  const admissionComparison = Array.from(admissionComparisonMap.values()).sort((a, b) =>
-    a.classLabel.localeCompare(b.classLabel, undefined, { numeric: true })
-  );
+  const admissionComparison = includeAdmission
+    ? Array.from(admissionComparisonMap.values()).sort((a, b) =>
+        a.classLabel.localeCompare(b.classLabel, undefined, { numeric: true })
+      )
+    : undefined;
 
-  const admissionComparisonTotals = admissionComparison.reduce<SchoolAnalysisAdmissionTotals>(
+  const admissionComparisonTotals = admissionComparison?.reduce<SchoolAnalysisAdmissionTotals>(
     (acc, row) => {
       acc.existingDayScholarMale += row.existingDayScholarMale;
       acc.existingDayScholarFemale += row.existingDayScholarFemale;

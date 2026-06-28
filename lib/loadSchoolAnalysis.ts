@@ -20,6 +20,11 @@ export type AnalysisSection =
   | "fees-comparison"
   | "student-credentials";
 
+type AnalysisTableSection = Extract<
+  AnalysisSection,
+  "gender-enrollment" | "admission-comparison" | "fee-collection"
+>;
+
 const inflight = new Map<string, Promise<SchoolAnalysisPayload>>();
 
 function needsTables(section: AnalysisSection): boolean {
@@ -133,15 +138,21 @@ export async function fetchSchoolAnalysisFast(
 
 export async function fetchSchoolAnalysisTables(
   year: number,
-  options?: { schoolId?: string | null; classId?: string; signal?: AbortSignal }
+  options?: { schoolId?: string | null; classId?: string; section?: AnalysisTableSection; signal?: AbortSignal }
 ): Promise<SchoolAnalysisPayload> {
   const classId = options?.classId ?? "";
-  const key = `tables:${options?.schoolId ?? "anon"}:${year}:${classId || "all"}`;
+  const section = options?.section;
+  const key = `tables:${options?.schoolId ?? "anon"}:${year}:${classId || "all"}:${section ?? "all"}`;
   const running = inflight.get(key);
   if (running) return running;
 
   const run = (async () => {
-    const tables = await fetchAnalysisUrl(year, classId, { part: "tables" }, options?.signal);
+    const tables = await fetchAnalysisUrl(
+      year,
+      classId,
+      section ? { part: "tables", section } : { part: "tables" },
+      options?.signal
+    );
     const cacheId = options?.schoolId;
     const cacheKey = cacheId
       ? analysisCacheKey(cacheId, year, classId)

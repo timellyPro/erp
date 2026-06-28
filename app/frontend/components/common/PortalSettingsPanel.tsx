@@ -17,9 +17,14 @@ import type {
   PortalVariant,
   PreferencesState,
 } from "../settings/portalSettingsTypes";
-import Spinner from "./Spinner";
 import ParentTimellyLoader from "../parent/ParentTimellyLoader";
 import PageHeader from "./PageHeader";
+import TimellyLoader from "./TimellyLoader";
+import {
+  loadSettingsUser,
+  peekSettingsUser,
+  setSettingsUserCache,
+} from "@/lib/loadSchoolAdminFastTabs";
 
 type UserMe = {
   id: string;
@@ -78,15 +83,28 @@ export default function PortalSettingsPanel({ portal }: { portal: PortalVariant 
   );
 
   const loadData = useCallback(async () => {
-    setLoading(true);
+    const cachedUser = portal === "parent" ? null : peekSettingsUser();
+    if (cachedUser?.user) {
+      const u = cachedUser.user as UserMe;
+      setUserId(u.id ?? "");
+      const next = makeFormFromUser(u, portal, session, {});
+      setForm(next);
+      setInitialForm(next);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     try {
-      const [userRes, parentDetailsRes] = await Promise.all([
-        fetch("/api/user/me"),
+      const [userData, parentDetailsRes] = await Promise.all([
+        portal === "parent"
+          ? fetch("/api/user/me").then(async (res) => {
+              const data = await res.json();
+              if (!res.ok || !data?.user) throw new Error(data?.message || "Unable to load settings");
+              return data;
+            })
+          : loadSettingsUser({ revalidate: Boolean(cachedUser) }),
         portal === "parent" ? fetch("/api/student/parent-details") : Promise.resolve(null),
       ]);
-
-      const userData = await userRes.json();
-      if (!userRes.ok || !userData?.user) throw new Error(userData?.message || "Unable to load settings");
 
       const u = userData.user as UserMe;
       setUserId(u.id ?? "");
@@ -105,20 +123,7 @@ export default function PortalSettingsPanel({ portal }: { portal: PortalVariant 
         }
       }
 
-      const next: FormState = {
-        name: u.name ?? session?.user?.name ?? "User",
-        email: u.email ?? session?.user?.email ?? "",
-        mobile: u.mobile ?? "",
-        language: u.language ?? "English",
-        timezone: "Asia/Kolkata",
-        photoUrl: u.photoUrl ?? session?.user?.image ?? "",
-        location: "New Delhi, India",
-        address: portal === "parent" ? (parentDetails.address ?? "") : (u.address ?? ""),
-        fatherName: parentDetails.fatherName ?? "",
-        fatherPhone: parentDetails.fatherPhone ?? "",
-        motherName: parentDetails.motherName ?? "",
-        occupation: parentDetails.occupation ?? "",
-      };
+      const next = makeFormFromUser(u, portal, session, parentDetails);
       setForm(next);
       setInitialForm(next);
     } catch (error) {
@@ -213,6 +218,17 @@ export default function PortalSettingsPanel({ portal }: { portal: PortalVariant 
           localStorage.setItem("timelly:profile-updated", String(Date.now()));
         }
         toast.show("Profile photo updated and saved.", "success");
+        setSettingsUserCache({
+          user: {
+            id: userId,
+            name: form.name,
+            email: form.email,
+            mobile: form.mobile,
+            address: form.address ?? null,
+            language: form.language,
+            photoUrl: photoUrl ?? null,
+          },
+        });
       } catch (error) {
         toast.show(error instanceof Error ? error.message : "Image upload failed.", "error");
       } finally {
@@ -243,6 +259,19 @@ export default function PortalSettingsPanel({ portal }: { portal: PortalVariant 
     setSaving(true);
     try {
       await saveProfile(form, portal);
+      if (portal !== "parent") {
+        setSettingsUserCache({
+          user: {
+            id: userId,
+            name: form.name,
+            email: form.email,
+            mobile: form.mobile,
+            address: form.address ?? null,
+            language: form.language,
+            photoUrl: form.photoUrl ?? null,
+          },
+        });
+      }
       if (typeof window !== "undefined") {
         window.dispatchEvent(
           new CustomEvent("profile-updated", {
@@ -269,7 +298,10 @@ export default function PortalSettingsPanel({ portal }: { portal: PortalVariant 
         {portal === "parent" ? (
           <ParentTimellyLoader preset="settings" className="w-full max-w-2xl" />
         ) : (
-          <Spinner />
+          <TimellyLoader
+            title="Loading settings"
+            steps={["Profile", "Preferences", "Security"]}
+          />
         )}
       </div>
     );
@@ -343,6 +375,28 @@ function baseForm(overrides?: Partial<FormState>): FormState {
     motherName: "",
     occupation: "",
     ...overrides,
+  };
+}
+
+function makeFormFromUser(
+  user: UserMe,
+  portal: PortalVariant,
+  session: { user?: { name?: string | null; email?: string | null; image?: string | null } } | null,
+  parentDetails: Record<string, string | null | undefined>
+): FormState {
+  return {
+    name: user.name ?? session?.user?.name ?? "User",
+    email: user.email ?? session?.user?.email ?? "",
+    mobile: user.mobile ?? "",
+    language: user.language ?? "English",
+    timezone: "Asia/Kolkata",
+    photoUrl: user.photoUrl ?? session?.user?.image ?? "",
+    location: "New Delhi, India",
+    address: portal === "parent" ? (parentDetails.address ?? "") : (user.address ?? ""),
+    fatherName: parentDetails.fatherName ?? "",
+    fatherPhone: parentDetails.fatherPhone ?? "",
+    motherName: parentDetails.motherName ?? "",
+    occupation: parentDetails.occupation ?? "",
   };
 }
 

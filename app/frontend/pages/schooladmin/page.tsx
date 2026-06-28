@@ -29,7 +29,9 @@ import { warmSchoolAnalysisPage } from "@/lib/loadSchoolAnalysis";
 import { warmSchoolFeesPage } from "@/lib/loadSchoolFeesPage";
 import { warmAddUserPage } from "@/lib/fetchAddUserPage";
 import { warmTeachersPage } from "@/lib/fetchTeachersPage";
+import { warmSchoolAdminFastTabs, warmSchoolAdminTab } from "@/lib/loadSchoolAdminFastTabs";
 import { todayYmdLocal } from "@/lib/schoolDashboardCollection";
+import TimellyLoader from "../../components/common/TimellyLoader";
 
 function SchoolAdminContent() {
   const { data: session } = useSession();
@@ -87,6 +89,7 @@ function SchoolAdminContent() {
     warmSchoolFeesPage(sid);
     warmAddUserPage(sid);
     warmTeachersPage(sid);
+    warmSchoolAdminFastTabs();
   }, [session?.user?.schoolId]);
 
   useEffect(() => {
@@ -96,6 +99,7 @@ function SchoolAdminContent() {
     if (tab === "teachers" && session?.user?.schoolId) {
       warmTeachersPage(session.user.schoolId);
     }
+    warmSchoolAdminTab(tab);
   }, [tab, session?.user?.schoolId]);
 
   useEffect(() => {
@@ -177,7 +181,7 @@ function SchoolAdminContent() {
 
 export default function SchoolAdmin() {
   return (
-    <Suspense fallback={<div className="flex min-h-[40vh] items-center justify-center text-white/70">Loading...</div>}>
+    <Suspense fallback={<TimellyLoader title="Loading school admin" steps={["Navigation", "Profile", "Workspace"]} />}>
       <SchoolAdminContent />
     </Suspense>
   );

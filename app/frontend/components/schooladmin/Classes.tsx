@@ -30,20 +30,18 @@ import DeleteClassPanel from "./classes-panels/DeleteClassPanel";
 import SearchInput from "../common/SearchInput";
 import SelectInput from "../common/SelectInput";
 import InlinePanelTable from "../common/InlinePanelTable";
-import Spinner from "../common/Spinner";
+import TimellyLoader from "../common/TimellyLoader";
 import StatCard from "./StatCard";
-
+import {
+  loadClassesPage,
+  peekClassesPage,
+  setClassesPageCache,
+  type ClassesPagePayload,
+  type SchoolAdminClassRow,
+} from "@/lib/loadSchoolAdminFastTabs";
 
 export default function SchoolAdminClassesTab() {
   const router = useRouter();
-  type ApiClassRow = {
-    id: string;
-    name?: string | null;
-    section?: string | null;
-    _count?: { students?: number } | null;
-    teacher?: { name?: string | null; email?: string | null } | null;
-  };
-
   const [activeAction, setActiveAction] = useState<
     "class" | "section" | "csv" | "none"
   >("class");
@@ -51,16 +49,7 @@ export default function SchoolAdminClassesTab() {
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
   const [panelMode, setPanelMode] = useState<"view" | "edit" | "delete" | null>(null);
   const [mobileEdit, setMobileEdit] = useState<{ className: string; section: string } | null>(null);
-  const [classRows, setClassRows] = useState<
-    {
-      id: string;
-      name: string;
-      section: string;
-      students: number;
-      teacher: string;
-      subject: string;
-    }[]
-  >([]);
+  const [classRows, setClassRows] = useState<SchoolAdminClassRow[]>([]);
   const [totalClasses, setTotalClasses] = useState(0);
   const [totalStudents, setTotalStudents] = useState(0);
   const [totalTeachers, setTotalTeachers] = useState(0);
@@ -75,69 +64,63 @@ export default function SchoolAdminClassesTab() {
   >("idle");
   const [savingClassId, setSavingClassId] = useState<string | null>(null);
 
-  const loadClasses = useCallback(async () => {
-    setIsLoading(true);
+  const applyClassesPayload = useCallback((payload: ClassesPagePayload) => {
+    setClassRows(payload.classRows);
+    setTotalClasses(payload.totalClasses);
+    setTotalStudents(payload.totalStudents);
+    setTotalTeachers(payload.totalTeachers);
+    setAvgSize(payload.avgSize);
+  }, []);
+
+  const cacheRows = useCallback(
+    (rows: SchoolAdminClassRow[]) => {
+      const payload = {
+        classRows: rows,
+        totalClasses: rows.length,
+        totalStudents,
+        totalTeachers,
+        avgSize: rows.length > 0 ? Math.round(totalStudents / rows.length) : 0,
+      };
+      setClassesPageCache(payload);
+      applyClassesPayload(payload);
+    },
+    [applyClassesPayload, totalStudents, totalTeachers]
+  );
+
+  const loadClasses = useCallback(async (revalidate = false) => {
+    if (!revalidate) {
+      const cached = peekClassesPage();
+      if (cached) {
+        applyClassesPayload(cached);
+        setIsLoading(false);
+        void loadClasses(true);
+        return;
+      }
+    }
+
+    setIsLoading(classRows.length === 0);
     setLoadError(null);
     try {
-      const [classesRes, studentsRes, teachersRes] = await Promise.all([
-        fetch("/api/class/list", { method: "GET" }),
-        fetch("/api/student/list?take=1&includeTotal=1", { method: "GET" }),
-        fetch("/api/teacher/list", { method: "GET" }),
-      ]);
-
-      if (!classesRes.ok) {
-        throw new Error("Failed to load classes.");
-      }
-
-      const [classesData, studentsData, teachersData] = await Promise.all([
-        classesRes.json(),
-        studentsRes.ok ? studentsRes.json() : Promise.resolve(null),
-        teachersRes.ok ? teachersRes.json() : Promise.resolve(null),
-      ]);
-
-      const rows: ApiClassRow[] = Array.isArray(classesData?.classes)
-        ? classesData.classes
-        : [];
-      const studentCount =
-        typeof studentsData?.total === "number"
-          ? studentsData.total
-          : Array.isArray(studentsData?.students)
-            ? studentsData.students.length
-            : 0;
-      const teacherCount = Array.isArray(teachersData?.teachers)
-        ? teachersData.teachers.length
-        : 0;
-
-      setClassRows(
-        rows.map((row) => ({
-          id: row.id,
-          name: row.name ?? "Untitled",
-          section: row.section ? `Section ${row.section}` : "—",
-          students: row?._count?.students ?? 0,
-          teacher: row?.teacher?.name ?? "Unassigned",
-          subject: row?.teacher?.email ?? "",
-        }))
-      );
-      setTotalClasses(rows.length);
-      setTotalStudents(studentCount);
-      setTotalTeachers(teacherCount);
-      setAvgSize(rows.length > 0 ? Math.round(studentCount / rows.length) : 0);
+      const payload = await loadClassesPage({ revalidate });
+      applyClassesPayload(payload);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Failed to load classes.";
-      setClassRows([]);
       setLoadError(message);
-      setTotalClasses(0);
-      setTotalStudents(0);
-      setTotalTeachers(0);
-      setAvgSize(0);
+      if (classRows.length === 0) {
+        setClassRows([]);
+        setTotalClasses(0);
+        setTotalStudents(0);
+        setTotalTeachers(0);
+        setAvgSize(0);
+      }
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [applyClassesPayload, classRows.length]);
 
   const refreshAfterMutation = useCallback(() => {
-    void loadClasses();
+    void loadClasses(true);
     try {
       router.refresh();
     } catch {
@@ -447,10 +430,7 @@ export default function SchoolAdminClassesTab() {
       }
       setClassRows((prev) => {
         const next = prev.filter((row) => row.id !== id);
-        setTotalClasses(next.length);
-        setAvgSize(
-          next.length > 0 ? Math.round(totalStudents / next.length) : 0
-        );
+        cacheRows(next);
         return next;
       });
       closePanel();
@@ -483,7 +463,8 @@ export default function SchoolAdminClassesTab() {
       const updated = data?.class;
       if (updated) {
         setClassRows((prev) =>
-          prev.map((row) =>
+          {
+            const next = prev.map((row) =>
             row.id === payload.id
               ? {
                   ...row,
@@ -495,7 +476,10 @@ export default function SchoolAdminClassesTab() {
                   subject: updated.teacher?.email ?? row.subject,
                 }
               : row
-          )
+            );
+            cacheRows(next);
+            return next;
+          }
         );
       }
       return true;
@@ -633,9 +617,11 @@ export default function SchoolAdminClassesTab() {
         )}
 
         {isLoading ? (
-          <div className="py-6 flex items-center justify-center rounded-2xl border border-white/10 bg-white/5">
-            <Spinner size={28} label="Loading stats..." />
-          </div>
+          <TimellyLoader
+            compact
+            title="Loading classes"
+            steps={["Class list", "Student totals", "Teachers"]}
+          />
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <StatCard
@@ -727,7 +713,12 @@ export default function SchoolAdminClassesTab() {
               )}
               {isLoading && (
                 <div className="text-center py-10 text-white/60">
-                  <Spinner/>
+                  <TimellyLoader
+                    compact
+                    bare
+                    title="Loading classes"
+                    steps={["Classes", "Sections", "Teachers"]}
+                  />
                 </div>
               )}
               {pagedRows.map((row) => (

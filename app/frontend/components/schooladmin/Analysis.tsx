@@ -52,7 +52,7 @@ type EnrollmentByClassSectionRow = {
 
 type GenderViewMode = "CLASS_WISE" | "SECTION_WISE";
 
-import Spinner from "../common/Spinner";
+import TimellyLoader from "../common/TimellyLoader";
 import SelectInput from "../common/SelectInput";
 import AnalysisSectionNav from "./AnalysisSectionNav";
 import FeesComparisonPanel from "./analysis/fees-comparison/FeesComparisonPanel";
@@ -80,12 +80,25 @@ type AnalysisDashboardProps = {
   section?: AnalysisSection;
 };
 
-function sectionNeedsTables(section: AnalysisSection): boolean {
+type AnalysisTableSection = Extract<
+  AnalysisSection,
+  "gender-enrollment" | "admission-comparison" | "fee-collection"
+>;
+
+function sectionNeedsTables(section: AnalysisSection): section is AnalysisTableSection {
   return (
     section === "gender-enrollment" ||
     section === "admission-comparison" ||
     section === "fee-collection"
   );
+}
+
+function sectionHasTables(section: AnalysisSection, payload: AnalysisResponse | null | undefined): boolean {
+  if (!sectionNeedsTables(section)) return true;
+  if (section === "gender-enrollment") return Array.isArray(payload?.enrollmentByClassSection);
+  if (section === "admission-comparison") return Array.isArray(payload?.admissionComparison);
+  if (section === "fee-collection") return Array.isArray(payload?.feeCollectionByClass);
+  return analysisHasTables(payload);
 }
 
 /* ---------------- Component ---------------- */
@@ -96,7 +109,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
   const [data, setData] = useState<AnalysisResponse | null>(initialCached);
   const [shellLoading, setShellLoading] = useState(() => !initialCached?.stats);
   const [tablesLoading, setTablesLoading] = useState(
-    () => sectionNeedsTables(section) && !analysisHasTables(initialCached)
+    () => sectionNeedsTables(section) && !sectionHasTables(section, initialCached)
   );
   const [error, setError] = useState<string | null>(null);
   const [year, setYear] = useState<number>(() => initialCached?.selectedYear ?? defaultYear);
@@ -124,7 +137,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
       setData(cached);
       setError(null);
       setShellLoading(false);
-      setTablesLoading(sectionNeedsTables(section) && !analysisHasTables(cached));
+      setTablesLoading(sectionNeedsTables(section) && !sectionHasTables(section, cached));
     }
 
     fetchAbortRef.current?.abort();
@@ -133,6 +146,34 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
 
     (async () => {
       try {
+        if (sectionNeedsTables(section) && !sectionHasTables(section, cached)) {
+          setTablesLoading(true);
+          const tables = await fetchSchoolAnalysisTables(year, {
+            schoolId: sid,
+            classId,
+            section,
+            signal: controller.signal,
+          });
+          if (controller.signal.aborted) return;
+          setData((prev) => ({ ...(prev ?? {}), ...tables } as AnalysisResponse));
+          setTablesLoading(false);
+          setShellLoading(false);
+          setError(null);
+
+          if (!shellReady) {
+            void fetchSchoolAnalysisFast(year, {
+              schoolId: sid,
+              classId,
+            })
+              .then((fast) => {
+                if (controller.signal.aborted) return;
+                setData((prev) => ({ ...(prev ?? {}), ...fast } as AnalysisResponse));
+              })
+              .catch(() => {});
+          }
+          return;
+        }
+
         if (!shellReady) {
           const fast = await fetchSchoolAnalysisFast(year, {
             schoolId: sid,
@@ -145,11 +186,12 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
           setShellLoading(false);
           setError(null);
 
-          if (sectionNeedsTables(section) && !analysisHasTables(fast)) {
+          if (sectionNeedsTables(section) && !sectionHasTables(section, fast)) {
             setTablesLoading(true);
             const tables = await fetchSchoolAnalysisTables(year, {
               schoolId: sid,
               classId,
+              section,
               signal: controller.signal,
             });
             if (controller.signal.aborted) return;
@@ -157,23 +199,13 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
             setTablesLoading(false);
             return;
           }
-        } else if (sectionNeedsTables(section) && !analysisHasTables(cached)) {
-          setTablesLoading(true);
-          const tables = await fetchSchoolAnalysisTables(year, {
-            schoolId: sid,
-            classId,
-            signal: controller.signal,
-          });
-          if (controller.signal.aborted) return;
-          setData((prev) => ({ ...(prev ?? {}), ...tables } as AnalysisResponse));
-          setTablesLoading(false);
-          return;
         }
 
-        if (!analysisHasTables(cached)) {
+        if (!sectionHasTables(section, cached)) {
           void fetchSchoolAnalysisTables(year, {
             schoolId: sid,
             classId,
+            section: sectionNeedsTables(section) ? section : undefined,
           })
             .then((tables) => {
               if (controller.signal.aborted) return;
@@ -230,10 +262,14 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
     );
   }
 
-  if (shellLoading && !data) {
+  if ((sessionStatus === "loading" || shellLoading || (!error && !data)) && !data) {
     return (
       <div className="p-4 sm:p-6 text-white">
-        <Spinner />
+        <TimellyLoader
+          title="Loading analysis"
+          steps={["School data", "Student strength", "Insights"]}
+          compact
+        />
       </div>
     );
   }
@@ -247,12 +283,22 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
 
   /* ---------------- UI-ready Data ---------------- */
 
+  const selectedYear = data.selectedYear ?? year ?? defaultYear;
+  const availableYears =
+    data.availableYears && data.availableYears.length > 0 ? data.availableYears : [selectedYear];
+  const statsSource = data.stats ?? {
+    feesCollected: 0,
+    totalEnrollment: 0,
+    avgTeacherRating: 0,
+    avgExamScore: 0,
+  };
+
   const stats = [
     {
       title: "Fees Collected",
-      value: data.stats.feesCollected >= 100000
-        ? `₹${(data.stats.feesCollected / 100000).toFixed(1)}L`
-        : `₹${data.stats.feesCollected.toLocaleString()}`,
+      value: statsSource.feesCollected >= 100000
+        ? `₹${(statsSource.feesCollected / 100000).toFixed(1)}L`
+        : `₹${statsSource.feesCollected.toLocaleString()}`,
       change: "vs last month",
       icon: IndianRupee,
       iconColor: "text-lime-400",
@@ -262,7 +308,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
     },
     {
       title: "Total Enrollment",
-      value: data.stats.totalEnrollment.toLocaleString(),
+      value: statsSource.totalEnrollment.toLocaleString(),
       change: "New admissions",
       icon: Users,
       iconColor: "text-sky-400",
@@ -273,8 +319,8 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
     {
       title: "Avg Teacher Rating",
       value:
-        data.stats.avgTeacherRating > 0
-          ? `${data.stats.avgTeacherRating} / 5`
+        statsSource.avgTeacherRating > 0
+          ? `${statsSource.avgTeacherRating} / 5`
           : "—",
       change: "Based on student feedback",
       icon: Star,
@@ -285,7 +331,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
     },
     {
       title: "Avg Exam Score",
-      value: `${data.stats.avgExamScore}%`,
+      value: `${statsSource.avgExamScore}%`,
       change: "vs last year",
       icon: Award,
       iconColor: "text-yellow-400",
@@ -337,7 +383,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
   const formatInr = (n: number) =>
     `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}`;
   const getAcademicYearLabel = () => {
-    const y = year !== 0 ? year : data.selectedYear;
+    const y = year !== 0 ? year : selectedYear;
     return `${y}-${y + 1}`;
   };
 
@@ -605,7 +651,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
         return acc;
       }, new Map<string, { totalAmount: number; discount: number; paidAmount: number; pendingAmount: number }>());
 
-      const yearStart = year !== 0 ? year : data.selectedYear;
+      const yearStart = year !== 0 ? year : selectedYear;
       const from = new Date(yearStart, 3, 1);
       const to = new Date(yearStart + 1, 2, 31, 23, 59, 59, 999);
 
@@ -714,8 +760,8 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
                 value={
                   year !== 0
                     ? year
-                    : data.availableYears && data.availableYears.length > 0
-                    ? data.availableYears[0]
+                    : availableYears.length > 0
+                    ? availableYears[0]
                     : ""
                 }
                 onChange={(e) => setYear(Number(e.target.value))}
@@ -735,7 +781,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
                   sm:px-7
                 "
               >
-                {(data.availableYears ?? []).map((y) => (
+                {availableYears.map((y) => (
                   <option key={y} value={y} className="text-black">
                     {y}-{y + 1}
                   </option>
@@ -937,8 +983,8 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
             </h3>
           </div>
           <p className="text-xs sm:text-sm text-white/50 mt-1">
-            By student exam performance ({data.selectedYear}-
-            {data.selectedYear + 1}), best first
+            By student exam performance ({selectedYear}-
+            {selectedYear + 1}), best first
           </p>
         </div>
 
@@ -985,7 +1031,12 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
       {section === "gender-enrollment" ? (
       tablesLoading ? (
         <div className="mt-4 flex min-h-[240px] items-center justify-center rounded-xl border border-white/10 bg-white/5">
-          <Spinner />
+          <TimellyLoader
+            title="Loading student strength"
+            steps={["Classes", "Gender counts", "Totals"]}
+            compact
+            bare
+          />
         </div>
       ) : (
       <div className="mt-0 sm:mt-0 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
@@ -1115,7 +1166,12 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
       {section === "admission-comparison" ? (
       tablesLoading ? (
         <div className="mt-4 flex min-h-[240px] items-center justify-center rounded-xl border border-white/10 bg-white/5">
-          <Spinner />
+          <TimellyLoader
+            title="Loading admissions"
+            steps={["Applications", "Hostel data", "Comparison"]}
+            compact
+            bare
+          />
         </div>
       ) : (
       <div className="mt-0 sm:mt-0 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
@@ -1215,7 +1271,12 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
       {section === "fee-collection" ? (
       tablesLoading ? (
         <div className="mt-4 flex min-h-[240px] items-center justify-center rounded-xl border border-white/10 bg-white/5">
-          <Spinner />
+          <TimellyLoader
+            title="Loading fee collection"
+            steps={["Fees", "Payments", "Pending"]}
+            compact
+            bare
+          />
         </div>
       ) : (
       <div className="mt-0 sm:mt-0 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">

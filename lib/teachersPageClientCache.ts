@@ -22,7 +22,7 @@ type SessionStore = {
 
 const MEMORY_TTL_MS = 90_000;
 const SESSION_TTL_MS = 20 * 60 * 1000;
-const SESSION_KEY = "erp:teachers-page:v1";
+const SESSION_KEY = "erp:teachers-page:v2";
 const LAST_SCHOOL_KEY = "erp:teachers-page:last-school";
 
 const memory = new Map<string, { expiresAt: number; value: unknown }>();

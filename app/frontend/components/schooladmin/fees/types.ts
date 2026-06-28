@@ -7,6 +7,7 @@ export interface Class {
 export interface Student {
   id: string;
   admissionNumber: string;
+  status?: string | null;
   user: { name: string | null; email: string | null };
   class: { id: string; name: string; section: string | null } | null;
 }
@@ -35,6 +36,7 @@ export interface FeeRecord {
   discountPercent: number;
   student: {
     id: string;
+    status?: string | null;
     user: { name: string | null; email: string | null };
     class: { id: string; name: string; section: string | null } | null;
   };

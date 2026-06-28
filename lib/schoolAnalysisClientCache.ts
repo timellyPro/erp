@@ -2,7 +2,7 @@ import type { SchoolAnalysisPayload } from "@/lib/schoolAnalysisTypes";
 
 const MEMORY_TTL_MS = 90_000;
 const SESSION_TTL_MS = 30 * 60 * 1000;
-const SESSION_KEY = "erp:school-analysis:v1";
+const SESSION_KEY = "erp:school-analysis:v2";
 const LAST_SCHOOL_KEY = "erp:school-analysis:last-school";
 
 const memory = new Map<string, { expiresAt: number; value: SchoolAnalysisPayload }>();

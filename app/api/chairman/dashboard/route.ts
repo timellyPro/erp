@@ -62,6 +62,11 @@ export async function GET(req: NextRequest) {
         FROM "Student"
         WHERE "schoolId" = ${schoolId}
       ),
+      active_school_students AS (
+        SELECT id
+        FROM school_students
+        WHERE COALESCE(status, 'Active') = 'Active'
+      ),
       student_counts AS (
         SELECT
           COUNT(*) AS "totalStudents",
@@ -75,7 +80,7 @@ export async function GET(req: NextRequest) {
           COALESCE(SUM(GREATEST(sf."totalFee" - sf."finalFee", 0)), 0) AS "totalDiscount",
           COALESCE(SUM(sf."remainingFee"), 0) AS "remainingFees"
         FROM "StudentFee" sf
-        JOIN school_students s ON s.id = sf."studentId"
+        JOIN active_school_students s ON s.id = sf."studentId"
       ),
       payment_totals AS (
         SELECT
@@ -85,7 +90,7 @@ export async function GET(req: NextRequest) {
           ), 0) AS "todayCollection",
           COALESCE(SUM(p.amount), 0) AS "totalCollection"
         FROM "Payment" p
-        JOIN school_students s ON s.id = p."studentId"
+        JOIN active_school_students s ON s.id = p."studentId"
         WHERE p.status = 'SUCCESS'
           AND p.purpose = 'FEES'
       ),
