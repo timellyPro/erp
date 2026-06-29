@@ -2,7 +2,6 @@
 
 import { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { warmStudentDetailsBundle } from "@/lib/loadStudentDetailsBundle";
 
 type StudentOption = {
   id: string;
@@ -13,6 +12,9 @@ type StudentOption = {
   classId: string;
   section: string | null;
   status?: string;
+  rollNo?: string | null;
+  penNumber?: string | null;
+  apaarId?: string | null;
 };
 
 type Props = {
@@ -30,6 +32,9 @@ function mapApiRow(s: {
   id: string;
   user?: { name?: string };
   admissionNumber?: string;
+  rollNo?: string | null;
+  penNumber?: string | null;
+  apaarId?: string | null;
   fatherName?: string;
   motherName?: string;
   status?: string;
@@ -44,6 +49,9 @@ function mapApiRow(s: {
     classId: s.class?.id ?? "",
     section: s.class?.section ?? null,
     status: s.status ?? "Active",
+    rollNo: s.rollNo ?? null,
+    penNumber: s.penNumber ?? null,
+    apaarId: s.apaarId ?? null,
   };
 }
 
@@ -112,7 +120,10 @@ export const StudentSearchAutocomplete = ({
       return (
         s.name.toLowerCase().includes(q) ||
         s.admissionNumber.toLowerCase().includes(q) ||
-        s.id.toLowerCase().includes(q)
+        s.id.toLowerCase().includes(q) ||
+        (s.rollNo ?? "").toLowerCase().includes(q) ||
+        (s.penNumber ?? "").toLowerCase().includes(q) ||
+        (s.apaarId ?? "").toLowerCase().includes(q)
       );
     })
   );
@@ -127,6 +138,8 @@ export const StudentSearchAutocomplete = ({
 
     const gen = ++searchGenRef.current;
     setSearching(localFiltered.length === 0);
+    const controller = new AbortController();
+    const delayMs = /\d/.test(q) || /^c[a-z0-9]{8,}$/i.test(q) ? 80 : 200;
     const timer = setTimeout(() => {
       void (async () => {
         try {
@@ -136,20 +149,25 @@ export const StudentSearchAutocomplete = ({
           const res = await fetch(`/api/student/list?${params.toString()}`, {
             credentials: "include",
             cache: "no-store",
+            signal: controller.signal,
           });
           const data = await res.json().catch(() => ({}));
           if (gen !== searchGenRef.current) return;
           const rows = Array.isArray(data?.students) ? data.students : [];
           setRemoteResults(filterByClass(rows.map(mapApiRow)));
-        } catch {
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") return;
           if (gen === searchGenRef.current) setRemoteResults([]);
         } finally {
           if (gen === searchGenRef.current) setSearching(false);
         }
       })();
-    }, 200);
+    }, delayMs);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [searchQuery, filterByClass, statusFilter, localFiltered.length]);
 
   const filteredStudents = useMemo(() => {
@@ -211,7 +229,10 @@ export const StudentSearchAutocomplete = ({
           const q = searchQuery.trim().toLowerCase();
           const exact =
             filteredStudents.find((s) => s.admissionNumber.toLowerCase() === q) ??
-            filteredStudents.find((s) => s.id.toLowerCase() === q);
+            filteredStudents.find((s) => s.id.toLowerCase() === q) ??
+            filteredStudents.find((s) => (s.rollNo ?? "").toLowerCase() === q) ??
+            filteredStudents.find((s) => (s.penNumber ?? "").toLowerCase() === q) ??
+            filteredStudents.find((s) => (s.apaarId ?? "").toLowerCase() === q);
           const pick = exact ?? filteredStudents[0];
           if (pick) handleSelectStudent(pick);
         }
@@ -253,7 +274,6 @@ export const StudentSearchAutocomplete = ({
               onClick={() => handleSelectStudent(student)}
               onMouseEnter={() => {
                 setHighlightedIndex(index);
-                warmStudentDetailsBundle(student.id);
               }}
               className={`w-full px-4 py-3 text-left text-sm border-b border-white/5 last:border-0 transition-colors ${
                 index === highlightedIndex
@@ -263,7 +283,7 @@ export const StudentSearchAutocomplete = ({
                     : "text-gray-300 hover:bg-white/5"
               }`}
             >
-              <div className="font-semibold text-white break-words">
+              <div className="font-semibold text-white wrap-break-word">
                 {`${student.name} -${student.admissionNumber || "-"} | ${student.classDisplay || "-"} | ${student.parentName || "-"}`}
                 {(student.status ?? "Active").trim().toLowerCase() === "inactive" ? (
                   <span className="ml-2 text-[11px] font-bold uppercase tracking-wide text-red-300">
@@ -271,6 +291,17 @@ export const StudentSearchAutocomplete = ({
                   </span>
                 ) : null}
               </div>
+              {student.rollNo || student.penNumber || student.apaarId ? (
+                <div className="mt-1 text-[11px] text-white/45">
+                  {[
+                    student.rollNo ? `Roll: ${student.rollNo}` : "",
+                    student.penNumber ? `PEN: ${student.penNumber}` : "",
+                    student.apaarId ? `APAAR: ${student.apaarId}` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </div>
+              ) : null}
             </button>
           ))}
         </div>
@@ -292,7 +323,7 @@ export const StudentSearchAutocomplete = ({
     ) : null;
 
   return (
-    <div ref={containerRef} className="relative z-[60]">
+    <div ref={containerRef} className="relative z-60">
       <label className="text-xs text-gray-500 mb-2 block">Search Student</label>
       <div className="relative">
         <input

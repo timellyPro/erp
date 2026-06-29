@@ -6,6 +6,7 @@ import {
 } from "@/lib/offlinePaymentIdempotency";
 import { FEE_MUTATION_TX } from "@/lib/prismaFeeMutationTx";
 import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
+import { computeAdminStudentFeeBreakdown } from "@/lib/computeAdminStudentFeeBreakdown";
 
 export type OfflineSelectedHead =
   | { headType: "BASE_COMPONENT"; componentIndex: number; componentName?: string }
@@ -125,10 +126,31 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
 
   const fee = student.fee;
 
-  if (amount > fee.remainingFee + 0.01) {
+  const breakdown = await computeAdminStudentFeeBreakdown(schoolId, studentId, {
+    migrateLumps: true,
+    cleanupHostelMessDuplicates: false,
+    reconcileTotals: true,
+  });
+  const dueByKey = new Map<string, number>();
+  for (const head of breakdown.dueHeads) {
+    dueByKey.set(normalizeAllocationKey(head.key), (dueByKey.get(normalizeAllocationKey(head.key)) ?? 0) + head.dueBefore);
+  }
+  const totalHeadDue = Array.from(dueByKey.values()).reduce((sum, due) => sum + due, 0);
+
+  if (amount > totalHeadDue + 0.01) {
     throw new Error(
-      `Amount cannot exceed remaining due (₹${fee.remainingFee.toLocaleString("en-IN")})`
+      `Amount cannot exceed remaining due (₹${totalHeadDue.toLocaleString("en-IN")})`
     );
+  }
+
+  for (const a of normalizedAllocations) {
+    const due = dueByKey.get(a.key);
+    if (due === undefined) {
+      throw new Error(`Invalid fee head key: ${a.key}`);
+    }
+    if (a.amount > due + 0.01) {
+      throw new Error(`Amount for ${a.key} exceeds due (₹${due.toLocaleString("en-IN")})`);
+    }
   }
 
   const extraIdsNeedingNames = [
@@ -177,7 +199,7 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
   });
 
   const newAmountPaid = Math.round((fee.amountPaid + amount) * 100) / 100;
-  const newRemaining = Math.max(Math.round((fee.remainingFee - amount) * 100) / 100, 0);
+  const newRemaining = Math.max(Math.round((totalHeadDue - amount) * 100) / 100, 0);
 
   const offlineGateway = resolveGateway(paymentMode);
   const txId = resolveOfflinePaymentTransactionId(transactionId, refNo);
@@ -254,15 +276,15 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
       }
 
       const feeUpdate = await tx.studentFee.updateMany({
-        where: { studentId, remainingFee: { gte: amount - 0.01 } },
+        where: { studentId },
         data: {
           amountPaid: { increment: amount },
-          remainingFee: { decrement: amount },
+          remainingFee: newRemaining,
         },
       });
 
       if (feeUpdate.count !== 1) {
-        throw new Error("Amount exceeds remaining due or fee was updated concurrently");
+        throw new Error("Fee record was updated concurrently");
       }
 
       return { payment, idempotent: false as const, feeAllocations: null as null };

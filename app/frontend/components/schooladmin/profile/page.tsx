@@ -24,7 +24,7 @@ import {
   invalidateFeeBreakdownCache,
   setFeeBreakdownCache,
 } from "@/lib/feeBreakdownClientCache";
-import { readStudentListCacheLegacy, writeStudentListCacheLegacy } from "@/lib/studentListSessionCache";
+import { readStudentListCacheLegacy } from "@/lib/studentListSessionCache";
 import { isInactiveStudentStatus } from "@/lib/resolveStudentDisplayClass";
 import { resolveStudentDisplayName } from "@/lib/resolveStudentDisplayName";
 import { StudentSearchAutocomplete } from "./components/StudentSearchAutocomplete";
@@ -112,6 +112,9 @@ type StudentOption = {
   classId: string;
   section: string | null;
   status?: string;
+  rollNo?: string | null;
+  penNumber?: string | null;
+  apaarId?: string | null;
 };
 
 function StudentNameCard({
@@ -139,6 +142,9 @@ function normalizeStudentOption(raw: {
   admissionNumber?: string;
   parentName?: string;
   fatherName?: string;
+  rollNo?: string | null;
+  penNumber?: string | null;
+  apaarId?: string | null;
   classDisplay?: string;
   classId?: string;
   section?: string | null;
@@ -161,6 +167,9 @@ function normalizeStudentOption(raw: {
     classId: raw.classId ?? raw.class?.id ?? "",
     section: raw.section ?? (dash > 0 ? classDisplay.slice(dash + 1) : raw.class?.section ?? null),
     status: raw.status ?? "Active",
+    rollNo: raw.rollNo ?? null,
+    penNumber: raw.penNumber ?? null,
+    apaarId: raw.apaarId ?? null,
   };
 }
 
@@ -561,6 +570,9 @@ function StudentDetailsPageContent() {
       admissionNumber?: string;
       fatherName?: string;
       parentName?: string;
+      rollNo?: string | null;
+      penNumber?: string | null;
+      apaarId?: string | null;
       status?: string;
       application?: {
         firstName?: string | null;
@@ -582,6 +594,9 @@ function StudentDetailsPageContent() {
       classId: s.class?.id ?? "",
       section: s.class?.section ?? null,
       status: s.status ?? "Active",
+      rollNo: s.rollNo ?? null,
+      penNumber: s.penNumber ?? null,
+      apaarId: s.apaarId ?? null,
     }),
     []
   );
@@ -595,25 +610,6 @@ function StudentDetailsPageContent() {
 
     let cancelled = false;
 
-    const loadDropdownList = async () => {
-      try {
-        const res = await fetch("/api/student/list?take=500&search=1", {
-          credentials: "include",
-          cache: "no-store",
-        });
-        if (!res.ok || cancelled) return;
-        const data = await res.json().catch(() => ({}));
-        const rows = Array.isArray(data?.students) ? data.students : [];
-        const list = rows.map(mapListRow);
-        if (list.length > 0) {
-          setStudents(list);
-          writeStudentListCacheLegacy(list);
-        }
-      } catch {
-        /* keep search API as fallback */
-      }
-    };
-
     (async () => {
       try {
         const classesRes = await fetch("/api/class/list", { credentials: "include" });
@@ -623,13 +619,10 @@ function StudentDetailsPageContent() {
         }
 
         if (studentIdFromUrl) {
-          // Defer bulk list — don't compete with student profile / search API calls.
-          window.setTimeout(() => void loadDropdownList(), 4000);
           setListLoading(false);
           return;
         }
 
-        await loadDropdownList();
         if (!cancelled) setListLoading(false);
       } catch {
         if (!cancelled && !cached?.length) setStudents([]);

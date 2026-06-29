@@ -297,7 +297,7 @@ export default function TeacherAdmissionTab() {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [applicationsCount, setApplicationsCount] = useState(0);
+  const [paidApplicationsCount, setPaidApplicationsCount] = useState(0);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, 350);
   const [filters, setFilters] = useState<{ gradeSought: string; boardingType: string; from: string; to: string; classId: string }>({
@@ -1135,6 +1135,26 @@ export default function TeacherAdmissionTab() {
   );
 
   useEffect(() => {
+    const params = new URLSearchParams();
+    params.set("page", "1");
+    params.set("pageSize", "1");
+    if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim());
+    if (filters.gradeSought) params.set("gradeSought", filters.gradeSought);
+    if (filters.boardingType) params.set("boardingType", filters.boardingType);
+    if (filters.classId) params.set("classId", filters.classId);
+    if (filters.from) params.set("from", filters.from);
+    if (filters.to) params.set("to", filters.to);
+
+    fetch(`/api/admissions/list?${params.toString()}`, { credentials: "include" })
+      .then((res) => res.json().then((d) => ({ ok: res.ok, d })))
+      .then(({ ok, d }) => {
+        if (!ok) throw new Error(d?.message || "Failed to load admissions count");
+        setPaidApplicationsCount(Number(d?.paidApplicationsTotal ?? 0));
+      })
+      .catch(() => setPaidApplicationsCount(0));
+  }, [debouncedSearch, filters.gradeSought, filters.boardingType, filters.classId, filters.from, filters.to, reloadKey]);
+
+  useEffect(() => {
     if (view !== "all") return;
     const params = new URLSearchParams();
     params.set("page", String(page));
@@ -1155,7 +1175,7 @@ export default function TeacherAdmissionTab() {
         if (!ok) throw new Error(d?.message || "Failed to load admissions");
         setRows(Array.isArray(d?.applications) ? d.applications : []);
         const total = Number(d?.total ?? 0);
-        setApplicationsCount(total);
+        setPaidApplicationsCount(Number(d?.paidApplicationsTotal ?? 0));
         const pageSize = Number(d?.pageSize ?? 10);
         const computed = Math.max(1, Math.ceil(total / Math.max(1, pageSize)));
         setTotalPages(computed);
@@ -1163,7 +1183,7 @@ export default function TeacherAdmissionTab() {
       })
       .catch((e) => {
         setRows([]);
-        setApplicationsCount(0);
+        setPaidApplicationsCount(0);
         setTotalPages(1);
         setMessageTone("error");
         setMessage(e instanceof Error ? e.message : "Failed to load admissions");
@@ -1351,7 +1371,7 @@ export default function TeacherAdmissionTab() {
           <PageTabs
             tabs={[
               { label: "New Application", value: "add" },
-              { label: `Applications (${applicationsCount})`, value: "all" },
+              { label: `Applications (${paidApplicationsCount})`, value: "all" },
             ]}
             queryKey="view"
           />

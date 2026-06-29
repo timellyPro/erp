@@ -102,7 +102,12 @@ function toBundle(
   extras: StudentDetailsTabExtras,
   feeBreakdown: AdminStudentFeeBreakdownResult | null
 ): StudentDetailsFastBundle {
-  return { ...shell, ...extras, feeBreakdown };
+  return {
+    ...shell,
+    ...extras,
+    payments: mergeStudentPayments(extras.payments, shell.payments),
+    feeBreakdown,
+  };
 }
 
 /** Keep optimistic payments until the server extras response includes them. */
@@ -416,7 +421,7 @@ async function fetchExtras(
   const running = force ? undefined : extrasInflight.get(studentId);
   if (running) return running;
 
-  const query = force ? "extras=1&refresh=1" : "extras=1";
+  const query = force ? "extras=1&scope=nonPayments&refresh=1" : "extras=1&scope=nonPayments";
   const run = fetch(
     `/api/student/${encodeURIComponent(studentId)}/details-bundle?${query}`,
     { credentials: "include", cache: "no-store", signal }
@@ -430,6 +435,23 @@ async function fetchExtras(
   } finally {
     extrasInflight.delete(studentId);
   }
+}
+
+async function fetchPaymentsExtras(
+  studentId: string,
+  signal?: AbortSignal,
+  force?: boolean
+): Promise<StudentDetailsTabExtras> {
+  const query = force
+    ? "extras=1&scope=payments&includeAdmission=0&refresh=1"
+    : "extras=1&scope=payments&includeAdmission=0";
+  return fetch(`/api/student/${encodeURIComponent(studentId)}/details-bundle?${query}`, {
+    credentials: "include",
+    cache: "no-store",
+    signal,
+  })
+    .then(async (res) => (res.ok ? parseExtras(await res.json().catch(() => ({}))) : emptyExtras()))
+    .catch(() => emptyExtras());
 }
 
 /**
@@ -510,9 +532,9 @@ export async function fetchStudentDetailsFast(
       });
     }
 
-    // Defer extras until shell is painted — reduces concurrent DB load on remote Postgres.
-    const [extras, feeBreakdown] = await Promise.all([
-      fetchExtras(studentId, options?.signal, options?.force),
+    // Load payment history first; attendance/marks/certificates can arrive later.
+    const [paymentExtras, feeBreakdown] = await Promise.all([
+      fetchPaymentsExtras(studentId, options?.signal, options?.force),
       breakdownPromise,
     ]);
     if (feeBreakdown) {
@@ -520,10 +542,27 @@ export async function fetchStudentDetailsFast(
       options?.onBreakdownLoaded?.(feeBreakdown);
     }
 
-    const full = toBundle(shell, extras, feeBreakdown ?? cachedBreakdown ?? null);
-    cacheBundle(studentId, full);
-    options?.onExtrasLoaded?.(full);
-    return full;
+    const initial = toBundle(shell, paymentExtras, feeBreakdown ?? cachedBreakdown ?? null);
+    cacheBundle(studentId, initial);
+    options?.onExtrasLoaded?.(initial);
+
+    void fetchExtras(studentId, options?.signal, options?.force).then((extras) => {
+      const current = bundleMemory.get(studentId)?.value ?? initial;
+      const full = toBundle(
+        { ...current, payments: mergeStudentPayments(current.payments, extras.payments) },
+        {
+          payments: mergeStudentPayments(current.payments, extras.payments),
+          attendanceTrends: extras.attendanceTrends,
+          academicPerformance: extras.academicPerformance,
+          certificates: extras.certificates,
+        },
+        feeBreakdown ?? cachedBreakdown ?? null
+      );
+      cacheBundle(studentId, full);
+      options?.onExtrasLoaded?.(full);
+    });
+
+    return initial;
   })();
 
   bundleInflight.set(studentId, run);

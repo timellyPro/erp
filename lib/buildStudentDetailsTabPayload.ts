@@ -15,6 +15,7 @@ import {
 import { resolveStudentDisplayClass } from "@/lib/resolveStudentDisplayClass";
 import { resolveStudentDisplayName } from "@/lib/resolveStudentDisplayName";
 import {
+  admissionApplicationPaymentsFromSnapshot,
   loadStudentAdmissionApplicationPayments,
   mergeStudentProfilePayments,
   resolveStudentAdmissionApplicationFees,
@@ -118,12 +119,10 @@ export type StudentDetailsTabPayload = {
   }>;
 };
 
-async function loadPaymentsWithFeeTypes(studentId: string) {
-  const studentMeta = await prisma.student.findUnique({
-    where: { id: studentId },
-    select: { schoolId: true, aadhaarNo: true },
-  });
-
+async function loadPaymentsWithFeeTypes(
+  studentId: string,
+  options?: { includeAdmissionApplicationPayments?: boolean }
+) {
   const payments = await prisma.payment.findMany({
     where: { studentId },
     orderBy: { createdAt: "desc" },
@@ -196,31 +195,31 @@ async function loadPaymentsWithFeeTypes(studentId: string) {
       .reduce((s, a) => s + a.allocatedAmount, 0);
   }
 
-  const admissionApplicationPayments = await loadStudentAdmissionApplicationPayments(
-    studentId,
-    studentMeta?.schoolId,
-    studentMeta?.aadhaarNo
-  );
+  const admissionApplicationPayments = options?.includeAdmissionApplicationPayments
+    ? await loadStudentAdmissionApplicationPayments(studentId)
+    : [];
+
+  const gatewayPayments = payments.map((p) => {
+    const headMap = feeHeadAmountsByPaymentId.get(p.id);
+    const feeAllocations = feeHeadLinesFromMap(headMap);
+    const dominant = dominantFeeHead(headMap);
+    return {
+      id: p.id,
+      amount: p.amount,
+      status: p.status,
+      method: p.gateway ?? "—",
+      createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : String(p.createdAt),
+      transactionId: p.transactionId ?? null,
+      collectedByName: p.collectedByName ?? null,
+      collectedByUserId: p.collectedByUserId ?? null,
+      feeTypeName: dominant?.name,
+      feeTypeAmount: dominant?.amount,
+      feeAllocations: feeAllocations.length > 0 ? feeAllocations : undefined,
+    };
+  });
 
   return {
-    payments: payments.map((p) => {
-      const headMap = feeHeadAmountsByPaymentId.get(p.id);
-      const feeAllocations = feeHeadLinesFromMap(headMap);
-      const dominant = dominantFeeHead(headMap);
-      return {
-        id: p.id,
-        amount: p.amount,
-        status: p.status,
-        method: p.gateway ?? "—",
-        createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : String(p.createdAt),
-        transactionId: p.transactionId ?? null,
-        collectedByName: p.collectedByName ?? null,
-        collectedByUserId: p.collectedByUserId ?? null,
-        feeTypeName: dominant?.name,
-        feeTypeAmount: dominant?.amount,
-        feeAllocations: feeAllocations.length > 0 ? feeAllocations : undefined,
-      };
-    }),
+    payments: mergeStudentProfilePayments(gatewayPayments, admissionApplicationPayments),
     tuitionPaidFromAllocations,
   };
 }
@@ -261,6 +260,7 @@ const studentDetailsInclude = {
   },
   application: {
     select: {
+      id: true,
       firstName: true,
       middleName: true,
       lastName: true,
@@ -286,6 +286,12 @@ const studentDetailsInclude = {
       admissionFee: true,
       applicationFeePaid: true,
       admissionFeePaid: true,
+      applicationFeePaidAt: true,
+      admissionFeePaidAt: true,
+      applicationFeePaymentMode: true,
+      applicationFeePaymentMethod: true,
+      admissionFeePaymentMode: true,
+      admissionFeePaymentMethod: true,
       class: { select: { id: true, name: true, section: true } },
     },
   },
@@ -329,18 +335,17 @@ export async function buildStudentDetailsShellPayload(
 
 /** After fee payment — payments list only (skips attendance/marks/certificates). */
 export async function buildStudentDetailsPaymentsOnly(
-  studentId: string
+  studentId: string,
+  options?: { includeAdmissionApplicationPayments?: boolean }
 ): Promise<Pick<StudentDetailsTabExtras, "payments">> {
-  const bundle = await loadPaymentsWithFeeTypes(studentId);
+  const bundle = await loadPaymentsWithFeeTypes(studentId, options);
   return { payments: bundle.payments };
 }
 
-/** Deferred load: payments, attendance, marks, certificates. */
-export async function buildStudentDetailsTabExtras(
+export async function buildStudentDetailsNonPaymentExtras(
   studentId: string
-): Promise<StudentDetailsTabExtras> {
-  const [paymentsBundle, attendances, marks, certificates] = await Promise.all([
-    loadPaymentsWithFeeTypes(studentId),
+): Promise<Omit<StudentDetailsTabExtras, "payments">> {
+  const [attendances, marks, certificates] = await Promise.all([
     prisma.attendance.findMany({
       where: { studentId },
       orderBy: { date: "desc" },
@@ -405,7 +410,6 @@ export async function buildStudentDetailsTabExtras(
   }));
 
   return {
-    payments: paymentsBundle.payments,
     attendanceTrends,
     academicPerformance,
     certificates: certificates.map((c) => ({
@@ -416,6 +420,21 @@ export async function buildStudentDetailsTabExtras(
       issuedBy: c.issuedBy?.name ?? null,
       certificateUrl: c.certificateUrl ?? null,
     })),
+  };
+}
+
+/** Deferred load: payments, attendance, marks, certificates. */
+export async function buildStudentDetailsTabExtras(
+  studentId: string
+): Promise<StudentDetailsTabExtras> {
+  const [paymentsBundle, nonPaymentExtras] = await Promise.all([
+    loadPaymentsWithFeeTypes(studentId, { includeAdmissionApplicationPayments: true }),
+    buildStudentDetailsNonPaymentExtras(studentId),
+  ]);
+
+  return {
+    payments: paymentsBundle.payments,
+    ...nonPaymentExtras,
   };
 }
 
@@ -439,6 +458,8 @@ function mapStudentToTabPayload(
   const age = dob
     ? Math.floor((Date.now() - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000))
     : null;
+
+  const admissionApplicationPayments = admissionApplicationPaymentsFromSnapshot(student.application);
 
   return {
     student: {
@@ -537,6 +558,7 @@ function mapStudentToTabPayload(
         }
       : null,
     ...extras,
+    payments: mergeStudentProfilePayments(extras.payments, admissionApplicationPayments),
   };
 }
 

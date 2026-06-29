@@ -18,6 +18,9 @@ type ChairmanSummary = {
   todayCollection: number;
   collectionDate?: string;
   totalCollection: number;
+  previousYearTotalFee?: number;
+  previousYearCollected?: number;
+  previousYearDue?: number;
   pendingDiscounts: number;
   approvedDiscounts: number;
   rejectedDiscounts: number;
@@ -26,7 +29,7 @@ type ChairmanSummary = {
 const money = (value: number) => `₹${Math.round(value || 0).toLocaleString("en-IN")}`;
 const todayYmd = () => new Date().toISOString().slice(0, 10);
 const clampPct = (value: number) => Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
-const DASHBOARD_SESSION_KEY = "chairman:dashboard:v2";
+const DASHBOARD_SESSION_KEY = "chairman:dashboard:v3";
 const DASHBOARD_SESSION_TTL_MS = 5 * 60_000;
 
 function readCachedSummary(date: string): ChairmanSummary | null {
@@ -102,7 +105,7 @@ function Card({
       <div className="relative flex items-start justify-between gap-2 sm:gap-3">
         <div className="min-w-0">
           <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-white/45 sm:text-[10px] sm:tracking-[0.24em]">{title}</p>
-          <p className="mt-2 break-words text-xl font-black leading-tight tracking-tight text-white sm:text-3xl">{value}</p>
+          <p className="mt-2 wrap-break-word text-xl font-black leading-tight tracking-tight text-white sm:text-3xl">{value}</p>
           {subtitle ? <p className="mt-2 text-xs font-medium text-white/45">{subtitle}</p> : null}
         </div>
         <div className="shrink-0 rounded-2xl bg-black/20 p-2 sm:p-3">{icon}</div>
@@ -216,11 +219,12 @@ export default function ChairmanDashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
         <Card title="Day Collection" value={money(summary.todayCollection)} subtitle={collectionDate} tone="lime" icon={<IndianRupee className="h-5 w-5" />} />
         <Card title="Total Collection" value={money(summary.totalCollection)} subtitle="All successful fee collections" tone="cyan" icon={<IndianRupee className="h-5 w-5" />} />
-        <Card title="Net Fees" value={money(summary.netFees)} tone="violet" icon={<IndianRupee className="h-5 w-5" />} />
-        <Card title="Overall Discount" value={money(summary.totalDiscount)} tone="amber" icon={<BadgePercent className="h-5 w-5" />} />
+        <Card title="Current Year Total" value={money(summary.grossFees)} subtitle="Excludes previous-year pending" tone="violet" icon={<IndianRupee className="h-5 w-5" />} />
+        <Card title="Total Discount" value={money(summary.totalDiscount)} subtitle="Current-year base minus final" tone="amber" icon={<BadgePercent className="h-5 w-5" />} />
+        <Card title="Previous Year Due" value={money(summary.previousYearDue ?? 0)} subtitle="Shown separately from total fees" tone="rose" icon={<IndianRupee className="h-5 w-5" />} />
       </div>
 
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
@@ -235,7 +239,7 @@ export default function ChairmanDashboard() {
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h2 className="text-lg font-bold text-white">Money Flow Map</h2>
-              <p className="text-xs text-white/40">Gross fees flowing into discounts, collections and pending dues</p>
+              <p className="text-xs text-white/40">Current-year fees flowing into discounts, collections and pending dues</p>
             </div>
             <span className="rounded-full bg-lime-400/10 px-3 py-1 text-xs font-bold text-lime-200">
               {Math.round(netPercent)}% collectable
@@ -245,7 +249,7 @@ export default function ChairmanDashboard() {
           <div className="mt-5 space-y-4">
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <div className="mb-3 flex items-center justify-between text-xs text-white/45">
-                <span>Gross fee pool</span>
+                <span>Current-year fee pool</span>
                 <span>{money(summary.grossFees)}</span>
               </div>
               <div className="flex h-7 overflow-hidden rounded-full bg-white/10">
@@ -273,7 +277,7 @@ export default function ChairmanDashboard() {
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               {[
                 { label: "Collected", value: summary.totalCollection, pct: collectedPercent, color: "text-lime-200", bg: "bg-lime-400/10" },
-                { label: "Remaining", value: summary.remainingFees, pct: remainingPercent, color: "text-amber-200", bg: "bg-amber-400/10" },
+                { label: "Current Due", value: summary.remainingFees, pct: remainingPercent, color: "text-amber-200", bg: "bg-amber-400/10" },
                 { label: "Today", value: summary.todayCollection, pct: summary.totalCollection > 0 ? clampPct((summary.todayCollection / summary.totalCollection) * 100) : 0, color: "text-sky-200", bg: "bg-sky-400/10" },
               ].map((item) => (
                 <div key={item.label} className={`rounded-2xl ${item.bg} p-3`}>
@@ -327,7 +331,7 @@ export default function ChairmanDashboard() {
           <div className="relative flex items-center justify-between">
             <div>
               <h2 className="text-lg font-bold text-white">Fees Overview</h2>
-              <p className="text-xs text-white/40">Gross to net breakdown</p>
+              <p className="text-xs text-white/40">Current-year gross to net breakdown</p>
             </div>
             <span className="rounded-full bg-lime-400/10 px-3 py-1 text-xs font-bold text-lime-200">
               {summary.grossFees > 0 ? `${Math.round((summary.netFees / summary.grossFees) * 1000) / 10}% net` : "0% net"}
@@ -335,7 +339,7 @@ export default function ChairmanDashboard() {
           </div>
           <div className="relative mt-4 space-y-3">
             <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
-              <p className="flex items-center gap-3 text-sm text-white/60"><span className="h-2.5 w-2.5 rounded-full bg-lime-400" />Gross Fees</p>
+              <p className="flex items-center gap-3 text-sm text-white/60"><span className="h-2.5 w-2.5 rounded-full bg-lime-400" />Current Year Total</p>
               <p className="font-bold text-lime-200">{money(summary.grossFees)}</p>
             </div>
             <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
@@ -345,6 +349,10 @@ export default function ChairmanDashboard() {
             <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
               <p className="flex items-center gap-3 text-sm text-white/60"><span className="h-2.5 w-2.5 rounded-full bg-sky-400" />Collectable Net</p>
               <p className="font-bold text-sky-200">{money(summary.netFees)}</p>
+            </div>
+            <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
+              <p className="flex items-center gap-3 text-sm text-white/60"><span className="h-2.5 w-2.5 rounded-full bg-orange-400" />Previous Year Due</p>
+              <p className="font-bold text-orange-200">{money(summary.previousYearDue ?? 0)}</p>
             </div>
           </div>
         </div>

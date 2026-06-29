@@ -82,7 +82,11 @@ export async function GET(req: Request) {
           OR?: Array<
             | { admissionNumber: { contains: string; mode: "insensitive" } }
             | { rollNo: { contains: string; mode: "insensitive" } }
+            | { penNumber: { contains: string; mode: "insensitive" } }
+            | { apaarId: { contains: string; mode: "insensitive" } }
+            | { aadhaarNo: { contains: string; mode: "insensitive" } }
             | { user: { name: { contains: string; mode: "insensitive" } } }
+            | { user: { email: { contains: string; mode: "insensitive" } } }
           >;
         } = { schoolId };
 
@@ -108,12 +112,20 @@ export async function GET(req: Request) {
             where.OR = [
               { admissionNumber: { contains: q, mode: "insensitive" } },
               { rollNo: { contains: q, mode: "insensitive" } },
+              { penNumber: { contains: q, mode: "insensitive" } },
+              { apaarId: { contains: q, mode: "insensitive" } },
+              { aadhaarNo: { contains: q, mode: "insensitive" } },
+              { user: { email: { contains: q, mode: "insensitive" } } },
             ];
           } else {
             where.OR = [
               { admissionNumber: { contains: q, mode: "insensitive" } },
               { rollNo: { contains: q, mode: "insensitive" } },
+              { penNumber: { contains: q, mode: "insensitive" } },
+              { apaarId: { contains: q, mode: "insensitive" } },
+              { aadhaarNo: { contains: q, mode: "insensitive" } },
               { user: { name: { contains: q, mode: "insensitive" } } },
+              { user: { email: { contains: q, mode: "insensitive" } } },
             ];
           }
         }
@@ -135,10 +147,14 @@ export async function GET(req: Request) {
               id: true,
               schoolId: true,
               admissionNumber: true,
+              rollNo: true,
+              penNumber: true,
+              apaarId: true,
+              aadhaarNo: true,
               fatherName: true,
               motherName: true,
               status: true,
-              user: { select: { name: true } },
+              user: { select: { name: true, email: true } },
               application: {
                 select: { firstName: true, middleName: true, lastName: true },
               },

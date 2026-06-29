@@ -22,6 +22,7 @@ import { loadExtraFeesForStudentScope } from "@/lib/loadExtraFeesForStudentScope
 import { sumSuccessfulFeePayments } from "@/lib/reconcileStudentFeeFromPayments";
 import { cleanupDuplicateHostelMessExtraFees } from "@/lib/cleanupDuplicateHostelMessExtraFees";
 import { migrateUnsplitLumpExtraFees } from "@/lib/extraFeeInstallmentDb";
+import { isPreviousYearFeeHeadName } from "@/lib/feeYearClassification";
 
 function normalizeExtraFeeName(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, " ");
@@ -92,6 +93,9 @@ export type AdminStudentFeeBreakdownResult = {
   totalAmount: number;
   amountPaid: number;
   finalFee: number;
+  previousYearTotalAmount?: number;
+  previousYearAmountPaid?: number;
+  previousYearRemainingFee?: number;
   dueHeads: AdminFeeBreakdownDueHead[];
 };
 
@@ -313,11 +317,6 @@ export async function computeAdminStudentFeeBreakdown(
         },
       });
     }
-  } else if (fee) {
-    const paymentSum = await sumSuccessfulFeePayments(student.id);
-    if (Math.abs(fee.amountPaid - paymentSum) > 0.02) {
-      fee = { ...fee, amountPaid: paymentSum, remainingFee: Math.max(Math.round((fee.finalFee - paymentSum) * 100) / 100, 0) };
-    }
   }
 
   if (!fee) {
@@ -476,14 +475,26 @@ export async function computeAdminStudentFeeBreakdown(
     };
   });
 
-  const totalDueBefore = roundMoney(dueHeads.reduce((s, h) => s + h.dueBefore, 0));
-  const totalAmount = roundMoney(dueHeads.reduce((s, h) => s + h.snapshotAmount, 0));
+  const currentYearHeads = dueHeads.filter((h) => !isPreviousYearFeeHeadName(h.label));
+  const previousYearHeads = dueHeads.filter((h) => isPreviousYearFeeHeadName(h.label));
+  const totalDueBefore = roundMoney(currentYearHeads.reduce((s, h) => s + h.dueBefore, 0));
+  const totalAmount = roundMoney(currentYearHeads.reduce((s, h) => s + h.snapshotAmount, 0));
+  const currentYearPaid = roundMoney(
+    currentYearHeads.reduce((s, h) => s + Math.max(h.snapshotAmount - h.dueBefore, 0), 0)
+  );
+  const previousYearTotalAmount = roundMoney(previousYearHeads.reduce((s, h) => s + h.snapshotAmount, 0));
+  const previousYearRemainingFee = roundMoney(previousYearHeads.reduce((s, h) => s + h.dueBefore, 0));
+  const previousYearAmountPaid = roundMoney(
+    previousYearHeads.reduce((s, h) => s + Math.max(h.snapshotAmount - h.dueBefore, 0), 0)
+  );
 
-  const amountPaid = fee.amountPaid;
+  const amountPaid = currentYearPaid;
   let finalFee = fee.finalFee;
   let remainingFee = totalDueBefore;
 
   const expectedFinal = totalAmount;
+  const storedExpectedFinal = roundMoney(dueHeads.reduce((s, h) => s + h.snapshotAmount, 0));
+  const storedExpectedRemaining = roundMoney(dueHeads.reduce((s, h) => s + h.dueBefore, 0));
   const expectedTotalFee = roundMoney(dueHeads.reduce((s, h) => s + h.grossAmount, 0));
 
   remainingFee = totalDueBefore;
@@ -493,15 +504,15 @@ export async function computeAdminStudentFeeBreakdown(
   if (
     reconcileTotals &&
     (Math.abs(fee.totalFee - expectedTotalFee) > 0.02 ||
-      Math.abs(fee.finalFee - expectedFinal) > 0.02 ||
-      Math.abs(fee.remainingFee - totalDueBefore) > 0.02)
+      Math.abs(fee.finalFee - storedExpectedFinal) > 0.02 ||
+      Math.abs(fee.remainingFee - storedExpectedRemaining) > 0.02)
   ) {
     await prisma.studentFee.update({
       where: { studentId: student.id },
       data: {
         totalFee: expectedTotalFee,
-        finalFee: expectedFinal,
-        remainingFee: totalDueBefore,
+        finalFee: storedExpectedFinal,
+        remainingFee: storedExpectedRemaining,
       },
     });
   }
@@ -512,6 +523,9 @@ export async function computeAdminStudentFeeBreakdown(
     totalAmount,
     amountPaid,
     finalFee,
+    previousYearTotalAmount,
+    previousYearAmountPaid,
+    previousYearRemainingFee,
     dueHeads,
   };
 }

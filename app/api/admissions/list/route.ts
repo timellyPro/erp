@@ -21,6 +21,44 @@ function parseIntSafe(value: string | null, fallback: number) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function buildPaidApplicationsWhere(params: {
+  schoolId: string;
+  gradeSought: string;
+  boardingType: string;
+  classId: string;
+  fromDate: Date | null;
+  toDateEnd: Date | null;
+  search: string;
+}): Record<string, unknown> {
+  const { schoolId, gradeSought, boardingType, classId, fromDate, toDateEnd, search } = params;
+  const where: Record<string, unknown> = { schoolId, applicationFeePaid: true };
+
+  if (gradeSought) where.gradeSought = gradeSought;
+  if (boardingType) where.boardingType = boardingType;
+  if (classId) where.classId = classId;
+  if (fromDate && !Number.isNaN(fromDate.getTime())) {
+    where.createdAt = { ...(where.createdAt as object), gte: fromDate };
+  }
+  if (toDateEnd && !Number.isNaN(toDateEnd.getTime())) {
+    where.createdAt = { ...(where.createdAt as object), lte: toDateEnd };
+  }
+
+  if (search) {
+    where.OR = [
+      { applicationNo: { contains: search, mode: "insensitive" } },
+      { admissionNo: { contains: search, mode: "insensitive" } },
+      { fedenaNo: { contains: search, mode: "insensitive" } },
+      { firstName: { contains: search, mode: "insensitive" } },
+      { lastName: { contains: search, mode: "insensitive" } },
+      { parentName: { contains: search, mode: "insensitive" } },
+      { parentPhone: { contains: search, mode: "insensitive" } },
+      { aadharNo: { contains: search, mode: "insensitive" } },
+    ];
+  }
+
+  return where;
+}
+
 /** Same shape as before; `workflowStatus` is merged after fetch (DB column, not Prisma client field). */
 const admissionListSelect = {
   id: true,
@@ -104,6 +142,17 @@ export async function GET(req: Request) {
     }
 
     const hasWorkflowColumn = await studentApplicationHasWorkflowColumn();
+    const paidApplicationsTotalPromise = prisma.studentApplication.count({
+      where: buildPaidApplicationsWhere({
+        schoolId,
+        gradeSought,
+        boardingType,
+        classId,
+        fromDate: fromDate && !Number.isNaN(fromDate.getTime()) ? fromDate : null,
+        toDateEnd,
+        search,
+      }) as never,
+    });
 
     const useRawIdPipeline = phase === "pending" || phase === "upcoming";
     const skipWorkflowLookup = !useRawIdPipeline;
@@ -122,13 +171,14 @@ export async function GET(req: Request) {
         hasWorkflowColumn,
       });
 
-      const [total, ids] = await Promise.all([
+      const [total, ids, paidApplicationsTotal] = await Promise.all([
         admissionRawCount(whereSql),
         admissionRawIdsPage(whereSql, skip, pageSize),
+        paidApplicationsTotalPromise,
       ]);
 
       if (ids.length === 0) {
-        const emptyPayload = { applications: [], total, page, pageSize };
+        const emptyPayload = { applications: [], total, paidApplicationsTotal, page, pageSize };
         setAdmissionsListCached(cacheKey, emptyPayload);
         return NextResponse.json(emptyPayload, { status: 200 });
       }
@@ -153,7 +203,7 @@ export async function GET(req: Request) {
         })
         .filter(Boolean);
 
-      const payload = { applications, total, page, pageSize };
+      const payload = { applications, total, paidApplicationsTotal, page, pageSize };
       setAdmissionsListCached(cacheKey, payload);
       return NextResponse.json(payload, { status: 200 });
     }
@@ -185,7 +235,7 @@ export async function GET(req: Request) {
       ];
     }
 
-    const [total, rows] = await Promise.all([
+    const [total, rows, paidApplicationsTotal] = await Promise.all([
       prisma.studentApplication.count({ where: where as never }),
       prisma.studentApplication.findMany({
         where: where as never,
@@ -194,6 +244,7 @@ export async function GET(req: Request) {
         take: pageSize,
         select: admissionListSelect,
       }),
+      paidApplicationsTotalPromise,
     ]);
 
     const applications = skipWorkflowLookup
@@ -210,7 +261,7 @@ export async function GET(req: Request) {
           }));
         })();
 
-    const payload = { applications, total, page, pageSize };
+    const payload = { applications, total, paidApplicationsTotal, page, pageSize };
     setAdmissionsListCached(cacheKey, payload);
     return NextResponse.json(payload, { status: 200 });
   } catch (e: unknown) {

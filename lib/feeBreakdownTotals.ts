@@ -1,5 +1,6 @@
 import { roundRupee } from "@/lib/formatRupee";
 import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
+import { isPreviousYearFeeHeadName } from "@/lib/feeYearClassification";
 
 /** Sum of pre-discount face values across all fee heads. */
 export function grossTotalFromBreakdown(
@@ -7,7 +8,11 @@ export function grossTotalFromBreakdown(
 ): number | null {
   const heads = breakdown?.dueHeads;
   if (!heads?.length) return null;
-  return roundRupee(heads.reduce((s, h) => s + (Number(h.grossAmount) || 0), 0));
+  return roundRupee(
+    heads
+      .filter((h) => !isPreviousYearFeeHeadName(h.label))
+      .reduce((s, h) => s + (Number(h.grossAmount) || 0), 0)
+  );
 }
 
 /** Net total after per-head / overall discounts (matches Total Fees on profile). */
