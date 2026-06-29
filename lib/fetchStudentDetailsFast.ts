@@ -18,7 +18,7 @@ const extrasInflight = new Map<string, Promise<StudentDetailsTabExtras>>();
 const refreshFeesInflight = new Map<string, Promise<StudentDetailsFastBundle | null>>();
 
 const BUNDLE_TTL_MS = 30 * 60 * 1000;
-const SESSION_KEY = "erp:student-details-bundle:v2";
+const SESSION_KEY = "erp:student-details-bundle:v3";
 const SESSION_TTL_MS = 30 * 60 * 1000;
 
 type SessionStore = Record<string, { savedAt: number; value: StudentDetailsFastBundle }>;
@@ -65,6 +65,11 @@ function writeSessionBundle(studentId: string, value: StudentDetailsFastBundle):
   const store = readSession();
   store[studentId] = { savedAt: Date.now(), value };
   writeSession(store);
+}
+
+function isUsableCachedBundle(bundle: StudentDetailsFastBundle): boolean {
+  const paid = bundle.fee?.amountPaid ?? 0;
+  return !(bundle.payments.length === 0 && paid > 0);
 }
 
 function parseShell(data: unknown): StudentDetailsTabPayload {
@@ -480,13 +485,22 @@ export async function fetchStudentDetailsFast(
   if (!options?.force) {
     const mem = bundleMemory.get(studentId);
     if (mem && Date.now() < mem.expiresAt) {
-      return mem.value;
+      if (isUsableCachedBundle(mem.value)) {
+        return mem.value;
+      }
+      bundleMemory.delete(studentId);
     }
 
     const sessionHit = readSessionBundle(studentId);
     if (sessionHit) {
-      bundleMemory.set(studentId, { value: sessionHit, expiresAt: Date.now() + BUNDLE_TTL_MS });
-      return sessionHit;
+      if (!isUsableCachedBundle(sessionHit)) {
+        const store = readSession();
+        delete store[studentId];
+        writeSession(store);
+      } else {
+        bundleMemory.set(studentId, { value: sessionHit, expiresAt: Date.now() + BUNDLE_TTL_MS });
+        return sessionHit;
+      }
     }
   }
 
