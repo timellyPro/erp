@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
-import { extraFeeAppliesToStudentResidency } from "@/lib/extraFeeResidencyScope";
+import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
 import { patchExtraFeeWithInstallmentSupport } from "@/lib/extraFeeInstallmentDb";
 import { invalidateSchoolFeeReadCaches } from "@/lib/studentFeeReadCache";
 import { Prisma } from "@prisma/client";
@@ -50,6 +50,7 @@ async function applyStudentFeeDelta(studentIds: string[], delta: number) {
 
 async function eligibleStudentIdsForExtra(
   extraFee: {
+    name: string;
     targetType: string;
     targetClassId: string | null;
     targetSection: string | null;
@@ -71,7 +72,12 @@ async function eligibleStudentIdsForExtra(
     select: { id: true, residencyType: true },
   });
   return students
-    .filter((s) => extraFeeAppliesToStudentResidency(extraFee.residencyScope, s.residencyType))
+    .filter((s) =>
+      extraFeeAppliesToStudent(
+        { name: extraFee.name, residencyScope: extraFee.residencyScope },
+        s.residencyType
+      )
+    )
     .map((s) => s.id);
 }
 

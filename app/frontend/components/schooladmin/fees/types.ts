@@ -22,6 +22,9 @@ export interface FeeSummary {
   totalDiscount: number;
   totalCollected: number;
   totalDue: number;
+  previousYearTotalFee?: number;
+  previousYearCollected?: number;
+  previousYearDue?: number;
 }
 
 export interface FeeRecord {

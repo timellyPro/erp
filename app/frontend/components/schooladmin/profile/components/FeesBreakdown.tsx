@@ -12,6 +12,7 @@ import { storedDiscountRupeeAmount } from "@/lib/studentFeeHeadDiscount";
 import { formatRupee, roundRupee } from "@/lib/formatRupee";
 import { grossTotalFromBreakdown, netTotalFromBreakdown } from "@/lib/feeBreakdownTotals";
 import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
+import { isPreviousYearFeeHeadName } from "@/lib/feeYearClassification";
 
 function baseComponentIndexFromHead(head: {
   key: string;
@@ -176,6 +177,7 @@ export const FeesBreakdown = ({
   >([]);
   const [headsTotalAmount, setHeadsTotalAmount] = useState<number | null>(null);
   const [headsRemainingAmount, setHeadsRemainingAmount] = useState<number | null>(null);
+  const [previousYearRemainingAmount, setPreviousYearRemainingAmount] = useState(0);
   const [payingHead, setPayingHead] = useState<{
     key: string;
     sourceKey?: string;
@@ -212,27 +214,6 @@ export const FeesBreakdown = ({
       return incoming.length > 0 ? mergeDiscountApprovals(prev, incoming) : prev;
     });
   }, [studentId, discountApprovals, latestDiscountApproval]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`/api/fees/student/${studentId}/discount-approvals`, {
-          credentials: "include",
-          cache: "no-store",
-        });
-        const data = await res.json().catch(() => ({}));
-        if (cancelled || !res.ok) return;
-        const approvals = Array.isArray(data?.approvals) ? data.approvals : [];
-        setApprovalState(approvals);
-      } catch {
-        // Keep bundled/local approval state.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [studentId]);
 
   const approvedDiscountRefreshKey = approvalState
     .filter((approval) => approval.status === "APPROVED")
@@ -286,7 +267,11 @@ export const FeesBreakdown = ({
 
   const breakdownGrossTotal = useMemo(() => {
     if (headCards.length > 0) {
-      return roundRupee(headCards.reduce((s, h) => s + (Number(h.gross ?? h.amount) || 0), 0));
+      return roundRupee(
+        headCards
+          .filter((h) => !isPreviousYearFeeHeadName(h.label))
+          .reduce((s, h) => s + (Number(h.gross ?? h.amount) || 0), 0)
+      );
     }
     const fromBundle = grossTotalFromBreakdown(initialFeeBreakdown);
     if (fromBundle != null && fromBundle > 0) return fromBundle;
@@ -348,11 +333,11 @@ export const FeesBreakdown = ({
         : 0;
   const displayAmountPaid =
     headCards.length > 0
-      ? roundRupee(headCards.reduce((s, h) => s + h.paid, 0))
+      ? roundRupee(headCards.filter((h) => !isPreviousYearFeeHeadName(h.label)).reduce((s, h) => s + h.paid, 0))
       : amountPaid;
   const displayRemainingAmount =
     headCards.length > 0
-      ? roundRupee(headCards.reduce((s, h) => s + h.due, 0))
+      ? roundRupee(headCards.filter((h) => !isPreviousYearFeeHeadName(h.label)).reduce((s, h) => s + h.due, 0))
       : headsRemainingAmount != null && headsRemainingAmount >= 0
         ? roundRupee(headsRemainingAmount)
         : roundRupee(Math.max(0, displayTotalAmount - displayAmountPaid));
@@ -394,7 +379,8 @@ export const FeesBreakdown = ({
           splitHeads.reduce((s: number, h: { amount: number }) => s + h.amount, 0)
       )
     );
-    setHeadsRemainingAmount(roundRupee(splitHeads.reduce((s: number, h: { due: number }) => s + h.due, 0)));
+    setHeadsRemainingAmount(roundRupee(Number(data?.remainingFee) || 0));
+    setPreviousYearRemainingAmount(roundRupee(Number(data?.previousYearRemainingFee) || 0));
   };
 
   const openModifyFeeModal = async () => {
@@ -722,12 +708,12 @@ export const FeesBreakdown = ({
       </div>
 
       {/* Main Fee Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
         <div className="bg-amber-400/10 border border-amber-400/20 rounded-xl p-4">
-          <p className="text-xs text-amber-300/70 uppercase tracking-widest font-bold">Total Fees (All Heads)</p>
+          <p className="text-xs text-amber-300/70 uppercase tracking-widest font-bold">Current Year Fees</p>
           <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(displayTotalAmount)}</p>
           <p className="text-xs text-amber-300 mt-1 font-semibold">
-            Pre-discount (all heads): ₹{formatRupee(displayPreDiscountTotal)}
+            Pre-discount: ₹{formatRupee(displayPreDiscountTotal)}
           </p>
           <p className="text-xs text-amber-300 mt-1 font-semibold">
             {raisedDiscountAmount != null ? "Raised discount" : "Discount"}: ₹
@@ -798,17 +784,23 @@ export const FeesBreakdown = ({
         </div>
 
         <div className="bg-lime-400/10 border border-lime-400/20 rounded-xl p-4">
-          <p className="text-xs text-lime-300/70 uppercase tracking-widest font-bold">Amount Paid</p>
+          <p className="text-xs text-lime-300/70 uppercase tracking-widest font-bold">Current Year Paid</p>
           <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(displayAmountPaid)}</p>
           <p className="text-xs text-lime-400 mt-1 font-semibold">{Math.round(paidPercentage)}% Paid</p>
         </div>
 
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4">
-          <p className="text-xs text-red-300/70 uppercase tracking-widest font-bold">Remaining / Due</p>
+          <p className="text-xs text-red-300/70 uppercase tracking-widest font-bold">Current Year Due</p>
           <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(displayRemainingAmount)}</p>
           <p className="text-xs text-red-400 mt-1 font-semibold">
             {Math.round(100 - paidPercentage)}% Pending
           </p>
+        </div>
+
+        <div className="bg-orange-400/10 border border-orange-400/20 rounded-xl p-4">
+          <p className="text-xs text-orange-300/70 uppercase tracking-widest font-bold">Previous Year Due</p>
+          <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(previousYearRemainingAmount)}</p>
+          <p className="text-xs text-orange-300 mt-1 font-semibold">Kept separate from current fees</p>
         </div>
       </div>
 

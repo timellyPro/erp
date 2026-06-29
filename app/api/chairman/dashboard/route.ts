@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import prisma from "@/lib/db";
+import { computeCurrentAndPreviousFeeStats } from "@/lib/computeFeeSummaryStats";
 
 function dateRangeFromYmd(ymd: string | null) {
   const valid = typeof ymd === "string" && /^\d{4}-\d{2}-\d{2}$/.test(ymd) ? ymd : null;
@@ -39,17 +40,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ summary: cached.summary });
     }
 
-    const [summary] = await prisma.$queryRaw<
+    const [summaryRows, feeStats] = await Promise.all([
+      prisma.$queryRaw<
       Array<{
         schoolName: string | null;
         totalStudents: bigint;
         activeStudents: bigint;
         totalClasses: bigint;
         totalTeachers: bigint;
-        grossFees: number | null;
-        netFees: number | null;
-        totalDiscount: number | null;
-        remainingFees: number | null;
         todayCollection: number | null;
         totalCollection: number | null;
         pendingDiscounts: bigint;
@@ -72,15 +70,6 @@ export async function GET(req: NextRequest) {
           COUNT(*) AS "totalStudents",
           COUNT(*) FILTER (WHERE COALESCE(status, 'Active') = 'Active') AS "activeStudents"
         FROM school_students
-      ),
-      fee_totals AS (
-        SELECT
-          COALESCE(SUM(sf."totalFee"), 0) AS "grossFees",
-          COALESCE(SUM(sf."finalFee"), 0) AS "netFees",
-          COALESCE(SUM(GREATEST(sf."totalFee" - sf."finalFee", 0)), 0) AS "totalDiscount",
-          COALESCE(SUM(sf."remainingFee"), 0) AS "remainingFees"
-        FROM "StudentFee" sf
-        JOIN active_school_students s ON s.id = sf."studentId"
       ),
       payment_totals AS (
         SELECT
@@ -108,20 +97,19 @@ export async function GET(req: NextRequest) {
         sc."activeStudents",
         (SELECT COUNT(*) FROM "Class" WHERE "schoolId" = ${schoolId}) AS "totalClasses",
         (SELECT COUNT(*) FROM "User" WHERE "schoolId" = ${schoolId} AND role = CAST('TEACHER' AS "Role")) AS "totalTeachers",
-        ft."grossFees",
-        ft."netFees",
-        ft."totalDiscount",
-        ft."remainingFees",
         pt."todayCollection",
         pt."totalCollection",
         dc."pendingDiscounts",
         dc."approvedDiscounts",
         dc."rejectedDiscounts"
       FROM student_counts sc
-      CROSS JOIN fee_totals ft
       CROSS JOIN payment_totals pt
       CROSS JOIN discount_counts dc
-    `;
+    `,
+      computeCurrentAndPreviousFeeStats(schoolId),
+    ]);
+    const summary = summaryRows[0];
+    const currentYearNetFees = Math.max(feeStats.totalFee - feeStats.totalDiscount, 0);
 
     const responseSummary = {
         schoolName: summary?.schoolName ?? "School",
@@ -129,13 +117,16 @@ export async function GET(req: NextRequest) {
         activeStudents: Number(summary?.activeStudents ?? 0),
         totalClasses: Number(summary?.totalClasses ?? 0),
         totalTeachers: Number(summary?.totalTeachers ?? 0),
-        grossFees: Number(summary?.grossFees ?? 0),
-        netFees: Number(summary?.netFees ?? 0),
-        totalDiscount: Number(summary?.totalDiscount ?? 0),
-        remainingFees: Number(summary?.remainingFees ?? 0),
+        grossFees: feeStats.totalFee,
+        netFees: currentYearNetFees,
+        totalDiscount: feeStats.totalDiscount,
+        remainingFees: feeStats.totalDue,
         todayCollection: Number(summary?.todayCollection ?? 0),
         collectionDate: collectionDate.ymd,
-        totalCollection: Number(summary?.totalCollection ?? 0),
+        totalCollection: feeStats.totalCollected,
+        previousYearTotalFee: feeStats.previousYearTotalFee,
+        previousYearCollected: feeStats.previousYearCollected,
+        previousYearDue: feeStats.previousYearDue,
         pendingDiscounts: Number(summary?.pendingDiscounts ?? 0),
         approvedDiscounts: Number(summary?.approvedDiscounts ?? 0),
         rejectedDiscounts: Number(summary?.rejectedDiscounts ?? 0),

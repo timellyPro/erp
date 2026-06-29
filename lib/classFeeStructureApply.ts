@@ -8,9 +8,10 @@ export type FeeStructureComponent = { name: string; amount: number };
 
 function normalizeComponents(raw: unknown[]): FeeStructureComponent[] {
   return raw
-    .map((c: any) => {
-      const name = typeof c?.name === "string" ? c.name.trim() : "";
-      const rawAmount = c?.amount;
+    .map((c: unknown) => {
+      const component = c as { name?: unknown; amount?: unknown };
+      const name = typeof component.name === "string" ? component.name.trim() : "";
+      const rawAmount = component.amount;
       const amount =
         typeof rawAmount === "number" ? rawAmount : rawAmount != null ? Number(rawAmount) : NaN;
       return { name, amount };

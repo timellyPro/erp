@@ -1,7 +1,12 @@
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
-import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
+import {
+  extraFeeAppliesToStudent,
+  isHostelCategoryExtraFeeName,
+  isMessCategoryExtraFeeName,
+} from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
+import { previousYearFeeHeadLabel } from "@/lib/feeYearClassification";
 
 export type FeeDueColumnGroup = {
   /** Stable id: `BASE@classId@index`, `EXTRA_NAME@slug` (merged extras with same name), or legacy `EXTRA:id` */
@@ -23,6 +28,9 @@ export type FeeDueReportRow = {
   totalDiscount: number;
   feesPaid: number;
   feesDue: number;
+  previousYearTotalFee?: number;
+  previousYearFeesPaid?: number;
+  previousYearFeesDue?: number;
   /** Amounts per fee-head group id */
   cellsByGroupId: Record<string, { fee: number; concession: number; paid: number; due: number }>;
 };
@@ -76,6 +84,15 @@ function extraFeeApplies(
   return false;
 }
 
+function includeSchoolWideExtraInDueReport(ef: ExtraFeeLite, includeSchoolWideExtras: boolean): boolean {
+  return (
+    includeSchoolWideExtras ||
+    isHostelCategoryExtraFeeName(ef.name) ||
+    isMessCategoryExtraFeeName(ef.name) ||
+    Boolean(previousYearFeeHeadLabel(ef.name))
+  );
+}
+
 /** Extras for fee-due columns: class / section / student only (not whole-school catalog — that would add a column for every student). */
 function applicableExtrasForDueReport(
   extraFees: ExtraFeeLite[],
@@ -91,7 +108,7 @@ function applicableExtrasForDueReport(
     if (!extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, opts.studentResidency))
       return false;
     if (isStudentRte(opts.studentResidency) && isTuitionNamedExtraFee(ef.name)) return false;
-    if (ef.targetType === "SCHOOL") return includeSchoolWideExtras;
+    if (ef.targetType === "SCHOOL") return includeSchoolWideExtraInDueReport(ef, includeSchoolWideExtras);
     return extraFeeApplies(ef, opts);
   });
 }
@@ -103,7 +120,7 @@ function extraFeeAppliesToStudentForRoster(
 ): boolean {
   if (!extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, st.category)) return false;
   if (isStudentRte(st.category) && isTuitionNamedExtraFee(ef.name)) return false;
-  if (ef.targetType === "SCHOOL") return includeSchoolWideExtras;
+  if (ef.targetType === "SCHOOL") return includeSchoolWideExtraInDueReport(ef, includeSchoolWideExtras);
   return extraFeeApplies(ef, { classId: st.classId, section: st.section, studentId: st.studentId });
 }
 
@@ -128,7 +145,10 @@ export function extraFeesForDueReportRoster(
     return extraFeesForExportRoster(extraFees, students, true);
   }
   return extraFees.filter((ef) => {
-    if (ef.targetType === "SCHOOL") return false;
+    if (ef.targetType === "SCHOOL") {
+      if (!includeSchoolWideExtraInDueReport(ef, false)) return false;
+      return students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, false));
+    }
     return students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, false));
   });
 }
@@ -159,28 +179,13 @@ function labelFromLegacyBaseGroupId(id: string): string {
   return `${name} (${num})`;
 }
 
-function previousYearDueLabel(name: string): string | null {
-  const compact = name.trim().replace(/\s+/g, " ");
-  const lower = compact.toLowerCase();
-  if (!lower.includes("last year") || !lower.includes("fee due")) return null;
-
-  const yearRange = lower.match(/20\d{2}\s*[-/]\s*(?:20)?\d{2}/)?.[0];
-  if (!yearRange) return "Previous Year Fee Due";
-
-  const parts = yearRange.split(/[-/]/).map((part) => part.trim());
-  const start = parts[0] ?? "";
-  const rawEnd = parts[1] ?? "";
-  const end = rawEnd.length === 2 ? `${start.slice(0, 2)}${rawEnd}` : rawEnd;
-  return `Previous Year ${start}-${end} Fee Due`;
-}
-
 function isPreviousYearGroupId(groupId: string): boolean {
   return groupId.startsWith("EXTRA_NAME@previous_year_");
 }
 
 /** Same display name → one column (many DB rows often share a title). */
 function normalizeExtraNameKey(name: string): string {
-  const previousYear = previousYearDueLabel(name);
+  const previousYear = previousYearFeeHeadLabel(name);
   if (previousYear) return previousYear.toLowerCase();
   return name.trim().replace(/\s+/g, " ").toLowerCase();
 }
@@ -387,7 +392,7 @@ export function buildFeeDueReportPayload(args: {
   for (const ef of rosterExtras) {
     const nk = normalizeExtraNameKey(ef.name);
     const slug = extraNameSlugFromNorm(nk);
-    const nm = previousYearDueLabel(ef.name) ?? ef.name.trim();
+    const nm = previousYearFeeHeadLabel(ef.name) ?? ef.name.trim();
     const prev = extraDisplayBySlug.get(slug);
     if (!prev || nm.length > prev.length) extraDisplayBySlug.set(slug, nm);
   }
@@ -419,6 +424,12 @@ export function buildFeeDueReportPayload(args: {
     const currentYearTotalDiscount = currentYearCells.reduce((sum, cell) => sum + cell.concession, 0);
     const currentYearFeesPaid = currentYearCells.reduce((sum, cell) => sum + cell.paid, 0);
     const currentYearFeesDue = currentYearCells.reduce((sum, cell) => sum + cell.due, 0);
+    const previousYearCells = Object.entries(cells)
+      .filter(([groupId]) => isPreviousYearGroupId(groupId))
+      .map(([, cell]) => cell);
+    const previousYearTotalFee = previousYearCells.reduce((sum, cell) => sum + cell.fee, 0);
+    const previousYearFeesPaid = previousYearCells.reduce((sum, cell) => sum + cell.paid, 0);
+    const previousYearFeesDue = previousYearCells.reduce((sum, cell) => sum + cell.due, 0);
     rows.push({
       studentId: s.studentId,
       no: no++,
@@ -432,6 +443,9 @@ export function buildFeeDueReportPayload(args: {
       totalDiscount: currentYearTotalDiscount,
       feesPaid: currentYearFeesPaid,
       feesDue: currentYearFeesDue,
+      previousYearTotalFee,
+      previousYearFeesPaid,
+      previousYearFeesDue,
       cellsByGroupId: cells,
     });
   }

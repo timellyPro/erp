@@ -38,7 +38,7 @@ function formatTransportDisplayBase(cleaned: string): string {
 }
 
 function resolveInstallmentDisplayBase(raw: string): string {
-  let base = stripInstallmentPhrasesFromName(canonicalExtraFeeBaseName(raw));
+  const base = stripInstallmentPhrasesFromName(canonicalExtraFeeBaseName(raw));
 
   if (isHostelCategoryExtraFeeName(raw) && !isMessCategoryExtraFeeName(raw)) {
     return "Hostel Fee";

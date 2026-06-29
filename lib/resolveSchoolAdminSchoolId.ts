@@ -8,7 +8,7 @@ export type SchoolAdminSchoolContext =
 export async function resolveSchoolAdminSchoolId(session: {
   user: { id: string; schoolId?: string | null };
 }): Promise<SchoolAdminSchoolContext> {
-  let schoolId = session.user.schoolId ?? null;
+  const schoolId = session.user.schoolId ?? null;
 
   if (!schoolId) {
     const adminSchool = await prisma.school.findFirst({
