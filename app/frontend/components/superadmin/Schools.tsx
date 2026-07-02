@@ -1,6 +1,6 @@
 "use client";
 
-import { Search, Users, GraduationCap, Building2, TrendingUp, Trash2 } from "lucide-react";
+import { Search, Users, GraduationCap, Building2, TrendingUp, Trash2, Download } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import PageHeader from "../common/PageHeader";
@@ -103,6 +103,7 @@ export default function Schools({ variant = "default" }: SchoolsProps) {
   const [confirmName, setConfirmName] = useState("");
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [exportingSchoolId, setExportingSchoolId] = useState<string | null>(null);
 
   const fetchSchools = useCallback(
     async (searchTerm: string, opts?: { silent?: boolean; cacheBust?: boolean }) => {
@@ -143,6 +144,36 @@ export default function Schools({ variant = "default" }: SchoolsProps) {
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
+
+  const handleDownloadFeesBackup = async (school: SchoolRow) => {
+    setExportingSchoolId(school.id);
+    try {
+      const res = await fetch(`/api/superadmin/schools/${school.id}/fees-backup`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { message?: string };
+        throw new Error(data.message || "Failed to download fees backup");
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename =
+        match?.[1] ||
+        `fees-backup-${school.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Could not download fees backup");
+    } finally {
+      setExportingSchoolId(null);
+    }
+  };
 
   const handleConfirmDeleteSchool = async () => {
     if (!modalSchool) return;
@@ -241,24 +272,40 @@ export default function Schools({ variant = "default" }: SchoolsProps) {
         header: "",
         align: "right",
         render: (s) => (
-          <button
-            type="button"
-            onClick={() => {
-              setDeleteError(null);
-              setConfirmName("");
-              setModalSchool(s);
-            }}
-            className="inline-flex items-center justify-center rounded-lg border border-red-500/40 bg-red-500/10 p-2 text-red-300 hover:bg-red-500/20 transition disabled:opacity-50"
-            title="Delete school and all related data"
-            aria-label={`Delete ${s.name}`}
-            disabled={deleteBusy}
-          >
-            <Trash2 className="w-4 h-4" aria-hidden />
-          </button>
+          <div className="inline-flex items-center justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={() => void handleDownloadFeesBackup(s)}
+              className="inline-flex items-center justify-center rounded-lg border border-lime-400/40 bg-lime-500/10 p-2 text-lime-200 hover:bg-lime-500/20 transition disabled:opacity-50"
+              title="Download full fees backup (Excel)"
+              aria-label={`Download fees backup for ${s.name}`}
+              disabled={exportingSchoolId === s.id || deleteBusy}
+            >
+              {exportingSchoolId === s.id ? (
+                <span className="w-4 h-4 border-2 border-lime-200/30 border-t-lime-200 rounded-full animate-spin" />
+              ) : (
+                <Download className="w-4 h-4" aria-hidden />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDeleteError(null);
+                setConfirmName("");
+                setModalSchool(s);
+              }}
+              className="inline-flex items-center justify-center rounded-lg border border-red-500/40 bg-red-500/10 p-2 text-red-300 hover:bg-red-500/20 transition disabled:opacity-50"
+              title="Delete school and all related data"
+              aria-label={`Delete ${s.name}`}
+              disabled={deleteBusy || exportingSchoolId === s.id}
+            >
+              <Trash2 className="w-4 h-4" aria-hidden />
+            </button>
+          </div>
         ),
       },
     ],
-    [deleteBusy]
+    [deleteBusy, exportingSchoolId]
   );
 
   return (
@@ -268,8 +315,8 @@ export default function Schools({ variant = "default" }: SchoolsProps) {
           title={variant === "remove" ? "Remove schools" : "Schools"}
           subtitle={
             variant === "remove"
-              ? "Delete a school only after you export anything you need. Staff and student logins for that school only are removed."
-              : "Schools, admins, students, and turnover"
+              ? "Delete a school only after you export anything you need. Use Fees backup on each row for a full Excel report."
+              : "Schools, admins, students, turnover — download full fees backup (Excel) per school"
           }
           className="rounded-2xl sm:rounded-3xl"
           rightSlot={
@@ -398,19 +445,34 @@ export default function Schools({ variant = "default" }: SchoolsProps) {
                         </div>
                       </dl>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDeleteError(null);
-                          setConfirmName("");
-                          setModalSchool(s);
-                        }}
-                        disabled={deleteBusy}
-                        className="mt-4 w-full inline-flex items-center justify-center gap-2 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2.5 text-sm font-semibold text-red-200 hover:bg-red-500/20 transition disabled:opacity-50"
-                      >
-                        <Trash2 className="w-4 h-4 shrink-0" aria-hidden />
-                        Delete school
-                      </button>
+                      <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                        <button
+                          type="button"
+                          onClick={() => void handleDownloadFeesBackup(s)}
+                          disabled={exportingSchoolId === s.id || deleteBusy}
+                          className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-lime-400/40 bg-lime-500/10 px-3 py-2.5 text-sm font-semibold text-lime-100 hover:bg-lime-500/20 transition disabled:opacity-50"
+                        >
+                          {exportingSchoolId === s.id ? (
+                            <span className="w-4 h-4 border-2 border-lime-200/30 border-t-lime-200 rounded-full animate-spin" />
+                          ) : (
+                            <Download className="w-4 h-4 shrink-0" aria-hidden />
+                          )}
+                          {exportingSchoolId === s.id ? "Preparing…" : "Fees backup"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDeleteError(null);
+                            setConfirmName("");
+                            setModalSchool(s);
+                          }}
+                          disabled={deleteBusy || exportingSchoolId === s.id}
+                          className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2.5 text-sm font-semibold text-red-200 hover:bg-red-500/20 transition disabled:opacity-50"
+                        >
+                          <Trash2 className="w-4 h-4 shrink-0" aria-hidden />
+                          Delete school
+                        </button>
+                      </div>
                     </article>
                   );
                 })
