@@ -5,6 +5,7 @@ import HeaderActionButton from "../common/HeaderActionButton";
 
 import {
   AlertTriangle,
+  ArrowRightLeft,
   BookOpen,
   ChevronDown,
   Download,
@@ -23,6 +24,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import AddClassPanel from "./classes-panels/AddClassPanel";
 import AddSectionPanel from "./classes-panels/AddSectionPanel";
+import AssignSectionPanel from "./classes-panels/AssignSectionPanel";
 import UploadCsvPanel from "./classes-panels/UploadCsvPanel";
 import ClassDetailsPanel from "./classes-panels/ClassDetailsPanel";
 import EditClassPanel from "./classes-panels/EditClassPanel";
@@ -43,7 +45,7 @@ import {
 export default function SchoolAdminClassesTab() {
   const router = useRouter();
   const [activeAction, setActiveAction] = useState<
-    "class" | "section" | "csv" | "none"
+    "class" | "section" | "assign" | "csv" | "none"
   >("class");
   const [search, setSearch] = useState("");
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
@@ -492,7 +494,7 @@ export default function SchoolAdminClassesTab() {
   };
 
   const renderButton = (
-    type: "class" | "section" | "csv" | "report",
+    type: "class" | "section" | "assign" | "csv" | "report",
     Icon: LucideIcon,
     label: string,
     onClick: () => void,
@@ -502,6 +504,7 @@ export default function SchoolAdminClassesTab() {
     const isActive =
       (type === "class" && activeAction === "class") ||
       (type === "section" && activeAction === "section") ||
+      (type === "assign" && activeAction === "assign") ||
       (type === "csv" && activeAction === "csv");
 
     return (
@@ -571,6 +574,13 @@ export default function SchoolAdminClassesTab() {
                   () => setActiveAction("section")
                 )}
 
+                {renderButton(
+                  "assign",
+                  ArrowRightLeft,
+                  "Assign Section",
+                  () => setActiveAction("assign")
+                )}
+
                 {/* {renderButton(
                   "csv",
                   Upload,
@@ -605,6 +615,14 @@ export default function SchoolAdminClassesTab() {
             onCancel={() => setActiveAction("none")}
             onSuccess={() => {
               setActiveAction("none");
+              refreshAfterMutation();
+            }}
+          />
+        )}
+        {activeAction === "assign" && (
+          <AssignSectionPanel
+            onCancel={() => setActiveAction("none")}
+            onSuccess={() => {
               refreshAfterMutation();
             }}
           />
