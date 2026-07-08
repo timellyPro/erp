@@ -38,6 +38,13 @@ export const assignStudentsToClass = (studentId: string, classId: string) =>
     body: JSON.stringify({ studentId, classId }),
   });
 
+export const bulkAssignStudentsToClass = (studentIds: string[], classId: string) =>
+  api("/api/student/bulk-assign-class", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ studentIds, classId }),
+  });
+
 export const updateStudent = (studentId: string, payload: {
   name?: string;
   fatherName?: string;
