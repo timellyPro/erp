@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { fetchAllStudents } from "@/lib/fetchAllStudents";
 
 export type TeacherClass = {
@@ -41,44 +41,40 @@ export function useTeacherClasses() {
     error: null,
   });
 
-  useEffect(() => {
-    let isMounted = true;
-
-    (async () => {
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) {
       setState((prev) => ({ ...prev, loading: true, error: null }));
+    }
 
-      try {
-        const [classRes, studentRows] = await Promise.all([
-          fetch("/api/class/list"),
-          fetchAllStudents<StudentRow>(undefined, { take: 100, maxPages: 50 }),
-        ]);
+    try {
+      const [classRes, studentRows] = await Promise.all([
+        fetch("/api/class/list", { credentials: "include", cache: "no-store" }),
+        fetchAllStudents<StudentRow>(undefined, { take: 100, maxPages: 50 }),
+      ]);
 
-        if (!classRes.ok) throw new Error("Failed to load classes.");
+      if (!classRes.ok) throw new Error("Failed to load classes.");
 
-        const classData = await classRes.json();
-        if (!isMounted) return;
+      const classData = await classRes.json();
 
-        setState({
-          classes: Array.isArray(classData?.classes) ? classData.classes : [],
-          students: studentRows,
-          loading: false,
-          error: null,
-        });
-      } catch (err: any) {
-        if (!isMounted) return;
-        setState({
-          classes: [],
-          students: [],
-          loading: false,
-          error: err?.message ?? "Unable to load classes.",
-        });
-      }
-    })();
-
-    return () => {
-      isMounted = false;
-    };
+      setState({
+        classes: Array.isArray(classData?.classes) ? classData.classes : [],
+        students: studentRows,
+        loading: false,
+        error: null,
+      });
+    } catch (err: unknown) {
+      setState((prev) => ({
+        classes: opts?.silent ? prev.classes : [],
+        students: opts?.silent ? prev.students : [],
+        loading: false,
+        error: err instanceof Error ? err.message : "Unable to load classes.",
+      }));
+    }
   }, []);
 
-  return state;
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  return { ...state, reload: () => load({ silent: true }) };
 }

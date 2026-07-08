@@ -5,10 +5,13 @@ import prisma from "@/lib/db";
 import { invalidateStudentListCaches } from "@/lib/invalidateStudentListCaches";
 import { purgeSchoolDashboardServerCacheMatching } from "@/lib/schoolDashboardServerCache";
 import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
+import { requireSchoolId } from "@/lib/tenant";
 import {
   buildTuitionBulkCache,
   upsertStudentFeeFromStructure,
 } from "@/lib/studentTuitionFromStructure";
+
+const STAFF_ROLES = new Set(["SCHOOLADMIN", "SUPERADMIN", "TEACHER"]);
 
 export async function PUT(req: Request) {
   try {
@@ -18,20 +21,15 @@ export async function PUT(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    let schoolId = session.user.schoolId;
-    if (!schoolId) {
-      const adminSchool = await prisma.school.findFirst({
-        where: { admins: { some: { id: session.user.id } } },
-        select: { id: true },
-      });
-      schoolId = adminSchool?.id ?? null;
+    if (!STAFF_ROLES.has(session.user.role)) {
+      return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
-    if (!schoolId) {
-      return NextResponse.json(
-        { message: "School not found in session" },
-        { status: 400 }
-      );
+
+    const ctx = await requireSchoolId(session);
+    if (!ctx.ok) {
+      return NextResponse.json({ message: ctx.message }, { status: ctx.status });
     }
+    const schoolId = ctx.schoolId;
 
     const body = await req.json();
     const studentIds: string[] = Array.isArray(body?.studentIds)
