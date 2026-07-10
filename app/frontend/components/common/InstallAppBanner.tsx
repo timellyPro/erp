@@ -2,40 +2,19 @@
 
 import { Download, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-
-type BeforeInstallPromptEvent = Event & {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
-};
+import { usePathname } from "next/navigation";
+import { usePwaInstall } from "@/app/frontend/hooks/usePwaInstall";
 
 const DISMISS_KEY = "timelly-pwa-install-dismissed";
 
 export default function InstallAppBanner() {
-  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const pathname = usePathname();
   const [dismissed, setDismissed] = useState(true);
-  const [installing, setInstalling] = useState(false);
+  const { status, install, canInstall } = usePwaInstall();
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     setDismissed(sessionStorage.getItem(DISMISS_KEY) === "1");
-
-    const onBeforeInstall = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e as BeforeInstallPromptEvent);
-    };
-
-    const onInstalled = () => {
-      setDeferredPrompt(null);
-      sessionStorage.setItem(DISMISS_KEY, "1");
-      setDismissed(true);
-    };
-
-    window.addEventListener("beforeinstallprompt", onBeforeInstall);
-    window.addEventListener("appinstalled", onInstalled);
-    return () => {
-      window.removeEventListener("beforeinstallprompt", onBeforeInstall);
-      window.removeEventListener("appinstalled", onInstalled);
-    };
   }, []);
 
   const dismiss = useCallback(() => {
@@ -43,23 +22,15 @@ export default function InstallAppBanner() {
     setDismissed(true);
   }, []);
 
-  const install = useCallback(async () => {
-    if (!deferredPrompt) return;
-    setInstalling(true);
-    try {
-      await deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      if (outcome === "accepted") {
-        setDeferredPrompt(null);
-        sessionStorage.setItem(DISMISS_KEY, "1");
-        setDismissed(true);
-      }
-    } finally {
-      setInstalling(false);
+  const handleInstall = useCallback(async () => {
+    const accepted = await install();
+    if (accepted) {
+      sessionStorage.setItem(DISMISS_KEY, "1");
+      setDismissed(true);
     }
-  }, [deferredPrompt]);
+  }, [install]);
 
-  if (!deferredPrompt || dismissed) return null;
+  if (pathname === "/download" || pathname === "/qr" || !canInstall || dismissed) return null;
 
   return (
     <div
@@ -83,12 +54,12 @@ export default function InstallAppBanner() {
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => void install()}
-              disabled={installing}
+              onClick={() => void handleInstall()}
+              disabled={status === "installing"}
               className="inline-flex items-center gap-1.5 rounded-xl bg-lime-500 px-3 py-2 text-xs font-semibold text-black hover:bg-lime-400 transition disabled:opacity-60"
             >
               <Download className="h-3.5 w-3.5" aria-hidden />
-              {installing ? "Installing…" : "Install app"}
+              {status === "installing" ? "Installing…" : "Install app"}
             </button>
             <button
               type="button"

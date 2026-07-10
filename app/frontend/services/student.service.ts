@@ -43,6 +43,7 @@ export const bulkAssignStudentsToClass = (studentIds: string[], classId: string)
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ studentIds, classId }),
+    timeoutMs: 120_000,
   });
 
 export const updateStudent = (studentId: string, payload: {
