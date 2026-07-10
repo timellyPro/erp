@@ -1,17 +1,19 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import prisma, { runWithDeferredCacheInvalidation } from "@/lib/db";
 import { invalidateStudentListCaches } from "@/lib/invalidateStudentListCaches";
 import { purgeSchoolDashboardServerCacheMatching } from "@/lib/schoolDashboardServerCache";
 import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
 import { requireSchoolId } from "@/lib/tenant";
 import {
   buildTuitionBulkCache,
-  upsertStudentFeeFromStructure,
+  buildStudentFeeRecalcPayload,
 } from "@/lib/studentTuitionFromStructure";
 
 const STAFF_ROLES = new Set(["SCHOOLADMIN", "SUPERADMIN", "TEACHER"]);
+const MAX_BULK_ASSIGN = 500;
+const FEE_UPSERT_BATCH = 10;
 
 export async function PUT(req: Request) {
   try {
@@ -57,6 +59,13 @@ export async function PUT(req: Request) {
     }
 
     const uniqueStudentIds = [...new Set(studentIds)];
+
+    if (uniqueStudentIds.length > MAX_BULK_ASSIGN) {
+      return NextResponse.json(
+        { message: `Cannot assign more than ${MAX_BULK_ASSIGN} students at once` },
+        { status: 400 }
+      );
+    }
 
     const classData = await prisma.class.findFirst({
       where: { id: classId, schoolId },
@@ -104,28 +113,49 @@ export async function PUT(req: Request) {
 
     const targetIds = toUpdate.map((s) => s.id);
 
-    await prisma.$transaction(async (tx) => {
-      await tx.student.updateMany({
-        where: { schoolId, id: { in: targetIds } },
-        data: { classId },
-      });
+    // Single update — no long interactive transaction (avoids Neon/pooler tx timeout on fee upserts).
+    await prisma.student.updateMany({
+      where: { schoolId, id: { in: targetIds } },
+      data: { classId },
+    });
 
-      const cache = await buildTuitionBulkCache(tx, schoolId, [classId]);
+    const cache = await buildTuitionBulkCache(prisma, schoolId, [classId]);
 
-      for (const student of toUpdate) {
-        await upsertStudentFeeFromStructure(
-          tx,
+    await runWithDeferredCacheInvalidation(async () => {
+      const feeUpserts = toUpdate.map((student) => {
+        const payload = buildStudentFeeRecalcPayload(
           {
-            schoolId,
-            studentId: student.id,
+            id: student.id,
             classId,
             section: classData.section ?? null,
+            residencyType: student.residencyType,
             discountPercent: student.fee?.discountPercent ?? 0,
             amountPaid: student.fee?.amountPaid ?? 0,
-            residencyType: student.residencyType,
           },
           cache
         );
+
+        return prisma.studentFee.upsert({
+          where: { studentId: student.id },
+          create: {
+            studentId: student.id,
+            totalFee: payload.totalFee,
+            discountPercent: payload.discountPercent,
+            finalFee: payload.finalFee,
+            amountPaid: payload.amountPaid,
+            remainingFee: payload.remainingFee,
+          },
+          update: {
+            totalFee: payload.totalFee,
+            discountPercent: payload.discountPercent,
+            finalFee: payload.finalFee,
+            remainingFee: payload.remainingFee,
+          },
+        });
+      });
+
+      for (let i = 0; i < feeUpserts.length; i += FEE_UPSERT_BATCH) {
+        await Promise.all(feeUpserts.slice(i, i + FEE_UPSERT_BATCH));
       }
     });
 

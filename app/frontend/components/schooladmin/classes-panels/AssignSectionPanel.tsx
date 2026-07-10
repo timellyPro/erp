@@ -218,6 +218,15 @@ export default function AssignSectionPanel({
     });
   };
 
+  const clearSelection = () => {
+    setSelectedStudentIds(new Set());
+  };
+
+  const selectionFilteredBySearch =
+    studentSearch.trim().length > 0 &&
+    selectedStudentIds.size > 0 &&
+    filteredStudents.length < students.length;
+
   const ensureTargetClassId = async (): Promise<string | null> => {
     if (!selectedClassName) {
       setError("Please select a class.");
@@ -405,17 +414,31 @@ export default function AssignSectionPanel({
               {selectedStudentIds.size > 0 && (
                 <span className="rounded-full bg-lime-400/20 border border-lime-400/30 px-2 py-0.5 text-[11px] font-semibold text-lime-300">
                   {selectedStudentIds.size} selected
+                  {selectionFilteredBySearch
+                    ? ` (${filteredStudents.length} shown)`
+                    : ""}
                 </span>
               )}
             </div>
-            <div className="w-full sm:w-[240px]">
-              <SearchInput
-                value={studentSearch}
-                onChange={setStudentSearch}
-                placeholder="Search students..."
-                icon={Search}
-                variant="glass"
-              />
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+              {selectedStudentIds.size > 0 && (
+                <button
+                  type="button"
+                  onClick={clearSelection}
+                  className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-white/70 hover:bg-white/10 cursor-pointer"
+                >
+                  Clear selection
+                </button>
+              )}
+              <div className="w-full sm:w-[240px]">
+                <SearchInput
+                  value={studentSearch}
+                  onChange={setStudentSearch}
+                  placeholder="Search students..."
+                  icon={Search}
+                  variant="glass"
+                />
+              </div>
             </div>
           </div>
 
@@ -519,9 +542,11 @@ export default function AssignSectionPanel({
               <p className="text-xs text-white/50">
                 {selectedStudentIds.size === 0
                   ? "Check the students you want to move, then assign them to the section above."
-                  : resolvedTargetSectionName
-                    ? `${selectedStudentIds.size} student${selectedStudentIds.size === 1 ? "" : "s"} will be assigned to section ${resolvedTargetSectionName}.`
-                    : `${selectedStudentIds.size} student${selectedStudentIds.size === 1 ? "" : "s"} selected — pick a section above.`}
+                  : selectionFilteredBySearch
+                    ? `${selectedStudentIds.size} student${selectedStudentIds.size === 1 ? "" : "s"} selected (${filteredStudents.length} visible in search) will be assigned to section ${resolvedTargetSectionName || "—"}.`
+                    : resolvedTargetSectionName
+                      ? `${selectedStudentIds.size} student${selectedStudentIds.size === 1 ? "" : "s"} will be assigned to section ${resolvedTargetSectionName}.`
+                      : `${selectedStudentIds.size} student${selectedStudentIds.size === 1 ? "" : "s"} selected — pick a section above.`}
               </p>
               <button
                 type="button"
