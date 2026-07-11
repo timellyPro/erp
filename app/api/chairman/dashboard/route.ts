@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getToken } from "next-auth/jwt";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { computeCurrentAndPreviousFeeStats } from "@/lib/computeFeeSummaryStats";
 
@@ -17,17 +18,18 @@ const DASHBOARD_CACHE_TTL_MS = 30_000;
 
 export async function GET(req: NextRequest) {
   try {
-    const token = await getToken({ req });
-    if (!token) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const role = String(token.role ?? "");
+    const role = String(session.user.role ?? "");
     if (role !== "CHAIRMAN" && role !== "SUPERADMIN") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
-    const schoolId = typeof token.schoolId === "string" ? token.schoolId.trim() : "";
+    const schoolId =
+      typeof session.user.schoolId === "string" ? session.user.schoolId.trim() : "";
     if (!schoolId) {
       return NextResponse.json({ message: "School not found in session" }, { status: 400 });
     }
