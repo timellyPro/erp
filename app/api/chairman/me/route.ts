@@ -1,5 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getToken } from "next-auth/jwt";
+import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 
 const profileCache = new Map<string, { expiresAt: number; user: unknown }>();
@@ -13,18 +14,18 @@ export function invalidateChairmanProfileCache(userId?: string | null): void {
   profileCache.delete(userId);
 }
 
-export async function GET(req: NextRequest) {
-  const token = await getToken({ req });
-  if (!token?.id) {
+export async function GET() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
 
-  const role = String(token.role ?? "");
+  const role = String(session.user.role ?? "");
   if (role !== "CHAIRMAN" && role !== "SUPERADMIN") {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
 
-  const userId = String(token.id);
+  const userId = String(session.user.id);
   const cached = profileCache.get(userId);
   if (cached && Date.now() < cached.expiresAt) {
     return NextResponse.json({ user: cached.user });

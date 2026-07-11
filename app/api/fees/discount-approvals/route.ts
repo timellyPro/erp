@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getToken } from "next-auth/jwt";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import {
   getDiscountApprovalsListCached,
@@ -61,12 +62,12 @@ function mapApprovals(rows: ApprovalListRow[]) {
 }
 
 export async function GET(req: NextRequest) {
-  const token = await getToken({ req });
-  if (!token) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
 
-  const role = String(token.role ?? "");
+  const role = String(session.user.role ?? "");
   if (!ALLOWED_ROLES.has(role)) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
@@ -74,8 +75,8 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const status = (searchParams.get("status") || "PENDING").toUpperCase();
   const schoolId =
-    typeof token.schoolId === "string" && token.schoolId.trim()
-      ? token.schoolId
+    typeof session.user.schoolId === "string" && session.user.schoolId.trim()
+      ? session.user.schoolId
       : searchParams.get("schoolId")?.trim();
 
   if (!schoolId) {
