@@ -1,5 +1,9 @@
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
-import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
+import { rollupOrphanExtraFeeAllocations } from "@/lib/rollupOrphanExtraFeeAllocations";
+import {
+  discountedSnapshotDueForHead,
+  studentFeeDiscountFromRecord,
+} from "@/lib/studentFeeHeadDiscount";
 import {
   extraFeeAppliesToStudent,
   isHostelCategoryExtraFeeName,
@@ -65,12 +69,50 @@ export type StudentFeeDueInput = {
   amountPaid: number;
   remainingFee: number;
   discountPercent: number;
+  discountFeeHeadKey?: string | null;
+  discountFeeHeadLabel?: string | null;
   name: string | null;
   admissionNo: string;
   parent: string;
   mobile: string;
   category: string | null;
 };
+
+function roundMoney(n: number): number {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+/**
+ * When a class/section has no ClassFeeStructure, copy components from another section
+ * of the same class name so tuition heads and BASE allocations still appear in the report.
+ */
+export function fillMissingClassFeeStructuresFromSiblings(
+  componentsByClassId: Map<string, Component[]>,
+  classMeta: ReadonlyArray<{ id: string; name: string; section: string | null }>
+): void {
+  const byName = new Map<string, Array<{ id: string; section: string | null }>>();
+  for (const c of classMeta) {
+    const key = c.name.trim().toLowerCase().replace(/\s+/g, " ");
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key)!.push({ id: c.id, section: c.section });
+  }
+  for (const siblings of byName.values()) {
+    const donor = siblings.find((s) => {
+      const comps = componentsByClassId.get(s.id);
+      return Array.isArray(comps) && comps.length > 0;
+    });
+    if (!donor) continue;
+    const donorComps = componentsByClassId.get(donor.id)!;
+    for (const s of siblings) {
+      const existing = componentsByClassId.get(s.id);
+      if (existing && existing.length > 0) continue;
+      componentsByClassId.set(
+        s.id,
+        donorComps.map((c) => ({ name: c.name, amount: Number(c.amount) || 0 }))
+      );
+    }
+  }
+}
 
 function extraFeeApplies(
   ef: ExtraFeeLite,
@@ -267,8 +309,8 @@ type HeadRow = {
   snapshotDue: number;
   gross: number;
   concession: number;
-  /** When set, use this instead of looking up `${studentId}|${headKey}` for net allocations. */
-  mergedExtraNetPaid?: number;
+  /** Extra fee ids merged into this EXTRA_NAME column (for orphan rollup + discounts). */
+  extraFeeIds?: string[];
 };
 
 function computeStudentHeads(
@@ -276,12 +318,22 @@ function computeStudentHeads(
   componentsByClassId: Map<string, Component[]>,
   extraFees: ExtraFeeLite[],
   netPaidByStudentHead: Map<string, number>,
-  includeSchoolWideExtras: boolean
+  includeSchoolWideExtras: boolean,
+  extraFeesById: Map<string, { id: string; name: string }>
 ): Record<string, { fee: number; concession: number; paid: number; due: number }> {
   const classId = fee.classId;
   const section = fee.section;
-  const structMult = structureMultiplierAfterDiscount(fee.discountPercent);
   const baseComponents = classId ? componentsByClassId.get(classId) ?? [] : [];
+  const discount = studentFeeDiscountFromRecord(
+    {
+      discountPercent: fee.discountPercent,
+      totalFee: fee.totalFee,
+      finalFee: fee.finalFee,
+      discountFeeHeadKey: fee.discountFeeHeadKey,
+      discountFeeHeadLabel: fee.discountFeeHeadLabel,
+    },
+    baseComponents
+  );
 
   const applicable = applicableExtrasForDueReport(
     extraFees,
@@ -298,10 +350,11 @@ function computeStudentHeads(
   const heads: HeadRow[] = [];
   for (let i = 0; i < baseComponents.length; i++) {
     const gross = rte ? 0 : Number(baseComponents[i]?.amount) || 0;
-    const snapshotDue = gross * structMult;
-    const concession = Math.max(gross - snapshotDue, 0);
+    const headKey = `BASE:${i}`;
+    const snapshotDue = roundMoney(discountedSnapshotDueForHead(headKey, gross, discount));
+    const concession = roundMoney(Math.max(gross - snapshotDue, 0));
     const groupId = baseGroupId(classId, i);
-    heads.push({ groupId, headKey: `BASE:${i}`, snapshotDue, gross, concession });
+    heads.push({ groupId, headKey, snapshotDue, gross, concession });
   }
 
   const extraByNorm = new Map<string, ExtraFeeLite[]>();
@@ -313,53 +366,80 @@ function computeStudentHeads(
   const normKeys = [...extraByNorm.keys()].sort((a, b) => a.localeCompare(b));
   for (const nk of normKeys) {
     const efs = extraByNorm.get(nk)!;
-    const gross = efs.reduce((s, e) => s + (Number(e.amount) || 0), 0);
     const slug = extraNameSlugFromNorm(nk);
     const groupId = `EXTRA_NAME@${slug}`;
     const headKey = groupId;
-    let mergedNet = 0;
+    let gross = 0;
+    let snapshotDue = 0;
     for (const ef of efs) {
-      mergedNet += netPaidByStudentHead.get(`${fee.studentId}|EXTRA:${ef.id}`) ?? 0;
+      const g = Number(ef.amount) || 0;
+      gross += g;
+      snapshotDue += discountedSnapshotDueForHead(`EXTRA:${ef.id}`, g, discount);
     }
+    snapshotDue = roundMoney(snapshotDue);
+    gross = roundMoney(gross);
+    const concession = roundMoney(Math.max(gross - snapshotDue, 0));
     heads.push({
       groupId,
       headKey,
-      snapshotDue: gross,
+      snapshotDue,
       gross,
-      concession: 0,
-      mergedExtraNetPaid: mergedNet,
+      concession,
+      extraFeeIds: efs.map((e) => e.id),
     });
   }
 
+  // Build EXTRA:id / BASE:n paid map, roll orphan extra ids onto live installment ids, then fold.
+  const idKeyed = new Map<string, number>();
+  for (const [composed, amount] of netPaidByStudentHead.entries()) {
+    if (!composed.startsWith(`${fee.studentId}|`)) continue;
+    idKeyed.set(composed.slice(`${fee.studentId}|`.length), amount);
+  }
+  rollupOrphanExtraFeeAllocations(
+    idKeyed,
+    heads.flatMap((h) =>
+      (h.extraFeeIds ?? []).map((id) => ({
+        key: `EXTRA:${id}`,
+        label: extraFeesById.get(id)?.name ?? h.groupId,
+        extraFeeId: id,
+      }))
+    ),
+    extraFeesById
+  );
+
   const netPaidByHead = new Map<string, number>();
   for (const h of heads) {
-    if (typeof h.mergedExtraNetPaid === "number") {
-      netPaidByHead.set(h.headKey, h.mergedExtraNetPaid);
+    if (h.extraFeeIds?.length) {
+      let mergedNet = 0;
+      for (const id of h.extraFeeIds) {
+        mergedNet += idKeyed.get(`EXTRA:${id}`) ?? 0;
+      }
+      netPaidByHead.set(h.headKey, mergedNet);
     } else {
-      const k = `${fee.studentId}|${h.headKey}`;
-      netPaidByHead.set(h.headKey, netPaidByStudentHead.get(k) ?? 0);
+      netPaidByHead.set(h.headKey, idKeyed.get(h.headKey) ?? 0);
     }
   }
+
   redistributeBaseMinusOneAllocations(
     netPaidByHead,
     heads.map((h) => ({ key: h.headKey, snapshotDue: h.snapshotDue }))
   );
 
-  const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);
-  const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);
-  const totalSnapshotDue = Math.max(heads.reduce((s, h) => s + h.snapshotDue, 0), 0);
-
+  /**
+   * Per-head paid comes from allocations only — never spread leftover StudentFee.amountPaid
+   * across heads (that marked unpaid installments as paid). Cap at snapshot so overpay on
+   * one head cannot inflate "Fees paid" above that head's due.
+   */
   const cells: Record<string, { fee: number; concession: number; paid: number; due: number }> = {};
   for (const h of heads) {
-    const paidAlloc = netPaidByHead.get(h.headKey) ?? 0;
-    const paidLegacy = totalSnapshotDue > 0 ? legacyPaidTotal * (h.snapshotDue / totalSnapshotDue) : 0;
-    const paidBefore = Math.max(paidAlloc + paidLegacy, 0);
-    const dueBefore = Math.max(h.snapshotDue - paidBefore, 0);
+    const paidAlloc = Math.max(netPaidByHead.get(h.headKey) ?? 0, 0);
+    const paidApplied = roundMoney(Math.min(paidAlloc, h.snapshotDue));
+    const dueBefore = roundMoney(Math.max(h.snapshotDue - paidApplied, 0));
 
     const cur = cells[h.groupId] ?? { fee: 0, concession: 0, paid: 0, due: 0 };
     cur.fee += h.gross;
     cur.concession += h.concession;
-    cur.paid += paidBefore;
+    cur.paid += paidApplied;
     cur.due += dueBefore;
     cells[h.groupId] = cur;
   }
@@ -376,6 +456,11 @@ export function buildFeeDueReportPayload(args: {
   componentsByClassId: Map<string, Component[]>;
   /** When true, include SCHOOL-wide extra fees (one column each for every catalog row). Default false — huge width and not class-specific. */
   includeSchoolWideExtras?: boolean;
+  /**
+   * Optional full extra-fee id→name map (including fees not on the roster columns) so orphan
+   * allocations can roll onto matching installment heads by name.
+   */
+  extraFeesById?: Map<string, { id: string; name: string }>;
 }): FeeDueReportPayload {
   const includeSchoolWideExtras = Boolean(args.includeSchoolWideExtras);
 
@@ -386,6 +471,9 @@ export function buildFeeDueReportPayload(args: {
   });
 
   const rosterExtras = extraFeesForDueReportRoster(args.extraFees, sortedStudents, includeSchoolWideExtras);
+  const extraFeesById =
+    args.extraFeesById ??
+    new Map(args.extraFees.map((e) => [e.id, { id: e.id, name: e.name }]));
   const extraFeeNameById = new Map(rosterExtras.map((e) => [e.id, e.name]));
 
   const extraDisplayBySlug = new Map<string, string>();
@@ -409,7 +497,8 @@ export function buildFeeDueReportPayload(args: {
       args.componentsByClassId,
       rosterExtras,
       args.netPaidByStudentHead,
-      includeSchoolWideExtras
+      includeSchoolWideExtras,
+      extraFeesById
     );
     for (const gid of Object.keys(cells)) {
       if (!seenGroup.has(gid)) {
@@ -439,13 +528,13 @@ export function buildFeeDueReportPayload(args: {
       parent: s.parent,
       mobile: s.mobile,
       category: (s.category || "Day Scholar").trim() || "Day Scholar",
-      totalFee: currentYearTotalFee,
-      totalDiscount: currentYearTotalDiscount,
-      feesPaid: currentYearFeesPaid,
-      feesDue: currentYearFeesDue,
-      previousYearTotalFee,
-      previousYearFeesPaid,
-      previousYearFeesDue,
+      totalFee: roundMoney(currentYearTotalFee),
+      totalDiscount: roundMoney(currentYearTotalDiscount),
+      feesPaid: roundMoney(currentYearFeesPaid),
+      feesDue: roundMoney(currentYearFeesDue),
+      previousYearTotalFee: roundMoney(previousYearTotalFee),
+      previousYearFeesPaid: roundMoney(previousYearFeesPaid),
+      previousYearFeesDue: roundMoney(previousYearFeesDue),
       cellsByGroupId: cells,
     });
   }

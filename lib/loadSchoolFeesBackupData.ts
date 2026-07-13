@@ -8,6 +8,7 @@ import {
 import { FEE_COLLECTION_PAYMENT_WHERE } from "@/lib/schoolDashboardCollection";
 import {
   buildFeeDueReportPayload,
+  fillMissingClassFeeStructuresFromSiblings,
   type ExtraFeeLite,
   type StudentFeeDueInput,
 } from "@/lib/feeDueReportCompute";
@@ -465,6 +466,21 @@ export async function loadSchoolFeesBackupData(schoolId: string): Promise<School
     }));
     componentsByClassId.set(s.classId, comps);
   }
+  const classMetaById = new Map<string, { id: string; name: string; section: string | null }>();
+  for (const s of structuresRaw) {
+    classMetaById.set(s.classId, {
+      id: s.classId,
+      name: s.class?.name ?? "",
+      section: s.class?.section ?? null,
+    });
+  }
+  for (const f of fees) {
+    const cls = f.student.class;
+    if (cls?.id) {
+      classMetaById.set(cls.id, { id: cls.id, name: cls.name, section: cls.section });
+    }
+  }
+  fillMissingClassFeeStructuresFromSiblings(componentsByClassId, [...classMetaById.values()]);
 
   const studentIds = fees.map((f) => f.studentId);
   const [paymentAllocs, refundAllocs] =
@@ -540,6 +556,8 @@ export async function loadSchoolFeesBackupData(schoolId: string): Promise<School
       amountPaid: f.amountPaid,
       remainingFee: f.remainingFee,
       discountPercent: f.discountPercent,
+      discountFeeHeadKey: f.discountFeeHeadKey,
+      discountFeeHeadLabel: f.discountFeeHeadLabel,
       name: st.user?.name ?? null,
       admissionNo: st.admissionNumber,
       parent: st.fatherName?.trim() || "-",
@@ -555,6 +573,7 @@ export async function loadSchoolFeesBackupData(schoolId: string): Promise<School
     netPaidByStudentHead,
     componentsByClassId,
     includeSchoolWideExtras: true,
+    extraFeesById: new Map(extraFees.map((e) => [e.id, { id: e.id, name: e.name }])),
   });
 
   const studentFees: SchoolFeesBackupStudentFeeRow[] = fees.map((f) => {

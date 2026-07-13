@@ -6,6 +6,7 @@ import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import {
   buildFeeDueReportPayload,
+  fillMissingClassFeeStructuresFromSiblings,
   type ExtraFeeLite,
   type StudentFeeDueInput,
 } from "@/lib/feeDueReportCompute";
@@ -36,7 +37,7 @@ export async function GET(req: Request) {
     const includeSchoolWideExtras =
       searchParams.get("schoolWideExtras") === "1" || searchParams.get("schoolWideExtras") === "true";
 
-    const [school, fees, structuresRaw, extraFeesRaw] = await Promise.all([
+    const [school, fees, structuresRaw, extraFeesRaw, classesMeta] = await Promise.all([
       prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } }),
       prisma.studentFee.findMany({
         where: {
@@ -78,6 +79,10 @@ export async function GET(req: Request) {
           residencyScope: true,
         },
       }),
+      prisma.class.findMany({
+        where: { schoolId },
+        select: { id: true, name: true, section: true },
+      }),
     ]);
 
     const extraFees: ExtraFeeLite[] = extraFeesRaw.map((e) => ({
@@ -99,6 +104,9 @@ export async function GET(req: Request) {
       }));
       componentsByClassId.set(s.classId, comps);
     }
+    fillMissingClassFeeStructuresFromSiblings(componentsByClassId, classesMeta);
+
+    const extraFeesById = new Map(extraFees.map((e) => [e.id, { id: e.id, name: e.name }]));
 
     const studentIds = fees.map((f) => f.studentId);
 
@@ -175,6 +183,8 @@ export async function GET(req: Request) {
         amountPaid: f.amountPaid,
         remainingFee: f.remainingFee,
         discountPercent: f.discountPercent,
+        discountFeeHeadKey: f.discountFeeHeadKey,
+        discountFeeHeadLabel: f.discountFeeHeadLabel,
         name: st.user?.name ?? null,
         admissionNo: st.admissionNumber,
         parent: st.fatherName?.trim() || "-",
@@ -190,6 +200,7 @@ export async function GET(req: Request) {
       netPaidByStudentHead,
       componentsByClassId,
       includeSchoolWideExtras,
+      extraFeesById,
     });
 
     const workbook = await buildFeeDueReportWorkbook(payload);
