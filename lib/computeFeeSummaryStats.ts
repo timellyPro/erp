@@ -2,6 +2,7 @@ import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import {
   buildFeeDueReportPayload,
+  fillMissingClassFeeStructuresFromSiblings,
   type ExtraFeeLite,
   type StudentFeeDueInput,
 } from "@/lib/feeDueReportCompute";
@@ -24,7 +25,7 @@ export type CurrentPreviousFeeSummaryStats = {
 export async function computeCurrentAndPreviousFeeStats(
   schoolId: string
 ): Promise<CurrentPreviousFeeSummaryStats> {
-  const [fees, structuresRaw, extraFeesRaw] = await Promise.all([
+  const [fees, structuresRaw, extraFeesRaw, classesMeta] = await Promise.all([
     prisma.studentFee.findMany({
       where: { student: { schoolId, ...activeStudentWhere } },
       include: {
@@ -57,6 +58,10 @@ export async function computeCurrentAndPreviousFeeStats(
         targetStudentId: true,
         residencyScope: true,
       },
+    }),
+    prisma.class.findMany({
+      where: { schoolId },
+      select: { id: true, name: true, section: true },
     }),
   ]);
 
@@ -120,14 +125,13 @@ export async function computeCurrentAndPreviousFeeStats(
 
   const componentsByClassId = new Map<string, Array<{ name: string; amount: number }>>();
   for (const s of structuresRaw) {
-    componentsByClassId.set(
-      s.classId,
-      (Array.isArray(s.components) ? (s.components as unknown[]) : []).map((c) => ({
-        name: String((c as { name?: string })?.name ?? "Component"),
-        amount: Number((c as { amount?: number })?.amount) || 0,
-      }))
-    );
+    const comps = (Array.isArray(s.components) ? (s.components as unknown[]) : []).map((c) => ({
+      name: String((c as { name?: string })?.name ?? "Component"),
+      amount: Number((c as { amount?: number })?.amount) || 0,
+    }));
+    componentsByClassId.set(s.classId, comps);
   }
+  fillMissingClassFeeStructuresFromSiblings(componentsByClassId, classesMeta);
 
   const extraFees: ExtraFeeLite[] = extraFeesRaw.map((e) => ({
     id: e.id,
@@ -152,6 +156,8 @@ export async function computeCurrentAndPreviousFeeStats(
       amountPaid: f.amountPaid,
       remainingFee: f.remainingFee,
       discountPercent: f.discountPercent,
+      discountFeeHeadKey: f.discountFeeHeadKey,
+      discountFeeHeadLabel: f.discountFeeHeadLabel,
       name: f.student.user?.name ?? null,
       admissionNo: f.student.admissionNumber,
       parent: f.student.fatherName?.trim() || "-",
@@ -167,6 +173,7 @@ export async function computeCurrentAndPreviousFeeStats(
     netPaidByStudentHead,
     componentsByClassId,
     includeSchoolWideExtras: true,
+    extraFeesById: new Map(extraFees.map((e) => [e.id, { id: e.id, name: e.name }])),
   });
 
   const totalFee = roundRupee(payload.rows.reduce((sum, row) => sum + row.totalFee, 0));
