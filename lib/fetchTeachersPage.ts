@@ -1,9 +1,13 @@
 import type { TeacherRow } from "@/app/frontend/components/schooladmin/teachersTab/TeachersList";
 import {
+  getLastTeachersSchoolId,
   invalidateTeachersPageCache,
   peekAppointTeacherData,
+  peekAppointTeacherDataAny,
   peekTeacherAttendance,
+  peekTeacherAttendanceAny,
   peekTeachersList,
+  peekTeachersListAny,
   setAppointTeacherDataCache,
   setTeacherAttendanceCache,
   setTeachersListCache,
@@ -11,7 +15,17 @@ import {
   type TeacherAttendanceEntry,
 } from "@/lib/teachersPageClientCache";
 
-export { invalidateTeachersPageCache, peekTeachersList, peekTeacherAttendance };
+export {
+  getLastTeachersSchoolId,
+  invalidateTeachersPageCache,
+  peekAppointTeacherData,
+  peekAppointTeacherDataAny,
+  peekTeacherAttendance,
+  peekTeacherAttendanceAny,
+  peekTeachersList,
+  peekTeachersListAny,
+  setTeacherAttendanceCache,
+};
 export type { TeacherApiRow };
 
 const DEFAULT_AVATAR = "https://randomuser.me/api/portraits/lego/1.jpg";
@@ -156,13 +170,12 @@ export async function fetchAppointTeacherData(
 export function warmTeachersPage(schoolId: string | null | undefined): void {
   if (!schoolId) return;
   const today = new Date().toISOString().slice(0, 10);
-  if (!peekTeachersList(schoolId)) {
-    void fetchTeachersList(schoolId).catch(() => {});
-  }
-  if (!peekTeacherAttendance(schoolId, today)) {
-    void fetchTeacherAttendance(schoolId, today).catch(() => {});
-  }
-  if (!peekAppointTeacherData(schoolId)) {
-    void fetchAppointTeacherData(schoolId).catch(() => {});
-  }
+  // Always kick network in background so tab opens with fresh data after instant cache paint.
+  void fetchTeachersList(schoolId, { revalidate: Boolean(peekTeachersList(schoolId)) }).catch(() => {});
+  void fetchTeacherAttendance(schoolId, today, {
+    revalidate: Boolean(peekTeacherAttendance(schoolId, today)),
+  }).catch(() => {});
+  void fetchAppointTeacherData(schoolId, {
+    revalidate: Boolean(peekAppointTeacherData(schoolId)),
+  }).catch(() => {});
 }

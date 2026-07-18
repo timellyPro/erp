@@ -3,10 +3,16 @@
 import { useRouter } from "next/navigation";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import PageHeader from "../../common/PageHeader";
+import TimellyLoader from "../../common/TimellyLoader";
 import { SelectField } from "./MarksSelectField";
 import { Save } from "lucide-react";
 import DataTable from "../../common/TableLayout";
 import { Column } from "@/app/frontend/types/superadmin";
+import {
+  loadTeacherMarksClasses,
+  peekTeacherMarksClasses,
+  type LiteClassOption,
+} from "@/lib/loadTeacherFastTabs";
 
 /* ---------------- TYPES ---------------- */
 
@@ -51,19 +57,34 @@ const DEFAULT_SUBJECTS = [
 ];
 const DEFAULT_EXAM_TYPES = ["TERM 1", "TERM 2", "FINAL"];
 
+function mapLiteClasses(list: LiteClassOption[]): ClassOption[] {
+  return list.map((c) => ({ id: c.id, name: c.name, section: c.section ?? null }));
+}
+
 export default function TeacherMarksTab() {
   const router = useRouter();
-  const [classes, setClasses] = useState<ClassOption[]>([]);
+  const initialClasses = peekTeacherMarksClasses();
+  const [classes, setClasses] = useState<ClassOption[]>(() =>
+    initialClasses ? mapLiteClasses(initialClasses) : []
+  );
+  const [classesLoading, setClassesLoading] = useState(() => !initialClasses);
   const [subjectOptions, setSubjectOptions] = useState<string[]>(DEFAULT_SUBJECTS);
   const [examTypeOptions, setExamTypeOptions] =
     useState<string[]>(DEFAULT_EXAM_TYPES);
-  const [form, setForm] = useState({
-    classId: "",
-    classLabel: "",
-    section: "",
-    subject: "Mathematics",
-    examType: "TERM 1",
-    maxMarks: 100,
+  const [form, setForm] = useState(() => {
+    const first = initialClasses?.[0];
+    return {
+      classId: first?.id ?? "",
+      classLabel: first
+        ? first.section
+          ? `${first.name} - ${first.section}`
+          : first.name
+        : "",
+      section: first?.section || "Section A",
+      subject: "Mathematics",
+      examType: "TERM 1",
+      maxMarks: 100,
+    };
   });
   const [activeBtn, setActiveBtn] = useState<null | "save" | "import" | "export">(null);
   const [rows, setRows] = useState<StudentRow[]>([]);
@@ -85,23 +106,43 @@ export default function TeacherMarksTab() {
       })()
     : ["Section A"];
   const fetchClasses = useCallback(async () => {
-    try {
-      const res = await fetch("/api/class/list");
-      const data = await res.json();
-      if (!res.ok) return;
-      const list = Array.isArray(data.classes) ? data.classes : [];
-      setClasses(list.map((c: { id: string; name: string; section?: string | null }) => ({ id: c.id, name: c.name, section: c.section ?? null })));
-      if (list.length > 0 && !form.classId) {
-        const first = list[0];
-        setForm((prev) => ({
+    const cached = peekTeacherMarksClasses();
+    if (cached?.length) {
+      setClasses(mapLiteClasses(cached));
+      setClassesLoading(false);
+      setForm((prev) => {
+        if (prev.classId) return prev;
+        const first = cached[0];
+        return {
           ...prev,
           classId: first.id,
           classLabel: first.section ? `${first.name} - ${first.section}` : first.name,
           section: first.section || "Section A",
-        }));
+        };
+      });
+    } else {
+      setClassesLoading(true);
+    }
+
+    try {
+      const list = await loadTeacherMarksClasses({ revalidate: true });
+      setClasses(mapLiteClasses(list));
+      if (list.length > 0) {
+        setForm((prev) => {
+          if (prev.classId) return prev;
+          const first = list[0];
+          return {
+            ...prev,
+            classId: first.id,
+            classLabel: first.section ? `${first.name} - ${first.section}` : first.name,
+            section: first.section || "Section A",
+          };
+        });
       }
     } catch {
-      setClasses([]);
+      if (!peekTeacherMarksClasses()?.length) setClasses([]);
+    } finally {
+      setClassesLoading(false);
     }
   }, []);
 
@@ -478,6 +519,10 @@ export default function TeacherMarksTab() {
           title="Marks Entry"
           subtitle="Enter and manage student marks for your classes"
         />
+
+        {classesLoading && classes.length === 0 && (
+          <TimellyLoader title="Loading classes" steps={["Classes", "Subjects", "Marks"]} />
+        )}
 
         {/* FILTER BAR */}
         <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl p-4 sm:p-6">

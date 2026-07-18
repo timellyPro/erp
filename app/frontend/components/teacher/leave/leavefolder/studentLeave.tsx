@@ -1,35 +1,22 @@
 import React, { useState, useEffect, useCallback } from "react";
 import {
-  GraduationCap,
-  Briefcase,
   Clock,
   CheckCircle2,
   Search,
   Calendar,
-  Paperclip,
   Check,
   X,
 } from "lucide-react";
-import { log } from "console";
 import PageHeader from "../../../common/PageHeader";
-import Spinner from "../../../common/Spinner";
+import TimellyLoader from "../../../common/TimellyLoader";
+import {
+  loadTeacherStudentLeaves,
+  peekTeacherStudentLeaves,
+  setTeacherStudentLeavesCache,
+  type TeacherStudentLeave,
+} from "@/lib/loadTeacherFastTabs";
 
-type StudentLeaveItem = {
-  attachment: any;
-  id: string;
-  leaveType: string;
-  reason: string;
-  fromDate: string;
-  toDate: string;
-  status: string;
-  remarks: string | null;
-  createdAt: string;
-  student: {
-    id: string;
-    user: { id: string; name: string | null; email: string | null; photoUrl: string | null } | null;
-    class: { id: string; name: string; section: string | null } | null;
-  };
-};
+type StudentLeaveItem = TeacherStudentLeave;
 
 function formatDate(d: string) {
   return new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
@@ -54,51 +41,80 @@ function leaveTypeShort(t: string) {
 }
 
 export default function StudentLeave() {
+  const initial = peekTeacherStudentLeaves();
   const [subTab, setSubTab] = useState<"pending" | "history">("pending");
   const [searchQuery, setSearchQuery] = useState("");
-  const [pendingLeaves, setPendingLeaves] = useState<StudentLeaveItem[]>([]);
-  const [allLeaves, setAllLeaves] = useState<StudentLeaveItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [pendingLeaves, setPendingLeaves] = useState<StudentLeaveItem[]>(
+    () => initial?.pendingLeaves ?? []
+  );
+  const [allLeaves, setAllLeaves] = useState<StudentLeaveItem[]>(
+    () => initial?.allLeaves ?? []
+  );
+  const [loading, setLoading] = useState(() => !initial);
   const [actionId, setActionId] = useState<string | null>(null);
 
-  const applyLeaveUpdate = useCallback((updatedLeave: StudentLeaveItem) => {
-    setPendingLeaves((prev) => prev.filter((leave) => leave.id !== updatedLeave.id));
-    setAllLeaves((prev) => {
-      const existing = prev.some((leave) => leave.id === updatedLeave.id);
-      if (!existing) {
-        return [updatedLeave, ...prev];
+  const syncCache = useCallback(
+    (pending: StudentLeaveItem[], all: StudentLeaveItem[]) => {
+      setTeacherStudentLeavesCache({ pendingLeaves: pending, allLeaves: all });
+    },
+    []
+  );
+
+  const applyLeaveUpdate = useCallback(
+    (updatedLeave: StudentLeaveItem) => {
+      setPendingLeaves((prev) => {
+        const pending = prev.filter((leave) => leave.id !== updatedLeave.id);
+        setAllLeaves((prevAll) => {
+          const existing = prevAll.some((leave) => leave.id === updatedLeave.id);
+          const all = !existing
+            ? [updatedLeave, ...prevAll]
+            : prevAll.map((leave) =>
+                leave.id === updatedLeave.id ? updatedLeave : leave
+              );
+          syncCache(pending, all);
+          return all;
+        });
+        return pending;
+      });
+    },
+    [syncCache]
+  );
+
+  const fetchLeaves = useCallback(
+    async (revalidate = false) => {
+      if (!revalidate) {
+        const cached = peekTeacherStudentLeaves();
+        if (cached) {
+          setPendingLeaves(cached.pendingLeaves);
+          setAllLeaves(cached.allLeaves);
+          setLoading(false);
+          void fetchLeaves(true);
+          return;
+        }
       }
-      return prev.map((leave) => (leave.id === updatedLeave.id ? updatedLeave : leave));
-    });
-  }, []);
 
-  const fetchPending = useCallback(async () => {
-    try {
-      const res = await fetch("/api/student-leaves/pending");
-      const data = await res.json();
-      if (res.ok && Array.isArray(data)) setPendingLeaves(data);
-      else setPendingLeaves([]);
-    } catch {
-      setPendingLeaves([]);
-    }
-  }, []);
-
-  const fetchAll = useCallback(async () => {
-    try {
-      const res = await fetch("/api/student-leaves/all");
-      const data = await res.json();
-      //console.log("All Leaves:", data);
-      if (res.ok && Array.isArray(data)) setAllLeaves(data);
-      else setAllLeaves([]);
-    } catch (err) {
-      setAllLeaves([]);
-    }
-  }, []);
+      try {
+        setLoading((prev) =>
+          pendingLeaves.length === 0 && allLeaves.length === 0 ? true : prev
+        );
+        const payload = await loadTeacherStudentLeaves({ revalidate: true });
+        setPendingLeaves(payload.pendingLeaves);
+        setAllLeaves(payload.allLeaves);
+      } catch {
+        if (pendingLeaves.length === 0 && allLeaves.length === 0) {
+          setPendingLeaves([]);
+          setAllLeaves([]);
+        }
+      } finally {
+        setLoading(false);
+      }
+    },
+    [pendingLeaves.length, allLeaves.length]
+  );
 
   useEffect(() => {
-    setLoading(true);
-    Promise.all([fetchPending(), fetchAll()]).finally(() => setLoading(false));
-  }, [fetchPending, fetchAll]);
+    void fetchLeaves(false);
+  }, [fetchLeaves]);
 
   const handleApprove = async (id: string) => {
     setActionId(id);
@@ -108,10 +124,8 @@ export default function StudentLeave() {
       if (res.ok) {
         if (data?.leave) {
           applyLeaveUpdate(data.leave as StudentLeaveItem);
-        } else {
-          await fetchPending();
-          await fetchAll();
         }
+        void fetchLeaves(true);
       }
     } finally {
       setActionId(null);
@@ -130,10 +144,8 @@ export default function StudentLeave() {
       if (res.ok) {
         if (data?.leave) {
           applyLeaveUpdate(data.leave as StudentLeaveItem);
-        } else {
-          await fetchPending();
-          await fetchAll();
         }
+        void fetchLeaves(true);
       }
     } finally {
       setActionId(null);
@@ -151,6 +163,7 @@ export default function StudentLeave() {
     : displayList;
 
   const approvedRecent = allLeaves.filter((l) => l.status === "APPROVED").length;
+  const isEmpty = pendingLeaves.length === 0 && allLeaves.length === 0;
 
   return (
     <div className="text-white  md:px-0">
@@ -178,10 +191,8 @@ export default function StudentLeave() {
           </div>
         }
       />
-        {loading && (
-              <div className="flex justify-center items-center min-h-[300px]">
-                <Spinner />
-              </div>
+        {loading && isEmpty && (
+              <TimellyLoader title="Loading student leaves" steps={["Pending", "History"]} />
             )}
 
       {/* Sub-Nav & Search Bar */}
@@ -220,11 +231,7 @@ export default function StudentLeave() {
       </div>
 
       {/* Request Cards */}
-      {loading ? (
-        <div className="max-w-6xl mx-auto flex justify-center py-12">
-          <div className="w-10 h-10 border-2 border-[#b4f03d]/30 border-t-[#b4f03d] rounded-full animate-spin" />
-        </div>
-      ) : filteredList.length === 0 ? (
+      {loading && isEmpty ? null : filteredList.length === 0 ? (
         <div className="max-w-6xl mx-auto border border-white/10 rounded-[1rem] p-8 text-center text-white/50">
           {subTab === "pending" ? "No pending student leave requests." : "No leave history."}
         </div>
@@ -275,11 +282,6 @@ export default function StudentLeave() {
                     <p className="text-white/70 text-[0.85rem] md:text-[0.9rem] leading-relaxed font-normal">
                       {leave.reason}
                     </p>
-                    {/*{leave.attachment && (
-                      <button className="flex items-center gap-1.5 mt-2 text-[#b4f03d] text-xs font-semibold hover:underline w-fit">
-                        <Paperclip size={12} /> View Attachment
-                      </button>
-                    )}*/}
                   </div>
                 </div>
 

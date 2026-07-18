@@ -17,7 +17,7 @@ import { getAge, toStudentForm } from "./students/utils";
 import { ClassItem } from "./students/types";
 import SuccessPopups from "../common/SuccessPopUps";
 import StudentsHeader from "./students/StudentsHeader";
-import Spinner from "../common/Spinner";
+import TimellyLoader from "../common/TimellyLoader";
 
 type Props = {
   classes?: ClassItem[];
@@ -145,10 +145,12 @@ export default function StudentsManagementPage({ classes, reload }: Props) {
             </div>
           </div>
 
-          {page.tableLoading ? (
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
-              <Spinner size={26} label="Loading..." />
-            </div>
+          {page.tableLoading && pagedStudents.length === 0 ? (
+            <TimellyLoader
+              compact
+              title="Loading students"
+              steps={["Roster", "Filters", "Ready"]}
+            />
           ) : pagedStudents.length === 0 ? (
             <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center text-white/60">
               No students found

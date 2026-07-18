@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import SuccessPopups from "../../common/SuccessPopUps";
-import { CLASS_HANDLING, DEFAULT_TEACHER_PROFILE, QUICK_STATS } from "./data";
+import TimellyLoader from "../../common/TimellyLoader";
+import { EMPTY_CLASSES, EMPTY_QUICK_STATS, EMPTY_TEACHER_PROFILE } from "./data";
 import {
   ClassHandlingItem,
   QuickStats,
@@ -15,138 +16,70 @@ import ClassesHandlingCard from "./sections/ClassesHandlingCard";
 import ContactInformationCard from "./sections/ContactInformationCard";
 import QuickStatsCard from "./sections/QuickStatsCard";
 import EditProfileForm from "./sections/EditProfileForm";
+import {
+  loadTeacherProfile,
+  peekTeacherProfile,
+  setTeacherProfileCache,
+  type TeacherProfilePagePayload,
+} from "@/lib/loadTeacherFastTabs";
 
 type ProfileTab = "overview" | "edit";
 
-type MeAssignedClass = {
-  id: string;
-  name: string;
-  section: string | null;
-  _count: { students: number };
-};
-
-type MeUserResponse = {
-  id: string;
-  name: string | null;
-  email: string | null;
-  mobile: string | null;
-  address: string | null;
-  qualification: string | null;
-  experience: string | null;
-  photoUrl: string | null;
-  teacherId: string | null;
-  subject: string | null;
-  createdAt: string;
-  assignedClasses: MeAssignedClass[];
-};
-
-type MeApiResponse = {
-  user: MeUserResponse;
-};
-
-type EventListItem = {
-  type?: string | null;
-};
-
-type EventListResponse = {
-  events?: EventListItem[];
-};
-
-function formatDate(value?: string | null) {
-  if (!value) return DEFAULT_TEACHER_PROFILE.joiningDate;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return DEFAULT_TEACHER_PROFILE.joiningDate;
-  return date.toLocaleDateString("en-GB");
-}
-
-function mapClassName(name: string, section?: string | null) {
-  if (!section) return name;
-  return `${name}-${section}`;
-}
-
 export default function TeacherProfileTab() {
-  const [profileData, setProfileData] = useState<TeacherProfileData>(DEFAULT_TEACHER_PROFILE);
-  const [draftData, setDraftData] = useState<TeacherProfileData>(DEFAULT_TEACHER_PROFILE);
+  const initial = peekTeacherProfile();
+  const [profileData, setProfileData] = useState<TeacherProfileData>(
+    () => initial?.profile ?? EMPTY_TEACHER_PROFILE
+  );
+  const [draftData, setDraftData] = useState<TeacherProfileData>(
+    () => initial?.profile ?? EMPTY_TEACHER_PROFILE
+  );
   const [activeTab, setActiveTab] = useState<ProfileTab>("overview");
   const [showSuccess, setShowSuccess] = useState(false);
-  const [classes, setClasses] = useState<ClassHandlingItem[]>(CLASS_HANDLING);
-  const [quickStats, setQuickStats] = useState<QuickStats>(QUICK_STATS);
+  const [classes, setClasses] = useState<ClassHandlingItem[]>(
+    () => initial?.classes ?? EMPTY_CLASSES
+  );
+  const [quickStats, setQuickStats] = useState<QuickStats>(
+    () => initial?.quickStats ?? EMPTY_QUICK_STATS
+  );
+  const [userId, setUserId] = useState(() => initial?.userId ?? "");
+  const [loading, setLoading] = useState(() => !initial);
 
-  const fetchWorkshopsCount = async (teacherId: string) => {
-    try {
-      const res = await fetch(`/api/events/list?teacherId=${encodeURIComponent(teacherId)}`);
-      const data = (await res.json()) as EventListResponse;
-      if (!res.ok) return QUICK_STATS.workshopsConducted;
-      const events = data?.events ?? [];
-      return events.filter((event) => (event.type ?? "").toLowerCase() === "workshop").length;
-    } catch {
-      return QUICK_STATS.workshopsConducted;
-    }
-  };
+  const applyPayload = useCallback((payload: TeacherProfilePagePayload) => {
+    setProfileData(payload.profile);
+    setDraftData(payload.profile);
+    setClasses(payload.classes);
+    setQuickStats(payload.quickStats);
+    setUserId(payload.userId);
+  }, []);
+
+  const load = useCallback(
+    async (revalidate = false) => {
+      if (!revalidate) {
+        const cached = peekTeacherProfile();
+        if (cached) {
+          applyPayload(cached);
+          setLoading(false);
+          void load(true);
+          return;
+        }
+        setLoading(true);
+      }
+
+      try {
+        const payload = await loadTeacherProfile({ revalidate: true });
+        applyPayload(payload);
+      } catch {
+        // Keep cached / empty state
+      } finally {
+        setLoading(false);
+      }
+    },
+    [applyPayload]
+  );
 
   useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const res = await fetch("/api/user/me");
-        const data = (await res.json()) as MeApiResponse;
-        if (!res.ok || cancelled || !data?.user) return;
-
-        const user = data.user;
-        const mappedClasses: ClassHandlingItem[] =
-          (user.assignedClasses ?? []).map((item) => ({
-            className: `Class ${mapClassName(item.name, item.section)}`,
-            subject: user.subject ?? DEFAULT_TEACHER_PROFILE.subject,
-            students: item._count?.students ?? 0,
-          })) || [];
-        const workshopsConducted = await fetchWorkshopsCount(user.id);
-
-        const mappedProfile: TeacherProfileData = {
-          ...DEFAULT_TEACHER_PROFILE,
-          name: user.name ?? DEFAULT_TEACHER_PROFILE.name,
-          email: user.email ?? DEFAULT_TEACHER_PROFILE.email,
-          phone: user.mobile ?? "-",
-          address: user.address ?? "-",
-          qualification: user.qualification ?? "-",
-          experience: user.experience ?? "-",
-          avatarUrl: user.photoUrl ?? DEFAULT_TEACHER_PROFILE.avatarUrl,
-          teacherId: user.teacherId ?? DEFAULT_TEACHER_PROFILE.teacherId,
-          subject: user.subject ?? DEFAULT_TEACHER_PROFILE.subject,
-          joiningDate: formatDate(user.createdAt),
-          assignedClasses:
-            mappedClasses.length > 0
-              ? mappedClasses.map((c) => c.className.replace(/^Class\s/, "")).join(", ")
-              : DEFAULT_TEACHER_PROFILE.assignedClasses,
-        };
-
-        setProfileData(mappedProfile);
-        setDraftData(mappedProfile);
-
-        if (mappedClasses.length > 0) {
-          const totalStudents = mappedClasses.reduce((sum, c) => sum + c.students, 0);
-          setClasses(mappedClasses);
-          setQuickStats({
-            ...QUICK_STATS,
-            totalClasses: mappedClasses.length,
-            totalStudents,
-            workshopsConducted,
-          });
-        } else {
-          setQuickStats((prev) => ({
-            ...prev,
-            workshopsConducted,
-          }));
-        }
-      } catch {
-        // Keep defaults if API fails.
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void load(false);
+  }, [load]);
 
   const isEditMode = activeTab === "edit";
 
@@ -166,6 +99,7 @@ export default function TeacherProfileTab() {
       const res = await fetch("/api/user/me", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           name: draftData.name,
           mobile: draftData.phone,
@@ -179,67 +113,28 @@ export default function TeacherProfileTab() {
       });
       if (!res.ok) return;
 
-      const data = (await res.json()) as MeApiResponse;
-      const user = data?.user;
+      const optimistic: TeacherProfilePagePayload = {
+        userId,
+        profile: { ...draftData, avatarUrl: draftData.avatarUrl?.trim() || null },
+        classes,
+        quickStats,
+      };
+      applyPayload(optimistic);
+      setTeacherProfileCache(optimistic);
+      void loadTeacherProfile({ revalidate: true })
+        .then((fresh) => {
+          applyPayload(fresh);
+          setTeacherProfileCache(fresh);
+        })
+        .catch(() => {});
 
-      if (user) {
-        const mappedClasses: ClassHandlingItem[] =
-          (user.assignedClasses ?? []).map((item) => ({
-            className: `Class ${mapClassName(item.name, item.section)}`,
-            subject: user.subject ?? draftData.subject,
-            students: item._count?.students ?? 0,
-          })) || [];
-        const workshopsConducted = await fetchWorkshopsCount(user.id);
-
-        const mappedProfile: TeacherProfileData = {
-          ...draftData,
-          name: user.name ?? draftData.name,
-          email: user.email ?? draftData.email,
-          phone: user.mobile ?? draftData.phone,
-          address: user.address ?? draftData.address,
-          qualification: user.qualification ?? draftData.qualification,
-          experience: user.experience ?? draftData.experience,
-          avatarUrl: user.photoUrl ?? draftData.avatarUrl,
-          teacherId: user.teacherId ?? draftData.teacherId,
-          subject: user.subject ?? draftData.subject,
-          joiningDate: formatDate(user.createdAt),
-        };
-        setProfileData(mappedProfile);
-        setDraftData(mappedProfile);
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(
-            new CustomEvent("profile-updated", {
-              detail: { userId: user.id, photoUrl: mappedProfile.avatarUrl },
-            })
-          );
-          localStorage.setItem("timelly:profile-updated", String(Date.now()));
-        }
-
-        if (mappedClasses.length > 0) {
-          const totalStudents = mappedClasses.reduce((sum, c) => sum + c.students, 0);
-          setClasses(mappedClasses);
-          setQuickStats({
-            ...QUICK_STATS,
-            totalClasses: mappedClasses.length,
-            totalStudents,
-            workshopsConducted,
-          });
-        } else {
-          setQuickStats((prev) => ({
-            ...prev,
-            workshopsConducted,
-          }));
-        }
-      } else {
-        setProfileData(draftData);
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(
-            new CustomEvent("profile-updated", {
-              detail: { photoUrl: draftData.avatarUrl },
-            })
-          );
-          localStorage.setItem("timelly:profile-updated", String(Date.now()));
-        }
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("profile-updated", {
+            detail: { userId, photoUrl: draftData.avatarUrl },
+          })
+        );
+        localStorage.setItem("timelly:profile-updated", String(Date.now()));
       }
 
       setActiveTab("overview");
@@ -254,10 +149,16 @@ export default function TeacherProfileTab() {
     setActiveTab("overview");
   };
 
+  if (loading && !profileData.name) {
+    return (
+      <div className="w-full min-h-screen text-white px-3 sm:px-6 lg:px-8 2xl:px-12 py-4">
+        <TimellyLoader title="Loading profile" steps={["Account", "Classes", "Stats"]} />
+      </div>
+    );
+  }
+
   return (
     <div className="w-full min-h-screen text-white px-3 sm:px-6 lg:px-8 2xl:px-12 py-4 space-y-6">
-      {/* <PageHeader title="Profile" subtitle={welcomeSubtitle} className="mb-6" /> */}
-
       <div className="w-full space-y-5">
         <ProfileBanner isEditMode={isEditMode} onToggleEdit={handleToggleEdit} />
 

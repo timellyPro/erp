@@ -392,7 +392,12 @@ export default function useStudentPage({ classes, reload }: Props) {
       const gen = ++listFetchGenRef.current;
       const cached = !opts?.bypassCache ? readStudentListCache<StudentRow>(listCacheScope) : null;
 
-      setListLoading(true);
+      if (cached?.length && !opts?.bypassCache) {
+        setStudents(cached);
+        setListLoading(false);
+      } else {
+        setListLoading(true);
+      }
 
       try {
         const params = buildListParams(opts?.bypassCache);
@@ -438,7 +443,6 @@ export default function useStudentPage({ classes, reload }: Props) {
   );
 
   useEffect(() => {
-    setStudents([]);
     setTotalCount(null);
     setNextCursor(null);
     void fetchStudentList();

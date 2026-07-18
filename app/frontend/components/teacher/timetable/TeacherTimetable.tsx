@@ -2,8 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import PageHeader from "../../common/PageHeader";
-import Spinner from "../../common/Spinner";
+import TimellyLoader from "../../common/TimellyLoader";
 import TimetableGrid, { TimetablePayload } from "../../timetable/TimetableGrid";
+import {
+  loadTeacherAttendanceClasses,
+  peekTeacherAttendanceClasses,
+} from "@/lib/loadTeacherFastTabs";
 
 type ClassOption = {
   id: string;
@@ -12,13 +16,16 @@ type ClassOption = {
 };
 
 const classLabel = (classRow?: ClassOption | null) =>
-  classRow ? `${classRow.name ?? "Class"}${classRow.section ? ` - ${classRow.section}` : ""}` : "Select class";
+  classRow
+    ? `${classRow.name ?? "Class"}${classRow.section ? ` - ${classRow.section}` : ""}`
+    : "Select class";
 
 export default function TeacherTimetableTab() {
-  const [classes, setClasses] = useState<ClassOption[]>([]);
-  const [selectedClassId, setSelectedClassId] = useState("");
+  const initialClasses = peekTeacherAttendanceClasses();
+  const [classes, setClasses] = useState<ClassOption[]>(() => initialClasses ?? []);
+  const [selectedClassId, setSelectedClassId] = useState(() => initialClasses?.[0]?.id ?? "");
   const [timetable, setTimetable] = useState<TimetablePayload>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !initialClasses?.length);
   const [loadingTimetable, setLoadingTimetable] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,22 +34,32 @@ export default function TeacherTimetableTab() {
     [classes, selectedClassId]
   );
 
-  const loadClasses = useCallback(async () => {
-    setLoading(true);
+  const loadClasses = useCallback(async (revalidate = false) => {
+    if (!revalidate) {
+      const cached = peekTeacherAttendanceClasses();
+      if (cached?.length) {
+        setClasses(cached);
+        setLoading(false);
+        setSelectedClassId((prev) => prev || cached[0]?.id || "");
+        void loadClasses(true);
+        return;
+      }
+    }
+
+    setLoading((prev) => (classes.length === 0 ? true : prev));
     setError(null);
     try {
-      const res = await fetch("/api/class/list?lite=1", { credentials: "include" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || "Failed to load classes");
-      const loadedClasses = Array.isArray(data.classes) ? data.classes : [];
+      const loadedClasses = await loadTeacherAttendanceClasses({ revalidate: true });
       setClasses(loadedClasses);
-      if (!selectedClassId && loadedClasses[0]?.id) setSelectedClassId(loadedClasses[0].id);
+      setSelectedClassId((prev) => prev || loadedClasses[0]?.id || "");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load classes");
+      if (classes.length === 0) {
+        setError(err instanceof Error ? err.message : "Failed to load classes");
+      }
     } finally {
       setLoading(false);
     }
-  }, [selectedClassId]);
+  }, [classes.length]);
 
   const loadTimetable = useCallback(async (classId: string) => {
     if (!classId) return;
@@ -65,18 +82,17 @@ export default function TeacherTimetableTab() {
   }, []);
 
   useEffect(() => {
-    void loadClasses();
-  }, [loadClasses]);
+    void loadClasses(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (selectedClassId) void loadTimetable(selectedClassId);
   }, [loadTimetable, selectedClassId]);
 
-  if (loading) {
+  if (loading && classes.length === 0) {
     return (
-      <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
-        <Spinner label="Loading timetable..." />
-      </div>
+      <TimellyLoader title="Loading timetable" steps={["Classes", "Periods", "Schedule"]} />
     );
   }
 
@@ -99,16 +115,23 @@ export default function TeacherTimetableTab() {
             ))}
           </select>
         </label>
-        {selectedClass ? <p className="mt-3 text-sm text-white/55">Showing timetable for {classLabel(selectedClass)}.</p> : null}
+        {selectedClass ? (
+          <p className="mt-3 text-sm text-white/55">Showing timetable for {classLabel(selectedClass)}.</p>
+        ) : null}
       </section>
 
-      {error ? <div className="rounded-2xl border border-red-400/25 bg-red-500/10 p-4 text-sm text-red-100">{error}</div> : null}
-      {loadingTimetable ? (
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
-          <Spinner label="Loading selected timetable..." />
+      {error ? (
+        <div className="rounded-2xl border border-red-400/25 bg-red-500/10 p-4 text-sm text-red-100">
+          {error}
         </div>
+      ) : null}
+      {loadingTimetable ? (
+        <TimellyLoader compact title="Loading schedule" steps={["Periods", "Teachers", "Rooms"]} />
       ) : (
-        <TimetableGrid timetable={timetable} emptyMessage="No timetable has been published for this class yet." />
+        <TimetableGrid
+          timetable={timetable}
+          emptyMessage="No timetable has been published for this class yet."
+        />
       )}
     </div>
   );
