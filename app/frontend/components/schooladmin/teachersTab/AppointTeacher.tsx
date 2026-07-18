@@ -6,7 +6,10 @@ import {
   fetchAppointTeacherData,
   invalidateTeachersPageCache,
 } from "@/lib/fetchTeachersPage";
-import { peekAppointTeacherData } from "@/lib/teachersPageClientCache";
+import {
+  peekAppointTeacherData,
+  peekAppointTeacherDataAny,
+} from "@/lib/teachersPageClientCache";
 import TimellyLoader from "../../common/TimellyLoader";
 
 const DEFAULT_AVATAR =
@@ -52,9 +55,14 @@ type AppointTeacherProps = {
 
 /* ================= COMPONENT ================= */
 export default function AppointTeacher({ schoolId, onRosterChange }: AppointTeacherProps) {
-  const [classes, setClasses] = useState<ClassItem[]>([]);
-  const [teachers, setTeachers] = useState<TeacherItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const initialAppoint = peekAppointTeacherDataAny();
+  const [classes, setClasses] = useState<ClassItem[]>(() =>
+    initialAppoint ? (initialAppoint.classes as ClassItem[]) : []
+  );
+  const [teachers, setTeachers] = useState<TeacherItem[]>(() =>
+    initialAppoint ? (initialAppoint.teachers as TeacherItem[]) : []
+  );
+  const [loading, setLoading] = useState(() => !initialAppoint);
 
   const [selectedClassId, setSelectedClassId] = useState("");
   const [selectedTeacherId, setSelectedTeacherId] = useState("");
@@ -81,17 +89,18 @@ export default function AppointTeacher({ schoolId, onRosterChange }: AppointTeac
   useEffect(() => {
     if (!schoolId) return;
 
-    const cached = peekAppointTeacherData(schoolId);
+    const cached = peekAppointTeacherData(schoolId) ?? peekAppointTeacherDataAny();
     if (cached) {
       applyPayload(cached);
       setLoading(false);
-    } else {
-      setLoading(true);
+      void reloadAppointData(true);
+      return;
     }
 
+    setLoading(true);
     const controller = new AbortController();
     void fetchAppointTeacherData(schoolId, {
-      revalidate: !cached,
+      revalidate: true,
       signal: controller.signal,
     })
       .then(applyPayload)
@@ -104,7 +113,7 @@ export default function AppointTeacher({ schoolId, onRosterChange }: AppointTeac
       });
 
     return () => controller.abort();
-  }, [schoolId, applyPayload]);
+  }, [schoolId, applyPayload, reloadAppointData]);
 
   useEffect(() => {
     if (!schoolId) return;

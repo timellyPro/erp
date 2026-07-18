@@ -207,7 +207,7 @@ export default function CertificatesTab({
     }
   };
 
-  if (loading) {
+  if (loading && certificateRequests.length === 0) {
     return (
       <TimellyLoader
         compact

@@ -66,11 +66,26 @@ function memSet(key: string, value: unknown): void {
   memory.set(key, { value, expiresAt: Date.now() + MEMORY_TTL_MS });
 }
 
+export function getLastTeachersSchoolId(): string | null {
+  if (typeof sessionStorage === "undefined") return null;
+  try {
+    return sessionStorage.getItem(LAST_SCHOOL_KEY);
+  } catch {
+    return null;
+  }
+}
+
 export function peekTeachersList(schoolId: string): TeacherApiRow[] | null {
   const mem = memGet<TeacherApiRow[]>(`list:${schoolId}`);
   if (mem) return mem;
   const entry = readSession(schoolId).teacherList;
   return fresh(entry) ? entry!.value : null;
+}
+
+/** Instant paint before session hydrates (uses last known school). */
+export function peekTeachersListAny(): TeacherApiRow[] | null {
+  const schoolId = getLastTeachersSchoolId();
+  return schoolId ? peekTeachersList(schoolId) : null;
 }
 
 export function setTeachersListCache(schoolId: string, teachers: TeacherApiRow[]): void {
@@ -85,6 +100,12 @@ export function peekTeacherAttendance(schoolId: string, date: string): TeacherAt
   if (mem) return mem;
   const entry = readSession(schoolId).attendanceByDate?.[date];
   return fresh(entry) ? entry!.value : null;
+}
+
+/** Instant paint before session hydrates (uses last known school). */
+export function peekTeacherAttendanceAny(date: string): TeacherAttendanceEntry[] | null {
+  const schoolId = getLastTeachersSchoolId();
+  return schoolId ? peekTeacherAttendance(schoolId, date) : null;
 }
 
 export function setTeacherAttendanceCache(
@@ -109,6 +130,14 @@ export function peekAppointTeacherData(schoolId: string): {
   if (mem) return mem;
   const entry = readSession(schoolId).appointData;
   return fresh(entry) ? entry!.value : null;
+}
+
+export function peekAppointTeacherDataAny(): {
+  classes: unknown[];
+  teachers: TeacherApiRow[];
+} | null {
+  const schoolId = getLastTeachersSchoolId();
+  return schoolId ? peekAppointTeacherData(schoolId) : null;
 }
 
 export function setAppointTeacherDataCache(

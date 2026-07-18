@@ -32,8 +32,11 @@ export interface CertificateRequestListItem {
 }
 
 export default function SchoolAdminCertificatesTab() {
-  const [certificateRequests, setCertificateRequests] = useState<CertificateRequestListItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const initial = peekCertificatesPage();
+  const [certificateRequests, setCertificateRequests] = useState<CertificateRequestListItem[]>(
+    () => initial ?? []
+  );
+  const [loading, setLoading] = useState(() => !initial);
   const [error, setError] = useState<string | null>(null);
 
   const fetchCertificateRequests = useCallback(async (revalidate = false) => {

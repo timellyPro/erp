@@ -14,6 +14,7 @@ import {
   XCircle,
 } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
+import TimellyLoader from "../../common/TimellyLoader";
 import StatCard from "../../common/statCard";
 import SearchInput from "../../common/SearchInput";
 import SelectInput from "../../common/SelectInput";
@@ -22,6 +23,10 @@ import AttendanceButton from "./AttendanceButton";
 import { Column } from "../../../types/superadmin";
 import SuccessPopups from "../../common/SuccessPopUps";
 import { useToastContext } from "../../../context/ToastContext";
+import {
+  loadTeacherAttendanceClasses,
+  peekTeacherAttendanceClasses,
+} from "@/lib/loadTeacherFastTabs";
 
 type AttendanceStatus = "present" | "absent" | "late";
 
@@ -54,10 +59,20 @@ function formatLongDate(value: string) {
 
 const DEFAULT_PERIOD = 1;
 
+function toClassOptions(classes: { id: string; name: string; section?: string | null }[]) {
+  return classes.map((cls) => ({
+    label: cls.section ? `${cls.name}-${cls.section}` : `${cls.name}`,
+    value: cls.id,
+  }));
+}
+
 export default function TeacherAttendanceTab() {
   const router = useRouter();
   const toast = useToastContext();
-  const [selectedClass, setSelectedClass] = useState("");
+  const initialClasses = peekTeacherAttendanceClasses();
+  const [selectedClass, setSelectedClass] = useState(
+    () => (initialClasses?.[0]?.id ? initialClasses[0].id : "")
+  );
   const [selectedDate, setSelectedDate] = useState(
     new Date().toISOString().slice(0, 10)
   );
@@ -65,8 +80,8 @@ export default function TeacherAttendanceTab() {
   const [students, setStudents] = useState<StudentRow[]>([]);
   const [classOptions, setClassOptions] = useState<
     { label: string; value: string }[]
-  >([]);
-  const [loadingClasses, setLoadingClasses] = useState(false);
+  >(() => (initialClasses ? toClassOptions(initialClasses) : []));
+  const [loadingClasses, setLoadingClasses] = useState(() => !initialClasses);
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [savingAttendance, setSavingAttendance] = useState(false);
   const [copyingFromYesterday, setCopyingFromYesterday] = useState(false);
@@ -76,28 +91,26 @@ export default function TeacherAttendanceTab() {
     let isActive = true;
 
     const fetchClasses = async () => {
-      setLoadingClasses(true);
-      try {
-        const res = await fetch("/api/class/list");
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data?.message || "Failed to load classes");
+      const cached = peekTeacherAttendanceClasses();
+      if (cached?.length) {
+        const options = toClassOptions(cached);
+        if (isActive) {
+          setClassOptions(options);
+          setSelectedClass((prev) => prev || options[0]?.value || "");
+          setLoadingClasses(false);
         }
+      } else if (isActive) {
+        setLoadingClasses(true);
+      }
 
-        const options = Array.isArray(data?.classes)
-          ? data.classes.map((cls: any) => {
-              const label = cls.section
-                ? `${cls.name}-${cls.section}`
-                : `${cls.name}`;
-              return { label, value: cls.id };
-            })
-          : [];
-
+      try {
+        const list = await loadTeacherAttendanceClasses({ revalidate: true });
+        const options = toClassOptions(list);
         if (!isActive) return;
         setClassOptions(options);
         setSelectedClass((prev) => prev || options[0]?.value || "");
       } catch (error: any) {
-        if (isActive) {
+        if (isActive && !peekTeacherAttendanceClasses()?.length) {
           toast.show(error?.message || "Failed to load classes", "error");
         }
       } finally {
@@ -417,6 +430,10 @@ export default function TeacherAttendanceTab() {
         title="Attendance Management"
         subtitle="Mark and manage student attendance"
       />
+
+      {loadingClasses && classOptions.length === 0 && (
+        <TimellyLoader title="Loading classes" steps={["Classes", "Students", "Attendance"]} />
+      )}
 
       <section className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
         <StatCard className="bg-white/5 relative p-4 sm:p-5">

@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { X, Plus, BookOpen, CheckCircle2, Trash2, Save } from "lucide-react";
 import PageHeader from "../../../common/PageHeader";
-import Spinner from "../../../common/Spinner";
+import TimellyLoader from "../../../common/TimellyLoader";
 
 interface ClassItem {
     id: string;
@@ -323,9 +323,7 @@ export default function ScheduleExamView({
 
     if (isEdit && examLoading) {
         return (
-            <div className="min-h-screen text-white pb-10 flex flex-col items-center justify-center gap-4">
-                <Spinner/>
-            </div>
+            <TimellyLoader title="Loading exam" steps={["Classes", "Subjects", "Schedule"]} />
         );
     }
 
@@ -371,8 +369,10 @@ export default function ScheduleExamView({
                                 <div className="flex flex-col gap-2">
                                     <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Class</label>
                                     {classLoading ? (
-                                        <div className="bg-[#2a213a]/50 border border-white/5 rounded-2xl p-2 text-white/40 text-sm"><Spinner/></div>
-                                    ) : (
+                                        <div className="bg-[#2a213a]/50 border border-white/5 rounded-2xl p-2 text-white/40 text-sm">
+                                          <TimellyLoader compact bare title="Loading classes" steps={["Roster"]} />
+                                        </div>
+                                      ) : (
                                         <select
                                             value={selectedClassId}
                                             onChange={(e) => setSelectedClassId(e.target.value)}

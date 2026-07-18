@@ -1,15 +1,13 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import {
   Eye, Pencil, Trash2, Download, UserCheck,
-  Coffee, Clock, XCircle, Search, Save, Calendar
+  Coffee, Clock, XCircle, Save, Calendar
 } from "lucide-react";
 import PageHeader from "../common/PageHeader";
 import StatCard from "../common/statCard";
-import DataTable from "../common/TableLayout";
 import TeacherStatCard from "./teachersTab/teacherStatCard";
 import AppointTeacher from "./teachersTab/AppointTeacher";
 import TeachersList, { TeacherRow } from "./teachersTab/TeachersList";
@@ -21,176 +19,129 @@ import {
   invalidateTeachersPageCache,
   mapApiTeachersToRows,
   peekTeacherAttendance,
+  peekTeacherAttendanceAny,
   peekTeachersList,
+  peekTeachersListAny,
+  setTeacherAttendanceCache,
   warmTeachersPage,
 } from "@/lib/fetchTeachersPage";
 import { downloadTeacherAttendanceReportPdf } from "@/lib/teacherAttendanceReportPdf";
 
-const DEFAULT_AVATAR = "https://randomuser.me/api/portraits/lego/1.jpg";
 const ATTENDANCE_STATUSES = ["PRESENT", "ABSENT", "LATE", "ON_LEAVE"] as const;
 type AttendanceStatus = typeof ATTENDANCE_STATUSES[number];
 
-/* ================= Types ================= */
+const todayStr = () => new Date().toISOString().slice(0, 10);
 
-/* ================= Mobile Card Component ================= */
-
-const MobileTeacherCard = ({ teacher, onEdit, onDelete }: {
-  teacher: TeacherRow;
-  onEdit: (t: TeacherRow) => void;
-  onDelete: (id: string) => void;
-}) => (
-  <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-4xl p-5 space-y-4 shadow-xl">
-    <div className="flex items-center gap-4">
-      <img src={teacher.avatar} alt="" className="w-14 h-14 rounded-2xl border border-white/10 object-cover" />
-      <div className="flex-1">
-        <h4 className="font-bold text-gray-100 text-lg leading-tight">{teacher.name}</h4>
-        <p className="text-xs text-gray-500 font-mono">{teacher.teacherId}</p>
-        <span className={`inline-block mt-1 px-3 py-0.5 rounded-full text-[10px] font-bold border ${teacher.status === "Active" ? "bg-lime-400/10 text-lime-400 border-lime-400/20" : "bg-orange-400/10 text-orange-400 border-orange-400/20"
-          }`}>
-          {teacher.status.toUpperCase()}
-        </span>
-      </div>
-    </div>
-
-    <div className="bg-white/5 border border-white/5 rounded-2xl p-3">
-      <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Subject</p>
-      <p className="text-gray-200 font-medium">{teacher.subject}</p>
-    </div>
-
-    <div className="bg-white/5 border border-white/5 rounded-2xl p-3 flex justify-between items-center">
-      <div>
-        <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Attendance</p>
-        <p className="text-lime-400 font-bold">{teacher.attendance}% Present</p>
-      </div>
-      <div className="w-24 h-1.5 bg-white/10 rounded-full overflow-hidden">
-        <div className="h-full bg-lime-400" style={{ width: `${teacher.attendance}%` }} />
-      </div>
-    </div>
-
-    <div className="bg-white/5 border border-white/5 rounded-2xl p-3">
-      <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Phone</p>
-      <p className="text-gray-200 font-medium">{teacher.phone}</p>
-    </div>
-
-
-    <div className="flex gap-2 pt-2">
-      <button className="flex-1 bg-white/5 hover:bg-white/10 py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium text-gray-300 transition-colors">
-        <Eye size={18} /> View
-      </button>
-      <button
-        onClick={() => onEdit(teacher)}
-        className="flex-[1.5] bg-white/5 hover:bg-lime-400/10 py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium text-lime-400 transition-colors border border-white/5"
-      >
-        <Pencil size={18} /> Edit
-      </button>
-      <button
-        onClick={() => onDelete(teacher.id)}
-        className="bg-red-500/10 hover:bg-red-500/20 p-3 rounded-xl text-red-400 transition-colors border border-red-500/20"
-      >
-        <Trash2 size={18} />
-      </button>
-    </div>
-  </div>
-);
+function attendanceRowsToMap(
+  rows: { teacherId: string; status: string }[] | null | undefined
+): Record<string, AttendanceStatus> {
+  const map: Record<string, AttendanceStatus> = {};
+  rows?.forEach((a) => {
+    if (ATTENDANCE_STATUSES.includes(a.status as AttendanceStatus)) {
+      map[a.teacherId] = a.status as AttendanceStatus;
+    }
+  });
+  return map;
+}
 
 /* ================= Main Component ================= */
 
-const todayStr = () => new Date().toISOString().slice(0, 10);
-
 const SchoolAdminTeacherTab = () => {
-  const router = useRouter();
   const { data: session } = useSession();
   const schoolId = session?.user?.schoolId ?? null;
 
+  const initialList = peekTeachersListAny();
+  const initialAttendance = peekTeacherAttendanceAny(todayStr());
+
   const [searchTerm, setSearchTerm] = useState("");
   const [page, setPage] = useState(1);
-  const [teachers, setTeachers] = useState<TeacherRow[]>([]);
-  const [teachersLoading, setTeachersLoading] = useState(true);
+  const [teachers, setTeachers] = useState<TeacherRow[]>(() =>
+    initialList ? mapApiTeachersToRows(initialList) : []
+  );
+  const [teachersLoading, setTeachersLoading] = useState(() => !initialList);
   const [teachersRevalidating, setTeachersRevalidating] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState<TeacherRow | null>(null);
   const [attendanceDate, setAttendanceDate] = useState(() => todayStr());
-  const [attendanceMap, setAttendanceMap] = useState<Record<string, AttendanceStatus>>({});
-  const [attendanceLoading, setAttendanceLoading] = useState(true);
+  const [attendanceMap, setAttendanceMap] = useState<Record<string, AttendanceStatus>>(
+    () => attendanceRowsToMap(initialAttendance)
+  );
+  const [attendanceLoading, setAttendanceLoading] = useState(() => !initialAttendance);
   const [saveAttendanceLoading, setSaveAttendanceLoading] = useState(false);
 
   useEffect(() => {
     if (schoolId) warmTeachersPage(schoolId);
   }, [schoolId]);
 
+  const loadTeachers = useCallback(
+    async (revalidate = false) => {
+      if (!schoolId) return;
+
+      if (!revalidate) {
+        const cached = peekTeachersList(schoolId) ?? peekTeachersListAny();
+        if (cached) {
+          setTeachers(mapApiTeachersToRows(cached));
+          setTeachersLoading(false);
+          setTeachersRevalidating(true);
+          void loadTeachers(true);
+          return;
+        }
+      }
+
+      setTeachersLoading((prev) => (teachers.length === 0 ? true : prev));
+      setTeachersRevalidating(teachers.length > 0);
+      try {
+        const list = await fetchTeachersList(schoolId, { revalidate: true });
+        setTeachers(mapApiTeachersToRows(list));
+      } catch (err) {
+        console.error("Failed to load teachers:", err);
+      } finally {
+        setTeachersLoading(false);
+        setTeachersRevalidating(false);
+      }
+    },
+    [schoolId, teachers.length]
+  );
+
   useEffect(() => {
     if (!schoolId) return;
+    void loadTeachers(false);
+  }, [schoolId, loadTeachers]);
 
-    const cached = peekTeachersList(schoolId);
-    if (cached) {
-      setTeachers(mapApiTeachersToRows(cached));
-      setTeachersLoading(false);
-    } else {
-      setTeachersLoading(true);
-    }
+  const loadAttendance = useCallback(
+    async (revalidate = false) => {
+      if (!schoolId || !attendanceDate) return;
 
-    const controller = new AbortController();
-    setTeachersRevalidating(Boolean(cached));
-
-    void fetchTeachersList(schoolId, {
-      revalidate: !cached,
-      signal: controller.signal,
-    })
-      .then((list) => setTeachers(mapApiTeachersToRows(list)))
-      .catch((err) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("Failed to load teachers:", err);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setTeachersLoading(false);
-          setTeachersRevalidating(false);
+      if (!revalidate) {
+        const cached =
+          peekTeacherAttendance(schoolId, attendanceDate) ??
+          (attendanceDate === todayStr() ? peekTeacherAttendanceAny(attendanceDate) : null);
+        if (cached) {
+          setAttendanceMap(attendanceRowsToMap(cached));
+          setAttendanceLoading(false);
+          void loadAttendance(true);
+          return;
         }
-      });
+        setAttendanceLoading(true);
+      }
 
-    return () => controller.abort();
-  }, [schoolId]);
+      try {
+        const rows = await fetchTeacherAttendance(schoolId, attendanceDate, { revalidate: true });
+        setAttendanceMap(attendanceRowsToMap(rows));
+      } catch (err) {
+        if (!(err instanceof DOMException && err.name === "AbortError")) {
+          console.error("Failed to load attendance:", err);
+        }
+      } finally {
+        setAttendanceLoading(false);
+      }
+    },
+    [schoolId, attendanceDate]
+  );
 
   useEffect(() => {
     if (!schoolId || !attendanceDate) return;
-
-    const cached = peekTeacherAttendance(schoolId, attendanceDate);
-    if (cached) {
-      const map: Record<string, AttendanceStatus> = {};
-      cached.forEach((a) => {
-        if (ATTENDANCE_STATUSES.includes(a.status as AttendanceStatus)) {
-          map[a.teacherId] = a.status as AttendanceStatus;
-        }
-      });
-      setAttendanceMap(map);
-      setAttendanceLoading(false);
-    } else {
-      setAttendanceLoading(true);
-    }
-
-    const controller = new AbortController();
-    void fetchTeacherAttendance(schoolId, attendanceDate, {
-      revalidate: !cached,
-      signal: controller.signal,
-    })
-      .then((rows) => {
-        const map: Record<string, AttendanceStatus> = {};
-        rows.forEach((a) => {
-          if (ATTENDANCE_STATUSES.includes(a.status as AttendanceStatus)) {
-            map[a.teacherId] = a.status as AttendanceStatus;
-          }
-        });
-        setAttendanceMap(map);
-      })
-      .catch((err) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setAttendanceMap({});
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setAttendanceLoading(false);
-      });
-
-    return () => controller.abort();
-  }, [schoolId, attendanceDate]);
+    void loadAttendance(false);
+  }, [schoolId, attendanceDate, loadAttendance]);
 
   const refreshTeachers = useCallback(() => {
     if (!schoolId) return;
@@ -258,12 +209,15 @@ const SchoolAdminTeacherTab = () => {
   };
 
   const saveAttendance = async () => {
+    if (!schoolId) return;
     setSaveAttendanceLoading(true);
+    const attendances = teachers.map((t) => ({
+      teacherId: t.id,
+      status: attendanceMap[t.id] || "PRESENT",
+    }));
+    // Optimistic: keep UI responsive and warm client cache immediately.
+    setTeacherAttendanceCache(schoolId, attendanceDate, attendances);
     try {
-      const attendances = teachers.map((t) => ({
-        teacherId: t.id,
-        status: attendanceMap[t.id] || "PRESENT",
-      }));
       const res = await fetch("/api/teacher/attendance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -272,22 +226,10 @@ const SchoolAdminTeacherTab = () => {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Failed to save");
-      if (schoolId) {
-        invalidateTeachersPageCache(schoolId);
-        const rows = await fetchTeacherAttendance(schoolId, attendanceDate, { revalidate: true });
-        const map: Record<string, AttendanceStatus> = {};
-        rows.forEach((a) => {
-          if (ATTENDANCE_STATUSES.includes(a.status as AttendanceStatus)) {
-            map[a.teacherId] = a.status as AttendanceStatus;
-          }
-        });
-        setAttendanceMap(map);
-      }
-      try {
-        router.refresh();
-      } catch {
-        /* noop */
-      }
+      // Soft refresh in background — don't block UI or wipe the list.
+      void fetchTeacherAttendance(schoolId, attendanceDate, { revalidate: true })
+        .then((rows) => setAttendanceMap(attendanceRowsToMap(rows)))
+        .catch(() => {});
       if (typeof window !== "undefined") window.alert("Attendance saved successfully.");
     } catch (e) {
       if (typeof window !== "undefined") window.alert(e instanceof Error ? e.message : "Failed to save attendance.");
@@ -526,7 +468,7 @@ const SchoolAdminTeacherTab = () => {
         </div>
 
         <div className="p-4 md:p-5">
-          {attendanceLoading && teachers.length === 0 ? (
+          {teachersLoading && teachers.length === 0 ? (
             <TimellyLoader
               compact
               title="Loading teachers"
@@ -562,6 +504,9 @@ const SchoolAdminTeacherTab = () => {
                   />
                 );
               })}
+              {attendanceLoading && teachers.length > 0 ? (
+                <p className="col-span-full text-xs text-white/40">Updating attendance…</p>
+              ) : null}
             </div>
           )}
         </div>

@@ -6,7 +6,6 @@ import { useSearchParams } from "next/navigation";
 import AppLayout from "../../AppLayout";
 import { TEACHER_MENU_ITEMS } from "../../constants/sidebar";
 import RequiredRoles from "../../auth/RequiredRoles";
-import HomeworkPage from "../../components/teacher/homework/Homework";
 import RequireFeature from "../../auth/RequireFeature";
 import TeacherDashboard from "../../components/teacher/dashboard/Dashboard";
 import TeacherClasses from "../../components/teacher/classes/Classes";
@@ -29,6 +28,9 @@ import SchoolTeacherLeavesTab from "../../components/schooladmin/TeacherLeaves";
 import TeacherAuditTab from "../../components/schooladmin/TeacherAudit";
 import Certificates from "../../components/schooladmin/Certificates";
 import SchoolAdminFeesTab from "../../components/schooladmin/Fees";
+import TimellyLoader from "../../components/common/TimellyLoader";
+import { warmTeacherFastTabs, warmTeacherTab } from "@/lib/loadTeacherFastTabs";
+
 const TEACHER_TAB_TITLES = {
   dashboard: "Dashboard",
   admission: "Admission",
@@ -53,19 +55,29 @@ const TEACHER_TAB_TITLES = {
   certificates: "Certificates",
   fees: "Fees & Payments",
 };
+
 function TeacherDashboardInner() {
   const { data: session } = useSession();
   const tab = useSearchParams().get("tab") ?? "dashboard";
-  const title = (TEACHER_TAB_TITLES as any)[tab] ?? tab.toUpperCase();
+  const title = (TEACHER_TAB_TITLES as Record<string, string>)[tab] ?? tab.toUpperCase();
+  const schoolId = session?.user?.schoolId ?? null;
   const [profile, setProfile] = useState({
     name: session?.user?.name ?? "Teacher",
     subtitle: "Teacher",
-    image: (session?.user as any)?.image ?? null,
+    image: (session?.user as { image?: string | null })?.image ?? null,
     email: session?.user?.email ?? undefined,
-    phone: (session?.user as any)?.mobile ?? undefined,
+    phone: (session?.user as { mobile?: string })?.mobile ?? undefined,
     address: undefined as string | undefined,
-    userId: (session?.user as any)?.id ?? undefined,
+    userId: (session?.user as { id?: string })?.id ?? undefined,
   });
+
+  useEffect(() => {
+    warmTeacherFastTabs(schoolId);
+  }, [schoolId]);
+
+  useEffect(() => {
+    warmTeacherTab(tab, schoolId);
+  }, [tab, schoolId]);
 
   const renderTabContent = () => {
     switch (tab) {
@@ -120,7 +132,7 @@ function TeacherDashboardInner() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/user/me");
+        const res = await fetch("/api/user/me", { credentials: "include", cache: "no-store" });
         const data = await res.json();
         if (cancelled || !res.ok) return;
         const u = data.user;
@@ -130,9 +142,9 @@ function TeacherDashboardInner() {
             subtitle: "Teacher",
             image: u.photoUrl ?? session?.user?.image ?? null,
             email: u.email ?? session?.user?.email ?? undefined,
-            phone: u.mobile ?? (session?.user as any)?.mobile ?? undefined,
+            phone: u.mobile ?? (session?.user as { mobile?: string })?.mobile ?? undefined,
             address: u.address ?? undefined,
-            userId: u.id ?? (session?.user as any)?.id ?? undefined,
+            userId: u.id ?? (session?.user as { id?: string })?.id ?? undefined,
           });
         }
       } catch {
@@ -142,7 +154,13 @@ function TeacherDashboardInner() {
     return () => {
       cancelled = true;
     };
-  }, [session?.user?.name, session?.user?.image, session?.user?.email, (session?.user as any)?.mobile, (session?.user as any)?.id]);
+  }, [
+    session?.user?.name,
+    session?.user?.image,
+    session?.user?.email,
+    (session?.user as { mobile?: string })?.mobile,
+    (session?.user as { id?: string })?.id,
+  ]);
 
   return (
     <RequiredRoles allowedRoles={["TEACHER"]}>
@@ -161,7 +179,11 @@ function TeacherDashboardInner() {
 
 export default function TeacherDashboardContent() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-white/70">Loading…</div>}>
+    <Suspense
+      fallback={
+        <TimellyLoader title="Loading teacher portal" steps={["Navigation", "Profile", "Workspace"]} />
+      }
+    >
       <TeacherDashboardInner />
     </Suspense>
   );
