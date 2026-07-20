@@ -538,13 +538,17 @@ export const FeeTransactions = ({
     }
   };
 
-  const totalPaid =
-    feeBreakdown?.amountPaid ??
-    (hasFee
-      ? fee!.amountPaid
-      : transactionRows.filter((r) => isSuccessStatus(r.status)).reduce((s, r) => s + r.amount, 0));
+  const txnPaid = transactionRows
+    .filter((r) => isSuccessStatus(r.status))
+    .reduce((s, r) => s + r.amount, 0);
+  const totalPaid = Math.max(
+    feeBreakdown?.amountPaid ?? 0,
+    hasFee ? fee!.amountPaid : 0,
+    txnPaid
+  );
   const total =
-    feeBreakdown?.totalAmount ?? (hasFee ? fee!.amountPaid + fee!.remainingFee : totalPaid);
+    feeBreakdown?.totalAmount ??
+    (hasFee ? Math.max(fee!.amountPaid + fee!.remainingFee, totalPaid) : totalPaid);
   const hasAny = hasFee || transactionRows.length > 0;
 
   const simplifyFeeHeadName = (value?: string) => {

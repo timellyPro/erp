@@ -402,6 +402,7 @@ function computeStudentHeads(
         key: `EXTRA:${id}`,
         label: extraFeesById.get(id)?.name ?? h.groupId,
         extraFeeId: id,
+        snapshotDue: h.snapshotDue,
       }))
     ),
     extraFeesById

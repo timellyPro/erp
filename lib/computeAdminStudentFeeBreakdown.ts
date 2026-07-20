@@ -429,6 +429,24 @@ export async function computeAdminStudentFeeBreakdown(
     netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) + sign * amount);
   }
 
+  /** Names for allocation extraFeeIds not in scoped extras (deleted lumps / other-class rows). */
+  const orphanAllocationIds = [
+    ...new Set(
+      groupedAllocations
+        .filter((a) => a.headType === "EXTRA_FEE" && a.extraFeeId && !extraFeesById.has(a.extraFeeId))
+        .map((a) => a.extraFeeId as string)
+    ),
+  ];
+  if (orphanAllocationIds.length > 0) {
+    const orphanFees = await prisma.extraFee.findMany({
+      where: { id: { in: orphanAllocationIds } },
+      select: { id: true, name: true },
+    });
+    for (const ef of orphanFees) {
+      extraFeesById.set(ef.id, { id: ef.id, name: ef.name });
+    }
+  }
+
   redistributeBaseMinusOneAllocations(netPaidByHead, allHeads);
   rollupOrphanExtraFeeAllocations(
     netPaidByHead,
@@ -436,6 +454,7 @@ export async function computeAdminStudentFeeBreakdown(
       key: h.key,
       label: h.label,
       extraFeeId: h.headType === "EXTRA_FEE" ? h.extraFeeId : undefined,
+      snapshotDue: h.snapshotDue,
     })),
     extraFeesById
   );

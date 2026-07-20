@@ -18,7 +18,8 @@ const extrasInflight = new Map<string, Promise<StudentDetailsTabExtras>>();
 const refreshFeesInflight = new Map<string, Promise<StudentDetailsFastBundle | null>>();
 
 const BUNDLE_TTL_MS = 30 * 60 * 1000;
-const SESSION_KEY = "erp:student-details-bundle:v3";
+/** Bump when fee attribution / breakdown merge logic changes. */
+const SESSION_KEY = "erp:student-details-bundle:v4";
 const SESSION_TTL_MS = 30 * 60 * 1000;
 
 type SessionStore = Record<string, { savedAt: number; value: StudentDetailsFastBundle }>;
@@ -69,7 +70,18 @@ function writeSessionBundle(studentId: string, value: StudentDetailsFastBundle):
 
 function isUsableCachedBundle(bundle: StudentDetailsFastBundle): boolean {
   const paid = bundle.fee?.amountPaid ?? 0;
-  return !(bundle.payments.length === 0 && paid > 0);
+  if (bundle.payments.length === 0 && paid > 0) return false;
+  // Stale breakdown after attribution fixes: shell/payments show more paid than breakdown.
+  const breakdownPaid = bundle.feeBreakdown?.amountPaid;
+  if (breakdownPaid != null && paid > breakdownPaid + 0.02) return false;
+  const txnPaid = (bundle.payments ?? [])
+    .filter((p) => {
+      const s = String(p.status ?? "").toUpperCase();
+      return s === "SUCCESS" || s === "PAID" || s === "COMPLETED";
+    })
+    .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+  if (breakdownPaid != null && txnPaid > breakdownPaid + 0.02) return false;
+  return true;
 }
 
 function parseShell(data: unknown): StudentDetailsTabPayload {
@@ -535,14 +547,18 @@ export async function fetchStudentDetailsFast(
     }
 
     const shell = parseShell(shellData);
+    const shellPaid = Number(shell.fee?.amountPaid) || 0;
     options?.onShellLoaded?.(toBundle(shell, emptyExtras(), cachedBreakdown ?? null));
     const hasApprovedDiscount =
       shell.fee?.discountApprovals?.some((approval) => approval.status === "APPROVED") ?? false;
-    if (cachedBreakdown && !options?.force && hasApprovedDiscount) {
+    const cachedUndercounts =
+      Boolean(cachedBreakdown) && shellPaid > (cachedBreakdown?.amountPaid ?? 0) + 0.02;
+    if (cachedBreakdown && !options?.force && (hasApprovedDiscount || cachedUndercounts)) {
       invalidateFeeBreakdownCache(studentId);
       breakdownPromise = fetchFeeBreakdownFast(studentId, {
         signal: options?.signal,
         force: true,
+        minAmountPaid: shellPaid,
       });
     }
 

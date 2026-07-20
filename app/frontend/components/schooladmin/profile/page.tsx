@@ -711,20 +711,24 @@ function StudentDetailsPageContent() {
 
   const warmFeeBreakdown = useCallback(() => {
     if (!selectedId) return;
+    const shellPaid = Number(detail?.fee?.amountPaid) || 0;
     const cached = getFeeBreakdownCached(selectedId);
-    if (cached) {
+    if (cached && cached.amountPaid + 0.02 >= shellPaid) {
       setFeeBreakdown(cached);
       setFeeBreakdownPending(false);
       return;
     }
-    if (feeBreakdown) return;
-    void fetchFeeBreakdownFast(selectedId).then((breakdown) => {
+    if (feeBreakdown && feeBreakdown.amountPaid + 0.02 >= shellPaid) return;
+    void fetchFeeBreakdownFast(selectedId, {
+      force: Boolean(cached && shellPaid > cached.amountPaid + 0.02),
+      minAmountPaid: shellPaid,
+    }).then((breakdown) => {
       if (breakdown) {
         setFeeBreakdown(breakdown);
         setFeeBreakdownPending(false);
       }
     });
-  }, [selectedId, feeBreakdown]);
+  }, [selectedId, feeBreakdown, detail?.fee?.amountPaid]);
 
   useLayoutEffect(() => {
     if (!detail || focusFromUrl !== "fees") return;
@@ -752,8 +756,15 @@ function StudentDetailsPageContent() {
                 payments,
                 fee: {
                   ...rest.fee,
-                  amountPaid: breakdown.amountPaid,
-                  remainingFee: breakdown.remainingFee,
+                  // Never let a stale/undercounted breakdown shrink paid below shell or payment sum.
+                  amountPaid: Math.max(
+                    Number(breakdown.amountPaid) || 0,
+                    Number(rest.fee.amountPaid) || 0
+                  ),
+                  remainingFee: Math.min(
+                    Number(breakdown.remainingFee) || Number.POSITIVE_INFINITY,
+                    Number(rest.fee.remainingFee) || Number.POSITIVE_INFINITY
+                  ),
                   totalFee: breakdown.finalFee ?? rest.fee.totalFee,
                 },
               }
