@@ -249,6 +249,7 @@ export async function POST(req: Request) {
         key: h.key,
         label: h.headType === "EXTRA_FEE" ? h.extraFeeName : h.componentName,
         extraFeeId: h.headType === "EXTRA_FEE" ? h.extraFeeId : undefined,
+        snapshotDue: h.snapshotDue,
       })),
       extraFeesById
     );

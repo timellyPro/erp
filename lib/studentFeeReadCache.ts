@@ -21,12 +21,15 @@ const shellCache = new Map<string, { freshUntil: number; value: Record<string, u
 export const BREAKDOWN_MEM_TTL_MS = 300_000;
 export const SHELL_CACHE_TTL_MS = 300_000;
 
+/** Bump when breakdown attribution changes so in-memory fast responses are dropped. */
+const BREAKDOWN_MEM_VERSION = "v2";
+
 export function getBreakdownMemCached(
   key: string
 ): AdminStudentFeeBreakdownResult | null {
-  const hit = breakdownMemCache.get(key);
+  const hit = breakdownMemCache.get(`${BREAKDOWN_MEM_VERSION}:${key}`);
   if (!hit || Date.now() >= hit.freshUntil) {
-    if (hit) breakdownMemCache.delete(key);
+    if (hit) breakdownMemCache.delete(`${BREAKDOWN_MEM_VERSION}:${key}`);
     return null;
   }
   return hit.value;
@@ -37,7 +40,10 @@ export function setBreakdownMemCached(
   value: AdminStudentFeeBreakdownResult,
   ttlMs = BREAKDOWN_MEM_TTL_MS
 ): void {
-  breakdownMemCache.set(key, { value, freshUntil: Date.now() + ttlMs });
+  breakdownMemCache.set(`${BREAKDOWN_MEM_VERSION}:${key}`, {
+    value,
+    freshUntil: Date.now() + ttlMs,
+  });
 }
 
 export function getShellCached(key: string): Record<string, unknown> | null {

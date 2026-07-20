@@ -2,7 +2,8 @@ import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFe
 
 const MEMORY_TTL_MS = 30 * 60 * 1000;
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
-const SESSION_KEY = "erp:fee-breakdown:v2";
+/** Bump when breakdown attribution logic changes so stale session totals are dropped. */
+const SESSION_KEY = "erp:fee-breakdown:v3";
 const MAX_SESSION_ENTRIES = 80;
 
 const memory = new Map<string, { expiresAt: number; value: AdminStudentFeeBreakdownResult }>();
@@ -95,11 +96,18 @@ export function invalidateFeeBreakdownCache(studentId?: string): void {
 
 export async function fetchFeeBreakdownFast(
   studentId: string,
-  options?: { signal?: AbortSignal; force?: boolean }
+  options?: { signal?: AbortSignal; force?: boolean; minAmountPaid?: number }
 ): Promise<AdminStudentFeeBreakdownResult | null> {
   if (!options?.force) {
     const cached = getFeeBreakdownCached(studentId);
-    if (cached) return cached;
+    // Ignore cache that undercounts paid vs shell / payments (stale orphan-attribution).
+    const minPaid = options?.minAmountPaid;
+    if (
+      cached &&
+      (minPaid == null || cached.amountPaid + 0.02 >= minPaid)
+    ) {
+      return cached;
+    }
   }
 
   const running = inflight.get(studentId);
