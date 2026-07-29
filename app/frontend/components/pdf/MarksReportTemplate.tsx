@@ -18,7 +18,6 @@ export interface MarksReportData {
   overallGrade: string;
   totalMarks: number;
   totalMaxMarks: number;
-  rank: number | null;
   marks: Array<{
     subject: string;
     marks: number;
@@ -62,7 +61,6 @@ const MarksReportTemplate = forwardRef<HTMLDivElement, MarksReportTemplateProps>
             rightRows: [
               { label: "Overall Score", value: `${data.overallScore.toFixed(1)}%` },
               { label: "Overall Grade", value: data.overallGrade },
-              { label: "Class Rank", value: data.rank ? `#${data.rank}` : "N/A" },
             ],
           }}
         >

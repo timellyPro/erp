@@ -28,7 +28,7 @@ export async function PUT(
 
     const { id } = await params;
     const markId = id;
-    const { subject, marks, totalMarks, suggestions, examType } =
+    const { subject, marks, totalMarks, suggestions, examType, grade: gradeOverride } =
       await req.json();
 
     const existingMark = await prisma.mark.findUnique({
@@ -75,8 +75,9 @@ export async function PUT(
           : null;
     }
 
-    // Recalculate grade if marks changed
-    if (marks !== undefined || totalMarks !== undefined) {
+    if (gradeOverride === "AB") {
+      updateData.grade = "AB";
+    } else if (marks !== undefined || totalMarks !== undefined) {
       const finalMarks = marks !== undefined ? marks : existingMark.marks;
       const finalTotal = totalMarks !== undefined ? totalMarks : existingMark.totalMarks;
       updateData.grade = calculateGrade(finalMarks, finalTotal);
