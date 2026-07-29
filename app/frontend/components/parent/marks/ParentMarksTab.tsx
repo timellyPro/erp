@@ -11,7 +11,6 @@ import {
 } from "@/lib/loadParentPortal";
 import {
   TrendingUp,
-  Trophy,
   Award,
   Target,
   Download,
@@ -85,8 +84,6 @@ export default function ParentMarksTab() {
   const [schoolName, setSchoolName] = useState(
     peekedAnalytics?.student?.schoolName?.trim() || sessionSchoolName || ""
   );
-  const [rank, setRank] = useState<number | null>(peekedAnalytics?.stats?.grade?.rank ?? null);
-  const [totalStudents, setTotalStudents] = useState<number | null>(null);
   const [loading, setLoading] = useState(!(peekedMarks?.marks?.length || peekedAnalytics));
   const [examTypeFilter, setExamTypeFilter] = useState<string>("ALL");
   const [generatingPdf, setGeneratingPdf] = useState(false);
@@ -114,10 +111,6 @@ export default function ParentMarksTab() {
         setMarks((marksData.marks || []) as Mark[]);
 
         const student = analyticsData.student;
-
-        if (analyticsData.stats?.grade?.rank !== undefined && analyticsData.stats.grade.rank !== null) {
-          setRank(analyticsData.stats.grade.rank);
-        }
 
         if (student) {
           const classParts = typeof student.class === "string" ? student.class.split(" • ") : [];
@@ -201,7 +194,6 @@ export default function ParentMarksTab() {
       overallGrade: stats.overallGrade,
       totalMarks: stats.totalMarks,
       totalMaxMarks: stats.totalMaxMarks,
-      rank,
       marks: filteredMarks.map((m) => ({
         subject: m.subject,
         marks: m.marks,
@@ -210,15 +202,16 @@ export default function ParentMarksTab() {
         examType: m.examType,
       })),
     }),
-    [schoolBrand, schoolName, studentName, studentInfo, stats, rank, filteredMarks]
+    [schoolBrand, schoolName, studentName, studentInfo, stats, filteredMarks]
   );
 
   const handleDownloadReport = async () => {
     setGeneratingPdf(true);
     try {
+      const examLabel = examTypeFilter === "ALL" ? "All_Exams" : examTypeFilter.replace(/\s+/g, "_");
       await downloadParentPortalPdf({
         ref: reportRef,
-        filename: `Marks_Report_${studentName.replace(/\s+/g, "_")}.pdf`,
+        filename: `Marks_Report_${studentName.replace(/\s+/g, "_")}_${examLabel}.pdf`,
         beforeCapture: (brand) => {
           flushSync(() => {
             setPdfReportData({
@@ -259,23 +252,37 @@ export default function ParentMarksTab() {
               Track {studentName}'s marks and grades
             </p>
           </div>
-          <button
-            onClick={handleDownloadReport}
-            disabled={generatingPdf}
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl transition-colors font-medium text-sm border border-white/10 disabled:opacity-50"
-          >
-            {generatingPdf ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Download className="w-4 h-4" />
-            )}
-            Download Report
-          </button>
+          <div className="flex items-center gap-2">
+            <select
+              value={examTypeFilter}
+              onChange={(e) => setExamTypeFilter(e.target.value)}
+              className="h-10 px-3 bg-white/5 border border-white/10 rounded-xl text-white text-sm outline-none focus:border-lime-400/40 appearance-none cursor-pointer"
+              style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.5)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 10px center", paddingRight: "28px" }}
+            >
+              {examTypeOptions.map((opt) => (
+                <option key={opt} value={opt} className="bg-[#0f0f0f]">
+                  {opt === "ALL" ? "All Exams" : opt}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={handleDownloadReport}
+              disabled={generatingPdf}
+              className="flex items-center justify-center gap-2 px-4 py-2 h-10 bg-white/10 hover:bg-white/20 text-white rounded-xl transition-colors font-medium text-sm border border-white/10 disabled:opacity-50 whitespace-nowrap"
+            >
+              {generatingPdf ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Download className="w-4 h-4" />
+              )}
+              Download Report
+            </button>
+          </div>
         </div>
       </div>
 
       {/* STAT CARDS */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6">
 
         {/* Overall Score */}
         <div className="relative rounded-2xl border border-white/10 p-6 backdrop-blur-xl hover:border-lime-400/30 transition">
@@ -292,38 +299,6 @@ export default function ParentMarksTab() {
             <h2 className="text-3xl font-bold">{stats.overallScore}%</h2>
             <p className="text-sm text-white/50 mt-1">
               {stats.totalMarks > 0 ? "Based on all subjects" : "No marks available"}
-            </p>
-          </div>
-        </div>
-
-        {/* Class Rank */}
-        <div className="relative rounded-2xl border border-white/10 p-6 backdrop-blur-xl hover:border-lime-400/30 transition">
-          <div className="flex justify-between items-start">
-            <div className="p-3 bg-white/5 rounded-xl">
-              <Trophy className="w-5 h-5 text-lime-400" />
-            </div>
-            <span className={`px-3 py-1 text-xs rounded-lg border font-semibold ${
-              rank && rank <= 3 
-                ? "bg-lime-400/10 text-lime-400 border-lime-400/20" 
-                : rank 
-                ? "bg-blue-400/10 text-blue-400 border-blue-400/20"
-                : "bg-white/5 text-gray-400 border-white/10"
-            }`}>
-              {rank && rank <= 3 ? "Top 3" : rank ? "Ranked" : "N/A"}
-            </span>
-          </div>
-          <div className="mt-6">
-            <p className="text-sm text-white/60 mb-1">Class Rank</p>
-            <h2 className="text-3xl font-bold text-lime-400">
-              {rank ? `#${rank}` : "N/A"}
-            </h2>
-            <p className="text-sm text-white/50 mt-1">
-              {rank 
-                ? totalStudents 
-                  ? `Out of ${totalStudents} students`
-                  : "In your class"
-                : "Not available"
-              }
             </p>
           </div>
         </div>

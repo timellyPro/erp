@@ -32,6 +32,7 @@ export async function POST(req: Request) {
       totalMarks,
       suggestions,
       examType,
+      grade: gradeOverride,
     } = await req.json();
 
     if (
@@ -100,7 +101,7 @@ export async function POST(req: Request) {
         ? examType.trim().toUpperCase()
         : null;
 
-    const grade = calculateGrade(marks, totalMarks);
+    const grade = gradeOverride === "AB" ? "AB" : calculateGrade(marks, totalMarks);
 
     const mark = await prisma.mark.create({
       data: {
@@ -136,7 +137,9 @@ export async function POST(req: Request) {
         mark.student.user.id,
         "MARKS",
         "Marks updated",
-        `${subject}: ${marks}/${totalMarks} - Grade ${grade}`
+        grade === "AB"
+          ? `${subject}: Absent`
+          : `${subject}: ${marks}/${totalMarks} - Grade ${grade}`
       ).catch(() => {});
     }
 

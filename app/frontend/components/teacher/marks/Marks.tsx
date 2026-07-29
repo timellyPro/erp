@@ -1,11 +1,11 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import PageHeader from "../../common/PageHeader";
 import TimellyLoader from "../../common/TimellyLoader";
 import { SelectField } from "./MarksSelectField";
-import { Save } from "lucide-react";
+import { Save, ClipboardList, PenLine, Download } from "lucide-react";
 import DataTable from "../../common/TableLayout";
 import { Column } from "@/app/frontend/types/superadmin";
 import {
@@ -14,6 +14,9 @@ import {
   type LiteClassOption,
 } from "@/lib/loadTeacherFastTabs";
 
+const TeacherReportCard = lazy(() => import("./ReportCard"));
+const TeacherDownloadReports = lazy(() => import("./DownloadReports"));
+
 /* ---------------- TYPES ---------------- */
 
 type StudentRow = {
@@ -21,7 +24,7 @@ type StudentRow = {
   rollNo: string;
   name: string;
   avatar: string;
-  marks: number | "";
+  marks: number | "" | "AB";
   maxMarks: number;
   markId?: string;
 };
@@ -63,6 +66,7 @@ function mapLiteClasses(list: LiteClassOption[]): ClassOption[] {
 
 export default function TeacherMarksTab() {
   const router = useRouter();
+  const [subTab, setSubTab] = useState<"entry" | "report-card" | "download">("entry");
   const initialClasses = peekTeacherMarksClasses();
   const [classes, setClasses] = useState<ClassOption[]>(() =>
     initialClasses ? mapLiteClasses(initialClasses) : []
@@ -174,21 +178,23 @@ export default function TeacherMarksTab() {
       const students: StudentApi[] = Array.isArray(studentsData.students) ? studentsData.students : [];
       const marks: MarkApi[] = Array.isArray(marksData.marks) ? marksData.marks : [];
       const markByStudent: Record<string, MarkApi> = {};
-      marks.forEach((m) => {
-        if (!markByStudent[m.studentId] || new Date(m.createdAt) > new Date(markByStudent[m.studentId].createdAt)) {
+      for (const m of marks) {
+        const existing = markByStudent[m.studentId];
+        if (!existing || m.createdAt > existing.createdAt) {
           markByStudent[m.studentId] = m;
         }
-      });
+      }
       const newRows: StudentRow[] = students.map((s) => {
         const name = s.user?.name ?? "Student";
         const fallbackAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&size=40&background=4ade80&color=fff`;
         const mark = markByStudent[s.id];
+        const isAbsent = mark?.grade === "AB";
         return {
           id: s.id,
           rollNo: s.rollNo ?? "--",
           name,
           avatar: s.user?.photoUrl?.trim() || fallbackAvatar,
-          marks: mark ? (mark.marks as number) : "",
+          marks: mark ? (isAbsent ? "AB" as const : (mark.marks as number)) : "",
           maxMarks: form.maxMarks,
           markId: mark?.id,
         };
@@ -202,114 +208,64 @@ export default function TeacherMarksTab() {
     }
   }, [form.classId, form.subject, form.examType]);
 
-  const fetchExamTypes = useCallback(async () => {
-    try {
-      const res = await fetch("/api/exam-types", { cache: "no-store" });
-      if (!res.ok) {
-        setExamTypeOptions(DEFAULT_EXAM_TYPES);
-        return;
-      }
-      const data = await res.json();
-      const names: string[] = Array.isArray(data.examTypes)
-        ? data.examTypes
-        : DEFAULT_EXAM_TYPES;
-      setExamTypeOptions(names);
-      setForm((prev) => ({
-        ...prev,
-        examType:
-          names.includes(prev.examType) || !names.length
-            ? prev.examType
-            : names[0],
-      }));
-    } catch {
-      setExamTypeOptions(DEFAULT_EXAM_TYPES);
+  const fetchMetadata = useCallback(async (classId: string) => {
+    const [examTypesRes, subjectsRes, termsRes] = await Promise.all([
+      fetch("/api/exam-types", { cache: "no-store" }).catch(() => null),
+      fetch("/api/exam-subjects", { cache: "no-store", credentials: "include" }).catch(() => null),
+      fetch(`/api/exams/terms?${classId ? `classId=${classId}` : ""}`, {
+        cache: "no-store",
+        credentials: "include",
+      }).catch(() => null),
+    ]);
+
+    const allExamNames = new Set<string>();
+    const allSubjects = new Set<string>();
+
+    if (examTypesRes?.ok) {
+      const data = await examTypesRes.json().catch(() => ({}));
+      const names: string[] = Array.isArray(data.examTypes) ? data.examTypes : [];
+      names.forEach((n) => allExamNames.add(n));
+    }
+
+    if (subjectsRes?.ok) {
+      const data = await subjectsRes.json().catch(() => ({}));
+      const subjects = Array.isArray(data.subjects) ? data.subjects : [];
+      subjects.forEach((s: string) => { if (s?.trim()) allSubjects.add(s.trim()); });
+    }
+
+    if (termsRes?.ok) {
+      const data = await termsRes.json().catch(() => ({}));
+      const exams = Array.isArray(data.exams) ? data.exams : [];
+      exams.forEach((exam: { subject?: string; name?: string }) => {
+        if (exam.subject?.trim()) allSubjects.add(exam.subject.trim());
+        if (exam.name?.trim()) allExamNames.add(exam.name.trim().toUpperCase());
+      });
+    }
+
+    if (allExamNames.size > 0) {
+      setExamTypeOptions((prev) => Array.from(new Set([...allExamNames, ...prev])));
+      setForm((prev) =>
+        allExamNames.has(prev.examType) ? prev : { ...prev, examType: Array.from(allExamNames)[0] }
+      );
+    }
+
+    if (allSubjects.size > 0) {
+      setSubjectOptions((prev) => Array.from(new Set([...allSubjects, ...prev])));
+      setForm((prev) =>
+        allSubjects.has(prev.subject) ? prev : { ...prev, subject: Array.from(allSubjects)[0] }
+      );
     }
   }, []);
 
-  const fetchSavedExamFields = useCallback(async () => {
-    try {
-      const subjectsRes = await fetch("/api/exam-subjects", {
-        cache: "no-store",
-        credentials: "include",
-      });
-      if (subjectsRes.ok) {
-        const subjectsData = await subjectsRes.json();
-        const savedSubjects = Array.isArray(subjectsData.subjects)
-          ? subjectsData.subjects
-              .map((subject: string) => subject?.trim())
-              .filter((subject: string | undefined): subject is string => Boolean(subject))
-          : [];
-        if (savedSubjects.length > 0) {
-          setSubjectOptions((prev) => Array.from(new Set([...savedSubjects, ...prev])));
-          setForm((prev) =>
-            savedSubjects.includes(prev.subject)
-              ? prev
-              : { ...prev, subject: savedSubjects[0] }
-          );
-        }
-      }
-
-      const params = new URLSearchParams();
-      if (form.classId) params.set("classId", form.classId);
-      const res = await fetch(`/api/exams/terms?${params.toString()}`, {
-        cache: "no-store",
-        credentials: "include",
-      });
-      if (!res.ok) return;
-      const data = await res.json();
-      const exams = Array.isArray(data.exams) ? data.exams : [];
-
-      const savedSubjects: string[] = Array.from(
-        new Set<string>(
-          exams
-            .map((exam: { subject?: string }) => exam.subject?.trim())
-            .filter((subject: string | undefined): subject is string => Boolean(subject))
-        )
-      );
-      const savedExamNames: string[] = Array.from(
-        new Set<string>(
-          exams
-            .map((exam: { name?: string }) => exam.name?.trim().toUpperCase())
-            .filter((name: string | undefined): name is string => Boolean(name))
-        )
-      );
-
-      if (savedSubjects.length > 0) {
-        setSubjectOptions((prev) =>
-          Array.from(new Set<string>([...savedSubjects, ...prev]))
-        );
-      }
-
-      if (savedExamNames.length > 0) {
-        setExamTypeOptions((prev) =>
-          Array.from(new Set<string>([...savedExamNames, ...prev]))
-        );
-        setForm((prev) =>
-          savedExamNames.includes(prev.examType)
-            ? prev
-            : { ...prev, examType: savedExamNames[0] }
-        );
-      }
-    } catch {
-      /* noop */
-    }
-  }, [form.classId]);
-
   useEffect(() => {
     fetchClasses();
-  }, [fetchClasses]);
+    fetchMetadata(initialClasses?.[0]?.id ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     fetchStudentsAndMarks();
   }, [fetchStudentsAndMarks]);
-
-  useEffect(() => {
-    fetchExamTypes();
-  }, [fetchExamTypes]);
-
-  useEffect(() => {
-    fetchSavedExamFields();
-  }, [fetchSavedExamFields]);
 
   useEffect(() => {
     setPage(1);
@@ -347,16 +303,27 @@ export default function TeacherMarksTab() {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, marks: num } : r)));
   };
 
+  const toggleAbsent = (id: string) => {
+    setRows((prev) =>
+      prev.map((r) =>
+        r.id === id
+          ? { ...r, marks: r.marks === "AB" ? "" : ("AB" as const) }
+          : r
+      )
+    );
+  };
+
   const updateMaxMarks = (value: string) => {
     const num = Math.min(1000, Math.max(1, Number(value) || 100));
     setForm((prev) => ({ ...prev, maxMarks: num }));
     setRows((prev) => prev.map((r) => ({ ...r, maxMarks: num })));
   };
 
-  const getPercentage = (m: number | "", max: number) =>
-    m === "" ? "--" : `${((Number(m) / max) * 100).toFixed(1)}%`;
+  const getPercentage = (m: number | "" | "AB", max: number) =>
+    m === "" ? "--" : m === "AB" ? "Absent" : `${((Number(m) / max) * 100).toFixed(1)}%`;
 
-  const getGrade = (m: number | "", max: number) => {
+  const getGrade = (m: number | "" | "AB", max: number) => {
+    if (m === "AB") return "AB";
     if (m === "" || max <= 0) return "--";
     const pct = (Number(m) / max) * 100;
     if (pct >= 90) return "A+";
@@ -368,6 +335,7 @@ export default function TeacherMarksTab() {
 
   const total = rows.length;
   const entered = rows.filter((r) => r.marks !== "").length;
+  const absentCount = rows.filter((r) => r.marks === "AB").length;
   const pending = total - entered;
   const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -377,20 +345,24 @@ export default function TeacherMarksTab() {
   );
 
   const handleSaveAll = async () => {
-    if (pending > 0 || !form.classId) return;
+    if (!form.classId) return;
+    const filledRows = rows.filter((r) => r.marks !== "");
+    if (filledRows.length === 0) return;
     setSaveLoading(true);
     setSaveMessage("");
     try {
       const editableRows = rows.filter((row) => row.marks !== "");
       const results = await Promise.all(
         editableRows.map(async (row) => {
+          const isAbsent = row.marks === "AB";
           const payload = {
             studentId: row.id,
             classId: form.classId,
             subject: form.subject,
-            marks: Number(row.marks),
+            marks: isAbsent ? 0 : Number(row.marks),
             totalMarks: row.maxMarks,
             examType: form.examType || null,
+            ...(isAbsent ? { grade: "AB" } : {}),
           };
 
           const res = row.markId
@@ -401,6 +373,7 @@ export default function TeacherMarksTab() {
                   marks: payload.marks,
                   totalMarks: payload.totalMarks,
                   examType: payload.examType,
+                  ...(isAbsent ? { grade: "AB" } : {}),
                 }),
               })
             : await fetch("/api/marks/create", {
@@ -475,12 +448,30 @@ export default function TeacherMarksTab() {
       header: "MARKS OBTAINED",
       align: "center",
       render: (row: StudentRow) => (
-        <input
-          type="number"
-          value={row.marks}
-          onChange={(e) => updateMarks(row.id, e.target.value)}
-          className="w-20 text-center rounded-lg bg-white/5 border border-white/10 px-2 py-1 text-white outline-none"
-        />
+        <div className="flex items-center justify-center gap-1.5">
+          {row.marks === "AB" ? (
+            <span className="w-20 text-center text-red-400 font-semibold text-sm">Absent</span>
+          ) : (
+            <input
+              type="number"
+              value={row.marks}
+              onChange={(e) => updateMarks(row.id, e.target.value)}
+              className="w-20 text-center rounded-lg bg-white/5 border border-white/10 px-2 py-1 text-white outline-none"
+            />
+          )}
+          <button
+            type="button"
+            onClick={() => toggleAbsent(row.id)}
+            title={row.marks === "AB" ? "Remove absent" : "Mark as absent"}
+            className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition ${
+              row.marks === "AB"
+                ? "bg-red-500/20 text-red-400 border-red-500/30 hover:bg-red-500/30"
+                : "bg-white/5 text-white/40 border-white/10 hover:bg-white/10 hover:text-white/60"
+            }`}
+          >
+            AB
+          </button>
+        </div>
       ),
     },
     { header: "MAX MARKS", align: "center", accessor: "maxMarks" },
@@ -499,10 +490,14 @@ export default function TeacherMarksTab() {
         return (
           <span
             className={`px-3 py-1 rounded-full text-xs border ${
-              g === "A+" ? "bg-lime-400/10 text-lime-400 border-lime-400/30" : "bg-white/5 text-gray-200 border-white/20"
+              g === "AB"
+                ? "bg-red-500/10 text-red-400 border-red-500/30"
+                : g === "A+"
+                  ? "bg-lime-400/10 text-lime-400 border-lime-400/30"
+                  : "bg-white/5 text-gray-200 border-white/20"
             }`}
           >
-            {g}
+            {g === "AB" ? "Absent" : g}
           </span>
         );
       },
@@ -516,9 +511,57 @@ export default function TeacherMarksTab() {
     <div className="min-h-screen text-white px-3 sm:px-6 lg:px-8 py-4">
       <div className="max-w-7xl mx-auto space-y-6">
         <PageHeader
-          title="Marks Entry"
-          subtitle="Enter and manage student marks for your classes"
+          title={subTab === "entry" ? "Marks Entry" : subTab === "report-card" ? "Report Card" : "Download Reports"}
+          subtitle={subTab === "entry" ? "Enter and manage student marks for your classes" : subTab === "report-card" ? "View and download student report cards" : "Download marks reports for classes as Excel or PDF"}
         />
+
+        {/* SUB-TAB TOGGLE */}
+        <div className="flex gap-2">
+          <button
+            onClick={() => setSubTab("entry")}
+            className={`px-5 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition ${
+              subTab === "entry"
+                ? "bg-lime-400/20 text-lime-400 border border-lime-400/40 shadow-md"
+                : "bg-white/5 text-white/60 border border-white/10 hover:bg-white/10"
+            }`}
+          >
+            <PenLine size={15} />
+            Marks Entry
+          </button>
+          <button
+            onClick={() => setSubTab("report-card")}
+            className={`px-5 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition ${
+              subTab === "report-card"
+                ? "bg-lime-400/20 text-lime-400 border border-lime-400/40 shadow-md"
+                : "bg-white/5 text-white/60 border border-white/10 hover:bg-white/10"
+            }`}
+          >
+            <ClipboardList size={15} />
+            Report Card
+          </button>
+          <button
+            onClick={() => setSubTab("download")}
+            className={`px-5 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition ${
+              subTab === "download"
+                ? "bg-lime-400/20 text-lime-400 border border-lime-400/40 shadow-md"
+                : "bg-white/5 text-white/60 border border-white/10 hover:bg-white/10"
+            }`}
+          >
+            <Download size={15} />
+            Download Reports
+          </button>
+        </div>
+
+        {subTab === "report-card" ? (
+          <Suspense fallback={<div className="flex justify-center py-16"><div className="w-10 h-10 border-2 border-lime-500/30 border-t-lime-500 rounded-full animate-spin" /></div>}>
+            <TeacherReportCard />
+          </Suspense>
+        ) : subTab === "download" ? (
+          <Suspense fallback={<div className="flex justify-center py-16"><div className="w-10 h-10 border-2 border-lime-500/30 border-t-lime-500 rounded-full animate-spin" /></div>}>
+            <TeacherDownloadReports />
+          </Suspense>
+        ) : (
+        <>
 
         {classesLoading && classes.length === 0 && (
           <TimellyLoader title="Loading classes" steps={["Classes", "Subjects", "Marks"]} />
@@ -677,15 +720,32 @@ export default function TeacherMarksTab() {
                         <div className="mt-4 flex flex-col gap-3">
                           <div className="flex items-center justify-between gap-4">
                             <label className="text-xs text-white/60 shrink-0">Marks Obtained</label>
-                            <input
-                              type="number"
-                              inputMode="numeric"
-                              min={0}
-                              max={student.maxMarks}
-                              value={student.marks === "" ? "" : student.marks}
-                              onChange={(e) => updateMarks(student.id, e.target.value)}
-                              className="w-24 text-center rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-white text-sm outline-none focus:border-lime-400/50"
-                            />
+                            <div className="flex items-center gap-2">
+                              {student.marks === "AB" ? (
+                                <span className="w-24 text-center text-red-400 font-semibold text-sm py-2">Absent</span>
+                              ) : (
+                                <input
+                                  type="number"
+                                  inputMode="numeric"
+                                  min={0}
+                                  max={student.maxMarks}
+                                  value={student.marks === "" ? "" : student.marks}
+                                  onChange={(e) => updateMarks(student.id, e.target.value)}
+                                  className="w-24 text-center rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-white text-sm outline-none focus:border-lime-400/50"
+                                />
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => toggleAbsent(student.id)}
+                                className={`px-2.5 py-2 rounded-lg text-xs font-bold border transition ${
+                                  student.marks === "AB"
+                                    ? "bg-red-500/20 text-red-400 border-red-500/30"
+                                    : "bg-white/5 text-white/40 border-white/10"
+                                }`}
+                              >
+                                AB
+                              </button>
+                            </div>
                           </div>
                           <div className="flex justify-between text-sm">
                             <span className="text-white/60">Max: {student.maxMarks}</span>
@@ -706,6 +766,11 @@ export default function TeacherMarksTab() {
                   <span className="text-lime-400">
                     ENTERED <span className="font-semibold ml-1">{entered}</span>
                   </span>
+                  {absentCount > 0 && (
+                    <span className="text-red-400">
+                      ABSENT <span className="font-semibold ml-1">{absentCount}</span>
+                    </span>
+                  )}
                   <span className="text-red-400">
                     PENDING <span className="font-semibold ml-1">{pending}</span>
                   </span>
@@ -714,22 +779,24 @@ export default function TeacherMarksTab() {
                   <span className="text-sm text-white/70">{saveMessage}</span>
                 ) : null}
                 <button
-                  disabled={pending > 0 || saveLoading}
+                  disabled={saveLoading || entered === 0}
                   onClick={handleSaveAll}
                   className={`px-5 py-2 rounded-xl flex items-center gap-2 text-sm font-medium transition
                     ${
-                      pending === 0 && !saveLoading
+                      !saveLoading && entered > 0
                         ? "bg-lime-400/20 text-lime-400 border border-lime-400/30 hover:shadow-[0_0_15px_rgba(163,230,53,0.2)]"
                         : "bg-white/5 text-gray-500 border border-white/10 cursor-not-allowed"
                     }`}
                 >
                   <Save size={16} />
-                  {saveLoading ? "Saving…" : "Save All Marks"}
+                  {saveLoading ? "Saving…" : pending > 0 ? `Save ${entered} of ${total}` : "Save All Marks"}
                 </button>
               </div>
             </>
           )}
         </div>
+        </>
+        )}
       </div>
     </div>
   );
