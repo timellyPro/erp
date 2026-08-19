@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { AlertCircle, CheckCircle, Loader, User, Mail, Briefcase, Lock, Shield, User2, Phone, MapPin, Calendar, BookOpen } from "lucide-react";
@@ -12,7 +12,6 @@ import Spinner from "../../common/Spinner";
 import { validateUserForm, type UserFormErrors } from "./userFormValidation";
 import type { IUser } from "@/app/frontend/constants/addUserTable";
 import {
-  fetchUserForEdit,
   fetchUserFormMeta,
   invalidateAddUserPageCache,
   peekUserFormMeta,
@@ -180,6 +179,8 @@ export default function UserForm({
 
   const [classesList, setClassesList] = useState<{ id: string; name: string; section: string | null }[]>([]);
   const [subjectInput, setSubjectInput] = useState("");
+  const [availableSubjects, setAvailableSubjects] = useState<string[]>([]);
+  const [subjectsDropdownOpen, setSubjectsDropdownOpen] = useState(false);
 
   // Keep local form state in sync when parent passes initialData (edit from list)
   useEffect(() => {
@@ -189,12 +190,24 @@ export default function UserForm({
     }
   }, [initialData]);
 
+  const fullDataLoadedRef = React.useRef(false);
+
   useEffect(() => {
-    if (listShellUser && !initialData) {
+    if (listShellUser && !initialData && !fullDataLoadedRef.current) {
       setFormData(shellFromListUser(listShellUser));
       setLoading(false);
     }
   }, [listShellUser, initialData]);
+
+  // Fetch available subjects from exam-subjects API
+  useEffect(() => {
+    fetch("/api/exam-subjects", { credentials: "include" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data.subjects)) setAvailableSubjects(data.subjects);
+      })
+      .catch(() => {});
+  }, []);
 
   // Form metadata (classes + email domain) — cache-first
   useEffect(() => {
@@ -225,15 +238,27 @@ export default function UserForm({
     return () => controller.abort();
   }, [schoolId]);
 
-  // Full user for edit — cache-first; list shell shows immediately
+  // Reset full-data flag when switching users
   useEffect(() => {
-    if (!userId || initialData || !schoolId) return;
+    fullDataLoadedRef.current = false;
+  }, [userId]);
+
+  // Full user for edit — fetch directly, bypassing all caches
+  useEffect(() => {
+    if (!userId || initialData) return;
 
     setDetailLoading(true);
+    setLoading(false);
     const controller = new AbortController();
 
-    void fetchUserForEdit(schoolId, userId, { signal: controller.signal })
-      .then((userData) => {
+    fetch(`/api/user/${encodeURIComponent(userId)}`, {
+      credentials: "include",
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then((res) => res.json())
+      .then((userData: Record<string, unknown>) => {
+        fullDataLoadedRef.current = true;
         setFormData(formDataFromApi(userData));
       })
       .catch((err) => {
@@ -243,12 +268,11 @@ export default function UserForm({
       .finally(() => {
         if (!controller.signal.aborted) {
           setDetailLoading(false);
-          setLoading(false);
         }
       });
 
     return () => controller.abort();
-  }, [userId, initialData, schoolId]);
+  }, [userId, initialData]);
 
   const handleChange = (field: keyof UserFormData, value: unknown) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -512,37 +536,72 @@ export default function UserForm({
                       </span>
                     ))}
                   </div>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={subjectInput}
-                      onChange={(e) => setSubjectInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          const v = subjectInput.trim();
-                          if (v && !(formData.subjects || []).includes(v)) {
+                  <div className="relative">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={subjectInput}
+                        onChange={(e) => {
+                          setSubjectInput(e.target.value);
+                          setSubjectsDropdownOpen(true);
+                        }}
+                        onFocus={() => setSubjectsDropdownOpen(true)}
+                        onBlur={() => setTimeout(() => setSubjectsDropdownOpen(false), 200)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            const v = subjectInput.trim().toUpperCase();
+                            if (v && !(formData.subjects || []).map((s) => s.toUpperCase()).includes(v)) {
+                              handleChange("subjects", [...(formData.subjects || []), v]);
+                              setSubjectInput("");
+                              setSubjectsDropdownOpen(false);
+                            }
+                          }
+                        }}
+                        placeholder="Search or type a subject"
+                        className="flex-1 pl-4 pr-4 py-3 bg-black/20 border border-white/10 rounded-xl focus:outline-none focus:ring-1 focus:ring-lime-400/50 text-gray-400 text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const v = subjectInput.trim().toUpperCase();
+                          if (v && !(formData.subjects || []).map((s) => s.toUpperCase()).includes(v)) {
                             handleChange("subjects", [...(formData.subjects || []), v]);
                             setSubjectInput("");
+                            setSubjectsDropdownOpen(false);
                           }
-                        }
-                      }}
-                      placeholder="e.g. Mathematics (press Enter to add)"
-                      className="flex-1 pl-4 pr-4 py-3 bg-black/20 border border-white/10 rounded-xl focus:outline-none focus:ring-1 focus:ring-lime-400/50 text-gray-400 text-sm"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const v = subjectInput.trim();
-                        if (v && !(formData.subjects || []).includes(v)) {
-                          handleChange("subjects", [...(formData.subjects || []), v]);
-                          setSubjectInput("");
-                        }
-                      }}
-                      className="px-4 py-2 rounded-xl bg-lime-400/20 border border-lime-400/30 text-lime-300 text-sm font-medium hover:bg-lime-400/30"
-                    >
-                      Add
-                    </button>
+                        }}
+                        className="px-4 py-2 rounded-xl bg-lime-400/20 border border-lime-400/30 text-lime-300 text-sm font-medium hover:bg-lime-400/30"
+                      >
+                        Add
+                      </button>
+                    </div>
+                    {subjectsDropdownOpen && (() => {
+                      const selected = new Set((formData.subjects || []).map((s) => s.toUpperCase()));
+                      const filtered = availableSubjects.filter(
+                        (s) => !selected.has(s.toUpperCase()) && s.toUpperCase().includes(subjectInput.trim().toUpperCase())
+                      );
+                      if (!filtered.length) return null;
+                      return (
+                        <div className="absolute z-50 mt-1 w-full max-h-48 overflow-y-auto rounded-xl bg-[#1a1a2e] border border-white/10 shadow-xl no-scrollbar">
+                          {filtered.map((s) => (
+                            <button
+                              key={s}
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => {
+                                handleChange("subjects", [...(formData.subjects || []), s]);
+                                setSubjectInput("");
+                                setSubjectsDropdownOpen(false);
+                              }}
+                              className="w-full text-left px-4 py-2.5 text-sm text-white/80 hover:bg-lime-400/10 hover:text-lime-300 transition-colors"
+                            >
+                              {s}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </div>
                   {fieldErrors.subjects ? (
                     <p className="text-xs text-red-400 mt-1.5" role="alert">
