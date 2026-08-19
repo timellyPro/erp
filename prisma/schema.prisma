@@ -535,6 +535,8 @@ model Student {
   previousSchool  String?  @db.Text
   residencyType   String?  @default("Day Scholar")
   status          String   @default("Active")
+  /// Subjects this student takes (from exam/syllabus catalog); empty = not set
+  subjects        String[] @default([])
 
   applicationFee Float? // record-only fee amounts (no payment integration here)
   admissionFee   Float?

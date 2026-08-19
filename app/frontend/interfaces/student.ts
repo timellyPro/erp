@@ -33,5 +33,6 @@ export interface IStudent {
   phoneNo: string;
   applicationFee?: number | null;
   admissionFee?: number | null;
+  subjects?: string[];
   user?: { email: string; name: string; id: string; photoUrl?: string | null };
 }

@@ -5,6 +5,7 @@ import { Plus } from "lucide-react";
 import InputField from "../schooladmincomponents/InputField";
 import SelectInput from "../../common/SelectInput";
 import { SelectOption, StudentFormErrors, StudentFormState } from "./types";
+import StudentSubjectsMultiSelect from "./StudentSubjectsMultiSelect";
 
 type Props = {
   form: StudentFormState;
@@ -18,7 +19,7 @@ type Props = {
   subtitle?: string;
   submitLabel?: string;
   editMode?: boolean;
-  onFieldChange: (key: keyof StudentFormState, value: string) => void;
+  onFieldChange: (key: keyof StudentFormState, value: string | string[]) => void;
   onCancel: () => void;
   onReset: () => void;
   onSave: () => void;
@@ -203,6 +204,12 @@ export default function AddStudentForm({
             bgColor="white"
           />
         </div>
+        <StudentSubjectsMultiSelect
+          selected={form.subjects || []}
+          classId={form.classId}
+          onChange={(subjects) => onFieldChange("subjects", subjects)}
+          error={errors.subjects}
+        />
       </div>
 
       <p className="text-xs text-white/50 mt-2 mb-4">

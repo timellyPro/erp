@@ -83,6 +83,7 @@ export const updateStudent = (studentId: string, payload: {
   applicationFee?: number | null;
   admissionFee?: number | null;
   status?: string;
+  subjects?: string[];
 }) =>
   fetch(`/api/student/${studentId}`, {
     method: "PUT",

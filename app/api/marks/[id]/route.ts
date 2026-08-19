@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { assertTeacherCanEnterMarks } from "@/lib/teacherMarksScope";
 
 function calculateGrade(marks: number, totalMarks: number): string {
   const percentage = (marks / totalMarks) * 100;
@@ -63,8 +64,20 @@ export async function PUT(
       }
     }
 
+    const nextSubject =
+      subject !== undefined && typeof subject === "string" ? subject.trim() : existingMark.subject;
+    const scope = await assertTeacherCanEnterMarks({
+      role: session.user.role,
+      userId: session.user.id,
+      classId: existingMark.classId,
+      subject: nextSubject,
+    });
+    if (!scope.ok) {
+      return NextResponse.json({ message: scope.message }, { status: scope.status });
+    }
+
     const updateData: any = {};
-    if (subject !== undefined) updateData.subject = subject;
+    if (subject !== undefined) updateData.subject = nextSubject;
     if (marks !== undefined) updateData.marks = marks;
     if (totalMarks !== undefined) updateData.totalMarks = totalMarks;
     if (suggestions !== undefined) updateData.suggestions = suggestions;

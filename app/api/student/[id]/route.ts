@@ -329,6 +329,7 @@ export async function GET(_req: Request, context: RouteParams) {
         residencyType: student.residencyType ?? "Day Scholar",
         applicationFee: resolvedAdmissionApplicationFees.applicationFee,
         admissionFee: resolvedAdmissionApplicationFees.admissionFee,
+        subjects: Array.isArray(student.subjects) ? student.subjects : [],
         createdAt: student.createdAt?.toISOString() ?? "",
         status: student.status ?? "Active",
         class: student.class
@@ -509,6 +510,12 @@ export async function PUT(req: Request, context: RouteParams) {
     };
     const applicationFee = parseOptFee(body.applicationFee);
     const admissionFee = parseOptFee(body.admissionFee);
+    const subjects =
+      body.subjects !== undefined
+        ? Array.isArray(body.subjects) && body.subjects.every((s: unknown) => typeof s === "string")
+          ? (body.subjects as string[]).map((s) => s.trim()).filter(Boolean)
+          : []
+        : undefined;
 
     if (name !== undefined && name.length < 2) {
       return NextResponse.json({ message: "Name must be at least 2 characters" }, { status: 400 });
@@ -574,6 +581,7 @@ export async function PUT(req: Request, context: RouteParams) {
     if (previousSchool !== undefined) studentUpdate.previousSchool = previousSchool;
     if (applicationFee !== undefined) studentUpdate.applicationFee = applicationFee;
     if (admissionFee !== undefined) studentUpdate.admissionFee = admissionFee;
+    if (subjects !== undefined) studentUpdate.subjects = subjects;
 
     if (Object.keys(userUpdate).length > 0 && student.user) {
       await prisma.user.update({

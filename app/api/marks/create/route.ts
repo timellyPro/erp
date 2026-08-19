@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { createNotification } from "@/lib/notificationService";
+import { assertTeacherCanEnterMarks } from "@/lib/teacherMarksScope";
 
 function calculateGrade(marks: number, totalMarks: number): string {
   const percentage = (marks / totalMarks) * 100;
@@ -80,6 +81,21 @@ export async function POST(req: Request) {
       );
     }
 
+    const subjectName = typeof subject === "string" ? subject.trim() : "";
+    if (!subjectName) {
+      return NextResponse.json({ message: "Subject is required" }, { status: 400 });
+    }
+
+    const scope = await assertTeacherCanEnterMarks({
+      role: session.user.role,
+      userId: teacherId,
+      classId,
+      subject: subjectName,
+    });
+    if (!scope.ok) {
+      return NextResponse.json({ message: scope.message }, { status: scope.status });
+    }
+
     // Verify student belongs to the class
     const student = await prisma.student.findFirst({
       where: {
@@ -107,7 +123,7 @@ export async function POST(req: Request) {
       data: {
         studentId,
         classId,
-        subject,
+        subject: subjectName,
         marks,
         totalMarks,
         grade,
