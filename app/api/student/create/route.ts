@@ -111,6 +111,7 @@ export async function POST(req: Request) {
       admissionFee: admissionFeeInput,
       residencyType: residencyTypeInput,
       status: statusInput,
+      subjects: subjectsInput,
     } = body;
 
     const parseOptFee = (v: unknown): number | null => {
@@ -142,6 +143,11 @@ export async function POST(req: Request) {
         ? "Inactive"
         : "Active";
     let effectivePreviousSchoolInput = previousSchoolInput;
+
+    const studentSubjects =
+      Array.isArray(subjectsInput) && subjectsInput.every((s: unknown) => typeof s === "string")
+        ? (subjectsInput as string[]).map((s) => s.trim()).filter(Boolean)
+        : [];
 
     let effectiveApplicationFee = parseOptFee(applicationFeeInput);
     let effectiveAdmissionFee = parseOptFee(admissionFeeInput);
@@ -493,6 +499,7 @@ export async function POST(req: Request) {
             apaarId: effectiveApaarId,
             applicationFee: effectiveApplicationFee,
             admissionFee: effectiveAdmissionFee,
+            subjects: studentSubjects,
           },
           include: {
             user: { select: { id: true, name: true, email: true } },

@@ -128,6 +128,7 @@ const DEFAULT_FORM: StudentFormState = {
   emergencyFatherNo: "",
   emergencyMotherNo: "",
   emergencyGuardianNo: "",
+  subjects: [],
 };
 
 const EMPTY_CLASSES: ClassItem[] = [];
@@ -599,14 +600,14 @@ export default function useStudentPage({ classes, reload }: Props) {
       (!selectedSection || item.section === selectedSection)
   );
 
-  const handleFormChange = (key: keyof StudentFormState, value: string) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
+  const handleFormChange = (key: keyof StudentFormState, value: string | string[]) => {
+    setForm((prev) => ({ ...prev, [key]: value } as StudentFormState));
     setErrors((prev) => ({ ...prev, [key]: undefined }));
   };
 
 
-  const handleEditChange = (key: keyof StudentFormState, value: string) => {
-    setEditForm((prev) => ({ ...prev, [key]: value }));
+  const handleEditChange = (key: keyof StudentFormState, value: string | string[]) => {
+    setEditForm((prev) => ({ ...prev, [key]: value } as StudentFormState));
     setEditErrors((prev) => ({ ...prev, [key]: undefined }));
   };
 
@@ -646,6 +647,7 @@ export default function useStudentPage({ classes, reload }: Props) {
         gender: form.gender?.trim() || undefined,
         residencyType: form.residencyType?.trim() || "Day Scholar",
         status: form.status || "Active",
+        subjects: Array.isArray(form.subjects) ? form.subjects : [],
       });
 
       const data = await res.json();
@@ -818,6 +820,7 @@ export default function useStudentPage({ classes, reload }: Props) {
           emergencyMotherNo: data.student.emergencyMotherNo || prev.emergencyMotherNo,
           emergencyGuardianNo: data.student.emergencyGuardianNo || prev.emergencyGuardianNo,
           status: data.student.status || prev.status,
+          subjects: Array.isArray(data.student.subjects) ? data.student.subjects : prev.subjects,
         }));
       } catch {
         // keep defaults from list row
@@ -879,6 +882,7 @@ export default function useStudentPage({ classes, reload }: Props) {
           : null,
         admissionFee: editForm.admissionFee.trim() ? Number(editForm.admissionFee) : null,
         status: editForm.status || "Active",
+        subjects: Array.isArray(editForm.subjects) ? editForm.subjects : [],
       });
       const data = await res.json();
       if (!res.ok) {

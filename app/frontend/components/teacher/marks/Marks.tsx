@@ -47,21 +47,24 @@ type MarkApi = {
   createdAt: string;
 };
 
-const DEFAULT_SUBJECTS = [
-  "Mathematics",
-  "Science",
-  "English",
-  "Hindi",
-  "Social Science",
-  "Physics",
-  "Chemistry",
-  "Biology",
-  "Computer Science",
-];
 const DEFAULT_EXAM_TYPES = ["TERM 1", "TERM 2", "FINAL"];
 
 function mapLiteClasses(list: LiteClassOption[]): ClassOption[] {
   return list.map((c) => ({ id: c.id, name: c.name, section: c.section ?? null }));
+}
+
+function uniqueSubjects(list: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of list) {
+    const s = String(raw || "").trim();
+    if (!s) continue;
+    const key = s.replace(/\s+/g, " ").toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
 }
 
 export default function TeacherMarksTab() {
@@ -72,7 +75,8 @@ export default function TeacherMarksTab() {
     initialClasses ? mapLiteClasses(initialClasses) : []
   );
   const [classesLoading, setClassesLoading] = useState(() => !initialClasses);
-  const [subjectOptions, setSubjectOptions] = useState<string[]>(DEFAULT_SUBJECTS);
+  const [subjectOptions, setSubjectOptions] = useState<string[]>([]);
+  const [subjectsLoading, setSubjectsLoading] = useState(true);
   const [examTypeOptions, setExamTypeOptions] =
     useState<string[]>(DEFAULT_EXAM_TYPES);
   const [form, setForm] = useState(() => {
@@ -85,7 +89,7 @@ export default function TeacherMarksTab() {
           : first.name
         : "",
       section: first?.section || "Section A",
-      subject: "Mathematics",
+      subject: "",
       examType: "TERM 1",
       maxMarks: 100,
     };
@@ -131,18 +135,20 @@ export default function TeacherMarksTab() {
     try {
       const list = await loadTeacherMarksClasses({ revalidate: true });
       setClasses(mapLiteClasses(list));
-      if (list.length > 0) {
-        setForm((prev) => {
-          if (prev.classId) return prev;
-          const first = list[0];
-          return {
-            ...prev,
-            classId: first.id,
-            classLabel: first.section ? `${first.name} - ${first.section}` : first.name,
-            section: first.section || "Section A",
-          };
-        });
-      }
+      setForm((prev) => {
+        const stillValid = list.some((c) => c.id === prev.classId);
+        if (stillValid) return prev;
+        if (list.length === 0) {
+          return { ...prev, classId: "", classLabel: "", section: "" };
+        }
+        const first = list[0];
+        return {
+          ...prev,
+          classId: first.id,
+          classLabel: first.section ? `${first.name} - ${first.section}` : first.name,
+          section: first.section || "Section A",
+        };
+      });
     } catch {
       if (!peekTeacherMarksClasses()?.length) setClasses([]);
     } finally {
@@ -209,51 +215,61 @@ export default function TeacherMarksTab() {
   }, [form.classId, form.subject, form.examType]);
 
   const fetchMetadata = useCallback(async (classId: string) => {
-    const [examTypesRes, subjectsRes, termsRes] = await Promise.all([
-      fetch("/api/exam-types", { cache: "no-store" }).catch(() => null),
-      fetch("/api/exam-subjects", { cache: "no-store", credentials: "include" }).catch(() => null),
-      fetch(`/api/exams/terms?${classId ? `classId=${classId}` : ""}`, {
-        cache: "no-store",
-        credentials: "include",
-      }).catch(() => null),
-    ]);
+    setSubjectsLoading(true);
+    try {
+      const [examTypesRes, meRes, termsRes] = await Promise.all([
+        fetch("/api/exam-types", { cache: "no-store" }).catch(() => null),
+        fetch("/api/user/me", { cache: "no-store", credentials: "include" }).catch(() => null),
+        fetch(`/api/exams/terms?${classId ? `classId=${classId}` : ""}`, {
+          cache: "no-store",
+          credentials: "include",
+        }).catch(() => null),
+      ]);
 
-    const allExamNames = new Set<string>();
-    const allSubjects = new Set<string>();
+      const allExamNames = new Set<string>();
 
-    if (examTypesRes?.ok) {
-      const data = await examTypesRes.json().catch(() => ({}));
-      const names: string[] = Array.isArray(data.examTypes) ? data.examTypes : [];
-      names.forEach((n) => allExamNames.add(n));
-    }
+      if (examTypesRes?.ok) {
+        const data = await examTypesRes.json().catch(() => ({}));
+        const names: string[] = Array.isArray(data.examTypes) ? data.examTypes : [];
+        names.forEach((n) => allExamNames.add(n));
+      }
 
-    if (subjectsRes?.ok) {
-      const data = await subjectsRes.json().catch(() => ({}));
-      const subjects = Array.isArray(data.subjects) ? data.subjects : [];
-      subjects.forEach((s: string) => { if (s?.trim()) allSubjects.add(s.trim()); });
-    }
+      if (termsRes?.ok) {
+        const data = await termsRes.json().catch(() => ({}));
+        const exams = Array.isArray(data.exams) ? data.exams : [];
+        exams.forEach((exam: { name?: string }) => {
+          if (exam.name?.trim()) allExamNames.add(exam.name.trim().toUpperCase());
+        });
+      }
 
-    if (termsRes?.ok) {
-      const data = await termsRes.json().catch(() => ({}));
-      const exams = Array.isArray(data.exams) ? data.exams : [];
-      exams.forEach((exam: { subject?: string; name?: string }) => {
-        if (exam.subject?.trim()) allSubjects.add(exam.subject.trim());
-        if (exam.name?.trim()) allExamNames.add(exam.name.trim().toUpperCase());
+      if (allExamNames.size > 0) {
+        setExamTypeOptions((prev) => Array.from(new Set([...allExamNames, ...prev])));
+        setForm((prev) =>
+          allExamNames.has(prev.examType) ? prev : { ...prev, examType: Array.from(allExamNames)[0] }
+        );
+      }
+
+      let teacherSubjects: string[] = [];
+      if (meRes?.ok) {
+        const data = await meRes.json().catch(() => ({}));
+        const user = data?.user;
+        const fromList = Array.isArray(user?.subjects) ? user.subjects : [];
+        const primary = typeof user?.subject === "string" ? user.subject : "";
+        teacherSubjects = uniqueSubjects([...fromList, primary].filter(Boolean));
+      }
+
+      setSubjectOptions(teacherSubjects);
+      setForm((prev) => {
+        if (teacherSubjects.length === 0) {
+          return { ...prev, subject: "" };
+        }
+        const match = teacherSubjects.find(
+          (s) => s.replace(/\s+/g, " ").toUpperCase() === prev.subject.replace(/\s+/g, " ").toUpperCase()
+        );
+        return match ? { ...prev, subject: match } : { ...prev, subject: teacherSubjects[0] };
       });
-    }
-
-    if (allExamNames.size > 0) {
-      setExamTypeOptions((prev) => Array.from(new Set([...allExamNames, ...prev])));
-      setForm((prev) =>
-        allExamNames.has(prev.examType) ? prev : { ...prev, examType: Array.from(allExamNames)[0] }
-      );
-    }
-
-    if (allSubjects.size > 0) {
-      setSubjectOptions((prev) => Array.from(new Set([...allSubjects, ...prev])));
-      setForm((prev) =>
-        allSubjects.has(prev.subject) ? prev : { ...prev, subject: Array.from(allSubjects)[0] }
-      );
+    } finally {
+      setSubjectsLoading(false);
     }
   }, []);
 
@@ -345,7 +361,7 @@ export default function TeacherMarksTab() {
   );
 
   const handleSaveAll = async () => {
-    if (!form.classId) return;
+    if (!form.classId || !form.subject || form.subject === "No subjects assigned") return;
     const filledRows = rows.filter((r) => r.marks !== "");
     if (filledRows.length === 0) return;
     setSaveLoading(true);
@@ -569,6 +585,16 @@ export default function TeacherMarksTab() {
 
         {/* FILTER BAR */}
         <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl p-4 sm:p-6">
+          {!subjectsLoading && subjectOptions.length === 0 && (
+            <p className="mb-4 text-sm text-amber-300/90">
+              No subjects assigned — contact admin to assign subjects on your teacher profile.
+            </p>
+          )}
+          {!classesLoading && classes.length === 0 && (
+            <p className="mb-4 text-sm text-amber-300/90">
+              No classes assigned — contact admin to assign classes on your teacher profile.
+            </p>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <SelectField
               label="CLASS"
@@ -588,7 +614,7 @@ export default function TeacherMarksTab() {
               label="SUBJECT"
               value={form.subject}
               onChange={(v) => handleChange("subject", v)}
-              options={subjectOptions}
+              options={subjectOptions.length ? subjectOptions : ["No subjects assigned"]}
               className="w-full px-4 py-2.5 bg-black/40 border border-white/10 rounded-xl focus:outline-none focus:border-lime-400/50 text-white text-sm"
             />
             <SelectField

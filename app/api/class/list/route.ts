@@ -55,16 +55,17 @@ export async function GET(req: Request) {
       schoolId: schoolId,
     };
 
-    // For teachers: show all classes in their school (not just assigned ones)
-    // This allows flexibility - teachers can work with any class in their school
-    // If you want to restrict to only assigned classes, uncomment the line below:
-    // if (session.user.role === "TEACHER") {
-    //   where.teacherId = session.user.id;
-    // }
+    // Teachers only see classes assigned to them (Class.teacherId)
+    if (session.user.role === "TEACHER") {
+      where.teacherId = session.user.id;
+    }
     const lite = new URL(req.url).searchParams.get("lite") === "1";
 
     if (lite) {
-      const memKey = `class:list:lite:${schoolId}`;
+      const memKey =
+        session.user.role === "TEACHER"
+          ? `class:list:lite:${schoolId}:teacher:${session.user.id}`
+          : `class:list:lite:${schoolId}`;
       const cached = getSchoolDashboardServerCached<{ classes: unknown[] }>(memKey);
       if (cached) {
         return NextResponse.json(cached, { status: 200 });

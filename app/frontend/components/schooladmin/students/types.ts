@@ -51,6 +51,8 @@ export type StudentFormState = {
   emergencyFatherNo: string;
   emergencyMotherNo: string;
   emergencyGuardianNo: string;
+  /** Subjects from exam/syllabus catalog */
+  subjects: string[];
 };
 
 export type StudentFormErrors = Partial<Record<keyof StudentFormState, string>>;

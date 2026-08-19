@@ -90,6 +90,9 @@ export const toStudentForm = (student: StudentRow): StudentFormState => ({
   emergencyFatherNo: "",
   emergencyMotherNo: "",
   emergencyGuardianNo: "",
+  subjects: Array.isArray((student as { subjects?: string[] }).subjects)
+    ? [...((student as { subjects?: string[] }).subjects || [])]
+    : [],
 });
 
 /** Merge edit form values into a list row for immediate UI updates after a successful save. */
@@ -125,6 +128,7 @@ export function mergeStudentAfterEdit(
     previousSchool: form.previousSchool.trim() || prev.previousSchool,
     status: form.status || prev.status,
     class: nextClass,
+    subjects: Array.isArray(form.subjects) ? [...form.subjects] : prev.subjects,
     user: prev.user ? { ...prev.user, name } : prev.user,
   };
 }

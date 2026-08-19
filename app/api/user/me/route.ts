@@ -24,6 +24,7 @@ export async function GET() {
         photoUrl: true,
         teacherId: true,
         subject: true,
+        subjects: true,
         createdAt: true,
         assignedClasses: {
           select: {
@@ -118,6 +119,7 @@ export async function PUT(req: Request) {
           photoUrl: true,
           teacherId: true,
           subject: true,
+          subjects: true,
           createdAt: true,
           assignedClasses: {
             select: {
