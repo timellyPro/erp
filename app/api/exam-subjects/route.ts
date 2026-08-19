@@ -73,10 +73,24 @@ export async function GET() {
       SELECT "name" FROM "ExamSubject" WHERE "schoolId" = ${schoolId}
     `;
 
+    const teacherSubjects = await prisma.$queryRaw<
+      Array<{ subjects: string[] }>
+    >`
+      SELECT "subjects" FROM "User"
+      WHERE "schoolId" = ${schoolId}
+        AND "role" = 'TEACHER'
+        AND array_length("subjects", 1) > 0
+    `;
+
     const names = new Set<string>();
     DEFAULT_EXAM_SUBJECTS.forEach((n) => names.add(n));
     customSubjects.forEach((s) => {
       if (s.name) names.add(s.name.trim().toUpperCase());
+    });
+    teacherSubjects.forEach((t) => {
+      t.subjects.forEach((s) => {
+        if (s) names.add(s.trim().toUpperCase());
+      });
     });
 
     return NextResponse.json(
