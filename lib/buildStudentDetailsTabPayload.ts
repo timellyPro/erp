@@ -14,6 +14,7 @@ import {
 } from "@/lib/paymentFeeHeadLines";
 import { resolveStudentDisplayClass } from "@/lib/resolveStudentDisplayClass";
 import { resolveStudentDisplayName } from "@/lib/resolveStudentDisplayName";
+import { ageFromDob, formatDobYmd } from "@/lib/dobCalendar";
 import {
   admissionApplicationPaymentsFromSnapshot,
   loadStudentAdmissionApplicationPayments,
@@ -454,10 +455,7 @@ function mapStudentToTabPayload(
   tuitionPaidFromAllocations: number,
   extras: StudentDetailsTabExtras
 ): StudentDetailsTabPayload {
-  const dob = student.dob ? new Date(student.dob) : null;
-  const age = dob
-    ? Math.floor((Date.now() - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000))
-    : null;
+  const age = ageFromDob(student.dob);
 
   const admissionApplicationPayments = admissionApplicationPaymentsFromSnapshot(student.application);
 
@@ -472,7 +470,7 @@ function mapStudentToTabPayload(
       rollNo: student.rollNo ?? "",
       penNumber: (student as { penNumber?: string | null }).penNumber ?? "",
       apaarId: (student as { apaarId?: string | null }).apaarId ?? "",
-      dob: student.dob?.toISOString().slice(0, 10) ?? "",
+      dob: formatDobYmd(student.dob),
       age,
       address: student.address ?? "",
       phone: student.phoneNo ?? "",

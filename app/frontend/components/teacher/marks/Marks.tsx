@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import PageHeader from "../../common/PageHeader";
 import TimellyLoader from "../../common/TimellyLoader";
 import { SelectField } from "./MarksSelectField";
@@ -25,7 +25,7 @@ type StudentRow = {
   name: string;
   avatar: string;
   marks: number | "" | "AB";
-  maxMarks: number;
+  maxMarks: number | "";
   markId?: string;
 };
 
@@ -79,7 +79,14 @@ export default function TeacherMarksTab() {
   const [subjectsLoading, setSubjectsLoading] = useState(true);
   const [examTypeOptions, setExamTypeOptions] =
     useState<string[]>(DEFAULT_EXAM_TYPES);
-  const [form, setForm] = useState(() => {
+  const [form, setForm] = useState<{
+    classId: string;
+    classLabel: string;
+    section: string;
+    subject: string;
+    examType: string;
+    maxMarks: number | "";
+  }>(() => {
     const first = initialClasses?.[0];
     return {
       classId: first?.id ?? "",
@@ -96,11 +103,11 @@ export default function TeacherMarksTab() {
   });
   const [activeBtn, setActiveBtn] = useState<null | "save" | "import" | "export">(null);
   const [rows, setRows] = useState<StudentRow[]>([]);
-  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string>("");
-  const pageSize = 8;
+  const [editingMaxId, setEditingMaxId] = useState<string | null>(null);
+  const [editingMaxValue, setEditingMaxValue] = useState("");
 
   const classOptions = classes.map((c) => ({
     value: c.id,
@@ -190,22 +197,45 @@ export default function TeacherMarksTab() {
           markByStudent[m.studentId] = m;
         }
       }
-      const newRows: StudentRow[] = students.map((s) => {
-        const name = s.user?.name ?? "Student";
-        const fallbackAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&size=40&background=4ade80&color=fff`;
-        const mark = markByStudent[s.id];
-        const isAbsent = mark?.grade === "AB";
-        return {
-          id: s.id,
-          rollNo: s.rollNo ?? "--",
-          name,
-          avatar: s.user?.photoUrl?.trim() || fallbackAvatar,
-          marks: mark ? (isAbsent ? "AB" as const : (mark.marks as number)) : "",
-          maxMarks: form.maxMarks,
-          markId: mark?.id,
-        };
-      });
+
+      // Restore max marks from what was previously saved (not the UI default of 100)
+      const savedMarksList = Object.values(markByStudent).sort((a, b) =>
+        String(b.createdAt).localeCompare(String(a.createdAt))
+      );
+      const latestTotal = savedMarksList.find(
+        (m) => typeof m.totalMarks === "number" && m.totalMarks > 0
+      )?.totalMarks;
+      const defaultMax =
+        latestTotal ?? (typeof form.maxMarks === "number" && form.maxMarks > 0 ? form.maxMarks : 100);
+      if (latestTotal) {
+        setForm((prev) =>
+          prev.maxMarks === defaultMax ? prev : { ...prev, maxMarks: defaultMax }
+        );
+      }
+
+      const newRows: StudentRow[] = students
+        .map((s) => {
+          const name = s.user?.name ?? "Student";
+          const fallbackAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&size=40&background=4ade80&color=fff`;
+          const mark = markByStudent[s.id];
+          const isAbsent = mark?.grade === "AB";
+          const rowMax =
+            mark && typeof mark.totalMarks === "number" && mark.totalMarks > 0
+              ? mark.totalMarks
+              : defaultMax;
+          return {
+            id: s.id,
+            rollNo: s.rollNo ?? "--",
+            name,
+            avatar: s.user?.photoUrl?.trim() || fallbackAvatar,
+            marks: mark ? (isAbsent ? ("AB" as const) : Number(mark.marks)) : ("" as const),
+            maxMarks: rowMax,
+            markId: mark?.id,
+          };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
       setRows(newRows);
+      setEditingMaxId(null);
       setSaveMessage("");
     } catch {
       setRows([]);
@@ -283,10 +313,6 @@ export default function TeacherMarksTab() {
     fetchStudentsAndMarks();
   }, [fetchStudentsAndMarks]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [form.classId, form.subject, form.examType]);
-
   const handleChange = (key: string, value: string) => {
     if (key === "class") {
       if (!value || value === "Select class") {
@@ -330,17 +356,67 @@ export default function TeacherMarksTab() {
   };
 
   const updateMaxMarks = (value: string) => {
-    const num = Math.min(1000, Math.max(1, Number(value) || 100));
+    // Allow fully clearing the field — applies to all students
+    if (value.trim() === "") {
+      setForm((prev) => ({ ...prev, maxMarks: "" }));
+      setRows((prev) => prev.map((r) => ({ ...r, maxMarks: "" as const })));
+      setEditingMaxId(null);
+      return;
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return;
+    const num = Math.min(1000, Math.max(1, parsed));
     setForm((prev) => ({ ...prev, maxMarks: num }));
-    setRows((prev) => prev.map((r) => ({ ...r, maxMarks: num })));
+    setRows((prev) =>
+      prev.map((r) => {
+        const nextMarks =
+          r.marks !== "" && r.marks !== "AB" && Number(r.marks) > num ? num : r.marks;
+        return { ...r, maxMarks: num, marks: nextMarks };
+      })
+    );
+    setEditingMaxId(null);
   };
 
-  const getPercentage = (m: number | "" | "AB", max: number) =>
-    m === "" ? "--" : m === "AB" ? "Absent" : `${((Number(m) / max) * 100).toFixed(1)}%`;
+  const updateRowMaxMarks = (id: string, value: string) => {
+    if (value.trim() === "") {
+      setRows((prev) => prev.map((r) => (r.id === id ? { ...r, maxMarks: "" as const } : r)));
+      return;
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return;
+    const num = Math.min(1000, Math.max(1, parsed));
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== id) return r;
+        const nextMarks =
+          r.marks !== "" && r.marks !== "AB" && Number(r.marks) > num ? num : r.marks;
+        return { ...r, maxMarks: num, marks: nextMarks };
+      })
+    );
+    setForm((prev) => ({ ...prev, maxMarks: num }));
+  };
 
-  const getGrade = (m: number | "" | "AB", max: number) => {
+  const startEditMaxMarks = (id: string, current: number | "") => {
+    setEditingMaxId(id);
+    setEditingMaxValue(current === "" ? "" : String(current));
+  };
+
+  const commitEditMaxMarks = (id: string) => {
+    updateRowMaxMarks(id, editingMaxValue);
+    setEditingMaxId(null);
+    setEditingMaxValue("");
+  };
+
+  const getPercentage = (m: number | "" | "AB", max: number | "") =>
+    m === "" || max === "" || max <= 0
+      ? "--"
+      : m === "AB"
+        ? "Absent"
+        : `${((Number(m) / max) * 100).toFixed(1)}%`;
+
+  const getGrade = (m: number | "" | "AB", max: number | "") => {
     if (m === "AB") return "AB";
-    if (m === "" || max <= 0) return "--";
+    if (m === "" || max === "" || max <= 0) return "--";
     const pct = (Number(m) / max) * 100;
     if (pct >= 90) return "A+";
     if (pct >= 80) return "A";
@@ -353,17 +429,18 @@ export default function TeacherMarksTab() {
   const entered = rows.filter((r) => r.marks !== "").length;
   const absentCount = rows.filter((r) => r.marks === "AB").length;
   const pending = total - entered;
-  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const pagedRows = useMemo(
-    () => rows.slice((safePage - 1) * pageSize, safePage * pageSize),
-    [rows, safePage]
-  );
 
   const handleSaveAll = async () => {
     if (!form.classId || !form.subject || form.subject === "No subjects assigned") return;
     const filledRows = rows.filter((r) => r.marks !== "");
     if (filledRows.length === 0) return;
+    const missingMax = filledRows.some(
+      (r) => r.maxMarks === "" || typeof r.maxMarks !== "number" || r.maxMarks <= 0
+    );
+    if (missingMax) {
+      setSaveMessage("Set max marks before saving (cannot be empty).");
+      return;
+    }
     setSaveLoading(true);
     setSaveMessage("");
     try {
@@ -371,12 +448,13 @@ export default function TeacherMarksTab() {
       const results = await Promise.all(
         editableRows.map(async (row) => {
           const isAbsent = row.marks === "AB";
+          const totalMarks = row.maxMarks as number;
           const payload = {
             studentId: row.id,
             classId: form.classId,
             subject: form.subject,
             marks: isAbsent ? 0 : Number(row.marks),
-            totalMarks: row.maxMarks,
+            totalMarks,
             examType: form.examType || null,
             ...(isAbsent ? { grade: "AB" } : {}),
           };
@@ -490,7 +568,39 @@ export default function TeacherMarksTab() {
         </div>
       ),
     },
-    { header: "MAX MARKS", align: "center", accessor: "maxMarks" },
+    { header: "MAX MARKS", align: "center", render: (row: StudentRow) => (
+        editingMaxId === row.id ? (
+          <input
+            type="number"
+            autoFocus
+            min={1}
+            max={1000}
+            value={editingMaxValue}
+            onChange={(e) => setEditingMaxValue(e.target.value)}
+            onBlur={() => commitEditMaxMarks(row.id)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitEditMaxMarks(row.id);
+              }
+              if (e.key === "Escape") {
+                setEditingMaxId(null);
+                setEditingMaxValue("");
+              }
+            }}
+            className="w-20 text-center rounded-lg bg-white/10 border border-lime-400/50 px-2 py-1 text-white outline-none focus:ring-1 focus:ring-lime-400/50"
+          />
+        ) : (
+          <button
+            type="button"
+            title="Double-click to edit max marks"
+            onDoubleClick={() => startEditMaxMarks(row.id, row.maxMarks)}
+            className="min-w-16 px-3 py-1 rounded-lg text-white font-medium hover:bg-white/10 border border-transparent hover:border-white/10 transition cursor-text"
+          >
+            {row.maxMarks === "" ? "—" : row.maxMarks}
+          </button>
+        )
+      ) },
     {
       header: "PERCENTAGE",
       align: "center",
@@ -631,9 +741,11 @@ export default function TeacherMarksTab() {
                 min={1}
                 max={1000}
                 value={form.maxMarks}
+                placeholder="Clear to reset all"
                 onChange={(e) => updateMaxMarks(e.target.value)}
                 className="w-full px-4 py-2.5 bg-black/40 border border-white/10 rounded-xl focus:outline-none focus:border-lime-400/50 text-white text-sm"
               />
+              <p className="mt-1 text-[10px] text-white/40">Clear this field to clear max marks for all students</p>
             </div>
           </div>
         </div>
@@ -685,45 +797,17 @@ export default function TeacherMarksTab() {
                 <DataTable<StudentRow>
                   columns={columns}
                   rounded={false}
-                  data={pagedRows}
+                  data={rows}
                   rowKey={(row) => row.id}
                   emptyText="No students in this class. Select a class above."
-                  pagination={{
-                    page: safePage,
-                    totalPages,
-                    onChange: setPage,
-                  }}
                 />
               </div>
 
               <div className="md:hidden space-y-4 p-4">
-                {totalPages > 1 && (
-                  <div className="flex items-center justify-between gap-4 pb-2">
-                    <button
-                      type="button"
-                      onClick={() => setPage((p) => Math.max(1, p - 1))}
-                      disabled={safePage <= 1}
-                      className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Previous
-                    </button>
-                    <span className="text-sm text-white/60">
-                      Page {safePage} of {totalPages}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                      disabled={safePage >= totalPages}
-                      className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Next
-                    </button>
-                  </div>
-                )}
-                {pagedRows.length === 0 ? (
+                {rows.length === 0 ? (
                   <p className="text-white/60 text-center py-6">No students in this class.</p>
                 ) : (
-                  pagedRows.map((student) => {
+                  rows.map((student) => {
                     const percentage = getPercentage(student.marks, student.maxMarks);
                     const grade = getGrade(student.marks, student.maxMarks);
                     return (
@@ -754,7 +838,7 @@ export default function TeacherMarksTab() {
                                   type="number"
                                   inputMode="numeric"
                                   min={0}
-                                  max={student.maxMarks}
+                                  max={student.maxMarks === "" ? undefined : student.maxMarks}
                                   value={student.marks === "" ? "" : student.marks}
                                   onChange={(e) => updateMarks(student.id, e.target.value)}
                                   className="w-24 text-center rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-white text-sm outline-none focus:border-lime-400/50"
@@ -773,9 +857,40 @@ export default function TeacherMarksTab() {
                               </button>
                             </div>
                           </div>
-                          <div className="flex justify-between text-sm">
-                            <span className="text-white/60">Max: {student.maxMarks}</span>
-                            <span className="text-white font-semibold">{percentage}</span>
+                          <div className="flex justify-between text-sm items-center gap-3">
+                            <span className="text-white/60 shrink-0">Max</span>
+                            {editingMaxId === student.id ? (
+                              <input
+                                type="number"
+                                autoFocus
+                                min={1}
+                                max={1000}
+                                value={editingMaxValue}
+                                onChange={(e) => setEditingMaxValue(e.target.value)}
+                                onBlur={() => commitEditMaxMarks(student.id)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    commitEditMaxMarks(student.id);
+                                  }
+                                  if (e.key === "Escape") {
+                                    setEditingMaxId(null);
+                                    setEditingMaxValue("");
+                                  }
+                                }}
+                                className="w-24 text-center rounded-lg bg-white/10 border border-lime-400/50 px-3 py-2 text-white text-sm outline-none"
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                title="Double-tap to edit max marks"
+                                onDoubleClick={() => startEditMaxMarks(student.id, student.maxMarks)}
+                                className="text-white font-semibold px-2 py-1 rounded-lg hover:bg-white/10"
+                              >
+                                {student.maxMarks === "" ? "—" : student.maxMarks}
+                              </button>
+                            )}
+                            <span className="text-white font-semibold ml-auto">{percentage}</span>
                           </div>
                         </div>
                       </div>

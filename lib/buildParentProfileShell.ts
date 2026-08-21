@@ -3,6 +3,7 @@ import {
   getParentPortalServerCached,
   setParentPortalServerCached,
 } from "@/lib/parentPortalServerCache";
+import { ageFromDob, formatDobYmd } from "@/lib/dobCalendar";
 
 type ProfileStudentRow = {
   id: string;
@@ -40,10 +41,8 @@ export function profileShellFromStudent(student: ProfileStudentRow) {
       email: student.user?.email ?? "",
       photoUrl: student.user?.photoUrl ?? null,
       rollNo: student.rollNo ?? "",
-      dob: student.dob?.toISOString() ?? "",
-      age: student.dob
-        ? Math.floor((Date.now() - student.dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000))
-        : null,
+      dob: formatDobYmd(student.dob),
+      age: ageFromDob(student.dob),
       address: student.address ?? "",
       phone: student.phoneNo ?? student.user?.mobile ?? "",
       fatherName: student.fatherName,

@@ -111,8 +111,13 @@ function StatCard({
   );
 }
 
-export default function TeacherReportCard() {
-  const initialClasses = peekTeacherMarksClasses();
+export default function TeacherReportCard({
+  scope = "teacher",
+}: {
+  /** teacher = assigned classes only; school = all school classes */
+  scope?: "teacher" | "school";
+}) {
+  const initialClasses = scope === "teacher" ? peekTeacherMarksClasses() : null;
   const [classes, setClasses] = useState<ClassOption[]>(() =>
     initialClasses ? mapLiteClasses(initialClasses) : []
   );
@@ -144,6 +149,33 @@ export default function TeacherReportCard() {
 
   useEffect(() => {
     (async () => {
+      if (scope === "school") {
+        setClassesLoading(true);
+        try {
+          const res = await fetch("/api/class/list?lite=1", {
+            credentials: "include",
+            cache: "no-store",
+          });
+          const data = await res.json().catch(() => ({}));
+          const list = Array.isArray(data.classes) ? data.classes : [];
+          const mapped = mapLiteClasses(list);
+          setClasses(mapped);
+          if (!selectedClassId && mapped[0]) {
+            setSelectedClassId(mapped[0].id);
+            setSelectedClassLabel(
+              mapped[0].section
+                ? `${mapped[0].name} - ${mapped[0].section}`
+                : mapped[0].name
+            );
+          }
+        } catch {
+          setClasses([]);
+        } finally {
+          setClassesLoading(false);
+        }
+        return;
+      }
+
       const cached = peekTeacherMarksClasses();
       if (cached?.length) {
         setClasses(mapLiteClasses(cached));
@@ -173,7 +205,7 @@ export default function TeacherReportCard() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
     (async () => {

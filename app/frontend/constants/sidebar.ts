@@ -280,6 +280,13 @@ export const SCHOOLADMIN_MENU_ITEMS: SidebarItem[] = [
         permission: Permission.EXAMS,
     },
     {
+        label: "Marks",
+        tab: "marks",
+        href: "/frontend/pages/schooladmin?tab=marks",
+        icon: Award,
+        permission: Permission.MARKS,
+    },
+    {
         label: "Analysis",
         tab: "analysis",
         href: "/frontend/pages/schooladmin/analysis",
@@ -312,6 +319,7 @@ export const SCHOOLADMIN_TAB_TITLES: Record<string, string> = {
     workshops: "Workshops & Events",
     newsfeed: "Newsfeed",
     exams: "Exams",
+    marks: "Marks",
     analysis: "Analysis",
     "student-details": "Student Details",
     "add-user": "Add User",
