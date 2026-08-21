@@ -14,6 +14,7 @@ import { setApplicationEnrolled } from "@/lib/admissionsListQuery";
 import { studentApplicationForStudentCreateSelect } from "@/lib/studentApplicationSafeSelect";
 import { canonicalizeResidencyType } from "@/lib/residencyDisplay";
 import { invalidateStudentListCaches } from "@/lib/invalidateStudentListCaches";
+import { parseDobToDate } from "@/lib/dobCalendar";
 
 function normalizeResidencyType(value: unknown) {
   if (typeof value !== "string") return "Day Scholar";
@@ -249,9 +250,13 @@ export async function POST(req: Request) {
       );
     }
 
-    // Validate DOB is a valid date
-    const dobDate = new Date(effectiveDob);
-    if (isNaN(dobDate.getTime())) {
+    // Validate DOB is a valid date (calendar-safe — no timezone day shift)
+    const dobDate = parseDobToDate(
+      typeof effectiveDob === "string" || effectiveDob instanceof Date
+        ? effectiveDob
+        : String(effectiveDob ?? "")
+    );
+    if (!dobDate) {
       console.error("Validation failed: Invalid date of birth format");
       return NextResponse.json(
         { message: "Invalid date of birth format" },

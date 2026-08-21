@@ -77,7 +77,7 @@ export async function GET(req: Request) {
           },
         },
       },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      orderBy: [{ user: { name: "asc" } }, { id: "asc" }],
     });
 
     return NextResponse.json({ students }, { status: 200 });

@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { requireSchoolId } from "@/lib/tenant";
+import { formatDobYmd } from "@/lib/dobCalendar";
 import { withRequestTiming } from "@/lib/requestTiming";
 import { tenantCacheKey, swrGet, swrSet } from "@/lib/tenantCache";
 import {
@@ -15,6 +16,11 @@ import { resolveStudentDisplayClass } from "@/lib/resolveStudentDisplayClass";
 /** Admission / roll tokens usually include digits; pure letter queries are treated as names. */
 function studentSearchQueryLooksLikeAdmissionOrRoll(q: string): boolean {
   return /\d/.test(q);
+}
+
+function formatDobForList(row: { dob?: Date | string | null }): string | undefined {
+  if (!("dob" in row) || row.dob == null) return undefined;
+  return formatDobYmd(row.dob);
 }
 
 /** Exact student row lookup by cuid (autocomplete paste). */
@@ -201,7 +207,12 @@ export async function GET(req: Request) {
                 rest.class,
                 (rest as { application?: { class?: typeof rest.class } }).application?.class ?? null
               );
-          const item = { ...rest, class: resolvedClass };
+          const dob = formatDobForList(rest as { dob?: Date | null });
+          const item = {
+            ...rest,
+            class: resolvedClass,
+            ...(dob !== undefined ? { dob } : {}),
+          };
           const payload = { students: [item], items: [item], nextCursor: null };
           if (!bypassCache) setSchoolDashboardServerCached(memKey, payload, 180_000);
           return NextResponse.json(payload, { status: 200 });
@@ -220,7 +231,12 @@ export async function GET(req: Request) {
         const items = rawItems.map((row) => {
           if (searchMode) {
             const { schoolId: _schoolId, ...rest } = row as typeof row & { schoolId?: string };
-            return { ...rest, class: rest.class ?? null };
+            const dob = formatDobForList(rest as { dob?: Date | null });
+            return {
+              ...rest,
+              class: rest.class ?? null,
+              ...(dob !== undefined ? { dob } : {}),
+            };
           }
           const appClass =
             (row as { application?: { class?: typeof row.class } }).application?.class ?? null;
@@ -228,7 +244,12 @@ export async function GET(req: Request) {
           const { application: _app, ...rest } = row as typeof row & {
             application?: unknown;
           };
-          return { ...rest, class: resolvedClass };
+          const dob = formatDobForList(rest as { dob?: Date | null });
+          return {
+            ...rest,
+            class: resolvedClass,
+            ...(dob !== undefined ? { dob } : {}),
+          };
         });
         const nextCursor = hasNext ? items[items.length - 1]?.id ?? null : null;
 

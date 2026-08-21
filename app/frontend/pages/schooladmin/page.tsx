@@ -18,6 +18,7 @@ import StudentDetails from "../../components/schooladmin/StudentDetails";
 import Certificates from "../../components/schooladmin/Certificates";
 //import { ExamsPageInner } from "../../components/schooladmin/Exams";
 import ExamsPage from "../../components/schooladmin/exams/exams";
+import SchoolAdminMarksTab from "../../components/schooladmin/marks/Marks";
 import SchoolAdminSettingsTab from "../../components/schooladmin/Settings";
 import SchoolAdminTeacherTab from "../../components/schooladmin/TeachersTab";
 import SchoolAdminCircularsTab from "../../components/schooladmin/circularTab";
@@ -159,6 +160,8 @@ function SchoolAdminContent() {
         return <Certificates />;
       case "exams":
         return <ExamsPage />;
+      case "marks":
+        return <SchoolAdminMarksTab />;
       case "settings":
         return <SchoolAdminSettingsTab />;
       default:

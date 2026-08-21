@@ -50,11 +50,10 @@ export function buildStudentCredentialsWhere(
   return where;
 }
 
+import { formatDobYmd } from "@/lib/dobCalendar";
+
 function formatDobDisplay(dob: Date): string {
-  const y = dob.getFullYear();
-  const m = String(dob.getMonth() + 1).padStart(2, "0");
-  const d = String(dob.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+  return formatDobYmd(dob);
 }
 
 async function toCredentialRows(

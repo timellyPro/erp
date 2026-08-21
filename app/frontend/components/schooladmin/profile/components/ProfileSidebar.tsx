@@ -9,6 +9,11 @@ import {
   canonicalizeResidencyType,
   formatResidencyTypeForDisplay,
 } from "@/lib/residencyDisplay";
+import {
+  ageFromDob,
+  formatDobDisplay,
+  toDobDateInputValue,
+} from "@/lib/dobCalendar";
 
 const RESIDENCY_OPTIONS = [
   { label: "Day Scholar", value: "Day Scholar" },
@@ -32,6 +37,7 @@ interface StudentProfileProps {
   className: string;
   rollNo: string;
   age: string;
+  dob?: string;
   email: string;
   phone: string;
   address: string;
@@ -63,6 +69,8 @@ type Props = {
     classDisplayName?: string;
     gender?: string;
     residencyType?: string;
+    dob?: string;
+    age?: string;
   }) => void;
   onOpenFees?: () => void;
   /** Warm fee breakdown before the user opens the fees sheet. */
@@ -98,6 +106,7 @@ export const ProfileSidebar = ({
   const [sPhone, setSPhone] = useState(student.phone);
   const [sAddress, setSAddress] = useState(student.address === "—" ? "" : student.address);
   const [sRoll, setSRoll] = useState(student.rollNo);
+  const [sDob, setSDob] = useState(() => toDobDateInputValue(student.dob));
   const [sClassId, setSClassId] = useState(classId ?? "");
   const [sGender, setSGender] = useState(gender);
   const [sResidency, setSResidency] = useState(() => residencySelectValue(residencyType));
@@ -114,6 +123,7 @@ export const ProfileSidebar = ({
     setSPhone(student.phone);
     setSAddress(student.address === "—" ? "" : student.address);
     setSRoll(student.rollNo);
+    setSDob(toDobDateInputValue(student.dob));
     setSClassId(classId ?? "");
     setSGender(gender);
     setSResidency(residencySelectValue(residencyType));
@@ -135,6 +145,7 @@ export const ProfileSidebar = ({
     setSPhone(student.phone);
     setSAddress(student.address === "—" ? "" : student.address);
     setSRoll(student.rollNo);
+    setSDob(toDobDateInputValue(student.dob));
     setSClassId(classId ?? "");
     setSGender(gender);
     setSResidency(residencySelectValue(residencyType));
@@ -168,6 +179,7 @@ export const ProfileSidebar = ({
           classId: sClassId || null,
           gender: sGender.trim() || null,
           residencyType: residencySelectValue(sResidency),
+          dob: sDob.trim() || null,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -178,6 +190,8 @@ export const ProfileSidebar = ({
       setStudentModalOpen(false);
       const resolvedClass = classes.find((c) => c.id === sClassId);
       const savedResidency = residencySelectValue(sResidency);
+      const savedDob = sDob.trim();
+      const nextAge = ageFromDob(savedDob);
       onSaved?.({
         name,
         email: sEmail.trim(),
@@ -187,6 +201,8 @@ export const ProfileSidebar = ({
         classId: sClassId || null,
         gender: sGender.trim(),
         residencyType: savedResidency,
+        dob: savedDob,
+        ...(nextAge != null ? { age: String(nextAge) } : {}),
         ...(resolvedClass
           ? {
               classDisplayName: resolvedClass.label,
@@ -283,9 +299,15 @@ export const ProfileSidebar = ({
           </div>
         </div>
 
-        <div className="mb-2.5 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
-          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Type</p>
-          <p className="text-xs font-semibold text-white">{getResidencyLabel(residencyType)}</p>
+        <div className="mb-2.5 grid grid-cols-2 gap-2">
+          <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 min-w-0">
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Type</p>
+            <p className="text-xs font-semibold text-white truncate">{getResidencyLabel(residencyType)}</p>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 min-w-0">
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">DOB</p>
+            <p className="text-xs font-semibold text-white truncate">{formatDobDisplay(student.dob)}</p>
+          </div>
         </div>
 
         <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-3">
@@ -424,6 +446,15 @@ export const ProfileSidebar = ({
                   onChange={(v) => setSClassId(v)}
                   options={classOptions}
                   bgColor="black"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-white/50">Date of birth</label>
+                <input
+                  type="date"
+                  value={sDob}
+                  onChange={(e) => setSDob(e.target.value)}
+                  className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-white"
                 />
               </div>
               <div>

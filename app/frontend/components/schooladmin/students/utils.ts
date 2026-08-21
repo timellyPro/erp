@@ -1,5 +1,6 @@
 import { ClassItem, StudentFormState, StudentRow } from "./types";
 import type { StudentApplicationSummary } from "../../../interfaces/student";
+import { ageFromDob, formatDobYmd } from "@/lib/dobCalendar";
 
 export const isAdmissionStudent = (student: StudentRow): boolean => {
   const app = student.application;
@@ -36,12 +37,8 @@ export const getInitials = (name?: string | null) => {
 };
 
 export const getAge = (dob?: string | null) => {
-  if (!dob) return "-";
-  const date = new Date(dob);
-  if (Number.isNaN(date.getTime())) return "-";
-  const diff = Date.now() - date.getTime();
-  const ageDate = new Date(diff);
-  return Math.abs(ageDate.getUTCFullYear() - 1970).toString();
+  const age = ageFromDob(dob);
+  return age == null ? "-" : String(age);
 };
 
 export const toStudentForm = (student: StudentRow): StudentFormState => ({
@@ -51,7 +48,7 @@ export const toStudentForm = (student: StudentRow): StudentFormState => ({
   apaarId: (student as { apaarId?: string }).apaarId || "",
   gender: student.gender || "",
   residencyType: student.residencyType || "Day Scholar",
-  dob: student.dob || "",
+  dob: formatDobYmd(student.dob) || "",
   classId: student.class?.id || "",
   section: student.class?.section || "",
   status: student.status || "Active",

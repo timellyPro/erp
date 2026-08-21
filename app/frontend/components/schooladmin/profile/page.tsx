@@ -44,6 +44,7 @@ type StudentDetail = {
     photoUrl?: string | null;
     rollNo: string;
     age: number | null;
+    dob?: string;
     address: string;
     phone: string;
     fatherName: string;
@@ -1171,6 +1172,7 @@ function StudentDetailsPageContent() {
                 className: detail.student.class?.displayName ?? "-",
                 rollNo: detail.student.rollNo,
                 age: String(detail.student.age ?? "-"),
+                dob: detail.student.dob || "",
                 email: detail.student.email,
                 phone: detail.student.phone,
                 address: detail.student.address || "—",
@@ -1206,6 +1208,11 @@ function StudentDetailsPageContent() {
                     if (patch.rollNo !== undefined) nextStudent.rollNo = patch.rollNo;
                     if (patch.gender !== undefined) nextStudent.gender = patch.gender;
                     if (patch.residencyType !== undefined) nextStudent.residencyType = patch.residencyType;
+                    if (patch.dob !== undefined) nextStudent.dob = patch.dob;
+                    if (patch.age !== undefined) {
+                      const n = Number(patch.age);
+                      nextStudent.age = Number.isFinite(n) ? n : nextStudent.age;
+                    }
                     if (patch.classId !== undefined) {
                       if (patch.classId && patch.classDisplayName) {
                         const dash = patch.classDisplayName.indexOf(" - ");

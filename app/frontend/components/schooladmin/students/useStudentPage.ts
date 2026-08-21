@@ -175,10 +175,24 @@ const validateForm = (
     }
   }
 
-  if (!form.dob || Number.isNaN(new Date(form.dob).getTime())) {
+  if (!form.dob || !form.dob.trim()) {
     newErrors.dob = "Please enter a valid date of birth";
-  } else if (new Date(form.dob) >= new Date()) {
-    newErrors.dob = "Date of birth must be in the past";
+  } else {
+    const ymd = form.dob.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!ymd) {
+      newErrors.dob = "Please enter a valid date of birth";
+    } else {
+      const y = Number(ymd[1]);
+      const m = Number(ymd[2]);
+      const d = Number(ymd[3]);
+      const today = new Date();
+      const ty = today.getFullYear();
+      const tm = today.getMonth() + 1;
+      const td = today.getDate();
+      if (y > ty || (y === ty && m > tm) || (y === ty && m === tm && d >= td)) {
+        newErrors.dob = "Date of birth must be in the past";
+      }
+    }
   }
 
   if (options.requireClass && !form.classId.trim()) {

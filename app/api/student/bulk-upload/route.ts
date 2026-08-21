@@ -42,33 +42,30 @@ function parseOptionalNumber(value: unknown) {
   return Number.isFinite(parsed) ? parsed : Number.NaN;
 }
 
+import { parseDobToDate } from "@/lib/dobCalendar";
+
 function parseDob(rawDob: unknown): Date {
   if (!rawDob) {
     throw new Error("Date of birth (dob) is required");
   }
 
   if (rawDob instanceof Date) {
-    if (Number.isNaN(rawDob.getTime())) {
-      throw new Error("Invalid date of birth");
-    }
-    return rawDob;
+    const parsed = parseDobToDate(rawDob);
+    if (!parsed) throw new Error("Invalid date of birth");
+    return parsed;
   }
 
   if (typeof rawDob === "number") {
     const d = XLSX.SSF.parse_date_code(rawDob);
-    const dt = new Date(d.y, d.m - 1, d.d);
-    if (Number.isNaN(dt.getTime())) {
-      throw new Error("Invalid date of birth");
-    }
-    return dt;
+    const parsed = parseDobToDate(`${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`);
+    if (!parsed) throw new Error("Invalid date of birth");
+    return parsed;
   }
 
   const normalizedDob = toStr(rawDob);
-  const dt = new Date(normalizedDob);
-  if (Number.isNaN(dt.getTime())) {
-    throw new Error("Invalid date of birth");
-  }
-  return dt;
+  const parsed = parseDobToDate(normalizedDob);
+  if (!parsed) throw new Error("Invalid date of birth");
+  return parsed;
 }
 
 function buildName(row: Record<string, unknown>) {

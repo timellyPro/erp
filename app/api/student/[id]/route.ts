@@ -21,6 +21,7 @@ import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure
 import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
 import { invalidateStudentListCaches } from "@/lib/invalidateStudentListCaches";
 import { canonicalizeResidencyType } from "@/lib/residencyDisplay";
+import { ageFromDob, formatDobYmd, parseDobToDate } from "@/lib/dobCalendar";
 import {
   loadStudentAdmissionApplicationPayments,
   loadStudentApplicationFeeSnapshot,
@@ -241,10 +242,7 @@ export async function GET(_req: Request, context: RouteParams) {
           },
         });
 
-    const dob = student.dob ? new Date(student.dob) : null;
-    const age = dob
-      ? Math.floor((Date.now() - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000))
-      : null;
+    const age = ageFromDob(student.dob);
 
     const attendanceByMonth = attendances.reduce(
       (acc, a) => {
@@ -295,7 +293,7 @@ export async function GET(_req: Request, context: RouteParams) {
         rollNo: student.rollNo ?? "",
         penNumber: (student as { penNumber?: string | null }).penNumber ?? "",
         apaarId: (student as { apaarId?: string | null }).apaarId ?? "",
-        dob: student.dob?.toISOString().slice(0, 10) ?? "",
+        dob: formatDobYmd(student.dob),
         age,
         address: student.address ?? "",
         phone: student.phoneNo ?? "",
@@ -496,12 +494,7 @@ export async function PUT(req: Request, context: RouteParams) {
         : body.emergencyGuardianNo === null
           ? "-"
           : undefined;
-    const dob = dobRaw
-      ? (() => {
-          const parsed = new Date(dobRaw);
-          return Number.isNaN(parsed.getTime()) ? null : parsed;
-        })()
-      : undefined;
+    const dob = dobRaw !== undefined ? (dobRaw ? parseDobToDate(dobRaw) : null) : undefined;
     const parseOptFee = (v: unknown): number | null | undefined => {
       if (v === undefined) return undefined;
       if (v === null || v === "") return null;
