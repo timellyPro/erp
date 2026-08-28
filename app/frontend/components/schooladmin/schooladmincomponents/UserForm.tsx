@@ -112,24 +112,36 @@ function formDataFromApi(userData: Record<string, unknown>): UserFormData {
   };
 }
 
-function shellFromListUser(user: IUser): UserFormData {
+const EMPTY_FORM: UserFormData = {
+  name: "",
+  email: "",
+  role: "TEACHER",
+  designation: "",
+  password: "",
+  confirmPassword: "",
+  allowedFeatures: [],
+  teacherId: "",
+  subjects: [],
+  assignedClassIds: [],
+  qualification: "",
+  experience: "",
+  joiningDate: "",
+  teacherStatus: "Active",
+  mobile: "",
+  address: "",
+};
+
+/** Only fields available on the list row — never wipe teacher-specific state. */
+function listShellFields(user: IUser): Pick<
+  UserFormData,
+  "name" | "email" | "role" | "designation" | "allowedFeatures"
+> {
   return {
     name: user.name || "",
     email: user.email || "",
     role: (user.role as UserFormData["role"]) || "TEACHER",
     designation: user.designation || "",
-    password: "",
-    confirmPassword: "",
     allowedFeatures: user.allowedFeatures || [],
-    teacherId: "",
-    subjects: [],
-    assignedClassIds: [],
-    qualification: "",
-    experience: "",
-    joiningDate: "",
-    teacherStatus: "Active",
-    mobile: "",
-    address: "",
   };
 }
 
@@ -157,24 +169,9 @@ export default function UserForm({
 
   const [formData, setFormData] = useState<UserFormData>(
     initialData ||
-      (listShellUser ? shellFromListUser(listShellUser) : {
-        name: "",
-        email: "",
-        role: "TEACHER",
-        designation: "",
-        password: "",
-        confirmPassword: "",
-        allowedFeatures: [],
-        teacherId: "",
-        subjects: [],
-        assignedClassIds: [],
-        qualification: "",
-        experience: "",
-        joiningDate: "",
-        teacherStatus: "Active",
-        mobile: "",
-        address: "",
-      })
+      (listShellUser
+        ? { ...EMPTY_FORM, ...listShellFields(listShellUser) }
+        : EMPTY_FORM)
   );
 
   const [classesList, setClassesList] = useState<{ id: string; name: string; section: string | null }[]>([]);
@@ -190,14 +187,20 @@ export default function UserForm({
     }
   }, [initialData]);
 
-  const fullDataLoadedRef = React.useRef(false);
+  const shellAppliedForUserRef = React.useRef<string | null>(null);
+  const formDirtyRef = React.useRef(false);
 
   useEffect(() => {
-    if (listShellUser && !initialData && !fullDataLoadedRef.current) {
-      setFormData(shellFromListUser(listShellUser));
-      setLoading(false);
-    }
-  }, [listShellUser, initialData]);
+    if (!listShellUser || initialData || !userId) return;
+    if (shellAppliedForUserRef.current === userId) return;
+    shellAppliedForUserRef.current = userId;
+
+    setFormData((prev) => ({
+      ...prev,
+      ...listShellFields(listShellUser),
+    }));
+    setLoading(false);
+  }, [listShellUser, initialData, userId]);
 
   // Fetch available subjects from exam-subjects API
   useEffect(() => {
@@ -238,9 +241,10 @@ export default function UserForm({
     return () => controller.abort();
   }, [schoolId]);
 
-  // Reset full-data flag when switching users
+  // Reset edit state when switching users
   useEffect(() => {
-    fullDataLoadedRef.current = false;
+    formDirtyRef.current = false;
+    shellAppliedForUserRef.current = null;
   }, [userId]);
 
   // Full user for edit — fetch directly, bypassing all caches
@@ -258,8 +262,16 @@ export default function UserForm({
     })
       .then((res) => res.json())
       .then((userData: Record<string, unknown>) => {
-        fullDataLoadedRef.current = true;
-        setFormData(formDataFromApi(userData));
+        const fromApi = formDataFromApi(userData);
+        setFormData((prev) => {
+          if (!formDirtyRef.current) return fromApi;
+          return {
+            ...fromApi,
+            assignedClassIds: prev.assignedClassIds,
+            subjects: prev.subjects,
+            allowedFeatures: prev.allowedFeatures,
+          };
+        });
       })
       .catch((err) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
@@ -275,6 +287,7 @@ export default function UserForm({
   }, [userId, initialData]);
 
   const handleChange = (field: keyof UserFormData, value: unknown) => {
+    formDirtyRef.current = true;
     setFormData((prev) => ({ ...prev, [field]: value }));
     setError(null);
     setFieldErrors((prev) => {
@@ -287,6 +300,7 @@ export default function UserForm({
   };
 
   const handleFeatureToggle = (feature: string) => {
+    formDirtyRef.current = true;
     setFormData((prev) => ({
       ...prev,
       allowedFeatures: prev.allowedFeatures.includes(feature)

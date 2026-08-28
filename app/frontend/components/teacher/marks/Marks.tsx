@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useEffect, useCallback, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
 import PageHeader from "../../common/PageHeader";
 import TimellyLoader from "../../common/TimellyLoader";
 import { SelectField } from "./MarksSelectField";
@@ -108,6 +108,7 @@ export default function TeacherMarksTab() {
   const [saveMessage, setSaveMessage] = useState<string>("");
   const [editingMaxId, setEditingMaxId] = useState<string | null>(null);
   const [editingMaxValue, setEditingMaxValue] = useState("");
+  const userSelectedClassRef = useRef(false);
 
   const classOptions = classes.map((c) => ({
     value: c.id,
@@ -126,6 +127,7 @@ export default function TeacherMarksTab() {
       setClasses(mapLiteClasses(cached));
       setClassesLoading(false);
       setForm((prev) => {
+        if (userSelectedClassRef.current && prev.classId) return prev;
         if (prev.classId) return prev;
         const first = cached[0];
         return {
@@ -143,6 +145,7 @@ export default function TeacherMarksTab() {
       const list = await loadTeacherMarksClasses({ revalidate: true });
       setClasses(mapLiteClasses(list));
       setForm((prev) => {
+        if (userSelectedClassRef.current && prev.classId) return prev;
         const stillValid = list.some((c) => c.id === prev.classId);
         if (stillValid) return prev;
         if (list.length === 0) {
@@ -316,9 +319,11 @@ export default function TeacherMarksTab() {
   const handleChange = (key: string, value: string) => {
     if (key === "class") {
       if (!value || value === "Select class") {
+        userSelectedClassRef.current = false;
         setForm((prev) => ({ ...prev, classId: "", classLabel: "", section: "" }));
         return;
       }
+      userSelectedClassRef.current = true;
       const opt = classOptions.find((o) => o.value === value || o.label === value);
       const c = classes.find((x) => x.id === value || (x.section ? `${x.name} - ${x.section}` : x.name) === value);
       setForm((prev) => ({
