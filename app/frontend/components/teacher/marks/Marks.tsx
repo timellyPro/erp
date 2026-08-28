@@ -144,7 +144,7 @@ export default function TeacherMarksTab() {
     try {
       const list = await loadTeacherMarksClasses({ revalidate: true });
       setClasses(mapLiteClasses(list));
-      setForm((prev) => {
+      setForm((prev) => { 
         if (userSelectedClassRef.current && prev.classId) return prev;
         const stillValid = list.some((c) => c.id === prev.classId);
         if (stillValid) return prev;
