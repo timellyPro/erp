@@ -192,7 +192,7 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
       allocatedAmount: a.amount,
       headType: "EXTRA_FEE" as const,
       componentIndex: null as null,
-      componentName: null as null,
+      componentName: lineName,
       extraFeeId,
       lineName,
     };

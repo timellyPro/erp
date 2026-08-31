@@ -13,7 +13,27 @@ export function buildStudentFullNameFromApplication(
   return [app.firstName, app.middleName, app.lastName].filter(Boolean).join(" ").trim();
 }
 
-/** Prefer application name over login user.name (which may be a parent or placeholder). */
+/** Split a full name into admission application name fields. */
+export function splitFullNameToApplicationParts(fullName: string): {
+  firstName: string;
+  middleName: string | null;
+  lastName: string;
+} {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) {
+    return { firstName: "Student", middleName: null, lastName: "Student" };
+  }
+  if (parts.length === 1) {
+    return { firstName: parts[0]!, middleName: null, lastName: parts[0]! };
+  }
+  return {
+    firstName: parts[0]!,
+    middleName: parts.length > 2 ? parts.slice(1, -1).join(" ") : null,
+    lastName: parts[parts.length - 1]!,
+  };
+}
+
+/** Prefer login user.name — profile edits save here; application is kept in sync on update. */
 export function resolveStudentDisplayName(student: {
   user?: { name?: string | null } | null;
   application?:
@@ -26,11 +46,11 @@ export function resolveStudentDisplayName(student: {
   fatherName?: string | null;
   admissionNumber?: string | null;
 }): string {
+  const fromUser = (student.user?.name ?? "").trim();
+  if (fromUser.length >= 2) return fromUser;
+
   const fromApp = buildStudentFullNameFromApplication(student.application);
   if (fromApp) return fromApp;
-
-  const fromUser = (student.user?.name ?? "").trim();
-  if (fromUser) return fromUser;
 
   const admission = (student.admissionNumber ?? "").trim();
   if (admission) return admission;

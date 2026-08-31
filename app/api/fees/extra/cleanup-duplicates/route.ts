@@ -16,6 +16,7 @@ import {
   buildTuitionBulkCache,
   upsertStudentFeeFromStructure,
 } from "@/lib/studentTuitionFromStructure";
+import { backfillPaymentAllocationComponentNames } from "@/lib/backfillPaymentAllocationComponentNames";
 import { isMessCategoryExtraFeeName } from "@/lib/extraFeeResidencyScope";
 
 async function loadSchoolExtras(schoolId: string) {
@@ -115,8 +116,15 @@ export async function POST() {
     let hostelMessCleaned = false;
     let installmentPairsRepaired = 0;
     let studentsRecalculated = 0;
+    let allocationNamesBackfilled = {
+      fromExtraFee: 0,
+      inferredHostelMess: 0,
+      reassigned: 0,
+      lastYearSplit: 0,
+    };
 
     await runWithDeferredCacheInvalidation(async () => {
+      allocationNamesBackfilled = await backfillPaymentAllocationComponentNames(prisma, schoolId);
       installmentPairsRepaired = await repairIncompleteHostelMessInstallmentPairs(prisma, schoolId);
       hostelMessCleaned = await cleanupDuplicateHostelMessExtraFees(prisma, schoolId);
 
@@ -169,6 +177,7 @@ export async function POST() {
       studentsRecalculated,
       remainingIssues: afterIssues,
       remainingDuplicateCount: afterCount,
+      allocationNamesBackfilled,
     });
   } catch (error: unknown) {
     console.error("POST cleanup-duplicates error:", error);

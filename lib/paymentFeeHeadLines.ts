@@ -1,3 +1,5 @@
+import { formatFeeHeadDisplayLabel } from "@/lib/feeHeadInstallmentDisplay";
+
 export type PaymentFeeHeadLine = { name: string; amount: number };
 
 type AllocationRow = {
@@ -9,6 +11,20 @@ type AllocationRow = {
   allocatedAmount: number;
 };
 
+/** Raw fee head name before display formatting (e.g. for DB snapshots). */
+export function rawExtraFeeAllocationName(
+  a: Pick<AllocationRow, "componentName" | "extraFeeId">,
+  extraFeeNameById: Map<string, string>
+): string {
+  if (a.extraFeeId) {
+    const fromId = extraFeeNameById.get(a.extraFeeId)?.trim();
+    if (fromId) return fromId;
+  }
+  const snap = a.componentName?.trim();
+  if (snap) return snap;
+  return "Extra Fee";
+}
+
 export function labelForPaymentAllocation(
   a: Pick<AllocationRow, "headType" | "componentIndex" | "componentName" | "extraFeeId">,
   extraFeeNameById: Map<string, string>
@@ -19,7 +35,7 @@ export function labelForPaymentAllocation(
     return "Base Component";
   }
   if (a.headType === "EXTRA_FEE") {
-    return a.extraFeeId ? (extraFeeNameById.get(a.extraFeeId) ?? "Extra Fee") : "Extra Fee";
+    return formatFeeHeadDisplayLabel(rawExtraFeeAllocationName(a, extraFeeNameById));
   }
   return null;
 }

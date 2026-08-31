@@ -4,11 +4,13 @@ import { useState, useEffect, useMemo } from "react";
 import {
   Download,
   FileSpreadsheet,
+  FileText,
   Loader2,
   Check,
   X,
   Search,
 } from "lucide-react";
+import { downloadConsolidatedMarksPdf } from "@/lib/consolidatedMarksPdf";
 
 type ClassOption = {
   id: string;
@@ -42,7 +44,12 @@ type ConsolidatedSheet = {
 };
 
 type ConsolidatedPayload = {
-  school: { name: string; address: string };
+  school: {
+    name: string;
+    address: string;
+    logoUrl?: string | null;
+    admins?: Array<{ photoUrl?: string | null }>;
+  };
   examType: string;
   groupBy?: "class" | "section";
   sheets: ConsolidatedSheet[];
@@ -79,6 +86,7 @@ export default function SchoolAdminDownloadReports() {
   const [selectedSubjects, setSelectedSubjects] = useState<Set<string>>(new Set());
   const [classSearch, setClassSearch] = useState("");
   const [downloading, setDownloading] = useState(false);
+  const [downloadType, setDownloadType] = useState<"excel" | "pdf" | null>(null);
   const [progress, setProgress] = useState("");
 
   useEffect(() => {
@@ -222,30 +230,39 @@ export default function SchoolAdminDownloadReports() {
     });
   };
 
-  const handleDownloadExcel = async () => {
+  const fetchConsolidated = async (): Promise<ConsolidatedPayload> => {
     const classIds = resolveSelectedClassIds();
-    if (classIds.length === 0) return;
+    if (classIds.length === 0) throw new Error("Select at least one class or section");
+
+    const params = new URLSearchParams({
+      classIds: classIds.join(","),
+      groupBy: selectMode,
+    });
+    if (selectedExamType && selectedExamType !== "ALL") {
+      params.set("examType", selectedExamType);
+    }
+    if (selectedSubjects.size > 0) {
+      params.set("subjects", Array.from(selectedSubjects).join(","));
+    }
+
+    const res = await fetch(`/api/marks/consolidated?${params.toString()}`, {
+      credentials: "include",
+      cache: "no-store",
+    });
+    const data = (await res.json()) as ConsolidatedPayload & { message?: string };
+    if (!res.ok) throw new Error(data.message || "Failed to load consolidated marks");
+    if ((data.sheets ?? []).length === 0) throw new Error("No class sheets to export");
+    return data;
+  };
+
+  const handleDownloadExcel = async () => {
+    if (selectedKeys.size === 0) return;
     setDownloading(true);
+    setDownloadType("excel");
     setProgress("Building consolidated marks…");
 
     try {
-      const params = new URLSearchParams({
-        classIds: classIds.join(","),
-        groupBy: selectMode,
-      });
-      if (selectedExamType && selectedExamType !== "ALL") {
-        params.set("examType", selectedExamType);
-      }
-      if (selectedSubjects.size > 0) {
-        params.set("subjects", Array.from(selectedSubjects).join(","));
-      }
-
-      const res = await fetch(`/api/marks/consolidated?${params.toString()}`, {
-        credentials: "include",
-        cache: "no-store",
-      });
-      const data = (await res.json()) as ConsolidatedPayload & { message?: string };
-      if (!res.ok) throw new Error(data.message || "Failed to load consolidated marks");
+      const data = await fetchConsolidated();
 
       const ExcelJS = await import("exceljs");
       const workbook = new ExcelJS.Workbook();
@@ -353,7 +370,7 @@ export default function SchoolAdminDownloadReports() {
         throw new Error("No class sheets to export");
       }
 
-      setProgress("Downloading…");
+      setProgress("Downloading Excel…");
       const buffer = await workbook.xlsx.writeBuffer();
       const blob = new Blob([buffer], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -374,6 +391,42 @@ export default function SchoolAdminDownloadReports() {
     } finally {
       setTimeout(() => {
         setDownloading(false);
+        setDownloadType(null);
+        setProgress("");
+      }, 800);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    if (selectedKeys.size === 0) return;
+    setDownloading(true);
+    setDownloadType("pdf");
+    setProgress("Building consolidated marks…");
+
+    try {
+      const data = await fetchConsolidated();
+      setProgress("Generating PDF…");
+
+      const examFile =
+        selectedExamType === "ALL" ? "ALL_EXAMS" : selectedExamType.replace(/\s+/g, "_");
+      const modeFile = selectMode === "class" ? "BY_CLASS" : "BY_SECTION";
+
+      await downloadConsolidatedMarksPdf(
+        {
+          school: data.school,
+          examType: data.examType,
+          sheets: data.sheets ?? [],
+        },
+        `${examFile}_CONSOLIDATED_${modeFile}_${new Date().toISOString().slice(0, 10)}.pdf`
+      );
+      setProgress("Done");
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to generate PDF");
+      setProgress("");
+    } finally {
+      setTimeout(() => {
+        setDownloading(false);
+        setDownloadType(null);
         setProgress("");
       }, 800);
     }
@@ -557,12 +610,29 @@ export default function SchoolAdminDownloadReports() {
                 : "bg-white/5 text-white/40 border border-white/10 cursor-not-allowed"
             }`}
           >
-            {downloading ? (
+            {downloading && downloadType === "excel" ? (
               <Loader2 size={16} className="animate-spin" />
             ) : (
               <FileSpreadsheet size={16} />
             )}
-            {downloading ? "Generating…" : "Download Consolidated Excel"}
+            {downloading && downloadType === "excel" ? "Generating…" : "Download Excel"}
+          </button>
+          <button
+            type="button"
+            disabled={downloading || selectedKeys.size === 0}
+            onClick={handleDownloadPdf}
+            className={`px-5 py-3 rounded-xl flex items-center gap-2 text-sm font-bold transition ${
+              !downloading && selectedKeys.size > 0
+                ? "bg-blue-500 text-white hover:bg-blue-400"
+                : "bg-white/5 text-white/40 border border-white/10 cursor-not-allowed"
+            }`}
+          >
+            {downloading && downloadType === "pdf" ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <FileText size={16} />
+            )}
+            {downloading && downloadType === "pdf" ? "Generating…" : "Download PDF"}
           </button>
           {selectedKeys.size > 0 && (
             <button

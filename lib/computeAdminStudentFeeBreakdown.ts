@@ -23,6 +23,7 @@ import { sumSuccessfulFeePayments } from "@/lib/reconcileStudentFeeFromPayments"
 import { cleanupDuplicateHostelMessExtraFees } from "@/lib/cleanupDuplicateHostelMessExtraFees";
 import { migrateUnsplitLumpExtraFees } from "@/lib/extraFeeInstallmentDb";
 import { isPreviousYearFeeHeadName } from "@/lib/feeYearClassification";
+import { repairOrphanExtraFeeAllocations } from "@/lib/repairOrphanExtraFeeAllocations";
 
 function normalizeExtraFeeName(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, " ");
@@ -444,6 +445,25 @@ export async function computeAdminStudentFeeBreakdown(
     });
     for (const ef of orphanFees) {
       extraFeesById.set(ef.id, { id: ef.id, name: ef.name });
+    }
+
+    const stillMissing = orphanAllocationIds.filter((id) => !extraFeesById.has(id));
+    if (stillMissing.length > 0) {
+      const snapRows = await prisma.paymentFeeAllocation.findMany({
+        where: {
+          studentId: student.id,
+          headType: "EXTRA_FEE",
+          extraFeeId: { in: stillMissing },
+          NOT: [{ componentName: null }, { componentName: "" }],
+        },
+        select: { extraFeeId: true, componentName: true },
+      });
+      for (const row of snapRows) {
+        const name = row.componentName?.trim();
+        if (row.extraFeeId && name && !extraFeesById.has(row.extraFeeId)) {
+          extraFeesById.set(row.extraFeeId, { id: row.extraFeeId, name });
+        }
+      }
     }
   }
 

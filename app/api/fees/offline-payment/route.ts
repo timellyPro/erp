@@ -4,6 +4,8 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
+import { isPreviousYearFeeHeadName } from "@/lib/feeYearClassification";
+import { normalizeFeeAllocationKey } from "@/lib/feeAllocationKeys";
 import { rollupOrphanExtraFeeAllocations } from "@/lib/rollupOrphanExtraFeeAllocations";
 import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
 import { FEE_MUTATION_TX } from "@/lib/prismaFeeMutationTx";
@@ -16,6 +18,9 @@ import {
   findExistingOfflinePaymentByRef,
   resolveOfflinePaymentTransactionId,
 } from "@/lib/offlinePaymentIdempotency";
+import {
+  labelForPaymentAllocation,
+} from "@/lib/paymentFeeHeadLines";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import { resolveOfflinePaymentCollectorFromSession } from "@/lib/offlinePaymentCollector";
 import {
@@ -197,6 +202,9 @@ export async function POST(req: Request) {
       | { key: string; headType: "BASE_COMPONENT"; componentIndex: number; componentName: string; snapshotDue: number }
       | { key: string; headType: "EXTRA_FEE"; extraFeeId: string; extraFeeName: string; snapshotDue: number };
 
+    const headLabel = (h: Head) => (h.headType === "EXTRA_FEE" ? h.extraFeeName : h.componentName);
+    const isPreviousYearHead = (h: Head) => isPreviousYearFeeHeadName(headLabel(h));
+
     const allHeads: Head[] = [];
     baseComponents.forEach((c, idx) => {
       const key = `BASE:${idx}`;
@@ -275,7 +283,7 @@ export async function POST(req: Request) {
     const selectedHeadKeys = new Set<string>(
       normalizedSelectedHeads.length > 0
         ? normalizedSelectedHeads.map(getHeadKey)
-        : headsWithDueBefore.map((h) => h.key) // Back-compat: no selection => pay all
+        : headsWithDueBefore.filter((h) => !isPreviousYearHead(h)).map((h) => h.key)
     );
 
     const selectedHeads = headsWithDueBefore.filter((h) => selectedHeadKeys.has(h.key));
@@ -303,23 +311,24 @@ export async function POST(req: Request) {
       const selectedHeadKeysSet = new Set(selectedHeads.map((h) => h.key));
       let explicitTotal = 0;
       for (const a of normalizedExplicitAllocations) {
-        const due = dueByKey.get(a.key);
+        const normKey = normalizeFeeAllocationKey(a.key);
+        const due = dueByKey.get(normKey);
         if (due === undefined) {
           return NextResponse.json({ message: `Invalid fee head key: ${a.key}` }, { status: 400 });
         }
-        if (!selectedHeadKeysSet.has(a.key)) {
+        if (!selectedHeadKeysSet.has(normKey)) {
           return NextResponse.json(
-            { message: `Head ${a.key} must be present in selectedHeads` },
+            { message: `Head ${normKey} must be present in selectedHeads` },
             { status: 400 }
           );
         }
         if (a.amount > due + 0.01) {
           return NextResponse.json(
-            { message: `Amount for ${a.key} exceeds due (₹${due.toFixed(2)})` },
+            { message: `Amount for ${normKey} exceeds due (₹${due.toFixed(2)})` },
             { status: 400 }
           );
         }
-        allocationsByKey.set(a.key, a.amount);
+        allocationsByKey.set(normKey, a.amount);
         explicitTotal += a.amount;
       }
       if (Math.abs(explicitTotal - amount) > 0.01) {
@@ -363,16 +372,20 @@ export async function POST(req: Request) {
       for (const [k, v] of selectedAlloc) allocationsByKey.set(k, v);
 
       if (spill > 0.00001) {
-        if (unselectedDueSum <= 0) {
-          // Should not happen if amount <= fee.remainingFee, but guard anyway.
+        const spillHeads = unselectedHeads.filter((h) => !isPreviousYearHead(h));
+        const spillDueSum = spillHeads.reduce((s, h) => s + h.dueBefore, 0);
+        if (spillDueSum <= 0) {
           return NextResponse.json(
-            { message: "Selected heads due is full; no other heads to allocate spill amount" },
+            {
+              message:
+                "Remaining amount cannot be allocated to previous-year fee heads automatically. Select those heads explicitly or reduce the payment amount.",
+            },
             { status: 400 }
           );
         }
         const spillAlloc = proportionalAlloc(
           spill,
-          unselectedHeads.map((h) => ({ key: h.key, dueBefore: h.dueBefore }))
+          spillHeads.map((h) => ({ key: h.key, dueBefore: h.dueBefore }))
         );
         for (const [k, v] of spillAlloc) allocationsByKey.set(k, (allocationsByKey.get(k) ?? 0) + v);
       }
@@ -405,7 +418,7 @@ export async function POST(req: Request) {
           allocatedAmount,
           headType: "EXTRA_FEE",
           componentIndex: null,
-          componentName: null,
+          componentName: extraFeeName,
           extraFeeId,
           extraFeeName,
         };
@@ -497,6 +510,7 @@ export async function POST(req: Request) {
         where: { paymentId: paymentAndAllocations.payment.id, allocationType: "PAYMENT" },
         select: {
           headType: true,
+          componentIndex: true,
           componentName: true,
           extraFeeId: true,
           allocatedAmount: true,
@@ -515,9 +529,8 @@ export async function POST(req: Request) {
       }
       allocationLines = existingAllocations.map((a) => ({
         name:
-          a.headType === "EXTRA_FEE"
-            ? extraNameById.get(a.extraFeeId as string) ?? "Extra Fee"
-            : String(a.componentName ?? "Fee"),
+          labelForPaymentAllocation(a, extraNameById) ??
+          (a.headType === "EXTRA_FEE" ? "Extra Fee" : String(a.componentName ?? "Fee")),
         amount: a.allocatedAmount,
       }));
     }

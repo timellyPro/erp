@@ -8,6 +8,7 @@ import {
   setSchoolDashboardServerCached,
 } from "@/lib/schoolDashboardServerCache";
 import { loadFeeReportTransactions } from "@/lib/loadDayFeeCollectionTransactions";
+import { buildFeeHeadAmountsByPaymentId, dominantFeeHead, feeHeadLinesFromMap } from "@/lib/paymentFeeHeadLines";
 
 /**
  * GET /api/fees/transactions
@@ -135,31 +136,17 @@ export async function GET(req: Request) {
         : [];
     const extraFeeNameById = new Map(extraFees.map((ef) => [ef.id, ef.name]));
 
-    const allocationLabelAmountByPayment = new Map<string, Map<string, number>>();
-    for (const a of paymentAllocations) {
-      if (a.allocatedAmount <= 0.00001) continue;
-      let label = "Default";
-      if (a.headType === "BASE_COMPONENT") {
-        label = a.componentName || (typeof a.componentIndex === "number" ? `Component ${a.componentIndex + 1}` : "School Fees");
-      } else if (a.headType === "EXTRA_FEE") {
-        label = a.extraFeeId ? extraFeeNameById.get(a.extraFeeId) ?? "Extra Fee" : "Extra Fee";
-      }
-      const perPayment = allocationLabelAmountByPayment.get(a.paymentId) ?? new Map<string, number>();
-      allocationLabelAmountByPayment.set(a.paymentId, perPayment);
-      perPayment.set(label, (perPayment.get(label) ?? 0) + a.allocatedAmount);
-    }
+    const allocationLabelAmountByPayment = buildFeeHeadAmountsByPaymentId(
+      paymentAllocations.map((a) => ({ ...a, paymentId: a.paymentId })),
+      extraFeeNameById
+    );
 
     const dominantFeeTypeByPayment = new Map<string, { name: string; amount: number }>();
     for (const [paymentId, labelMap] of allocationLabelAmountByPayment.entries()) {
-      let bestName = "Default";
-      let bestAmount = 0;
-      for (const [name, amt] of labelMap.entries()) {
-        if (amt > bestAmount) {
-          bestAmount = amt;
-          bestName = name;
-        }
+      const dominant = dominantFeeHead(labelMap);
+      if (dominant) {
+        dominantFeeTypeByPayment.set(paymentId, dominant);
       }
-      dominantFeeTypeByPayment.set(paymentId, { name: bestName, amount: bestAmount });
     }
 
     let refundSums: { paymentId: string; total: number }[] = [];
@@ -177,12 +164,7 @@ export async function GET(req: Request) {
       const refunded = refundByPayment.get(p.id) ?? 0;
       const refundable = Math.max(p.amount - refunded, 0);
       const perHead = allocationLabelAmountByPayment.get(p.id);
-      const feeAllocations = perHead
-        ? Array.from(perHead.entries()).map(([name, amount]) => ({
-            name,
-            amount,
-          }))
-        : [];
+      const feeAllocations = feeHeadLinesFromMap(perHead);
       return {
         id: p.id,
         amount: p.amount,

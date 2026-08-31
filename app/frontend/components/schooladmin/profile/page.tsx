@@ -18,13 +18,15 @@ import {
   refreshStudentFeesAfterMutation,
 } from "@/lib/loadStudentDetailsBundle";
 import { dueHeadRowsFromBreakdown, type DueHeadRow } from "@/lib/feeBreakdownPaymentRows";
+import { extraFeeIdFromAllocationKey, normalizeFeeAllocationKey } from "@/lib/feeAllocationKeys";
+import { isPreviousYearFeeHeadName } from "@/lib/feeYearClassification";
 import {
   fetchFeeBreakdownFast,
   getFeeBreakdownCached,
   invalidateFeeBreakdownCache,
   setFeeBreakdownCache,
 } from "@/lib/feeBreakdownClientCache";
-import { readStudentListCacheLegacy } from "@/lib/studentListSessionCache";
+import { readStudentListCacheLegacy, clearStudentListCache, writeStudentListCacheLegacy } from "@/lib/studentListSessionCache";
 import { isInactiveStudentStatus } from "@/lib/resolveStudentDisplayClass";
 import { resolveStudentDisplayName } from "@/lib/resolveStudentDisplayName";
 import { StudentSearchAutocomplete } from "./components/StudentSearchAutocomplete";
@@ -1191,6 +1193,18 @@ function StudentDetailsPageContent() {
               residencyType={detail.student.residencyType ?? "Day Scholar"}
               onSaved={(patch) => {
                 if (patch) {
+                  const sid = detail.student.id;
+                  invalidateStudentDetailsBundleCache(sid);
+                  clearStudentListCache();
+                  if (patch.name !== undefined) {
+                    setStudents((prev) => {
+                      const next = prev.map((s) =>
+                        s.id === sid ? { ...s, name: patch.name! } : s
+                      );
+                      writeStudentListCacheLegacy(next);
+                      return next;
+                    });
+                  }
                   setDetail((current) => {
                     if (!current) return current;
                     const nextStudent = { ...current.student };
@@ -1453,7 +1467,7 @@ function StudentFeesPaymentModal({
 
   const seedRows = dueHeadRowsFromBreakdown(
     initialFeeBreakdown ?? getFeeBreakdownCached(studentId)
-  );
+  ).filter((r) => !isPreviousYearFeeHeadName(r.label));
   const [rows, setRows] = useState<DueHeadRow[]>(seedRows);
   const [loading, setLoading] = useState(seedRows.length === 0 && breakdownPending);
   const [saving, setSaving] = useState(false);
@@ -1488,7 +1502,9 @@ function StudentFeesPaymentModal({
       try {
         const data = await fetchFeeBreakdownFast(studentId);
         if (!cancelled && data) {
-          setRows(dueHeadRowsFromBreakdown(data));
+          setRows(
+            dueHeadRowsFromBreakdown(data).filter((r) => !isPreviousYearFeeHeadName(r.label))
+          );
           setPaymentDate(new Date().toISOString().slice(0, 10));
         } else if (!cancelled && !data) {
           throw new Error("Failed to load fee heads");
@@ -1599,7 +1615,7 @@ function StudentFeesPaymentModal({
 
     const selectedHeads = selectedRows
       .map((r) => {
-        const sourceKey = r.sourceKey || r.key;
+        const sourceKey = normalizeFeeAllocationKey(r.sourceKey || r.key);
         if (sourceKey.startsWith("BASE:")) {
           const idx = Number(sourceKey.slice("BASE:".length));
           if (!Number.isFinite(idx)) return null;
@@ -1609,10 +1625,11 @@ function StudentFeesPaymentModal({
             componentName: r.label,
           };
         }
-        if (sourceKey.startsWith("EXTRA:")) {
+        const extraFeeId = extraFeeIdFromAllocationKey(sourceKey);
+        if (extraFeeId) {
           return {
             headType: "EXTRA_FEE" as const,
-            extraFeeId: sourceKey.slice("EXTRA:".length),
+            extraFeeId,
           };
         }
         return null;
@@ -1640,7 +1657,7 @@ function StudentFeesPaymentModal({
           paymentDate,
           selectedHeads,
           explicitAllocations: selectedRows.map((r) => ({
-            key: r.sourceKey || r.key,
+            key: normalizeFeeAllocationKey(r.sourceKey || r.key),
             amount: Number(r.payAmount),
             label: r.label,
           })),

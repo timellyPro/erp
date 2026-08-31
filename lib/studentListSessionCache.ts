@@ -42,7 +42,7 @@ export function writeStudentListCache<T>(items: T[], scope: StudentListCacheScop
   }
 }
 
-const LEGACY_LIST_KEY = "erp:student-details:list:v1";
+const LEGACY_LIST_KEY = "erp:student-details:list:v2";
 
 export function clearStudentListCache(): void {
   if (typeof sessionStorage === "undefined") return;
