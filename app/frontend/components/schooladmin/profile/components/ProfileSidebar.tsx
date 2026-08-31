@@ -192,8 +192,12 @@ export const ProfileSidebar = ({
       const savedResidency = residencySelectValue(sResidency);
       const savedDob = sDob.trim();
       const nextAge = ageFromDob(savedDob);
+      const savedName =
+        typeof data.student?.name === "string" && data.student.name.trim()
+          ? data.student.name.trim()
+          : name;
       onSaved?.({
-        name,
+        name: savedName,
         email: sEmail.trim(),
         phone: sPhone.trim(),
         address: sAddress.trim(),

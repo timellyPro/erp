@@ -117,11 +117,18 @@ export async function buildLogoWatermarkPng(
 }
 
 export async function loadSchoolLogoForPdf(
-  school?: SchoolLogoSource | null
+  school?: SchoolLogoSource | null,
+  options?: { fallbackToTimelly?: boolean }
 ): Promise<{ png: string; watermarkPng: string | null } | null> {
-  const primary = pickSchoolLogoUrl(school);
+  const logo = school?.logoUrl?.trim();
+  const adminPhoto = school?.admins?.[0]?.photoUrl?.trim();
+  const primary = logo || adminPhoto || (options?.fallbackToTimelly !== false ? DEFAULT_LOGO : null);
+  if (!primary) return null;
+
   const candidates = [primary];
-  if (primary !== DEFAULT_LOGO) candidates.push(DEFAULT_LOGO);
+  if (options?.fallbackToTimelly !== false && primary !== DEFAULT_LOGO) {
+    candidates.push(DEFAULT_LOGO);
+  }
 
   for (const url of candidates) {
     const raw = await fetchAsDataUrl(url);

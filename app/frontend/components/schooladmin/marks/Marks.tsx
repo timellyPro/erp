@@ -18,7 +18,7 @@ export default function SchoolAdminMarksTab() {
           subtitle={
             subTab === "report-card"
               ? "View and download student report cards"
-              : "Download consolidated marks for all classes or selected sections"
+              : "Download consolidated marks for all classes or selected sections as Excel or PDF"
           }
         />
 

@@ -324,10 +324,12 @@ export async function POST(req: Request) {
             };
           }
           const extraFeeId = key.slice("EXTRA:".length);
+          const extraFeeName =
+            extraFees.find((ef) => ef.id === extraFeeId)?.name?.trim() || "Extra Fee";
           return {
             headType: "EXTRA_FEE" as const,
             componentIndex: null,
-            componentName: null,
+            componentName: extraFeeName,
             extraFeeId,
             allocatedAmount,
           };

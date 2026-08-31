@@ -557,6 +557,9 @@ export const FeeTransactions = ({
     const lower = raw.toLowerCase();
     if (lower.includes("tuition")) return "Tuition Fee";
     if (lower.includes("mess")) return "Mess Fee";
+    if (lower.includes("hostel") || lower.includes("hostler") || lower.includes("boarding")) {
+      return "Hostel Fee";
+    }
     if (lower.includes("transport")) return "Transportation Fee";
     const cleaned = raw
       .replace(/\b\d+(st|nd|rd|th)\s*installment\b/gi, "")

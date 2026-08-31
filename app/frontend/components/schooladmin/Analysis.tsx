@@ -52,6 +52,18 @@ type EnrollmentByClassSectionRow = {
 
 type GenderViewMode = "CLASS_WISE" | "SECTION_WISE";
 
+type EnrollmentGroupRow = {
+  groupLabel: string;
+  male: number;
+  female: number;
+  total: number;
+};
+
+type EnrollmentSectionRow = EnrollmentGroupRow & {
+  className: string;
+  section: string;
+};
+
 import TimellyLoader from "../common/TimellyLoader";
 import SelectInput from "../common/SelectInput";
 import AnalysisSectionNav from "./AnalysisSectionNav";
@@ -406,7 +418,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
 
     XLSX.writeFile(workbook, makeSafeFileName(filenameBase, "xlsx"));
   };
-  const enrollmentClassWiseRows = Array.from(
+  const enrollmentClassWiseRows: EnrollmentGroupRow[] = Array.from(
     enrollmentRows.reduce((acc, row) => {
       const key = row.className || "Unassigned";
       const item = acc.get(key) ?? { groupLabel: key, male: 0, female: 0, total: 0 };
@@ -415,20 +427,28 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
       item.total += row.total;
       acc.set(key, item);
       return acc;
-    }, new Map<string, { groupLabel: string; male: number; female: number; total: number }>())
-  ).map(([, value]) => value).sort((a, b) => a.groupLabel.localeCompare(b.groupLabel));
+    }, new Map<string, EnrollmentGroupRow>())
+  ).map(([, value]) => value).sort((a, b) => a.groupLabel.localeCompare(b.groupLabel, undefined, { numeric: true }));
 
-  const enrollmentSectionWiseRows = Array.from(
-    enrollmentRows.reduce((acc, row) => {
-      const key = row.section && row.section.trim() !== "" ? row.section.trim() : "Unassigned";
-      const item = acc.get(key) ?? { groupLabel: key, male: 0, female: 0, total: 0 };
-      item.male += row.male;
-      item.female += row.female;
-      item.total += row.total;
-      acc.set(key, item);
-      return acc;
-    }, new Map<string, { groupLabel: string; male: number; female: number; total: number }>())
-  ).map(([, value]) => value).sort((a, b) => a.groupLabel.localeCompare(b.groupLabel));
+  const enrollmentSectionWiseRows: EnrollmentSectionRow[] = enrollmentRows
+    .map((row) => {
+      const className = row.className?.trim() || "Unassigned";
+      const section =
+        row.section && row.section.trim() !== "" ? row.section.trim() : "Unassigned";
+      return {
+        groupLabel: `${className} - ${section}`,
+        className,
+        section,
+        male: row.male,
+        female: row.female,
+        total: row.total,
+      };
+    })
+    .sort((a, b) => {
+      const byClass = a.className.localeCompare(b.className, undefined, { numeric: true });
+      if (byClass !== 0) return byClass;
+      return a.section.localeCompare(b.section, undefined, { numeric: true });
+    });
 
   const enrollmentRowsBase =
     genderViewMode === "CLASS_WISE" ? enrollmentClassWiseRows : enrollmentSectionWiseRows;
@@ -440,9 +460,13 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
 
   const enrollmentRowsFiltered = enrollmentRowsBase.filter((row) => {
     const search = enrollmentSearch.trim().toLowerCase();
+    const sectionRow = row as EnrollmentSectionRow;
     const matchesSearch =
       !search ||
-      row.groupLabel.toLowerCase().includes(search);
+      row.groupLabel.toLowerCase().includes(search) ||
+      (genderViewMode === "SECTION_WISE" &&
+        (sectionRow.className.toLowerCase().includes(search) ||
+          sectionRow.section.toLowerCase().includes(search)));
     const matchesGroup = !enrollmentGroupFilter || row.groupLabel === enrollmentGroupFilter;
     return matchesSearch && matchesGroup;
   });
@@ -499,21 +523,32 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
       ? Number(((feeFilteredTotals.pendingFee / feeFilteredTotals.finalFees) * 100).toFixed(2))
       : 0;
 
-  const enrollmentExportRows = enrollmentRowsFiltered.map((row) => ({
-    [genderViewMode === "CLASS_WISE" ? "Class" : "Section"]: row.groupLabel,
-    Male: row.male,
-    Female: row.female,
-    Total: row.total,
-  }));
+  const toGenderExportRow = (
+    row: EnrollmentGroupRow | EnrollmentSectionRow,
+    mode: GenderViewMode
+  ): Record<string, string | number> =>
+    mode === "CLASS_WISE"
+      ? {
+          Class: row.groupLabel,
+          Male: row.male,
+          Female: row.female,
+          Total: row.total,
+        }
+      : {
+          Class: (row as EnrollmentSectionRow).className,
+          Section: (row as EnrollmentSectionRow).section,
+          Male: row.male,
+          Female: row.female,
+          Total: row.total,
+        };
+
+  const enrollmentExportRows = enrollmentRowsFiltered.map((row) =>
+    toGenderExportRow(row, genderViewMode)
+  );
 
   const exportGenderExcel = async (mode: GenderViewMode) => {
     const rows = mode === "CLASS_WISE" ? enrollmentClassWiseRows : enrollmentSectionWiseRows;
-    const exportRows = rows.map((row) => ({
-      [mode === "CLASS_WISE" ? "Class" : "Section"]: row.groupLabel,
-      Male: row.male,
-      Female: row.female,
-      Total: row.total,
-    }));
+    const exportRows = rows.map((row) => toGenderExportRow(row, mode));
     const fileSuffix = mode === "CLASS_WISE" ? "class_wise" : "section_wise";
     try {
       await exportWithXlsx(
@@ -1058,7 +1093,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
               type="text"
               value={enrollmentSearch}
               onChange={(e) => setEnrollmentSearch(e.target.value)}
-              placeholder={genderViewMode === "CLASS_WISE" ? "Search class" : "Search section"}
+              placeholder={genderViewMode === "CLASS_WISE" ? "Search class" : "Search class or section"}
               className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs text-white placeholder:text-white/40 focus:outline-none focus:ring-1 focus:ring-lime-400/40 sm:w-[180px] sm:text-sm"
             />
             <div className="w-full sm:w-[165px]">
@@ -1079,7 +1114,7 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
                 value={enrollmentGroupFilter}
                 onChange={setEnrollmentGroupFilter}
                 options={[
-                  { label: genderViewMode === "CLASS_WISE" ? "All Classes" : "All Sections", value: "" },
+                  { label: genderViewMode === "CLASS_WISE" ? "All Classes" : "All Class & Section", value: "" },
                   ...enrollmentGroupOptions.map((value) => ({ label: value, value })),
                 ]}
               />
@@ -1107,7 +1142,14 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
           <table className="w-full min-w-[520px] text-left text-sm">
             <thead>
               <tr className="border-b border-white/10 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-gray-400">
-                <th className="py-3 pr-3 font-medium">{genderViewMode === "CLASS_WISE" ? "Class" : "Section"}</th>
+                {genderViewMode === "CLASS_WISE" ? (
+                  <th className="py-3 pr-3 font-medium">Class</th>
+                ) : (
+                  <>
+                    <th className="py-3 pr-3 font-medium">Class</th>
+                    <th className="py-3 pr-3 font-medium">Section</th>
+                  </>
+                )}
                 <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Male</th>
                 <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Female</th>
                 <th className="py-3 pl-2 text-right font-medium whitespace-nowrap">Total</th>
@@ -1116,17 +1158,31 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
             <tbody className="text-white/90">
               {enrollmentRowsFiltered.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="py-8 text-center text-white/40">
+                  <td colSpan={genderViewMode === "CLASS_WISE" ? 4 : 5} className="py-8 text-center text-white/40">
                     No matching class / section found.
                   </td>
                 </tr>
               ) : (
-                enrollmentRowsFiltered.map((row) => (
+                enrollmentRowsFiltered.map((row) => {
+                  const sectionRow =
+                    genderViewMode === "SECTION_WISE" ? (row as EnrollmentSectionRow) : null;
+                  return (
                   <tr
-                    key={row.groupLabel}
+                    key={sectionRow ? `${sectionRow.className}-${sectionRow.section}` : row.groupLabel}
                     className="border-b border-white/5 last:border-0 hover:bg-white/[0.03]"
                   >
-                    <td className="py-3 pr-3 font-semibold text-white">{row.groupLabel}</td>
+                    {genderViewMode === "CLASS_WISE" ? (
+                      <td className="py-3 pr-3 font-semibold text-white">{row.groupLabel}</td>
+                    ) : (
+                      <>
+                        <td className="py-3 pr-3 font-semibold text-white">
+                          {sectionRow?.className ?? row.groupLabel}
+                        </td>
+                        <td className="py-3 pr-3 text-white/80">
+                          {sectionRow?.section ?? "—"}
+                        </td>
+                      </>
+                    )}
                     <td className="py-3 px-2 text-right tabular-nums text-sky-300">
                       {row.male.toLocaleString("en-IN")}
                     </td>
@@ -1137,11 +1193,15 @@ export default function AnalysisDashboard({ section = "overview" }: AnalysisDash
                       {row.total.toLocaleString("en-IN")}
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
               {enrollmentFilteredTotals && enrollmentRowsFiltered.length > 0 ? (
                 <tr className="border-t border-white/20 bg-white/[0.06] font-semibold">
-                  <td className="py-3 pr-3 text-white">
+                  <td
+                    className="py-3 pr-3 text-white"
+                    colSpan={genderViewMode === "CLASS_WISE" ? 1 : 2}
+                  >
                     Filtered total
                   </td>
                   <td className="py-3 px-2 text-right tabular-nums text-sky-300">

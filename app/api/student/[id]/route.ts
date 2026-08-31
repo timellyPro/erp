@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { requireSchoolId } from "@/lib/tenant";
 import { withRequestTiming } from "@/lib/requestTiming";
+import { backfillPaymentAllocationComponentNames } from "@/lib/backfillPaymentAllocationComponentNames";
 import {
   buildFeeHeadAmountsByPaymentId,
   dominantFeeHead,
@@ -22,6 +23,8 @@ import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
 import { invalidateStudentListCaches } from "@/lib/invalidateStudentListCaches";
 import { canonicalizeResidencyType } from "@/lib/residencyDisplay";
 import { ageFromDob, formatDobYmd, parseDobToDate } from "@/lib/dobCalendar";
+import { syncStudentDisplayNameRecords } from "@/lib/syncStudentDisplayName";
+import { resolveStudentDisplayName } from "@/lib/resolveStudentDisplayName";
 import {
   loadStudentAdmissionApplicationPayments,
   loadStudentApplicationFeeSnapshot,
@@ -147,6 +150,9 @@ export async function GET(_req: Request, context: RouteParams) {
           orderBy: { createdAt: "desc" },
           take: 500,
         });
+
+        // Repair missing fee head names on old hostel/mess payment rows (shows "Extra Fee" otherwise).
+        await backfillPaymentAllocationComponentNames(prisma, student.schoolId, { studentId: id });
 
         // For each payment row, show which fee heads were allocated
         // (e.g., Tuition, Lab, Uniform, etc.) by using PaymentFeeAllocation.
@@ -576,6 +582,20 @@ export async function PUT(req: Request, context: RouteParams) {
     if (admissionFee !== undefined) studentUpdate.admissionFee = admissionFee;
     if (subjects !== undefined) studentUpdate.subjects = subjects;
 
+    if (name !== undefined) {
+      await syncStudentDisplayNameRecords(
+        prisma,
+        {
+          id: student.id,
+          schoolId: student.schoolId,
+          aadhaarNo: student.aadhaarNo,
+          user: student.user,
+        },
+        name
+      );
+      delete userUpdate.name;
+    }
+
     if (Object.keys(userUpdate).length > 0 && student.user) {
       await prisma.user.update({
         where: { id: student.user.id },
@@ -728,11 +748,35 @@ export async function PUT(req: Request, context: RouteParams) {
     invalidateStudentListCaches(schoolId);
     invalidateStudentFeeReadCaches({ studentId: id, schoolId });
 
+    const refreshedStudent = await prisma.student.findUnique({
+      where: { id },
+      select: {
+        admissionNumber: true,
+        fatherName: true,
+        rollNo: true,
+        user: { select: { name: true, email: true } },
+        application: { select: { firstName: true, middleName: true, lastName: true } },
+      },
+    });
+
     const message = isReactivating
       ? "Student reactivated successfully. They can log in with their date of birth as password (YYYYMMDD)."
       : "Student updated successfully";
 
-    return NextResponse.json({ message }, { status: 200 });
+    return NextResponse.json(
+      {
+        message,
+        student: refreshedStudent
+          ? {
+              name: resolveStudentDisplayName(refreshedStudent),
+              email: refreshedStudent.user?.email ?? "",
+              rollNo: refreshedStudent.rollNo ?? "",
+              admissionNumber: refreshedStudent.admissionNumber,
+            }
+          : undefined,
+      },
+      { status: 200 }
+    );
   } catch (error: unknown) {
     console.error("Student update error:", error);
     return NextResponse.json(

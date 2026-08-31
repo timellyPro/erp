@@ -91,7 +91,11 @@ export async function reassignAllocationsToInstallmentPair(
     if (toFirst > 0) {
       await db.paymentFeeAllocation.update({
         where: { id: alloc.id },
-        data: { extraFeeId: newFirstId, allocatedAmount: toFirst },
+        data: {
+          extraFeeId: newFirstId,
+          allocatedAmount: toFirst,
+          ...(alloc.componentName?.trim() ? { componentName: alloc.componentName.trim() } : {}),
+        },
       });
     } else {
       await db.paymentFeeAllocation.delete({ where: { id: alloc.id } });
@@ -107,7 +111,7 @@ export async function reassignAllocationsToInstallmentPair(
           allocationType: alloc.allocationType,
           allocatedAmount: toSecond,
           componentIndex: null,
-          componentName: null,
+          componentName: alloc.componentName?.trim() || null,
         },
       });
     }

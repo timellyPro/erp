@@ -116,7 +116,13 @@ export async function GET(req: Request) {
 
     const school = await prisma.school.findUnique({
       where: { id: schoolId },
-      select: { id: true, name: true, address: true },
+      select: {
+        id: true,
+        name: true,
+        address: true,
+        logoUrl: true,
+        admins: { select: { photoUrl: true }, take: 1 },
+      },
     });
 
     const classes = await prisma.class.findMany({
@@ -321,6 +327,8 @@ export async function GET(req: Request) {
         school: {
           name: school?.name ?? "School",
           address: school?.address ?? "",
+          logoUrl: school?.logoUrl ?? null,
+          admins: school?.admins ?? [],
         },
         examType: examType ?? "ALL",
         groupBy,

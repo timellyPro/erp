@@ -19,7 +19,7 @@ const refreshFeesInflight = new Map<string, Promise<StudentDetailsFastBundle | n
 
 const BUNDLE_TTL_MS = 30 * 60 * 1000;
 /** Bump when fee attribution / breakdown merge logic changes. */
-const SESSION_KEY = "erp:student-details-bundle:v4";
+const SESSION_KEY = "erp:student-details-bundle:v7";
 const SESSION_TTL_MS = 30 * 60 * 1000;
 
 type SessionStore = Record<string, { savedAt: number; value: StudentDetailsFastBundle }>;
@@ -523,7 +523,7 @@ export async function fetchStudentDetailsFast(
     const cachedBreakdown = getFeeBreakdownCached(studentId);
     if (cachedBreakdown) options?.onBreakdownLoaded?.(cachedBreakdown);
 
-    const shellQuery = options?.force ? "shell=1&refresh=1" : "shell=1";
+    const shellQuery = "shell=1&refresh=1";
     let breakdownPromise =
       cachedBreakdown && !options?.force
         ? Promise.resolve(cachedBreakdown)

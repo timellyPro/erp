@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
+import { snapshotExtraFeeNameOnAllocations } from "@/lib/backfillPaymentAllocationComponentNames";
 import { patchExtraFeeWithInstallmentSupport } from "@/lib/extraFeeInstallmentDb";
 import { invalidateSchoolFeeReadCaches } from "@/lib/studentFeeReadCache";
 import { Prisma } from "@prisma/client";
@@ -209,6 +210,7 @@ export async function DELETE(
 
     const eligibleIds = await eligibleStudentIdsForExtra(extraFee, schoolId);
     await applyStudentFeeDelta(eligibleIds, -extraFee.amount);
+    await snapshotExtraFeeNameOnAllocations(prisma, id, extraFee.name);
     await prisma.extraFee.delete({ where: { id } });
 
     await invalidateSchoolFeeReadCaches(schoolId);
