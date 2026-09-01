@@ -18,18 +18,21 @@ export async function sumSuccessfulFeePayments(studentId: string): Promise<numbe
 
 /** Realign StudentFee.amountPaid / remainingFee from Payment rows after delete or drift. */
 export async function reconcileStudentFeeTotalsFromPayments(studentId: string) {
-  const fee = await prisma.studentFee.findUnique({
-    where: { studentId },
-    select: { finalFee: true },
+  const student = await prisma.student.findUnique({
+    where: { id: studentId },
+    select: { schoolId: true },
   });
-  if (!fee) return null;
+  if (!student) return null;
 
-  const amountPaid = await sumSuccessfulFeePayments(studentId);
-  const remainingFee = Math.max(Math.round((fee.finalFee - amountPaid) * 100) / 100, 0);
+  const { reconcileStudentFeeIntegrity } = await import("@/lib/reconcileStudentFeeIntegrity");
+  const result = await reconcileStudentFeeIntegrity(student.schoolId, studentId, {
+    repairAllocations: true,
+    apply: true,
+  });
+  if (!result) return null;
 
-  return prisma.studentFee.update({
+  return prisma.studentFee.findUnique({
     where: { studentId },
-    data: { amountPaid, remainingFee },
-    select: { amountPaid: true, remainingFee: true, finalFee: true },
+    select: { amountPaid: true, remainingFee: true, finalFee: true, totalFee: true },
   });
 }

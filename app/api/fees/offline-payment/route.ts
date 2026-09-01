@@ -27,6 +27,8 @@ import {
   canUseFastOfflineFeePayment,
   recordFastOfflineFeePayment,
 } from "@/lib/recordFastOfflineFeePayment";
+import { reconcileStudentFeeIntegrity } from "@/lib/reconcileStudentFeeIntegrity";
+import { roundRupee } from "@/lib/formatRupee";
 
 export async function POST(req: Request) {
   const [session, body] = await Promise.all([
@@ -424,8 +426,8 @@ export async function POST(req: Request) {
         };
       });
 
-    const newAmountPaid = fee.amountPaid + amount;
-    const newRemaining = Math.max(totalSnapshotDue - newAmountPaid, 0);
+    const newAmountPaid = roundRupee(fee.amountPaid + amount);
+    const newRemaining = Math.max(0, roundRupee(fee.finalFee - newAmountPaid));
 
     const token =
       typeof paymentMode === "string" && paymentMode.trim()
@@ -492,6 +494,11 @@ export async function POST(req: Request) {
     );
 
     if (!paymentAndAllocations.idempotent) {
+      await reconcileStudentFeeIntegrity(schoolId, studentId, {
+        repairAllocations: true,
+        apply: true,
+      });
+    } else {
       invalidateStudentFeeReadCaches({ studentId, schoolId });
     }
 
@@ -535,7 +542,9 @@ export async function POST(req: Request) {
       }));
     }
 
-    const updatedFeeRow = paymentAndAllocations.updatedFee;
+    const updatedFeeRow = !paymentAndAllocations.idempotent
+      ? await prisma.studentFee.findUnique({ where: { studentId } })
+      : paymentAndAllocations.updatedFee;
     if (!updatedFeeRow) {
       return NextResponse.json({ message: "Fee record not found for this student" }, { status: 404 });
     }
