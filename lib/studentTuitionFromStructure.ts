@@ -54,7 +54,7 @@ function isLegacyInstallmentDuplicate(ef: ExtraFeeRow, allSchoolExtras: ExtraFee
 type ComponentRow = { name: string; amount: number };
 
 /** DB client slice used for tuition totals (works with `prisma` or a `$transaction` callback client). */
-export type TuitionDb = Pick<typeof prisma, "classFeeStructure" | "extraFee">;
+export type TuitionDb = Pick<typeof prisma, "classFeeStructure" | "extraFee" | "class">;
 
 /** Preloaded rows for bulk recalculate — same totals, far fewer queries. */
 export type TuitionBulkCache = {
@@ -154,7 +154,31 @@ export async function sumClassBaseTuition(db: TuitionDb, classId: string | null)
     where: { classId },
     select: { components: true },
   });
-  return baseFromStructureComponents(structure?.components as ComponentRow[] | null);
+  const direct = baseFromStructureComponents(structure?.components as ComponentRow[] | null);
+  if (direct > 0) return direct;
+
+  /** Same class name, different section (e.g. LKG-A borrows from UKG or CLASS 8-B from 8-A). */
+  const cls = await db.class.findUnique({
+    where: { id: classId },
+    select: { name: true, schoolId: true },
+  });
+  if (!cls) return 0;
+
+  const nameKey = cls.name.trim().toLowerCase().replace(/\s+/g, " ");
+  const siblings = await db.class.findMany({
+    where: { schoolId: cls.schoolId, id: { not: classId } },
+    select: { id: true, name: true },
+  });
+  const siblingIds = siblings
+    .filter((s) => s.name.trim().toLowerCase().replace(/\s+/g, " ") === nameKey)
+    .map((s) => s.id);
+  if (siblingIds.length === 0) return 0;
+
+  const donor = await db.classFeeStructure.findFirst({
+    where: { classId: { in: siblingIds } },
+    select: { components: true },
+  });
+  return baseFromStructureComponents(donor?.components as ComponentRow[] | null);
 }
 
 /** One query for all class bases — used by bulk fee recalculate only. */
@@ -183,8 +207,23 @@ export async function buildTuitionBulkCache(
       where: { classId: { in: uniqueClassIds } },
       select: { classId: true, components: true },
     });
+    const componentsByClassId = new Map<string, ComponentRow[]>();
     for (const row of structures) {
-      baseByClassId.set(row.classId, baseFromStructureComponents(row.components as ComponentRow[]));
+      componentsByClassId.set(
+        row.classId,
+        (row.components as ComponentRow[] | null) ?? []
+      );
+    }
+    const classMeta = await db.class.findMany({
+      where: { id: { in: uniqueClassIds } },
+      select: { id: true, name: true, section: true },
+    });
+    const { fillMissingClassFeeStructuresFromSiblings } = await import(
+      "@/lib/feeDueReportCompute"
+    );
+    fillMissingClassFeeStructuresFromSiblings(componentsByClassId, classMeta);
+    for (const [classId, comps] of componentsByClassId) {
+      baseByClassId.set(classId, baseFromStructureComponents(comps));
     }
   }
 
@@ -331,7 +370,7 @@ export function finalFeeFromTotalAndDiscount(totalFee: number, discountPercent: 
   return finalFeeFromStructureAndExtras(totalFee, 0, discountPercent);
 }
 
-type FeeWriteDb = Pick<typeof prisma, "classFeeStructure" | "extraFee" | "studentFee" | "student">;
+type FeeWriteDb = Pick<typeof prisma, "classFeeStructure" | "extraFee" | "studentFee" | "student" | "class">;
 
 export async function upsertStudentFeeFromStructure(
   db: FeeWriteDb,

@@ -157,10 +157,33 @@ const CLASS_FEE_STRUCTURE_TTL_MS = 300_000;
 async function loadClassFeeStructure(classId: string) {
   const hit = classFeeStructureCache.get(classId);
   if (hit && Date.now() < hit.freshUntil) return hit.row;
-  const row = await prisma.classFeeStructure.findUnique({
+  let row = await prisma.classFeeStructure.findUnique({
     where: { classId },
     select: { components: true },
   });
+  if (!row?.components || !Array.isArray(row.components) || row.components.length === 0) {
+    const cls = await prisma.class.findUnique({
+      where: { id: classId },
+      select: { name: true, schoolId: true },
+    });
+    if (cls) {
+      const nameKey = cls.name.trim().toLowerCase().replace(/\s+/g, " ");
+      const siblings = await prisma.class.findMany({
+        where: { schoolId: cls.schoolId, id: { not: classId } },
+        select: { id: true, name: true },
+      });
+      const siblingIds = siblings
+        .filter((s) => s.name.trim().toLowerCase().replace(/\s+/g, " ") === nameKey)
+        .map((s) => s.id);
+      if (siblingIds.length > 0) {
+        const donor = await prisma.classFeeStructure.findFirst({
+          where: { classId: { in: siblingIds } },
+          select: { components: true },
+        });
+        if (donor) row = donor;
+      }
+    }
+  }
   classFeeStructureCache.set(classId, {
     row,
     freshUntil: Date.now() + CLASS_FEE_STRUCTURE_TTL_MS,
