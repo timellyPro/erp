@@ -33,6 +33,8 @@ export interface FeeRecord {
   finalFee: number;
   amountPaid: number;
   remainingFee: number;
+  /** Documented discount in rupees (totalFee − finalFee). */
+  discountAmount?: number;
   // Comma-separated fee head names (e.g., Tuition, Lab) that still have due.
   feeTypes?: string;
   feeTypeDueAmount?: number;

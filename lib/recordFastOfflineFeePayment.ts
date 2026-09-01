@@ -7,6 +7,8 @@ import {
 import { FEE_MUTATION_TX } from "@/lib/prismaFeeMutationTx";
 import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
 import { computeAdminStudentFeeBreakdown } from "@/lib/computeAdminStudentFeeBreakdown";
+import { reconcileStudentFeeIntegrity } from "@/lib/reconcileStudentFeeIntegrity";
+import { roundRupee } from "@/lib/formatRupee";
 
 export type OfflineSelectedHead =
   | { headType: "BASE_COMPONENT"; componentIndex: number; componentName?: string }
@@ -198,8 +200,7 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
     };
   });
 
-  const newAmountPaid = Math.round((fee.amountPaid + amount) * 100) / 100;
-  const newRemaining = Math.max(Math.round((totalHeadDue - amount) * 100) / 100, 0);
+  const newAmountPaid = roundRupee(fee.amountPaid + amount);
 
   const offlineGateway = resolveGateway(paymentMode);
   const txId = resolveOfflinePaymentTransactionId(transactionId, refNo);
@@ -278,8 +279,8 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
       const feeUpdate = await tx.studentFee.updateMany({
         where: { studentId },
         data: {
-          amountPaid: { increment: amount },
-          remainingFee: newRemaining,
+          amountPaid: newAmountPaid,
+          remainingFee: Math.max(0, roundRupee(fee.finalFee - newAmountPaid)),
         },
       });
 
@@ -292,8 +293,30 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
     FEE_MUTATION_TX
   );
 
+  let reconciledFee = {
+    amountPaid: result.idempotent ? fee.amountPaid : newAmountPaid,
+    remainingFee: result.idempotent
+      ? fee.remainingFee
+      : Math.max(0, roundRupee(fee.finalFee - newAmountPaid)),
+    finalFee: fee.finalFee,
+    totalFee: fee.totalFee,
+  };
+
   if (!result.idempotent) {
-    invalidateStudentFeeReadCaches({ studentId, schoolId });
+    const integrity = await reconcileStudentFeeIntegrity(schoolId, studentId, {
+      repairAllocations: true,
+      apply: true,
+    });
+    if (integrity) {
+      reconciledFee = {
+        amountPaid: integrity.after.amountPaid,
+        remainingFee: integrity.after.remainingFee,
+        finalFee: integrity.after.finalFee,
+        totalFee: integrity.after.totalFee,
+      };
+    } else {
+      invalidateStudentFeeReadCaches({ studentId, schoolId });
+    }
   }
 
   const allocationLines =
@@ -306,12 +329,7 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
 
   return {
     payment: result.payment,
-    updatedFee: {
-      amountPaid: result.idempotent ? fee.amountPaid : newAmountPaid,
-      remainingFee: result.idempotent ? fee.remainingFee : newRemaining,
-      finalFee: fee.finalFee,
-      totalFee: fee.totalFee,
-    },
+    updatedFee: reconciledFee,
     feeAllocations: allocationLines,
   };
 }

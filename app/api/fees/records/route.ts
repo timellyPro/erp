@@ -7,6 +7,8 @@ import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
 } from "@/lib/schoolDashboardServerCache";
+import { roundRupee } from "@/lib/formatRupee";
+import { storedDiscountRupeeAmount } from "@/lib/studentFeeHeadDiscount";
 
 /**
  * Fast fee records list for the Fees Records table (no per-head allocation work).
@@ -33,7 +35,7 @@ export async function GET(req: Request) {
     const take = Math.min(10000, Math.max(1, Number.isFinite(takeRaw) ? takeRaw : 5000));
     const cursor = searchParams.get("cursor")?.trim() || null;
 
-    const memKey = `fees:records:v2:${schoolId}:${take}:${cursor ?? "0"}`;
+    const memKey = `fees:records:v3:${schoolId}:${take}:${cursor ?? "0"}`;
     const cached = getSchoolDashboardServerCached<{ fees: unknown[]; nextCursor: string | null }>(memKey);
     if (cached) {
       return NextResponse.json(cached, { status: 200 });
@@ -67,18 +69,26 @@ export async function GET(req: Request) {
     const page = hasNext ? rows.slice(0, take) : rows;
     const nextCursor = hasNext ? page[page.length - 1]?.studentId ?? null : null;
 
-    const fees = page.map((fee) => ({
-      id: fee.id,
-      studentId: fee.studentId,
-      totalFee: fee.totalFee,
-      finalFee: fee.finalFee,
-      amountPaid: fee.amountPaid,
-      remainingFee: fee.remainingFee,
-      discountPercent: fee.discountPercent,
-      feeTypes: "-",
-      feeTypeDueAmount: fee.remainingFee,
-      student: fee.student,
-    }));
+    const fees = page.map((fee) => {
+      const totalFee = roundRupee(fee.totalFee);
+      const finalFee = roundRupee(fee.finalFee);
+      const amountPaid = roundRupee(fee.amountPaid);
+      const remainingFee = Math.max(0, roundRupee(finalFee - amountPaid));
+      const discountAmount = storedDiscountRupeeAmount(totalFee, finalFee);
+      return {
+        id: fee.id,
+        studentId: fee.studentId,
+        totalFee,
+        finalFee,
+        amountPaid,
+        remainingFee,
+        discountPercent: fee.discountPercent,
+        discountAmount,
+        feeTypes: "-",
+        feeTypeDueAmount: remainingFee,
+        student: fee.student,
+      };
+    });
 
     const payload = { fees, nextCursor };
     setSchoolDashboardServerCached(memKey, payload, 25_000);

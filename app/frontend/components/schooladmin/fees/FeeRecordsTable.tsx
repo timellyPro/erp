@@ -91,7 +91,11 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
         ? `${f.student.class.name}${f.student.class.section ? `-${f.student.class.section}` : ""}`
         : "-";
       const status = f.remainingFee <= 0 ? "Paid" : "Pending";
-      const discountAmount = roundRupee(Math.max((f.totalFee || 0) - (f.finalFee || 0), 0));
+      const discountAmount =
+        typeof f.discountAmount === "number"
+          ? roundRupee(f.discountAmount)
+          : roundRupee(Math.max((f.totalFee || 0) - (f.finalFee || 0), 0));
+      const pending = roundRupee(f.remainingFee);
       return {
         "Student Name": f.student.user?.name || "-",
         "Admission Email": f.student.user?.email || "-",
@@ -104,7 +108,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
         "Discount Amount": discountAmount,
         "Final Fee": roundRupee(f.finalFee),
         Paid: roundRupee(f.amountPaid),
-        Pending: roundRupee(f.remainingFee),
+        Pending: pending,
         Status: status,
       };
     });
