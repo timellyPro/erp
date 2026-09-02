@@ -170,6 +170,73 @@ export async function generatePDF(
   }
 }
 
+/** Print via a hidden iframe so browsers do not treat it as a pop-up. */
+function printImageDataUrl(imgData: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("title", "Print receipt");
+    iframe.setAttribute("aria-hidden", "true");
+    iframe.style.cssText =
+      "position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;";
+    document.body.appendChild(iframe);
+
+    const cleanup = () => {
+      window.setTimeout(() => {
+        iframe.remove();
+      }, 1000);
+    };
+
+    const fail = (message: string) => {
+      cleanup();
+      reject(new Error(message));
+    };
+
+    const doc = iframe.contentDocument;
+    const win = iframe.contentWindow;
+    if (!doc || !win) {
+      fail("Failed to open print preview. Please try again.");
+      return;
+    }
+
+    doc.open();
+    doc.write(
+      `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Print receipt</title>
+<style>@page{margin:10mm}html,body{margin:0;padding:0;background:#fff}
+body{display:flex;justify-content:center;align-items:flex-start;min-height:100vh}
+img{max-width:100%;height:auto;display:block}</style></head>
+<body><img src="${imgData}" alt="Receipt" /></body></html>`
+    );
+    doc.close();
+
+    const img = doc.querySelector("img");
+    const runPrint = () => {
+      try {
+        win.focus();
+        win.print();
+        cleanup();
+        resolve();
+      } catch {
+        fail("Failed to open print dialog. Please try again.");
+      }
+    };
+
+    if (img) {
+      if (img.complete) {
+        window.setTimeout(runPrint, 0);
+      } else {
+        img.addEventListener("load", () => window.setTimeout(runPrint, 0), { once: true });
+        img.addEventListener(
+          "error",
+          () => fail("Receipt image failed to load for printing."),
+          { once: true }
+        );
+      }
+    } else {
+      window.setTimeout(runPrint, 0);
+    }
+  });
+}
+
 /** Same visual capture as generatePDF; opens the browser print dialog (no PDF file). */
 export async function printFromElement(
   elementRef: RefObject<HTMLElement | null>,
@@ -182,27 +249,7 @@ export async function printFromElement(
     if (canvas.width < 2 || canvas.height < 2) {
       throw new Error("PDF capture produced empty content.");
     }
-    const imgData = canvas.toDataURL("image/png");
-    const w = window.open("");
-    if (!w) {
-      throw new Error("Pop-up blocked. Allow pop-ups to print the receipt.");
-    }
-    w.document.open();
-    w.document.write(
-      `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Print receipt</title></head><body style="margin:0;display:flex;justify-content:center;align-items:flex-start;min-height:100vh;background:#fff"><img src="${imgData}" alt="" style="max-width:100%;height:auto" /></body></html>`
-    );
-    w.document.close();
-    const img = w.document.querySelector("img");
-    const runPrint = () => {
-      w.focus();
-      window.setTimeout(() => w.print(), 0);
-    };
-    if (img) {
-      if (img.complete) runPrint();
-      else img.addEventListener("load", runPrint, { once: true });
-    } else {
-      runPrint();
-    }
+    await printImageDataUrl(canvas.toDataURL("image/png"));
   } catch (error) {
     console.error("Error printing receipt:", error);
     throw new Error(

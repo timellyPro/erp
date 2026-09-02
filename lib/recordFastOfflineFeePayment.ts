@@ -4,6 +4,11 @@ import {
   findExistingOfflinePaymentByRef,
   resolveOfflinePaymentTransactionId,
 } from "@/lib/offlinePaymentIdempotency";
+import {
+  allocationKeyFromRecord,
+  planSameRefPayment,
+  type ExistingPaymentAllocation,
+} from "@/lib/offlinePaymentSameRef";
 import { FEE_MUTATION_TX } from "@/lib/prismaFeeMutationTx";
 import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
 import { computeAdminStudentFeeBreakdown } from "@/lib/computeAdminStudentFeeBreakdown";
@@ -214,35 +219,96 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
       if (txId) {
         const existing = await findExistingOfflinePaymentByRef(tx, studentId, txId);
         if (existing) {
-          const allocations = await tx.paymentFeeAllocation.findMany({
+          const existingRows = await tx.paymentFeeAllocation.findMany({
             where: { paymentId: existing.id, allocationType: "PAYMENT" },
             select: {
               componentName: true,
               allocatedAmount: true,
               headType: true,
               extraFeeId: true,
+              componentIndex: true,
             },
           });
-          const extraIds = allocations
-            .filter((a) => a.headType === "EXTRA_FEE" && a.extraFeeId)
-            .map((a) => a.extraFeeId as string);
-          const extraNameById = new Map<string, string>();
-          if (extraIds.length > 0) {
-            const extras = await tx.extraFee.findMany({
-              where: { id: { in: extraIds }, schoolId },
-              select: { id: true, name: true },
-            });
-            for (const ef of extras) extraNameById.set(ef.id, ef.name);
+
+          const plan = planSameRefPayment(
+            existingRows as ExistingPaymentAllocation[],
+            normalizedAllocations
+          );
+
+          if (plan.kind === "duplicate") {
+            const extraIds = existingRows
+              .filter((a) => a.headType === "EXTRA_FEE" && a.extraFeeId)
+              .map((a) => a.extraFeeId as string);
+            const extraNameByIdDup = new Map<string, string>();
+            if (extraIds.length > 0) {
+              const extras = await tx.extraFee.findMany({
+                where: { id: { in: extraIds }, schoolId },
+                select: { id: true, name: true },
+              });
+              for (const ef of extras) extraNameByIdDup.set(ef.id, ef.name);
+            }
+            return {
+              payment: existing,
+              idempotent: true as const,
+              feeAllocations: existingRows.map((a) => ({
+                name:
+                  a.headType === "EXTRA_FEE"
+                    ? extraNameByIdDup.get(a.extraFeeId as string) ?? "Extra Fee"
+                    : String(a.componentName ?? "Fee"),
+                amount: a.allocatedAmount,
+                key: allocationKeyFromRecord(a as ExistingPaymentAllocation) ?? undefined,
+              })),
+            };
           }
+
+          const deltaByKey = new Map(plan.deltas.map((d) => [d.key, d.amount]));
+          const appendRows = normalizedAllocations
+            .map((a, index) => ({ a, data: paymentAllocationsData[index]! }))
+            .filter(({ a }) => deltaByKey.has(a.key));
+
+          if (appendRows.length === 0) {
+            throw new Error("Could not append allocations for this reference");
+          }
+
+          await tx.paymentFeeAllocation.createMany({
+            data: appendRows.map(({ a, data }) => ({
+              paymentId: existing.id,
+              studentId: data.studentId,
+              allocationType: data.allocationType,
+              allocatedAmount: deltaByKey.get(a.key)!,
+              headType: data.headType,
+              componentIndex: data.componentIndex,
+              componentName: data.componentName,
+              extraFeeId: data.extraFeeId,
+            })),
+          });
+
+          const updatedPayment = await tx.payment.update({
+            where: { id: existing.id },
+            data: { amount: roundRupee(existing.amount + plan.appendTotal) },
+          });
+
+          const appendedAmountPaid = roundRupee(fee.amountPaid + plan.appendTotal);
+          const feeUpdate = await tx.studentFee.updateMany({
+            where: { studentId },
+            data: {
+              amountPaid: appendedAmountPaid,
+              remainingFee: Math.max(0, roundRupee(fee.finalFee - appendedAmountPaid)),
+            },
+          });
+          if (feeUpdate.count !== 1) {
+            throw new Error("Fee record was updated concurrently");
+          }
+
           return {
-            payment: existing,
-            idempotent: true as const,
-            feeAllocations: allocations.map((a) => ({
-              name:
-                a.headType === "EXTRA_FEE"
-                  ? extraNameById.get(a.extraFeeId as string) ?? "Extra Fee"
-                  : String(a.componentName ?? "Fee"),
-              amount: a.allocatedAmount,
+            payment: updatedPayment,
+            idempotent: false as const,
+            appendedToExistingRef: true as const,
+            appendedAmount: plan.appendTotal,
+            feeAllocations: appendRows.map(({ a, data }) => ({
+              name: data.lineName,
+              amount: deltaByKey.get(a.key)!,
+              key: a.key,
             })),
           };
         }
@@ -293,11 +359,17 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
     FEE_MUTATION_TX
   );
 
+  const appliedAmount = result.idempotent
+    ? 0
+    : "appendedAmount" in result && typeof result.appendedAmount === "number"
+      ? result.appendedAmount
+      : amount;
+
   let reconciledFee = {
-    amountPaid: result.idempotent ? fee.amountPaid : newAmountPaid,
+    amountPaid: result.idempotent ? fee.amountPaid : roundRupee(fee.amountPaid + appliedAmount),
     remainingFee: result.idempotent
       ? fee.remainingFee
-      : Math.max(0, roundRupee(fee.finalFee - newAmountPaid)),
+      : Math.max(0, roundRupee(fee.finalFee - roundRupee(fee.amountPaid + appliedAmount))),
     finalFee: fee.finalFee,
     totalFee: fee.totalFee,
   };
@@ -331,6 +403,9 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
     payment: result.payment,
     updatedFee: reconciledFee,
     feeAllocations: allocationLines,
+    idempotent: result.idempotent,
+    appendedToExistingRef:
+      "appendedToExistingRef" in result ? Boolean(result.appendedToExistingRef) : false,
   };
 }
 

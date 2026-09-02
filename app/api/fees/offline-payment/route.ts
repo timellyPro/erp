@@ -19,6 +19,10 @@ import {
   resolveOfflinePaymentTransactionId,
 } from "@/lib/offlinePaymentIdempotency";
 import {
+  planSameRefPayment,
+  type ExistingPaymentAllocation,
+} from "@/lib/offlinePaymentSameRef";
+import {
   labelForPaymentAllocation,
 } from "@/lib/paymentFeeHeadLines";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
@@ -124,9 +128,16 @@ export async function POST(req: Request) {
           collectedByUserId: collector?.collectedByUserId,
           collectedByName: collector?.collectedByName,
         });
+        const message = fastResult.idempotent
+          ? "Payment already recorded for this reference"
+          : fastResult.appendedToExistingRef
+            ? "Additional fee heads linked to the existing UTR / reference"
+            : "Payment recorded successfully";
         return NextResponse.json(
-          { ...fastResult, message: "Payment recorded successfully" },
-          { status: 201 }
+          { ...fastResult, message },
+          {
+            status: fastResult.idempotent ? 200 : 201,
+          }
         );
       } catch (fastErr: unknown) {
         const msg = fastErr instanceof Error ? fastErr.message : "Payment failed";
@@ -445,13 +456,90 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Invalid paymentDate" }, { status: 400 });
     }
 
+    const requestedAllocations =
+      normalizedExplicitAllocations.length > 0
+        ? normalizedExplicitAllocations.map((a) => ({
+            key: normalizeFeeAllocationKey(a.key),
+            amount: a.amount,
+          }))
+        : Array.from(allocationsByKey.entries()).map(([key, allocAmount]) => ({
+            key,
+            amount: allocAmount,
+          }));
+
     const paymentAndAllocations = await prisma.$transaction(
       async (tx) => {
         if (txId) {
           const existing = await findExistingOfflinePaymentByRef(tx, studentId, txId);
           if (existing) {
-            const updatedFee = await tx.studentFee.findUnique({ where: { studentId } });
-            return { payment: existing, updatedFee, idempotent: true as const };
+            const existingRows = await tx.paymentFeeAllocation.findMany({
+              where: { paymentId: existing.id, allocationType: "PAYMENT" },
+              select: {
+                headType: true,
+                componentIndex: true,
+                extraFeeId: true,
+                allocatedAmount: true,
+              },
+            });
+
+            const plan = planSameRefPayment(
+              existingRows as ExistingPaymentAllocation[],
+              requestedAllocations
+            );
+
+            if (plan.kind === "duplicate") {
+              const updatedFee = await tx.studentFee.findUnique({ where: { studentId } });
+              return { payment: existing, updatedFee, idempotent: true as const, appended: false as const };
+            }
+
+            const deltaByKey = new Map(plan.deltas.map((d) => [d.key, d.amount]));
+            const appendRows = paymentAllocationsData.filter((d: { headType: string; componentIndex: number | null; extraFeeId: string | null }) => {
+              const key =
+                d.headType === "EXTRA_FEE" && d.extraFeeId
+                  ? normalizeFeeAllocationKey(`EXTRA:${d.extraFeeId}`)
+                  : d.headType === "BASE_COMPONENT" && d.componentIndex != null
+                    ? normalizeFeeAllocationKey(`BASE:${d.componentIndex}`)
+                    : null;
+              return key != null && deltaByKey.has(key);
+            });
+
+            await tx.paymentFeeAllocation.createMany({
+              data: appendRows.map((d: any) => ({
+                paymentId: existing.id,
+                studentId: d.studentId,
+                allocationType: d.allocationType,
+                allocatedAmount: deltaByKey.get(
+                  d.headType === "EXTRA_FEE" && d.extraFeeId
+                    ? normalizeFeeAllocationKey(`EXTRA:${d.extraFeeId}`)
+                    : normalizeFeeAllocationKey(`BASE:${d.componentIndex}`)
+                )!,
+                headType: d.headType,
+                componentIndex: d.componentIndex,
+                componentName: d.componentName,
+                extraFeeId: d.extraFeeId,
+              })),
+            });
+
+            const updatedPayment = await tx.payment.update({
+              where: { id: existing.id },
+              data: { amount: roundRupee(existing.amount + plan.appendTotal) },
+            });
+
+            const appendedAmountPaid = roundRupee(fee.amountPaid + plan.appendTotal);
+            const updatedFee = await tx.studentFee.update({
+              where: { studentId },
+              data: {
+                amountPaid: appendedAmountPaid,
+                remainingFee: Math.max(0, roundRupee(fee.finalFee - appendedAmountPaid)),
+              },
+            });
+
+            return {
+              payment: updatedPayment,
+              updatedFee,
+              idempotent: false as const,
+              appended: true as const,
+            };
           }
         }
 
@@ -488,7 +576,7 @@ export async function POST(req: Request) {
           data: { amountPaid: newAmountPaid, remainingFee: newRemaining },
         });
 
-        return { payment, updatedFee, idempotent: false as const };
+        return { payment, updatedFee, idempotent: false as const, appended: false as const };
       },
       FEE_MUTATION_TX
     );
@@ -561,7 +649,9 @@ export async function POST(req: Request) {
         feeAllocations: allocationLines,
         message: paymentAndAllocations.idempotent
           ? "Payment already recorded for this reference"
-          : "Payment recorded successfully",
+          : paymentAndAllocations.appended
+            ? "Additional fee heads linked to the existing UTR / reference"
+            : "Payment recorded successfully",
       },
       { status: paymentAndAllocations.idempotent ? 200 : 201 }
     );

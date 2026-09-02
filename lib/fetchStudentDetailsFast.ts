@@ -228,9 +228,12 @@ function preferFreshBreakdown(
 ): AdminStudentFeeBreakdownResult | null {
   if (!server) return patched;
   if (!patched) return server;
-  // Stale server cache can still show pre-mutation totals — keep the client patch.
-  if (server.remainingFee > patched.remainingFee + 0.02) return patched;
-  if (server.amountPaid > patched.amountPaid + 0.02) return patched;
+  // Keep optimistic patch only when server clearly lags on the same current-year metrics.
+  // Do not keep a patch merely because remaining is lower — previous-year payments used to
+  // write StudentFee (all-years) remaining onto the breakdown and stick forever.
+  const serverLagsPaid = server.amountPaid + 0.02 < patched.amountPaid;
+  const serverLagsRemaining = server.remainingFee > patched.remainingFee + 0.02;
+  if (serverLagsPaid && serverLagsRemaining) return patched;
   return server;
 }
 

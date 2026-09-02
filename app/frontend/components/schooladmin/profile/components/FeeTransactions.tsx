@@ -9,6 +9,7 @@ import { formatReceiptGeneratedDate, formatReceiptTransactionDate } from "@/lib/
 import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
 import { isOfflinePaymentGateway } from "@/lib/feePaymentGateway";
 import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
+import { isPreviousYearFeeHeadName } from "@/lib/feeYearClassification";
 
 type PaymentFeeAllocationLine = { name: string; amount: number };
 
@@ -538,14 +539,14 @@ export const FeeTransactions = ({
     }
   };
 
-  const txnPaid = transactionRows
-    .filter((r) => isSuccessStatus(r.status))
+  // FEES PAID / TOTAL is current-year only — exclude previous-year fee rows.
+  const currentYearTxnPaid = transactionRows
+    .filter((r) => isSuccessStatus(r.status) && !isPreviousYearFeeHeadName(r.feeTypeName))
     .reduce((s, r) => s + r.amount, 0);
-  const totalPaid = Math.max(
-    feeBreakdown?.amountPaid ?? 0,
-    hasFee ? fee!.amountPaid : 0,
-    txnPaid
-  );
+  const totalPaid =
+    feeBreakdown != null
+      ? Math.max(Number(feeBreakdown.amountPaid) || 0, currentYearTxnPaid)
+      : Math.max(hasFee ? fee!.amountPaid : 0, currentYearTxnPaid);
   const total =
     feeBreakdown?.totalAmount ??
     (hasFee ? Math.max(fee!.amountPaid + fee!.remainingFee, totalPaid) : totalPaid);

@@ -424,7 +424,7 @@ function patchBreakdownAfterPayment(
   result: FeePaymentSuccess
 ): AdminStudentFeeBreakdownResult | null {
   if (!prev) return prev;
-  const { updatedFee, feeAllocations } = result;
+  const { feeAllocations } = result;
 
   const deductByKey = new Map<string, number>();
   for (const line of feeAllocations ?? []) {
@@ -446,12 +446,41 @@ function patchBreakdownAfterPayment(
         })
       : prev.dueHeads;
 
+  // Breakdown metrics are current-year only — never copy StudentFee amountPaid/remaining
+  // (those include previous-year payments and zero out "Fees Due" incorrectly).
+  const currentYearHeads = dueHeads.filter((h) => !isPreviousYearFeeHeadName(h.label));
+  const previousYearHeads = dueHeads.filter((h) => isPreviousYearFeeHeadName(h.label));
+  const round = (n: number) => Math.round(n * 100) / 100;
+  const totalAmount = round(currentYearHeads.reduce((s, h) => s + (Number(h.snapshotAmount) || 0), 0));
+  const remainingFee = round(currentYearHeads.reduce((s, h) => s + (Number(h.dueBefore) || 0), 0));
+  const amountPaid = round(
+    currentYearHeads.reduce(
+      (s, h) => s + Math.max((Number(h.snapshotAmount) || 0) - (Number(h.dueBefore) || 0), 0),
+      0
+    )
+  );
+  const previousYearTotalAmount = round(
+    previousYearHeads.reduce((s, h) => s + (Number(h.snapshotAmount) || 0), 0)
+  );
+  const previousYearRemainingFee = round(
+    previousYearHeads.reduce((s, h) => s + (Number(h.dueBefore) || 0), 0)
+  );
+  const previousYearAmountPaid = round(
+    previousYearHeads.reduce(
+      (s, h) => s + Math.max((Number(h.snapshotAmount) || 0) - (Number(h.dueBefore) || 0), 0),
+      0
+    )
+  );
+
   return {
     ...prev,
-    amountPaid: updatedFee.amountPaid,
-    remainingFee: updatedFee.remainingFee,
-    finalFee: updatedFee.finalFee ?? prev.finalFee,
-    totalAmount: prev.totalAmount,
+    amountPaid,
+    remainingFee,
+    finalFee: totalAmount,
+    totalAmount,
+    previousYearTotalAmount,
+    previousYearAmountPaid,
+    previousYearRemainingFee,
     dueHeads,
   };
 }
@@ -759,16 +788,11 @@ function StudentDetailsPageContent() {
                 payments,
                 fee: {
                   ...rest.fee,
-                  // Never let a stale/undercounted breakdown shrink paid below shell or payment sum.
-                  amountPaid: Math.max(
-                    Number(breakdown.amountPaid) || 0,
-                    Number(rest.fee.amountPaid) || 0
-                  ),
-                  remainingFee: Math.min(
-                    Number(breakdown.remainingFee) || Number.POSITIVE_INFINITY,
-                    Number(rest.fee.remainingFee) || Number.POSITIVE_INFINITY
-                  ),
-                  totalFee: breakdown.finalFee ?? rest.fee.totalFee,
+                  // Breakdown is current-year source of truth. Do not Math.max with shell
+                  // amountPaid — shell includes previous-year payments and inflates "paid".
+                  amountPaid: Number(breakdown.amountPaid) || 0,
+                  remainingFee: Number(breakdown.remainingFee) || 0,
+                  totalFee: breakdown.totalAmount ?? rest.fee.totalFee,
                 },
               }
             : { ...rest, payments };
@@ -1666,6 +1690,13 @@ function StudentFeesPaymentModal({
       const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       if (!res.ok) {
         throw new Error(typeof data.message === "string" ? data.message : "Payment failed");
+      }
+      if (data.idempotent === true) {
+        throw new Error(
+          typeof data.message === "string"
+            ? data.message
+            : "This UTR / reference was already recorded for these fee heads."
+        );
       }
       const confirmedResult = buildConfirmedPaymentResult(
         data,
