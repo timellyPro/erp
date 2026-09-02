@@ -1,36 +1,20 @@
-
 import { useState } from "react";
 import { toast } from "../services/toast.service";
 import { assignStudentsToClass } from "../services/student.service";
 import { PRIMARY_COLOR } from "../constants/colors";
+import { downloadBulkStudentTemplateXlsx } from "@/lib/bulkStudentTemplateXlsx";
 
 export default function UploadCSVModal({ classId, onClose, onSuccess }: any) {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
 
   const handleDownloadTemplate = () => {
-    // Template aligned with the admission export format.
-    // Parent Email is optional. If empty, email becomes <student-name>@<school-domain>.
-    // Password is auto-generated from DOB in YYYYMMDD format.
-    const csvContent = `Fedena No,Grade Sought,Boarding Type,Class,Section,First Name,Middle Name,Last Name,Gender,Date of Birth,Aadhar No,Total Fee,Discount %,Application Fee,Admission Fee,Nationality,Languages at Home,Caste,Religion,House No,Street,City,Town,State,Pin Code,Parent Name,Occupation,Office Address,Parent Phone,Parent Email,WhatsApp,Bank Account No,Father No,Mother No,Guardian No
-,Grade 1,Semi Residential,Class 1,A,Rahul,,Sharma,Male,2015-06-15,123412341234,30000,10,500,5000,Indian,Hindi,,,12,MG Road,Delhi,,Delhi,110001,Rajesh Sharma,Engineer,Delhi Office,9876543210,,9876543210,1234567890,9876543210,9876543211,9876543212
-,Grade 1,Semi Residential,Class 1,A,Anita,,Verma,Female,2014-09-20,567856785678,28000,0,300,4000,Indian,English,,,45,Park Street,Mumbai,,Maharashtra,400001,Sunil Verma,Manager,Mumbai Office,9876501234,parent2@example.com,9876501234,2233445566,9876501234,9876501235,9876501236`;
-
-    const element = document.createElement("a");
-    element.setAttribute(
-      "href",
-      "data:text/csv;charset=utf-8," + encodeURIComponent(csvContent)
-    );
-    element.setAttribute("download", "student-bulk-template.csv");
-    element.style.display = "none";
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
+    downloadBulkStudentTemplateXlsx();
   };
 
   const handleUpload = async () => {
     if (!file) {
-      toast.error("Please select a CSV file");
+      toast.error("Please select a CSV or Excel file");
       return;
     }
 
@@ -82,7 +66,7 @@ export default function UploadCSVModal({ classId, onClose, onSuccess }: any) {
 
       /* ================= 2.FETCH UNASSIGNED STUDENTS (FIX) ================= */
 
-      const studentsRes = await fetch("/api/student/list", { credentials: "include" });
+      const studentsRes = await fetch("/api/student/list?all=1&take=10000", { credentials: "include" });
       const studentsData = await studentsRes.json();
 
       if (!studentsRes.ok || !Array.isArray(studentsData.students)) {
@@ -148,22 +132,21 @@ export default function UploadCSVModal({ classId, onClose, onSuccess }: any) {
       <div className="bg-white p-6 rounded-xl w-[400px]">
         <h3 className="font-semibold mb-2">Upload Students CSV / Excel</h3>
         <p className="text-xs text-gray-500 mb-3">
-          Upload the same Excel/CSV format used by the admission export. Required
-          fields include <span className="font-medium">First Name</span>,{" "}
-          <span className="font-medium">Last Name</span>,{" "}
-          <span className="font-medium">Parent Name</span>,{" "}
-          <span className="font-medium">Parent Phone</span>,{" "}
-          <span className="font-medium">Aadhar No</span>, and{" "}
-          <span className="font-medium">Date of Birth</span>. If{" "}
-          <span className="font-medium">Parent Email</span> is empty, the system
-          generates `studentname@schoolprefix`. Password is the DOB in
-          `YYYYMMDD` format.
+          Tuition is calculated from the admin global fee structure for the student&apos;s class (plus extra fees), not from this file. Use the same columns as the admission export, with an optional leading{" "}
+          <span className="font-medium">Timelly ID</span> column (plain roll number, or values like{" "}
+          <span className="font-mono">ADM/2026/123</span> where the last segment is used). Required fields include{" "}
+          <span className="font-medium">First Name</span>, <span className="font-medium">Last Name</span>,{" "}
+          <span className="font-medium">Parent Name</span>, <span className="font-medium">Parent Phone</span>,{" "}
+          <span className="font-medium">Aadhar No</span>, and <span className="font-medium">Date of Birth</span>. If{" "}
+          <span className="font-medium">Parent Email</span> is empty, the system generates{" "}
+          <span className="font-mono">studentname@schoolprefix</span>. Password is the DOB in{" "}
+          <span className="font-mono">YYYYMMDD</span> format.
         </p>
 
         <div className="flex flex-col gap-2">
           <input
             type="file"
-            accept=".csv,.xlsx"
+            accept=".csv,.xlsx,.xls"
             onChange={(e) => setFile(e.target.files?.[0] || null)}
             className="border border-gray-300 rounded-lg px-3 py-2 w-full"
           />
@@ -172,7 +155,7 @@ export default function UploadCSVModal({ classId, onClose, onSuccess }: any) {
             onClick={handleDownloadTemplate}
             className="self-start text-xs text-blue-600 hover:underline"
           >
-            Download student template
+            Download Excel template
           </button>
         </div>
 

@@ -7,14 +7,18 @@ import { IUpdateStudentPayload } from "../constants/student";
 export const getStudents = (classId?: string) =>
   api(`/api/students${classId ? `?classId=${classId}` : ""}`);
 
-export const addStudent = (payload: any) =>
-  api("/api/student/create", {
+/** Returns the raw Response on success and failure so callers can map field errors (do not use `api()` here — it throws on 4xx). */
+export const addStudent = (payload: unknown) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 90_000);
+  return fetch("/api/student/create", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify(payload),
-    // Student create runs a large Prisma transaction; allow extra time vs default.
-    timeoutMs: 90000,
-  });
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeout));
+};
 
 export const uploadStudentsCSV = (file: File, classId: string) => {
   const formData = new FormData();
@@ -34,20 +38,52 @@ export const assignStudentsToClass = (studentId: string, classId: string) =>
     body: JSON.stringify({ studentId, classId }),
   });
 
+export const bulkAssignStudentsToClass = (studentIds: string[], classId: string) =>
+  api("/api/student/bulk-assign-class", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ studentIds, classId }),
+    timeoutMs: 120_000,
+  });
+
 export const updateStudent = (studentId: string, payload: {
   name?: string;
   fatherName?: string;
   motherName?: string;
   occupation?: string;
   classId?: string;
+  dob?: string;
+  aadhaarNo?: string;
   rollNo?: string;
+  penNumber?: string;
+  apaarId?: string;
   phoneNo?: string;
   email?: string;
   address?: string;
   gender?: string;
+  residencyType?: string;
+  parentAadharNo?: string;
+  parentWhatsapp?: string;
+  bankAccountNo?: string;
+  officeAddress?: string;
+  houseNo?: string;
+  street?: string;
+  city?: string;
+  town?: string;
+  state?: string;
+  pinCode?: string;
+  nationality?: string;
+  languagesAtHome?: string;
+  caste?: string;
+  religion?: string;
+  emergencyFatherNo?: string;
+  emergencyMotherNo?: string;
+  emergencyGuardianNo?: string;
   previousSchool?: string;
   applicationFee?: number | null;
   admissionFee?: number | null;
+  status?: string;
+  subjects?: string[];
 }) =>
   fetch(`/api/student/${studentId}`, {
     method: "PUT",

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { activeStudentWhere } from "@/lib/studentStatus";
 
 export async function GET(req: Request) {
   try {
@@ -29,8 +30,13 @@ export async function GET(req: Request) {
       );
     }
 
-    const where: any = {
+    const where: {
+      schoolId: string;
+      classId?: string;
+      status: string;
+    } = {
       schoolId: schoolId,
+      ...activeStudentWhere,
     };
 
     if (classId) {
@@ -61,10 +67,17 @@ export async function GET(req: Request) {
         class: {
           select: { id: true, name: true, section: true },
         },
+        application: {
+          select: {
+            id: true,
+            createdAt: true,
+            admissionNo: true,
+            fedenaNo: true,
+            workflowStatus: true,
+          },
+        },
       },
-      orderBy: {
-        createdAt: "asc",
-      },
+      orderBy: [{ user: { name: "asc" } }, { id: "asc" }],
     });
 
     return NextResponse.json({ students }, { status: 200 });

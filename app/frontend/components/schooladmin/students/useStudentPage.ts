@@ -1,8 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useStudents } from "../../../hooks/useStudents";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { addStudent, assignStudentsToClass, updateStudent, deleteStudent as deleteStudentApi } from "../../../services/student.service";
 import { toast } from "../../../services/toast.service";
 import {
@@ -11,8 +9,17 @@ import {
   StudentFormErrors,
   StudentFormState,
   StudentRow,
+  StudentStatusFilter,
 } from "./types";
-import { mergeStudentAfterEdit, toStudentForm } from "./utils";
+import { mergeStudentAfterEdit, sortStudentsForDisplay, toStudentForm } from "./utils";
+import { downloadStudentListPdf } from "@/lib/studentListPdf";
+import { invalidateStudentDetailsFast as invalidateStudentDetailsBundleCache } from "@/lib/fetchStudentDetailsFast";
+import {
+  clearStudentListCache,
+  readStudentListCache,
+  writeStudentListCache,
+  type StudentListCacheScope,
+} from "@/lib/studentListSessionCache";
 
 type Props = {
   classes?: ClassItem[];
@@ -27,6 +34,36 @@ type StudentsListResponse = {
   students: StudentRow[];
 };
 
+type UploadFailedRow = {
+  row?: number;
+  error?: string;
+};
+
+type UploadResult = {
+  createdCount?: number;
+  failedCount?: number;
+  failed?: UploadFailedRow[];
+};
+
+type StatusFilter = "active" | "inactive" | "all";
+
+const formatStudentMessage = (message: string) => {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("student name and timelly id already exist")) {
+    return "Student with same name and Timelly ID already exists.";
+  }
+  if (normalized.includes("timelly id already exists")) {
+    return "Timelly ID already exists.";
+  }
+  if (normalized.includes("aadhaar number already exists in another school")) {
+    return "Aadhaar number already exists in another school.";
+  }
+  if (normalized.includes("upload failed at row")) {
+    return message;
+  }
+  return message || "Something went wrong. Please try again.";
+};
+
 let classesCache: ClassItem[] | null = null;
 let classesPromise: Promise<ClassItem[] | null> | null = null;
 
@@ -34,7 +71,7 @@ const preloadClasses = () => {
   if (classesCache) return Promise.resolve(classesCache);
   if (classesPromise) return classesPromise;
 
-  classesPromise = fetch("/api/class/list", { cache: "no-store", credentials: "include" })
+  classesPromise = fetch("/api/class/list?lite=1", { cache: "no-store", credentials: "include" })
     .then(async (res) => {
       if (!res.ok) return null;
       const data: ClassesListResponse = await res.json();
@@ -54,7 +91,10 @@ void preloadClasses();
 const DEFAULT_FORM: StudentFormState = {
   name: "",
   rollNo: "",
+  penNumber: "",
+  apaarId: "",
   gender: "",
+  residencyType: "Day Scholar",
   dob: "",
   classId: "",
   section: "",
@@ -88,7 +128,10 @@ const DEFAULT_FORM: StudentFormState = {
   emergencyFatherNo: "",
   emergencyMotherNo: "",
   emergencyGuardianNo: "",
+  subjects: [],
 };
+
+const EMPTY_CLASSES: ClassItem[] = [];
 
 const digitsOnly = (value: string) => value.replace(/\D/g, "");
 
@@ -97,7 +140,6 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const validateForm = (
   form: StudentFormState,
   options: {
-    requireFees: boolean;
     requireAadhaar: boolean;
     requirePhone: boolean;
     requireClass?: boolean;
@@ -133,34 +175,28 @@ const validateForm = (
     }
   }
 
-  if (!form.dob || Number.isNaN(new Date(form.dob).getTime())) {
+  if (!form.dob || !form.dob.trim()) {
     newErrors.dob = "Please enter a valid date of birth";
-  } else if (new Date(form.dob) >= new Date()) {
-    newErrors.dob = "Date of birth must be in the past";
+  } else {
+    const ymd = form.dob.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!ymd) {
+      newErrors.dob = "Please enter a valid date of birth";
+    } else {
+      const y = Number(ymd[1]);
+      const m = Number(ymd[2]);
+      const d = Number(ymd[3]);
+      const today = new Date();
+      const ty = today.getFullYear();
+      const tm = today.getMonth() + 1;
+      const td = today.getDate();
+      if (y > ty || (y === ty && m > tm) || (y === ty && m === tm && d >= td)) {
+        newErrors.dob = "Date of birth must be in the past";
+      }
+    }
   }
 
   if (options.requireClass && !form.classId.trim()) {
     newErrors.classId = "Please select a class";
-  }
-
-  if (options.requireFees) {
-    const feeNum = Number(form.totalFee);
-    if (
-      !form.totalFee?.trim() ||
-      Number.isNaN(feeNum) ||
-      feeNum <= 0
-    ) {
-      newErrors.totalFee = "Total fee must be a positive number";
-    }
-
-    if (
-      form.discountPercent?.trim() &&
-      (Number.isNaN(Number(form.discountPercent)) ||
-        Number(form.discountPercent) < 0 ||
-        Number(form.discountPercent) > 100)
-    ) {
-      newErrors.discountPercent = "Discount must be between 0 and 100";
-    }
   }
 
   if (form.address.trim() && form.address.trim().length < 5) {
@@ -213,24 +249,24 @@ const validateForm = (
   return newErrors;
 };
 
-export default function useStudentPage({ classes = [], reload }: Props) {
-  const router = useRouter();
-  const bumpAfterMutation = useCallback(() => {
-    reload?.();
-    try {
-      router.refresh();
-    } catch {
-      /* noop */
-    }
-  }, [reload, router]);
-
+export default function useStudentPage({ classes, reload }: Props) {
+  const stableClasses = classes ?? EMPTY_CLASSES;
   const [availableClasses, setAvailableClasses] = useState<ClassItem[]>(
-    classes.length ? classes : classesCache ?? []
+    stableClasses.length ? stableClasses : classesCache ?? []
   );
   const [classesLoading, setClassesLoading] = useState(false);
   const [selectedClass, setSelectedClass] = useState("");
   const [selectedSection, setSelectedSection] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StudentStatusFilter>("Active");
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [students, setStudents] = useState<StudentRow[]>([]);
+  const [listLoading, setListLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [activeCount, setActiveCount] = useState<number | null>(null);
+  const [inactiveCount, setInactiveCount] = useState<number | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showUploadPanel, setShowUploadPanel] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -247,17 +283,6 @@ export default function useStudentPage({ classes = [], reload }: Props) {
     return match?.id ?? "";
   }, [availableClasses, selectedClass, selectedSection]);
 
-  const {
-    students,
-    loading,
-    refresh,
-    refreshSilent,
-    patchStudent,
-    removeStudent,
-  } = useStudents(selectedClassIdForFetch);
-  const [allStudents, setAllStudents] = useState<StudentRow[]>([]);
-  const [allLoading, setAllLoading] = useState(false);
-
   const [viewStudent, setViewStudent] = useState<StudentRow | null>(null);
   const [editStudent, setEditStudent] = useState<StudentRow | null>(null);
   const [deleteStudent, setDeleteStudent] = useState<StudentRow | null>(null);
@@ -265,15 +290,18 @@ export default function useStudentPage({ classes = [], reload }: Props) {
   const [editErrors, setEditErrors] = useState<StudentFormErrors>({});
   const [editSaving, setEditSaving] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [exportingDetails, setExportingDetails] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const listFetchGenRef = useRef(0);
 
   useEffect(() => {
-    if (classes && classes.length) {
-      setAvailableClasses(classes);
+    if (stableClasses.length) {
+      setAvailableClasses(stableClasses);
     }
-  }, [classes]);
+  }, [stableClasses]);
 
   useEffect(() => {
-    if (classes && classes.length) return;
+    if (stableClasses.length) return;
 
     if (classesCache?.length) {
       setAvailableClasses(classesCache);
@@ -294,7 +322,7 @@ export default function useStudentPage({ classes = [], reload }: Props) {
     return () => {
       active = false;
     };
-  }, [classes]);
+  }, [stableClasses]);
 
   useEffect(() => {
     if (!form.classId && selectedClassIdForFetch) {
@@ -314,26 +342,177 @@ export default function useStudentPage({ classes = [], reload }: Props) {
     }
   }, [availableClasses, selectedClass, selectedSection]);
 
-  const fetchAllStudents = async (options?: { silent?: boolean }) => {
-    if (!options?.silent) setAllLoading(true);
-    try {
-      // Avoid pulling huge datasets; fetch only most recent students.
-      const res = await fetch("/api/student/list?take=300", { cache: "no-store", credentials: "include" });
-      const data: StudentsListResponse = await res.json();
-      if (!res.ok) return;
-      setAllStudents(data.students || []);
-    } catch {
-      // ignore
-    } finally {
-      if (!options?.silent) setAllLoading(false);
-    }
-  };
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(searchQuery.trim());
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
+  const listCacheScope = useMemo<StudentListCacheScope>(
+    () => ({
+      status:
+        statusFilter === "Active"
+          ? "active"
+          : statusFilter === "Inactive"
+            ? "inactive"
+            : "all",
+      classId: selectedClassIdForFetch || undefined,
+      className: selectedClass || undefined,
+      section: selectedSection || undefined,
+      q: debouncedSearch || undefined,
+    }),
+    [
+      statusFilter,
+      selectedClassIdForFetch,
+      selectedClass,
+      selectedSection,
+      debouncedSearch,
+    ]
+  );
+
+  const buildListParams = useCallback(
+    (bypassCache?: boolean) => {
+      const hasClassFilter = Boolean(
+        selectedClassIdForFetch || selectedClass || selectedSection
+      );
+      const params = new URLSearchParams();
+      // One request per filter — avoids slow multi-page appends and wrong counts.
+      params.set("all", "1");
+      params.set("take", "10000");
+      params.set("includeTotal", "1");
+      if (bypassCache) params.set("refresh", "1");
+      if (statusFilter === "Active") params.set("status", "Active");
+      else if (statusFilter === "Inactive") params.set("status", "Inactive");
+      if (debouncedSearch) params.set("q", debouncedSearch);
+      if (selectedClassIdForFetch) {
+        params.set("classId", selectedClassIdForFetch);
+      } else {
+        if (selectedClass) params.set("className", selectedClass);
+        if (selectedSection) params.set("section", selectedSection);
+      }
+      return params;
+    },
+    [
+      statusFilter,
+      debouncedSearch,
+      selectedClassIdForFetch,
+      selectedClass,
+      selectedSection,
+    ]
+  );
+
+  const fetchStudentList = useCallback(
+    async (opts?: { bypassCache?: boolean }) => {
+      const gen = ++listFetchGenRef.current;
+      const cached = !opts?.bypassCache ? readStudentListCache<StudentRow>(listCacheScope) : null;
+
+      if (cached?.length && !opts?.bypassCache) {
+        setStudents(cached);
+        setListLoading(false);
+      } else {
+        setListLoading(true);
+      }
+
+      try {
+        const params = buildListParams(opts?.bypassCache);
+        const res = await fetch(`/api/student/list?${params.toString()}`, {
+          credentials: "include",
+          cache: "no-store",
+        });
+        const data = (await res.json()) as {
+          students?: StudentRow[];
+          items?: StudentRow[];
+          nextCursor?: string | null;
+          total?: number;
+          message?: string;
+        };
+        if (gen !== listFetchGenRef.current) return;
+        if (!res.ok) throw new Error(data.message || "Failed to load students");
+
+        const items = Array.isArray(data.students)
+          ? data.students
+          : Array.isArray(data.items)
+            ? data.items
+            : [];
+
+        setStudents(items);
+        writeStudentListCache(items, listCacheScope);
+        setNextCursor(null);
+        if (typeof data.total === "number") setTotalCount(data.total);
+      } catch {
+        if (gen !== listFetchGenRef.current) return;
+        if (cached?.length) {
+          setStudents(cached);
+        } else {
+          setStudents([]);
+        }
+      } finally {
+        if (gen === listFetchGenRef.current) {
+          setListLoading(false);
+          setLoadingMore(false);
+        }
+      }
+    },
+    [buildListParams, listCacheScope]
+  );
 
   useEffect(() => {
-    if (!selectedClassIdForFetch) {
-      fetchAllStudents();
+    setTotalCount(null);
+    setNextCursor(null);
+    void fetchStudentList();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch when filters change
+  }, [statusFilter, debouncedSearch, selectedClass, selectedSection, selectedClassIdForFetch]);
+
+  const refreshStats = useCallback(async () => {
+    try {
+      const [activeRes, inactiveRes] = await Promise.all([
+        fetch("/api/student/list?take=1&includeTotal=1&status=Active", {
+          credentials: "include",
+          cache: "no-store",
+        }),
+        fetch("/api/student/list?take=1&includeTotal=1&status=Inactive", {
+          credentials: "include",
+          cache: "no-store",
+        }),
+      ]);
+      const activeData = await activeRes.json();
+      const inactiveData = await inactiveRes.json();
+      if (typeof activeData.total === "number") setActiveCount(activeData.total);
+      if (typeof inactiveData.total === "number") {
+        setInactiveCount(inactiveData.total);
+      }
+    } catch {
+      /* ignore */
     }
-  }, [selectedClassIdForFetch]);
+  }, []);
+
+  useEffect(() => {
+    void refreshStats();
+  }, [refreshStats]);
+
+  const refreshList = useCallback(
+    (silent?: boolean) => {
+      clearStudentListCache();
+      setNextCursor(null);
+      void fetchStudentList({ bypassCache: !silent });
+      void refreshStats();
+    },
+    [fetchStudentList, refreshStats]
+  );
+
+  const patchStudent = useCallback(
+    (studentId: string, updater: (row: StudentRow) => StudentRow) => {
+      setStudents((prev) =>
+        prev.map((s) => (s.id === studentId ? updater(s) : s))
+      );
+    },
+    []
+  );
+
+  const removeStudent = useCallback((studentId: string) => {
+    setStudents((prev) => prev.filter((s) => s.id !== studentId));
+  }, []);
 
   const filterClassOptions = useMemo<SelectOption[]>(() => {
     const uniqueNames = Array.from(
@@ -393,12 +572,17 @@ export default function useStudentPage({ classes = [], reload }: Props) {
   }, [availableClasses, classesLoading]);
 
   const filteredStudents = useMemo<StudentRow[]>(() => {
-    let list: StudentRow[] = selectedClassIdForFetch ? students : allStudents;
+    let list: StudentRow[] = students;
     if (selectedClass) {
       list = list.filter((student) => student.class?.name === selectedClass);
     }
     if (selectedSection) {
       list = list.filter((student) => student.class?.section === selectedSection);
+    }
+    if (statusFilter === "Active") {
+      list = list.filter((student) => (student.status || "Active") === "Active");
+    } else if (statusFilter === "Inactive") {
+      list = list.filter((student) => student.status === "Inactive");
     }
     if (searchQuery.trim()) {
       const query = searchQuery.trim().toLowerCase();
@@ -415,13 +599,12 @@ export default function useStudentPage({ classes = [], reload }: Props) {
         );
       });
     }
-    return list;
+    return sortStudentsForDisplay(list);
   }, [
-    allStudents,
     searchQuery,
     selectedClass,
     selectedSection,
-    selectedClassIdForFetch,
+    statusFilter,
     students,
   ]);
 
@@ -431,20 +614,19 @@ export default function useStudentPage({ classes = [], reload }: Props) {
       (!selectedSection || item.section === selectedSection)
   );
 
-  const handleFormChange = (key: keyof StudentFormState, value: string) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
+  const handleFormChange = (key: keyof StudentFormState, value: string | string[]) => {
+    setForm((prev) => ({ ...prev, [key]: value } as StudentFormState));
     setErrors((prev) => ({ ...prev, [key]: undefined }));
   };
 
 
-  const handleEditChange = (key: keyof StudentFormState, value: string) => {
-    setEditForm((prev) => ({ ...prev, [key]: value }));
+  const handleEditChange = (key: keyof StudentFormState, value: string | string[]) => {
+    setEditForm((prev) => ({ ...prev, [key]: value } as StudentFormState));
     setEditErrors((prev) => ({ ...prev, [key]: undefined }));
   };
 
   const handleSaveStudent = async () => {
     const nextErrors = validateForm(form, {
-      requireFees: true,
       requireAadhaar: true,
       requirePhone: true,
       requireClass: true,
@@ -467,26 +649,44 @@ export default function useStudentPage({ classes = [], reload }: Props) {
         occupation: form.occupation?.trim() || undefined,
         aadhaarNo: aadhaarDigits,
         phoneNo: phoneDigits,
+        /** Parent/guardian contact only — student login email is always auto-generated on the server */
         email: form.email.trim() || undefined,
+        parentEmail: form.email.trim() || undefined,
         dob: form.dob,
         classId: classIdPayload,
         address: form.address?.trim() || undefined,
-        totalFee: Number(form.totalFee),
-        discountPercent: form.discountPercent
-          ? Number(form.discountPercent)
-          : 0,
-        applicationFee: form.applicationFee.trim()
-          ? Number(form.applicationFee)
-          : null,
-        admissionFee: form.admissionFee.trim() ? Number(form.admissionFee) : null,
         rollNo: form.rollNo?.trim() || undefined,
+        penNumber: form.penNumber?.trim() || undefined,
+        apaarId: form.apaarId?.trim() || undefined,
         gender: form.gender?.trim() || undefined,
+        residencyType: form.residencyType?.trim() || "Day Scholar",
+        status: form.status || "Active",
+        subjects: Array.isArray(form.subjects) ? form.subjects : [],
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        toast.error(data.message || "Failed to add student");
+        const rawMessage = typeof data.message === "string" ? data.message : "";
+        const lowerRaw = rawMessage.toLowerCase();
+        const message = formatStudentMessage(rawMessage || "Failed to add student");
+
+        // Use raw API text for classification: formatted `message` can match the generic
+        // "timelly id already exists" substring even for the name+ID combined error.
+        if (lowerRaw.includes("student name and timelly id already exist")) {
+          setErrors((prev) => ({
+            ...prev,
+            name: "Already exist.",
+            rollNo: "Already exist.",
+          }));
+        } else if (
+          lowerRaw.includes("timelly id already exists") ||
+          lowerRaw.includes("timelly id is already used")
+        ) {
+          setErrors((prev) => ({ ...prev, rollNo: "Already exist." }));
+        }
+
+        toast.error(message);
         return;
       }
 
@@ -495,17 +695,10 @@ export default function useStudentPage({ classes = [], reload }: Props) {
       setShowSuccess(true);
       setForm({ ...DEFAULT_FORM, classId: form.classId });
       setShowAddForm(false);
-
-      // Defer heavy list refresh + router refresh so the main thread stays responsive (avoids "Page unresponsive").
-      window.setTimeout(() => {
-        try {
-          void refresh();
-          if (!selectedClass) void fetchAllStudents();
-          bumpAfterMutation();
-        } catch {
-          /* ignore */
-        }
-      }, 0);
+      void refreshStats();
+      if (form.status !== "Inactive" && statusFilter !== "Inactive") {
+        void refreshList(true);
+      }
     } catch (e) {
       const message =
         e instanceof Error && e.message
@@ -544,7 +737,19 @@ export default function useStudentPage({ classes = [], reload }: Props) {
       const uploadData = await uploadRes.json();
 
       if (!uploadRes.ok) {
-        const message = uploadData.message || "Upload failed";
+        const message = formatStudentMessage(uploadData.message || "Upload failed");
+        toast.error(message);
+        throw new Error(message);
+      }
+
+      if ((uploadData.createdCount || 0) === 0 && (uploadData.failedCount || 0) > 0) {
+        const firstFailed =
+          Array.isArray(uploadData.failed) && uploadData.failed.length > 0
+            ? uploadData.failed[0]
+            : null;
+        const message = firstFailed?.error
+          ? `Upload failed at row ${firstFailed.row}: ${formatStudentMessage(firstFailed.error)}`
+          : "Upload failed. No students were created.";
         toast.error(message);
         throw new Error(message);
       }
@@ -553,14 +758,12 @@ export default function useStudentPage({ classes = [], reload }: Props) {
         `${uploadData.createdCount || 0} students added successfully`
       );
       setUploadFile(null);
-      refresh();
-      if (!selectedClass) {
-        fetchAllStudents();
-      }
-      bumpAfterMutation();
+      void refreshStats();
+      void refreshList(true);
       return {
         createdCount: uploadData.createdCount || 0,
         failedCount: uploadData.failedCount || 0,
+        failed: Array.isArray(uploadData.failed) ? uploadData.failed : [],
       };
     } catch (e) {
       if (e instanceof Error) {
@@ -580,6 +783,63 @@ export default function useStudentPage({ classes = [], reload }: Props) {
     setEditStudent(student);
     setEditForm(toStudentForm(student));
     setEditErrors({});
+    void (async () => {
+      try {
+        const res = await fetch(`/api/student/${encodeURIComponent(student.id)}`, {
+          credentials: "include",
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.student) return;
+        setEditForm((prev) => ({
+          ...prev,
+          name: data.student.name || prev.name,
+          rollNo: data.student.rollNo || prev.rollNo,
+          penNumber: data.student.penNumber || prev.penNumber,
+          apaarId: data.student.apaarId || prev.apaarId,
+          gender: data.student.gender || prev.gender,
+          residencyType: data.student.residencyType || prev.residencyType,
+          dob: data.student.dob || prev.dob,
+          classId: data.student.class?.id || prev.classId,
+          section: data.student.class?.section || prev.section,
+          fatherName: data.student.fatherName || prev.fatherName,
+          motherName: data.student.motherName || prev.motherName,
+          occupation: data.student.fatherOccupation || prev.occupation,
+          officeAddress: data.student.officeAddress || prev.officeAddress,
+          phoneNo: data.student.phone || prev.phoneNo,
+          email: data.student.parentEmail || data.student.email || prev.email,
+          address: data.student.address || prev.address,
+          aadhaarNo: data.student.aadhaarNo || prev.aadhaarNo,
+          parentAadharNo: data.student.parentAadharNo || prev.parentAadharNo,
+          parentWhatsapp: data.student.parentWhatsapp || prev.parentWhatsapp,
+          bankAccountNo: data.student.bankAccountNo || prev.bankAccountNo,
+          applicationFee:
+            data.student.applicationFee != null
+              ? String(data.student.applicationFee)
+              : prev.applicationFee,
+          admissionFee:
+            data.student.admissionFee != null ? String(data.student.admissionFee) : prev.admissionFee,
+          previousSchool: data.student.previousSchool || prev.previousSchool,
+          houseNo: data.student.houseNo || prev.houseNo,
+          street: data.student.street || prev.street,
+          city: data.student.city || prev.city,
+          town: data.student.town || prev.town,
+          state: data.student.state || prev.state,
+          pinCode: data.student.pinCode || prev.pinCode,
+          nationality: data.student.nationality || prev.nationality,
+          languagesAtHome: data.student.languagesAtHome || prev.languagesAtHome,
+          caste: data.student.caste || prev.caste,
+          religion: data.student.religion || prev.religion,
+          emergencyFatherNo: data.student.emergencyFatherNo || prev.emergencyFatherNo,
+          emergencyMotherNo: data.student.emergencyMotherNo || prev.emergencyMotherNo,
+          emergencyGuardianNo: data.student.emergencyGuardianNo || prev.emergencyGuardianNo,
+          status: data.student.status || prev.status,
+          subjects: Array.isArray(data.student.subjects) ? data.student.subjects : prev.subjects,
+        }));
+      } catch {
+        // keep defaults from list row
+      }
+    })();
   };
 
   const openDelete = (student: StudentRow) => setDeleteStudent(student);
@@ -591,7 +851,6 @@ export default function useStudentPage({ classes = [], reload }: Props) {
   const handleEditSave = async () => {
     if (!editStudent) return;
     const nextErrors = validateForm(editForm, {
-      requireFees: false,
       requireAadhaar: false,
       requirePhone: false,
     });
@@ -605,14 +864,39 @@ export default function useStudentPage({ classes = [], reload }: Props) {
         motherName: editForm.motherName.trim() || undefined,
         occupation: editForm.occupation.trim() || undefined,
         classId: editForm.classId || undefined,
+        dob: editForm.dob || undefined,
+        aadhaarNo: editForm.aadhaarNo.trim() || undefined,
         rollNo: editForm.rollNo.trim() || undefined,
+        penNumber: editForm.penNumber.trim() || undefined,
+        apaarId: editForm.apaarId.trim() || undefined,
         phoneNo: editForm.phoneNo.trim() || undefined,
+        email: editForm.email.trim() || undefined,
         address: editForm.address.trim() || undefined,
         gender: editForm.gender.trim() || undefined,
+        residencyType: editForm.residencyType?.trim() || "Day Scholar",
+        parentAadharNo: editForm.parentAadharNo.trim() || undefined,
+        parentWhatsapp: editForm.parentWhatsapp.trim() || undefined,
+        bankAccountNo: editForm.bankAccountNo.trim() || undefined,
+        officeAddress: editForm.officeAddress.trim() || undefined,
+        houseNo: editForm.houseNo.trim() || undefined,
+        street: editForm.street.trim() || undefined,
+        city: editForm.city.trim() || undefined,
+        town: editForm.town.trim() || undefined,
+        state: editForm.state.trim() || undefined,
+        pinCode: editForm.pinCode.trim() || undefined,
+        nationality: editForm.nationality.trim() || undefined,
+        languagesAtHome: editForm.languagesAtHome.trim() || undefined,
+        caste: editForm.caste.trim() || undefined,
+        religion: editForm.religion.trim() || undefined,
+        emergencyFatherNo: editForm.emergencyFatherNo.trim() || undefined,
+        emergencyMotherNo: editForm.emergencyMotherNo.trim() || undefined,
+        emergencyGuardianNo: editForm.emergencyGuardianNo.trim() || undefined,
         applicationFee: editForm.applicationFee.trim()
           ? Number(editForm.applicationFee)
           : null,
         admissionFee: editForm.admissionFee.trim() ? Number(editForm.admissionFee) : null,
+        status: editForm.status || "Active",
+        subjects: Array.isArray(editForm.subjects) ? editForm.subjects : [],
       });
       const data = await res.json();
       if (!res.ok) {
@@ -625,30 +909,40 @@ export default function useStudentPage({ classes = [], reload }: Props) {
         : null;
       const updated = mergeStudentAfterEdit(editStudent, editForm, resolvedClass);
       const updatedClassId = updated.class?.id;
+      const becameInactive = (updated.status || "Active") === "Inactive";
+      const becameActive = (updated.status || "Active") === "Active";
 
       const movedOutOfFilteredClass =
         Boolean(selectedClassIdForFetch) &&
         Boolean(updatedClassId) &&
         updatedClassId !== selectedClassIdForFetch;
 
-      if (selectedClassIdForFetch) {
-        if (movedOutOfFilteredClass) {
-          removeStudent(editStudent.id);
-        } else {
-          patchStudent(editStudent.id, () => updated);
-        }
+      const shouldRemoveFromList =
+        (statusFilter === "Active" && becameInactive) ||
+        (statusFilter === "Inactive" && becameActive) ||
+        movedOutOfFilteredClass;
+
+      if (shouldRemoveFromList) {
+        removeStudent(editStudent.id);
+      } else {
+        patchStudent(editStudent.id, () => updated);
       }
 
-      setAllStudents((prev) =>
-        prev.map((s) => (s.id === editStudent.id ? updated : s))
-      );
+      if (becameInactive || becameActive) {
+        invalidateStudentDetailsBundleCache(editStudent.id);
+        clearStudentListCache();
+      }
 
-      toast.success("Student updated successfully");
+      toast.success(
+        becameInactive
+          ? "Student marked inactive. They no longer appear in class lists or portal."
+          : typeof data.message === "string" && data.message
+            ? data.message
+            : "Student updated successfully"
+      );
       closeEdit();
 
-      void refreshSilent();
-      void fetchAllStudents({ silent: true });
-      bumpAfterMutation();
+      void refreshStats();
     } catch {
       toast.error("Failed to update student");
     } finally {
@@ -668,17 +962,109 @@ export default function useStudentPage({ classes = [], reload }: Props) {
       }
       toast.success("Student deleted successfully");
       closeDelete();
-      refresh();
-      if (!selectedClassIdForFetch) fetchAllStudents();
-      bumpAfterMutation();
+      removeStudent(student.id);
+      void refreshStats();
     } catch {
       toast.error("Failed to delete student");
     }
   };
 
-  const handleDownloadReport = () => {
-    toast.info("Downloading report...");
+  const buildExportParams = () => {
+    const params = new URLSearchParams();
+    if (selectedClassIdForFetch) {
+      params.set("classId", selectedClassIdForFetch);
+    } else {
+      if (selectedClass) params.set("className", selectedClass);
+      if (selectedSection) params.set("section", selectedSection);
+    }
+    if (statusFilter !== "All") {
+      params.set("status", statusFilter);
+    }
+    return params;
   };
+
+  const handleDownloadExcel = async () => {
+    if (exportingDetails) return;
+    setExportingDetails(true);
+    try {
+      const res = await fetch(
+        `/api/student/export-details?${buildExportParams().toString()}`,
+        { credentials: "include", cache: "no-store" }
+      );
+      if (!res.ok) {
+        let message = "Export failed";
+        try {
+          const data = (await res.json()) as { message?: string };
+          if (typeof data.message === "string" && data.message) {
+            message = data.message;
+          }
+        } catch {
+          /* ignore */
+        }
+        toast.error(message);
+        return;
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download =
+        statusFilter === "Inactive"
+          ? "Inactive-students-report.xlsx"
+          : "Student-details-report.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success("Excel report downloaded");
+    } catch {
+      toast.error("Export failed");
+    } finally {
+      setExportingDetails(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    if (exportingPdf) return;
+    if (!filteredStudents.length) {
+      toast.error("No students to export");
+      return;
+    }
+    setExportingPdf(true);
+    try {
+      const schoolRes = await fetch("/api/school/mine", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const schoolPayload = await schoolRes.json().catch(() => ({}));
+      const statusLabel =
+        statusFilter === "All" ? "All Students" : `${statusFilter} Students`;
+      const classLabel = selectedClass
+        ? `Class ${selectedClass}${selectedSection ? ` ${selectedSection}` : ""}`
+        : "All Classes";
+      await downloadStudentListPdf({
+        students: filteredStudents,
+        title: `${statusLabel} (${filteredStudents.length})`,
+        subtitle: classLabel,
+        filename: `students-${statusFilter.toLowerCase()}.pdf`,
+        school: schoolPayload?.school as {
+          name?: string;
+          address?: string;
+          location?: string;
+          affiliationLine?: string;
+          logoUrl?: string | null;
+          admins?: Array<{ photoUrl?: string | null }>;
+        },
+      });
+      toast.success("PDF downloaded");
+    } catch {
+      toast.error("PDF export failed");
+    } finally {
+      setExportingPdf(false);
+    }
+  };
+
+  const handleDownloadReport = handleDownloadExcel;
 
   return {
     filterClassOptions,
@@ -690,6 +1076,8 @@ export default function useStudentPage({ classes = [], reload }: Props) {
     setSelectedClass,
     selectedSection,
     setSelectedSection,
+    statusFilter,
+    setStatusFilter,
     searchQuery,
     setSearchQuery,
     showAddForm,
@@ -707,12 +1095,18 @@ export default function useStudentPage({ classes = [], reload }: Props) {
     handleResetForm,
     handleSaveStudent,
     filteredStudents,
-    tableLoading: selectedClass ? loading : allLoading,
+    tableLoading: listLoading,
+    loadingMore,
+    hasMore: false,
+    totalCount,
+    activeCount,
+    inactiveCount,
     selectedClassObj,
     viewStudent,
     editStudent,
     deleteStudent,
     editForm,
+    setEditForm,
     editErrors,
     editSaving,
     handleEditChange,
@@ -725,6 +1119,10 @@ export default function useStudentPage({ classes = [], reload }: Props) {
     handleEditSave,
     handleDelete,
     handleDownloadReport,
+    handleDownloadExcel,
+    handleDownloadPdf,
+    exportingDetails,
+    exportingPdf,
     showSuccess,
     setShowSuccess,
   };

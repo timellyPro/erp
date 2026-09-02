@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { Role, type Prisma } from "@prisma/client";
 import { authOptions } from "../../../../lib/authOptions";
 import prisma from "../../../../lib/db";
+import {
+  getUserListCached,
+  setUserListCached,
+  userListCacheKey,
+} from "@/lib/userListServerCache";
 
 export async function GET(req: Request) {
   try {
@@ -14,7 +20,7 @@ export async function GET(req: Request) {
     const page = Number(searchParams.get("page") ?? 1);
     const pageSize = Number(searchParams.get("pageSize") ?? 10);
     const search = searchParams.get("search") ?? "";
-    const role = searchParams.get("role");
+    const role = searchParams.get("role") ?? "";
 
     const schoolId = session.user.schoolId;
     if (!schoolId) {
@@ -24,12 +30,23 @@ export async function GET(req: Request) {
       );
     }
 
-    const where: any = {
+    const cacheKey = userListCacheKey(schoolId, page, pageSize, role, search);
+    const cached = getUserListCached<{
+      users: unknown[];
+      total: number;
+      page: number;
+      pageSize: number;
+    }>(cacheKey);
+    if (cached) {
+      return NextResponse.json(cached, { status: 200 });
+    }
+
+    const where: Prisma.UserWhereInput = {
       schoolId,
     };
 
-    if (role) {
-      where.role = role;
+    if (role && Object.values(Role).includes(role as Role)) {
+      where.role = role as Role;
     }
 
     if (search) {
@@ -59,13 +76,15 @@ export async function GET(req: Request) {
       prisma.user.count({ where }),
     ]);
 
-    return NextResponse.json({
+    const payload = {
       users,
       total,
       page,
       pageSize,
-    });
-  } catch (error: any) {
+    };
+    setUserListCached(cacheKey, payload);
+    return NextResponse.json(payload);
+  } catch (error: unknown) {
     console.error(error);
     return NextResponse.json(
       { message: "Internal server error" },

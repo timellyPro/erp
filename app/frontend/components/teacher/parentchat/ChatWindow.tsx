@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useSession } from "next-auth/react";
 import { Chat } from "./ChatList";
+import TimellyLoader from "../../common/TimellyLoader";
 
 type Message = {
   id: string;
@@ -216,8 +217,8 @@ export default function ChatWindow({
           )}
           <div className="flex-1 space-y-3 overflow-y-auto">
             {loadingMessages ? (
-              <div className="text-center text-gray-400 text-sm py-4">
-                Loading...
+              <div className="py-4">
+                <TimellyLoader compact bare title="Loading messages" steps={["Chat"]} />
               </div>
             ) : messages.length === 0 ? (
               <div className="text-center text-gray-400 text-sm py-4">

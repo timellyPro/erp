@@ -4,6 +4,7 @@ import { Save, X } from "lucide-react";
 import InputField from "../schooladmincomponents/InputField";
 import SelectInput from "../../common/SelectInput";
 import { SelectOption, StudentFormState } from "./types";
+import StudentSubjectsMultiSelect from "./StudentSubjectsMultiSelect";
 
 type Props = {
   form: StudentFormState;
@@ -11,7 +12,7 @@ type Props = {
   sectionOptions: SelectOption[];
   saving: boolean;
   studentName: string;
-  onFieldChange: (key: keyof StudentFormState, value: string) => void;
+  onFieldChange: (key: keyof StudentFormState, value: string | string[]) => void;
   onClose: () => void;
   onSave: () => void;
 };
@@ -63,6 +64,18 @@ export default function StudentEditPanel({
       </div>
 
       <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <SelectInput
+          label="Residency Type"
+          value={form.residencyType}
+          onChange={(value) => onFieldChange("residencyType", value)}
+          options={[
+            { label: "Day Scholar", value: "Day Scholar" },
+            { label: "Hostel", value: "Hosteller" },
+          ]}
+        />
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
         <InputField
           label="Application Fee (record only)"
           value={form.applicationFee}
@@ -76,6 +89,14 @@ export default function StudentEditPanel({
           onChange={(value) => onFieldChange("admissionFee", value)}
           placeholder="Optional"
           type="number"
+        />
+      </div>
+
+      <div className="mt-4">
+        <StudentSubjectsMultiSelect
+          selected={form.subjects || []}
+          classId={form.classId}
+          onChange={(subjects) => onFieldChange("subjects", subjects)}
         />
       </div>
 

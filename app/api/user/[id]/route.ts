@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../lib/authOptions";
 import prisma from "../../../../lib/db";
 import bcrypt from "bcryptjs";
+import { purgeSchoolDashboardServerCacheMatching } from "@/lib/schoolDashboardServerCache";
 
 type Params = Promise<{ id: string }>;
 
@@ -121,7 +122,7 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
     // Check if new email is unique (if changing email)
     if (email && email !== user.email) {
       const existingUser = await prisma.user.findUnique({
-        where: { email },
+        where: { schoolId_email: { schoolId: user.schoolId!, email } },
       });
       if (existingUser) {
         return NextResponse.json(
@@ -175,43 +176,48 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
 
     const schoolId = session.user.schoolId as string;
 
-    const updatedUser = await prisma.user.update({
-      where: { id },
-      data: updateData,
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        subject: true,
-        subjects: true,
-        allowedFeatures: true,
-        teacherId: true,
-        qualification: true,
-        experience: true,
-        joiningDate: true,
-        teacherStatus: true,
-        mobile: true,
-        address: true,
-        photoUrl: true,
-      },
-    });
-
-    // Update assigned classes for teachers
-    if (user.role === "TEACHER" && schoolId && Array.isArray(assignedClassIds)) {
-      const classIds = assignedClassIds.filter((c: unknown) => typeof c === "string") as string[];
-      // Unassign this teacher from all classes they currently have
-      await prisma.class.updateMany({
-        where: { teacherId: id },
-        data: { teacherId: null },
+    const updatedUser = await prisma.$transaction(async (tx) => {
+      const userRow = await tx.user.update({
+        where: { id },
+        data: updateData,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          subject: true,
+          subjects: true,
+          allowedFeatures: true,
+          teacherId: true,
+          qualification: true,
+          experience: true,
+          joiningDate: true,
+          teacherStatus: true,
+          mobile: true,
+          address: true,
+          photoUrl: true,
+        },
       });
-      // Assign to new set of classes (only in same school)
-      if (classIds.length > 0) {
-        await prisma.class.updateMany({
-          where: { id: { in: classIds }, schoolId },
-          data: { teacherId: id },
+
+      if (user.role === "TEACHER" && Array.isArray(assignedClassIds)) {
+        const classIds = assignedClassIds.filter((c: unknown) => typeof c === "string") as string[];
+        await tx.class.updateMany({
+          where: { teacherId: id },
+          data: { teacherId: null },
         });
+        if (classIds.length > 0) {
+          await tx.class.updateMany({
+            where: { id: { in: classIds }, schoolId },
+            data: { teacherId: id },
+          });
+        }
       }
+
+      return userRow;
+    });
+    if (user.role === "TEACHER") {
+      purgeSchoolDashboardServerCacheMatching(`teacher:list:${schoolId}`);
+      purgeSchoolDashboardServerCacheMatching(`class:list:lite:${schoolId}`);
     }
 
     return NextResponse.json({
@@ -279,6 +285,10 @@ export async function DELETE(
     await prisma.user.delete({
       where: { id },
     });
+    if (user.role === "TEACHER" && user.schoolId) {
+      purgeSchoolDashboardServerCacheMatching(`teacher:list:${user.schoolId}`);
+      purgeSchoolDashboardServerCacheMatching(`class:list:lite:${user.schoolId}`);
+    }
 
     return NextResponse.json({
       message: "User deleted successfully",

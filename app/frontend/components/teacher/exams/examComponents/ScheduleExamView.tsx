@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { X, Plus, BookOpen, CheckCircle2, Trash2, Save } from "lucide-react";
 import PageHeader from "../../../common/PageHeader";
-import Spinner from "../../../common/Spinner";
+import TimellyLoader from "../../../common/TimellyLoader";
 
 interface ClassItem {
     id: string;
@@ -18,6 +18,8 @@ export default function ScheduleExamView({
 }: any) {
     const [units, setUnits] = useState<Array<{ id: number; unitId?: string; name: string; status: string; completion: number }>>([]);
     const [classes, setClasses] = useState<ClassItem[]>([]);
+    const [examTypeOptions, setExamTypeOptions] = useState<string[]>([]);
+    const [subjectOptions, setSubjectOptions] = useState<string[]>([]);
     const [classLoading, setClassLoading] = useState(true);
     const [selectedClassId, setSelectedClassId] = useState("");
     const today = new Date().toISOString().slice(0, 10);
@@ -52,6 +54,80 @@ export default function ScheduleExamView({
         })();
         return () => { cancelled = true; };
     }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await fetch("/api/exam-types", { cache: "no-store", credentials: "include" });
+                const data = await res.json();
+                if (cancelled) return;
+                if (res.ok && Array.isArray(data.examTypes)) {
+                    const options = data.examTypes
+                        .map((name: string) => name?.trim().toUpperCase())
+                        .filter((name: string) => Boolean(name));
+                    setExamTypeOptions(options);
+                }
+            } catch {
+                /* noop */
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const subjectsRes = await fetch("/api/exam-subjects", {
+                    cache: "no-store",
+                    credentials: "include",
+                });
+                if (subjectsRes.ok) {
+                    const subjectsData = await subjectsRes.json();
+                    if (!cancelled && Array.isArray(subjectsData.subjects)) {
+                        const listedSubjects = subjectsData.subjects
+                            .map((name: string) => name?.trim())
+                            .filter((name: string) => Boolean(name));
+                        setSubjectOptions((prev) => Array.from(new Set([...listedSubjects, ...prev])));
+                    }
+                }
+
+                const params = new URLSearchParams();
+                if (selectedClassId) params.set("classId", selectedClassId);
+                const res = await fetch(`/api/exams/terms?${params.toString()}`, {
+                    cache: "no-store",
+                    credentials: "include",
+                });
+                const data = await res.json();
+                if (cancelled || !res.ok) return;
+                const exams = Array.isArray(data.exams) ? data.exams : [];
+                const subjects: string[] = Array.from(
+                    new Set<string>(
+                        exams
+                            .map((exam: { subject?: string }) => exam.subject?.trim())
+                            .filter((name: string | undefined): name is string => Boolean(name))
+                    )
+                );
+                const names: string[] = Array.from(
+                    new Set<string>(
+                        exams
+                            .map((exam: { name?: string }) => exam.name?.trim())
+                            .filter((name: string | undefined): name is string => Boolean(name))
+                    )
+                );
+                setSubjectOptions((prev) => Array.from(new Set([...subjects, ...prev])));
+                setExamTypeOptions((prev) => Array.from(new Set([...names, ...prev])));
+            } catch {
+                /* noop */
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [selectedClassId]);
 
     useEffect(() => {
         if (mode !== "edit" || !examId) return;
@@ -247,9 +323,7 @@ export default function ScheduleExamView({
 
     if (isEdit && examLoading) {
         return (
-            <div className="min-h-screen text-white pb-10 flex flex-col items-center justify-center gap-4">
-                <Spinner/>
-            </div>
+            <TimellyLoader title="Loading exam" steps={["Classes", "Subjects", "Schedule"]} />
         );
     }
 
@@ -279,9 +353,15 @@ export default function ScheduleExamView({
                                     value={examTitle}
                                     onChange={(e) => setExamTitle(e.target.value)}
                                     placeholder="Term 1 Mathematics Finals"
+                                    list="teacher-exam-title-options"
                                     className="w-full px-4 py-3 bg-black/20 border border-white/10 rounded-xl focus:outline-none 
                                     focus:border-lime-400/50 text-white placeholder-gray-500 transition-all text-sm"
                                 />
+                                <datalist id="teacher-exam-title-options">
+                                    {examTypeOptions.map((name) => (
+                                        <option key={name} value={name} />
+                                    ))}
+                                </datalist>
                             </div>
 
                             {/* Class and Subject */}
@@ -289,8 +369,10 @@ export default function ScheduleExamView({
                                 <div className="flex flex-col gap-2">
                                     <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Class</label>
                                     {classLoading ? (
-                                        <div className="bg-[#2a213a]/50 border border-white/5 rounded-2xl p-2 text-white/40 text-sm"><Spinner/></div>
-                                    ) : (
+                                        <div className="bg-[#2a213a]/50 border border-white/5 rounded-2xl p-2 text-white/40 text-sm">
+                                          <TimellyLoader compact bare title="Loading classes" steps={["Roster"]} />
+                                        </div>
+                                      ) : (
                                         <select
                                             value={selectedClassId}
                                             onChange={(e) => setSelectedClassId(e.target.value)}
@@ -312,9 +394,15 @@ export default function ScheduleExamView({
                                         value={subject}
                                         onChange={(e) => setSubject(e.target.value)}
                                         placeholder="Mathematics"
+                                        list="teacher-exam-subject-options"
                                         className="w-full px-4 py-3 bg-black/20 border border-white/10 rounded-xl focus:outline-none 
                                         focus:border-lime-400/50 text-white placeholder-gray-500 transition-all text-sm"
                                     />
+                                    <datalist id="teacher-exam-subject-options">
+                                        {subjectOptions.map((name) => (
+                                            <option key={name} value={name} />
+                                        ))}
+                                    </datalist>
                                 </div>
                             </div>
 

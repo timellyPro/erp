@@ -13,7 +13,7 @@ import {
   File
 } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
-import Spinner from "../../common/Spinner";
+import ParentTimellyLoader from "../ParentTimellyLoader";
 
 const LEAVE_TYPE_OPTIONS = [
   { label: "Sick Leave", value: "SICK" },
@@ -231,7 +231,7 @@ export default function ParentLeavesTab() {
                 <h3 className="text-sm font-bold uppercase tracking-wider">Approval Authority</h3>
               </div>
               {!approvalAuthorityLoaded ? (
-                <div className="flex justify-center p-4"><Spinner /></div>
+                <ParentTimellyLoader preset="leave" compact className="w-full" />
               ) : approvalAuthority ? (
                 <div className="flex items-center gap-4 bg-white/5 p-4 rounded-2xl border border-white/5">
                   <div className="w-14 h-14 rounded-full overflow-hidden border-2 border-[#b4f03d]/30 shrink-0 bg-white/10">
@@ -351,7 +351,7 @@ export default function ParentLeavesTab() {
               /* HISTORY LIST */
               <div className="space-y-4">
                 {loading ? (
-                  <div className="flex justify-center py-20"><Spinner /></div>
+                  <ParentTimellyLoader preset="leave" compact className="w-full" />
                 ) : myLeaves.length === 0 ? (
                   <div className="somu border border-white/5 rounded-3xl p-20 text-center">
                     <p className="text-white/40 font-bold">No leave history found.</p>

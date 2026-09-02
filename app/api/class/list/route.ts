@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import {
+  getSchoolDashboardServerCached,
+  setSchoolDashboardServerCached,
+} from "@/lib/schoolDashboardServerCache";
+import { activeStudentWhere } from "@/lib/studentStatus";
 
 async function resolveSchoolId(session: { user: { id: string; schoolId?: string | null; role: string } }) {
   let schoolId = session.user.schoolId;
@@ -29,7 +34,7 @@ async function resolveSchoolId(session: { user: { id: string; schoolId?: string 
   return schoolId;
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
 
@@ -50,12 +55,46 @@ export async function GET() {
       schoolId: schoolId,
     };
 
-    // For teachers: show all classes in their school (not just assigned ones)
-    // This allows flexibility - teachers can work with any class in their school
-    // If you want to restrict to only assigned classes, uncomment the line below:
-    // if (session.user.role === "TEACHER") {
-    //   where.teacherId = session.user.id;
-    // }
+    // Teachers only see classes assigned to them (Class.teacherId)
+    if (session.user.role === "TEACHER") {
+      where.teacherId = session.user.id;
+    }
+    const lite = new URL(req.url).searchParams.get("lite") === "1";
+
+    if (lite) {
+      const memKey =
+        session.user.role === "TEACHER"
+          ? `class:list:lite:${schoolId}:teacher:${session.user.id}`
+          : `class:list:lite:${schoolId}`;
+      const cached = getSchoolDashboardServerCached<{ classes: unknown[] }>(memKey);
+      if (cached) {
+        return NextResponse.json(cached, { status: 200 });
+      }
+
+      const classes = await prisma.class.findMany({
+        where,
+        select: {
+          id: true,
+          name: true,
+          section: true,
+          teacherId: true,
+          teacher: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              teacherId: true,
+              photoUrl: true,
+            },
+          },
+        },
+        orderBy: [{ name: "asc" }, { section: "asc" }],
+      });
+      const payload = { classes };
+      setSchoolDashboardServerCached(memKey, payload, 60_000);
+      return NextResponse.json(payload, { status: 200 });
+    }
+
     const classes = await prisma.class.findMany({
       where,
       include: {
@@ -63,14 +102,17 @@ export async function GET() {
           select: { id: true, name: true, email: true, subject: true },
         },
         _count: {
-          select: { students: true },
+          select: {
+            students: {
+              where: activeStudentWhere,
+            },
+          },
         },
       },
       orderBy: {
         createdAt: "desc",
       },
     });
-    // Add teacherId to each class for frontend filtering
     const classesWithTeacherId = classes.map((c) => ({
       ...c,
       teacherId: c.teacher?.id || null,

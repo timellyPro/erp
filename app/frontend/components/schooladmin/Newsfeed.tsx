@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback } from "react";
 import { useNewsFeeds } from "../../hooks/useNewsFeeds";
+import TimellyLoader from "../common/TimellyLoader";
 import CreatePost from "./newsfeed/CreatePost";
 import PostCard from "./newsfeed/PostCard";
 
@@ -37,10 +38,12 @@ export default function NewsFeed() {
           </div>
         )}
 
-        {loading ? (
-          <div className="flex justify-center py-12">
-            <div className="animate-spin rounded-full h-10 w-10 border-2 border-white/30 border-t-white" />
-          </div>
+        {loading && feeds.length === 0 ? (
+          <TimellyLoader
+            compact
+            title="Loading newsfeed"
+            steps={["Announcements", "Likes", "Media"]}
+          />
         ) : feeds.length === 0 ? (
           <div className="rounded-2xl border border-white/10 bg-white/5 p-6 sm:p-8 text-center text-white/60 text-sm sm:text-base">
             No posts yet. Create the first one above.

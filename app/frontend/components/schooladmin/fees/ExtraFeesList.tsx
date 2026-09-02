@@ -1,16 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, Trash2 } from "lucide-react";
 import type { ExtraFee } from "./types";
 import { schoolAdminStudentDetailsFeesUrl } from "./studentDetailsNav";
+import InlinePagination from "../schooladmincomponents/InlinePagination";
+
+const PAGE_SIZE = 15;
 
 interface ExtraFeesListProps {
   extraFees: ExtraFee[];
   classes: Array<{ id: string; name: string; section: string | null }>;
   students: Array<{ id: string; user: { name: string | null }; admissionNumber: string }>;
   onSuccess: () => void;
+}
+
+function residencyLabel(scope: string | null | undefined): string {
+  const s = (scope ?? "ALL").toUpperCase();
+  if (s === "HOSTELLER") return "Hostel only";
+  if (s === "DAY_SCHOLAR") return "Day scholars only";
+  return "All students";
 }
 
 function targetLabel(
@@ -41,14 +51,17 @@ export default function ExtraFeesList({
   onSuccess,
 }: ExtraFeesListProps) {
   const router = useRouter();
+  const [page, setPage] = useState(1);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editAmount, setEditAmount] = useState("");
+  const [editSplitIntoTwoInstallments, setEditSplitIntoTwoInstallments] = useState(false);
 
   const startEdit = (ef: ExtraFee) => {
     setEditingId(ef.id);
     setEditName(ef.name);
     setEditAmount(String(ef.amount));
+    setEditSplitIntoTwoInstallments(Boolean(ef.splitIntoTwoInstallments));
   };
 
   const handleUpdate = async () => {
@@ -60,7 +73,10 @@ export default function ExtraFeesList({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: editName.trim(),
-          amount: Number(editAmount),
+          ...(editSplitIntoTwoInstallments
+            ? { combinedInstallmentTotal: Number(editAmount) }
+            : { amount: Number(editAmount) }),
+          splitIntoTwoInstallments: editSplitIntoTwoInstallments,
         }),
       });
       const data = await res.json();
@@ -96,13 +112,33 @@ export default function ExtraFeesList({
     }
   };
 
+  const totalPages = Math.max(1, Math.ceil(extraFees.length / PAGE_SIZE));
+  const pageRows = useMemo(
+    () => extraFees.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [extraFees, page]
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [extraFees.length]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
   if (extraFees.length === 0) return null;
 
   return (
     <section className="rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur sm:p-6">
-      <h3 className="text-lg font-semibold mb-4">All Extra Fees</h3>
+      <h3 className="text-lg font-semibold mb-4">
+        {`All Extra Fees (${extraFees.length}${
+          extraFees.length > PAGE_SIZE
+            ? ` · rows ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, extraFees.length)}`
+            : ""
+        })`}
+      </h3>
       <div className="space-y-3 sm:hidden">
-        {extraFees.map((ef) => (
+        {pageRows.map((ef) => (
           <div key={ef.id} className="rounded-xl border border-white/10 bg-black/10 p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -114,7 +150,12 @@ export default function ExtraFeesList({
                     className="w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1.5 text-sm"
                   />
                 ) : (
-                  <div className="break-words text-white">{ef.name}</div>
+                  <div className="break-words text-white">
+                    {ef.name}
+                    {ef.splitIntoTwoInstallments ? (
+                      <span className="ml-1.5 text-[10px] font-semibold uppercase text-sky-300">2 inst.</span>
+                    ) : null}
+                  </div>
                 )}
               </div>
               <div className="shrink-0">
@@ -148,10 +189,20 @@ export default function ExtraFeesList({
               }}
             >
               Applies to: {targetLabel(ef, classes, students)}
+              <span className="block mt-1 text-xs text-white/50">Residency: {residencyLabel(ef.residencyScope)}</span>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
               {editingId === ef.id ? (
                 <>
+                  <label className="flex w-full cursor-pointer items-center gap-2 text-[11px] text-white/70">
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 rounded border-white/20 bg-black/40"
+                      checked={editSplitIntoTwoInstallments}
+                      onChange={(e) => setEditSplitIntoTwoInstallments(e.target.checked)}
+                    />
+                    Two installments (50/50) on breakdown
+                  </label>
                   <button
                     type="button"
                     onClick={handleUpdate}
@@ -198,22 +249,39 @@ export default function ExtraFeesList({
               <th className="py-3">Name</th>
               <th className="py-3">Amount</th>
               <th className="py-3">Applies To</th>
+              <th className="py-3">Residency</th>
               <th className="py-3 w-20">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {extraFees.map((ef) => (
+            {pageRows.map((ef) => (
               <tr key={ef.id} className="border-b border-white/5">
                 <td className="py-3">
                   {editingId === ef.id ? (
-                    <input
-                      type="text"
-                      value={editName}
-                      onChange={(e) => setEditName(e.target.value)}
-                      className="rounded-lg bg-black/20 border border-white/10 px-2 py-1.5 text-sm w-full max-w-[180px]"
-                    />
+                    <div className="flex flex-col gap-2">
+                      <input
+                        type="text"
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        className="rounded-lg bg-black/20 border border-white/10 px-2 py-1.5 text-sm w-full max-w-[180px]"
+                      />
+                      <label className="flex cursor-pointer items-center gap-2 text-[10px] text-white/60">
+                        <input
+                          type="checkbox"
+                          className="h-3 w-3 rounded border-white/20 bg-black/40"
+                          checked={editSplitIntoTwoInstallments}
+                          onChange={(e) => setEditSplitIntoTwoInstallments(e.target.checked)}
+                        />
+                        2 installments
+                      </label>
+                    </div>
                   ) : (
-                    <span className="text-white">{ef.name}</span>
+                    <span className="text-white">
+                      {ef.name}
+                      {ef.splitIntoTwoInstallments ? (
+                        <span className="ml-1.5 text-[10px] font-semibold uppercase text-sky-300">2 inst.</span>
+                      ) : null}
+                    </span>
                   )}
                 </td>
                 <td className="py-3">
@@ -252,6 +320,7 @@ export default function ExtraFeesList({
                 >
                   {targetLabel(ef, classes, students)}
                 </td>
+                <td className="py-3 text-gray-400">{residencyLabel(ef.residencyScope)}</td>
                 <td className="py-3">
                   {editingId === ef.id ? (
                     <div className="flex gap-1">
@@ -295,6 +364,9 @@ export default function ExtraFeesList({
             ))}
           </tbody>
         </table>
+      </div>
+      <div className="mt-4">
+        <InlinePagination page={page} totalPages={totalPages} onChange={setPage} />
       </div>
     </section>
   );

@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSession } from "next-auth/react";
+import { motion } from "framer-motion";
 import {
   AreaChart,
   Area,
@@ -18,6 +20,7 @@ import {
   Users,
   Star,
   Award,
+  Download,
   ChevronDown,
   CalendarCheck,
   TrendingUp,
@@ -26,71 +29,259 @@ import {
 
 /* ---------------- Types ---------------- */
 
-type AnalysisResponse = {
-  availableYears: number[];
-  classes?: { id: string; name: string; section: string | null }[];
-  selectedYear: number;
-  stats: {
-    feesCollected: number;
-    totalEnrollment: number;
-    avgTeacherRating: number;
-    avgExamScore: number;
-  };
-  charts: {
-    monthlyFeesCollection: { month: string; amount: number }[];
-    enrollmentGrowth: { year: number; count: number }[];
-    attendance: { students: number; teachers: number };
-    subjectPerformance: { subject: string; percentage: number }[];
-  };
-  topTeachers: { id: string; name: string; subject: string; rating: number }[];
+type FeeCollectionRow = {
+  classId: string;
+  label: string;
+  totalFees: number;
+  avgDiscountPercent: number;
+  finalFees: number;
+  paidFee: number;
+  pendingFee: number;
+  collectionPercent: number;
+  duePercent: number;
 };
 
-import Spinner from "../common/Spinner";
-import PageHeader from "../common/PageHeader";
+type EnrollmentByClassSectionRow = {
+  classId: string;
+  className: string;
+  section: string | null;
+  male: number;
+  female: number;
+  total: number;
+};
+
+type GenderViewMode = "CLASS_WISE" | "SECTION_WISE";
+
+type EnrollmentGroupRow = {
+  groupLabel: string;
+  male: number;
+  female: number;
+  total: number;
+};
+
+type EnrollmentSectionRow = EnrollmentGroupRow & {
+  className: string;
+  section: string;
+};
+
+import TimellyLoader from "../common/TimellyLoader";
 import SelectInput from "../common/SelectInput";
+import AnalysisSectionNav from "./AnalysisSectionNav";
+import FeesComparisonPanel from "./analysis/fees-comparison/FeesComparisonPanel";
+import StudentCredentialsPanel from "./analysis/student-credentials/StudentCredentialsPanel";
+import {
+  analysisHasTables,
+  defaultAnalysisStartYear,
+  fetchSchoolAnalysisFast,
+  fetchSchoolAnalysisTables,
+  peekSchoolAnalysis,
+  peekSchoolAnalysisAny,
+  type AnalysisSection,
+} from "@/lib/loadSchoolAnalysis";
+import {
+  analysisCacheKey,
+  setSchoolAnalysisCached,
+} from "@/lib/schoolAnalysisClientCache";
+import type { SchoolAnalysisPayload } from "@/lib/schoolAnalysisTypes";
+
+type AnalysisResponse = SchoolAnalysisPayload;
+
+export type { AnalysisSection };
+
+type AnalysisDashboardProps = {
+  section?: AnalysisSection;
+};
+
+type AnalysisTableSection = Extract<
+  AnalysisSection,
+  "gender-enrollment" | "admission-comparison" | "fee-collection"
+>;
+
+function sectionNeedsTables(section: AnalysisSection): section is AnalysisTableSection {
+  return (
+    section === "gender-enrollment" ||
+    section === "admission-comparison" ||
+    section === "fee-collection"
+  );
+}
+
+function sectionHasTables(section: AnalysisSection, payload: AnalysisResponse | null | undefined): boolean {
+  if (!sectionNeedsTables(section)) return true;
+  if (section === "gender-enrollment") return Array.isArray(payload?.enrollmentByClassSection);
+  if (section === "admission-comparison") return Array.isArray(payload?.admissionComparison);
+  if (section === "fee-collection") return Array.isArray(payload?.feeCollectionByClass);
+  return analysisHasTables(payload);
+}
+
 /* ---------------- Component ---------------- */
 
-export default function AnalysisDashboard() {
-  const [data, setData] = useState<AnalysisResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+export default function AnalysisDashboard({ section = "overview" }: AnalysisDashboardProps) {
+  const defaultYear = defaultAnalysisStartYear();
+  const initialCached = peekSchoolAnalysisAny(defaultYear);
+  const [data, setData] = useState<AnalysisResponse | null>(initialCached);
+  const [shellLoading, setShellLoading] = useState(() => !initialCached?.stats);
+  const [tablesLoading, setTablesLoading] = useState(
+    () => sectionNeedsTables(section) && !sectionHasTables(section, initialCached)
+  );
   const [error, setError] = useState<string | null>(null);
-  // year is the start academic year; 0 indicates not yet loaded
-  const [year, setYear] = useState<number>(0);
+  const [year, setYear] = useState<number>(() => initialCached?.selectedYear ?? defaultYear);
   const [classId, setClassId] = useState("");
+  const { data: session, status: sessionStatus } = useSession();
+  const schoolId = session?.user?.schoolId ?? null;
+  const fetchAbortRef = useRef<AbortController | null>(null);
+  const [genderViewMode, setGenderViewMode] = useState<GenderViewMode>("CLASS_WISE");
+  const [enrollmentSearch, setEnrollmentSearch] = useState("");
+  const [enrollmentGroupFilter, setEnrollmentGroupFilter] = useState("");
+  const [feeSearch, setFeeSearch] = useState("");
+  const [feeClassSectionFilter, setFeeClassSectionFilter] = useState("");
 
   useEffect(() => {
-    setLoading(true);
-    setError(null);
+    if (section === "student-credentials" || section === "fees-comparison") return;
+    if (sessionStatus !== "authenticated") return;
 
-    const params = new URLSearchParams();
-    if (year !== 0) params.set("year", String(year));
-    if (classId) params.set("classId", classId);
+    const sid = schoolId;
+    const cached =
+      (sid ? peekSchoolAnalysis(sid, year, classId) : null) ??
+      peekSchoolAnalysisAny(year, classId);
 
-    fetch(`/api/school/analysis?${params}`, { credentials: "include" })
-      .then((res) => res.json())
-      .then((res: AnalysisResponse & { message?: string }) => {
-        if (res.message && !res.stats) {
-          setError(res.message ?? "Failed to load");
-          setData(null);
+    let shellReady = Boolean(cached?.stats);
+    if (cached) {
+      setData(cached);
+      setError(null);
+      setShellLoading(false);
+      setTablesLoading(sectionNeedsTables(section) && !sectionHasTables(section, cached));
+    }
+
+    fetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
+
+    (async () => {
+      try {
+        if (sectionNeedsTables(section) && !sectionHasTables(section, cached)) {
+          setTablesLoading(true);
+          const tables = await fetchSchoolAnalysisTables(year, {
+            schoolId: sid,
+            classId,
+            section,
+            signal: controller.signal,
+          });
+          if (controller.signal.aborted) return;
+          setData((prev) => ({ ...(prev ?? {}), ...tables } as AnalysisResponse));
+          setTablesLoading(false);
+          setShellLoading(false);
+          setError(null);
+
+          if (!shellReady) {
+            void fetchSchoolAnalysisFast(year, {
+              schoolId: sid,
+              classId,
+            })
+              .then((fast) => {
+                if (controller.signal.aborted) return;
+                setData((prev) => ({ ...(prev ?? {}), ...fast } as AnalysisResponse));
+              })
+              .catch(() => {});
+          }
           return;
         }
-        setData(res as AnalysisResponse);
-        // ensure year matches server suggestion
-        if (year === 0 && res.selectedYear) {
-          setYear(res.selectedYear);
-        }
-      })
-      .catch(() => {
-        setError("Failed to load analysis");
-        setData(null);
-      })
-      .finally(() => setLoading(false));
-  }, [year, classId]);
 
-  if (loading) {
+        if (!shellReady) {
+          const fast = await fetchSchoolAnalysisFast(year, {
+            schoolId: sid,
+            classId,
+            signal: controller.signal,
+          });
+          if (controller.signal.aborted) return;
+          shellReady = true;
+          setData((prev) => ({ ...(prev ?? {}), ...fast } as AnalysisResponse));
+          setShellLoading(false);
+          setError(null);
+
+          if (sectionNeedsTables(section) && !sectionHasTables(section, fast)) {
+            setTablesLoading(true);
+            const tables = await fetchSchoolAnalysisTables(year, {
+              schoolId: sid,
+              classId,
+              section,
+              signal: controller.signal,
+            });
+            if (controller.signal.aborted) return;
+            setData((prev) => ({ ...(prev ?? {}), ...tables } as AnalysisResponse));
+            setTablesLoading(false);
+            return;
+          }
+        }
+
+        if (!sectionHasTables(section, cached)) {
+          void fetchSchoolAnalysisTables(year, {
+            schoolId: sid,
+            classId,
+            section: sectionNeedsTables(section) ? section : undefined,
+          })
+            .then((tables) => {
+              if (controller.signal.aborted) return;
+              setData((prev) => ({ ...(prev ?? {}), ...tables } as AnalysisResponse));
+              setTablesLoading(false);
+            })
+            .catch(() => {});
+        }
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("Analysis fetch error:", err);
+        if (!shellReady) {
+          setError(err instanceof Error ? err.message : "Failed to load analysis");
+          setData(null);
+        }
+      } finally {
+        if (!controller.signal.aborted) setShellLoading(false);
+      }
+    })();
+
+    return () => controller.abort();
+  }, [sessionStatus, schoolId, year, classId, section]);
+
+  useEffect(() => {
+    if (!schoolId || !data) return;
+    setSchoolAnalysisCached(analysisCacheKey(schoolId, year, classId), data);
+  }, [schoolId, data, year, classId]);
+
+  if (section === "fees-comparison") {
+    return <FeesComparisonPanel />;
+  }
+
+  if (section === "student-credentials") {
     return (
       <div className="p-4 sm:p-6 text-white">
-        <Spinner />
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.22 }}
+          className="mb-4 rounded-xl border border-white/10 bg-white/5 p-3 shadow-[0_8px_32px_-8px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:mb-5 sm:rounded-2xl sm:p-5"
+        >
+          <div className="mb-2 border-b border-white/10 pb-2 sm:mb-4 sm:pb-4">
+            <p className="text-sm font-semibold tracking-tight text-white sm:text-base">
+              Analysis
+            </p>
+            <p className="mt-0.5 text-xs text-white/55 sm:text-sm">
+              Share login details with students by class and section.
+            </p>
+          </div>
+          <AnalysisSectionNav embedded />
+        </motion.div>
+        <StudentCredentialsPanel />
+      </div>
+    );
+  }
+
+  if ((sessionStatus === "loading" || shellLoading || (!error && !data)) && !data) {
+    return (
+      <div className="p-4 sm:p-6 text-white">
+        <TimellyLoader
+          title="Loading analysis"
+          steps={["School data", "Student strength", "Insights"]}
+          compact
+        />
       </div>
     );
   }
@@ -104,12 +295,22 @@ export default function AnalysisDashboard() {
 
   /* ---------------- UI-ready Data ---------------- */
 
+  const selectedYear = data.selectedYear ?? year ?? defaultYear;
+  const availableYears =
+    data.availableYears && data.availableYears.length > 0 ? data.availableYears : [selectedYear];
+  const statsSource = data.stats ?? {
+    feesCollected: 0,
+    totalEnrollment: 0,
+    avgTeacherRating: 0,
+    avgExamScore: 0,
+  };
+
   const stats = [
     {
       title: "Fees Collected",
-      value: data.stats.feesCollected >= 100000
-        ? `₹${(data.stats.feesCollected / 100000).toFixed(1)}L`
-        : `₹${data.stats.feesCollected.toLocaleString()}`,
+      value: statsSource.feesCollected >= 100000
+        ? `₹${(statsSource.feesCollected / 100000).toFixed(1)}L`
+        : `₹${statsSource.feesCollected.toLocaleString()}`,
       change: "vs last month",
       icon: IndianRupee,
       iconColor: "text-lime-400",
@@ -119,7 +320,7 @@ export default function AnalysisDashboard() {
     },
     {
       title: "Total Enrollment",
-      value: data.stats.totalEnrollment.toLocaleString(),
+      value: statsSource.totalEnrollment.toLocaleString(),
       change: "New admissions",
       icon: Users,
       iconColor: "text-sky-400",
@@ -130,8 +331,8 @@ export default function AnalysisDashboard() {
     {
       title: "Avg Teacher Rating",
       value:
-        data.stats.avgTeacherRating > 0
-          ? `${data.stats.avgTeacherRating} / 5`
+        statsSource.avgTeacherRating > 0
+          ? `${statsSource.avgTeacherRating} / 5`
           : "—",
       change: "Based on student feedback",
       icon: Star,
@@ -142,7 +343,7 @@ export default function AnalysisDashboard() {
     },
     {
       title: "Avg Exam Score",
-      value: `${data.stats.avgExamScore}%`,
+      value: `${statsSource.avgExamScore}%`,
       change: "vs last year",
       icon: Award,
       iconColor: "text-yellow-400",
@@ -182,19 +383,386 @@ export default function AnalysisDashboard() {
 
   // All teachers sorted best to least (API returns already sorted)
   const topTeachers = data.topTeachers ?? [];
+  const feeRows = Array.isArray(data.feeCollectionByClass) ? data.feeCollectionByClass : [];
+  const feeTotals = data.feeCollectionTotals;
+  const enrollmentRows = Array.isArray(data.enrollmentByClassSection)
+    ? data.enrollmentByClassSection
+    : [];
+  const enrollmentTotals = data.enrollmentByClassSectionTotals;
+  const admissionComparisonRows = Array.isArray(data.admissionComparison) ? data.admissionComparison : [];
+  const admissionComparisonTotals = data.admissionComparisonTotals;
+
+  const formatInr = (n: number) =>
+    `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}`;
+  const getAcademicYearLabel = () => {
+    const y = year !== 0 ? year : selectedYear;
+    return `${y}-${y + 1}`;
+  };
+
+  const makeSafeFileName = (base: string, ext: string) =>
+    `${base.replace(/[^\w-]+/g, "_").toLowerCase()}.${ext}`;
+
+  const exportWithXlsx = async (
+    rows: Array<Record<string, string | number>>,
+    sheetName: string,
+    filenameBase: string
+  ) => {
+    if (rows.length === 0) {
+      alert("No data available to export.");
+      return;
+    }
+    const XLSX = await import("xlsx");
+    const workbook = XLSX.utils.book_new();
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+
+    XLSX.writeFile(workbook, makeSafeFileName(filenameBase, "xlsx"));
+  };
+  const enrollmentClassWiseRows: EnrollmentGroupRow[] = Array.from(
+    enrollmentRows.reduce((acc, row) => {
+      const key = row.className || "Unassigned";
+      const item = acc.get(key) ?? { groupLabel: key, male: 0, female: 0, total: 0 };
+      item.male += row.male;
+      item.female += row.female;
+      item.total += row.total;
+      acc.set(key, item);
+      return acc;
+    }, new Map<string, EnrollmentGroupRow>())
+  ).map(([, value]) => value).sort((a, b) => a.groupLabel.localeCompare(b.groupLabel, undefined, { numeric: true }));
+
+  const enrollmentSectionWiseRows: EnrollmentSectionRow[] = enrollmentRows
+    .map((row) => {
+      const className = row.className?.trim() || "Unassigned";
+      const section =
+        row.section && row.section.trim() !== "" ? row.section.trim() : "Unassigned";
+      return {
+        groupLabel: `${className} - ${section}`,
+        className,
+        section,
+        male: row.male,
+        female: row.female,
+        total: row.total,
+      };
+    })
+    .sort((a, b) => {
+      const byClass = a.className.localeCompare(b.className, undefined, { numeric: true });
+      if (byClass !== 0) return byClass;
+      return a.section.localeCompare(b.section, undefined, { numeric: true });
+    });
+
+  const enrollmentRowsBase =
+    genderViewMode === "CLASS_WISE" ? enrollmentClassWiseRows : enrollmentSectionWiseRows;
+  const enrollmentGroupOptions = enrollmentRowsBase.map((row) => row.groupLabel);
+
+  const feeClassSectionOptions = Array.from(new Set(feeRows.map((row) => row.label))).sort((a, b) =>
+    a.localeCompare(b)
+  );
+
+  const enrollmentRowsFiltered = enrollmentRowsBase.filter((row) => {
+    const search = enrollmentSearch.trim().toLowerCase();
+    const sectionRow = row as EnrollmentSectionRow;
+    const matchesSearch =
+      !search ||
+      row.groupLabel.toLowerCase().includes(search) ||
+      (genderViewMode === "SECTION_WISE" &&
+        (sectionRow.className.toLowerCase().includes(search) ||
+          sectionRow.section.toLowerCase().includes(search)));
+    const matchesGroup = !enrollmentGroupFilter || row.groupLabel === enrollmentGroupFilter;
+    return matchesSearch && matchesGroup;
+  });
+
+  const feeRowsFiltered = feeRows.filter((row) => {
+    const search = feeSearch.trim().toLowerCase();
+    const matchesSearch = !search || row.label.toLowerCase().includes(search);
+    const matchesClassSection = !feeClassSectionFilter || row.label === feeClassSectionFilter;
+    return matchesSearch && matchesClassSection;
+  });
+
+  const enrollmentFilteredTotals =
+    enrollmentRowsFiltered.length > 0
+      ? enrollmentRowsFiltered.reduce(
+          (acc, row) => ({
+            male: acc.male + row.male,
+            female: acc.female + row.female,
+            total: acc.total + row.total,
+          }),
+          { male: 0, female: 0, total: 0 }
+        )
+      : null;
+
+  const feeFilteredTotals =
+    feeRowsFiltered.length > 0
+      ? feeRowsFiltered.reduce(
+          (acc, row) => ({
+            totalFees: acc.totalFees + row.totalFees,
+            finalFees: acc.finalFees + row.finalFees,
+            paidFee: acc.paidFee + row.paidFee,
+            pendingFee: acc.pendingFee + row.pendingFee,
+          }),
+          { totalFees: 0, finalFees: 0, paidFee: 0, pendingFee: 0 }
+        )
+      : null;
+
+  const feeFilteredAvgDiscountPercent =
+    feeRowsFiltered.length > 0
+      ? Number(
+          (
+            feeRowsFiltered.reduce((acc, row) => acc + row.avgDiscountPercent, 0) /
+            feeRowsFiltered.length
+          ).toFixed(2)
+        )
+      : 0;
+
+  const feeFilteredCollectionPercent =
+    feeFilteredTotals && feeFilteredTotals.finalFees > 0
+      ? Number(((feeFilteredTotals.paidFee / feeFilteredTotals.finalFees) * 100).toFixed(2))
+      : 0;
+
+  const feeFilteredDuePercent =
+    feeFilteredTotals && feeFilteredTotals.finalFees > 0
+      ? Number(((feeFilteredTotals.pendingFee / feeFilteredTotals.finalFees) * 100).toFixed(2))
+      : 0;
+
+  const toGenderExportRow = (
+    row: EnrollmentGroupRow | EnrollmentSectionRow,
+    mode: GenderViewMode
+  ): Record<string, string | number> =>
+    mode === "CLASS_WISE"
+      ? {
+          Class: row.groupLabel,
+          Male: row.male,
+          Female: row.female,
+          Total: row.total,
+        }
+      : {
+          Class: (row as EnrollmentSectionRow).className,
+          Section: (row as EnrollmentSectionRow).section,
+          Male: row.male,
+          Female: row.female,
+          Total: row.total,
+        };
+
+  const enrollmentExportRows = enrollmentRowsFiltered.map((row) =>
+    toGenderExportRow(row, genderViewMode)
+  );
+
+  const exportGenderExcel = async (mode: GenderViewMode) => {
+    const rows = mode === "CLASS_WISE" ? enrollmentClassWiseRows : enrollmentSectionWiseRows;
+    const exportRows = rows.map((row) => toGenderExportRow(row, mode));
+    const fileSuffix = mode === "CLASS_WISE" ? "class_wise" : "section_wise";
+    try {
+      await exportWithXlsx(
+        exportRows,
+        mode === "CLASS_WISE" ? "Gender Class-wise" : "Gender Section-wise",
+        `gender_distribution_${fileSuffix}_${getAcademicYearLabel()}`
+      );
+    } catch (e) {
+      console.error(e);
+      alert("Export failed. Please try again.");
+    }
+  };
+
+  const exportAdmissionComparisonExcel = async () => {
+    if (admissionComparisonRows.length === 0) {
+      alert("No data available to export.");
+      return;
+    }
+
+    try {
+      const XLSX = await import("xlsx");
+      const title = `COMPARISON REPORT OF NEW ADMISSION ${getAcademicYearLabel()}`;
+      const aoa: Array<Array<string | number>> = [
+        [title, "", "", "", "", "", "", "", ""],
+        ["CLASS", "EXISTING", "", "", "", "NEW", "", "", ""],
+        ["", "DAY SCHOLAR", "", "HOSTEL", "", "DAY SCHOLAR", "", "HOSTEL", ""],
+        ["", "MALE", "FEMALE", "MALE", "FEMALE", "MALE", "FEMALE", "MALE", "FEMALE"],
+      ];
+
+      for (const row of admissionComparisonRows) {
+        aoa.push([
+          row.classLabel,
+          row.existingDayScholarMale,
+          row.existingDayScholarFemale,
+          row.existingHostelMale,
+          row.existingHostelFemale,
+          row.newDayScholarMale,
+          row.newDayScholarFemale,
+          row.newHostelMale,
+          row.newHostelFemale,
+        ]);
+      }
+
+      if (admissionComparisonTotals) {
+        aoa.push([
+          "TOTAL",
+          admissionComparisonTotals.existingDayScholarMale,
+          admissionComparisonTotals.existingDayScholarFemale,
+          admissionComparisonTotals.existingHostelMale,
+          admissionComparisonTotals.existingHostelFemale,
+          admissionComparisonTotals.newDayScholarMale,
+          admissionComparisonTotals.newDayScholarFemale,
+          admissionComparisonTotals.newHostelMale,
+          admissionComparisonTotals.newHostelFemale,
+        ]);
+      }
+
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws["!merges"] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 8 } }, // title
+        { s: { r: 1, c: 1 }, e: { r: 1, c: 4 } }, // existing
+        { s: { r: 1, c: 5 }, e: { r: 1, c: 8 } }, // new
+        { s: { r: 2, c: 1 }, e: { r: 2, c: 2 } }, // existing day scholar
+        { s: { r: 2, c: 3 }, e: { r: 2, c: 4 } }, // existing hostel
+        { s: { r: 2, c: 5 }, e: { r: 2, c: 6 } }, // new day scholar
+        { s: { r: 2, c: 7 }, e: { r: 2, c: 8 } }, // new hostel
+      ];
+      ws["!cols"] = [
+        { wch: 22 },
+        { wch: 11 },
+        { wch: 11 },
+        { wch: 11 },
+        { wch: 11 },
+        { wch: 11 },
+        { wch: 11 },
+        { wch: 11 },
+        { wch: 11 },
+      ];
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Comparison report");
+      XLSX.writeFile(
+        wb,
+        makeSafeFileName(`new_admission_comparison_table_view_${getAcademicYearLabel()}`, "xlsx")
+      );
+    } catch (e) {
+      console.error(e);
+      alert("Export failed. Please try again.");
+    }
+  };
+
+  const exportPaymentDetailsExcel = async () => {
+    try {
+      const [txRes, summaryRes] = await Promise.all([
+        fetch("/api/fees/transactions?limit=200", { credentials: "include", cache: "no-store" }),
+        fetch("/api/fees/summary", { credentials: "include", cache: "no-store" }),
+      ]);
+      const txData = await txRes.json().catch(() => ({}));
+      const summaryData = await summaryRes.json().catch(() => ({}));
+      if (!txRes.ok) {
+        alert(txData?.message || "Failed to fetch payment transactions.");
+        return;
+      }
+
+      const transactions: Array<{
+        amount: number;
+        createdAt: string;
+        transactionId?: string | null;
+        feeAllocations?: Array<{ name: string; amount: number }>;
+        student: {
+          id: string;
+          admissionNumber?: string | null;
+          user?: { name?: string | null };
+          class?: { name?: string | null; section?: string | null } | null;
+        };
+      }> = Array.isArray(txData?.transactions) ? txData.transactions : [];
+
+      const summaryFees: Array<{
+        student: { id: string };
+        totalFee: number;
+        finalFee: number;
+        amountPaid: number;
+        remainingFee: number;
+      }> = Array.isArray(summaryData?.fees) ? summaryData.fees : [];
+
+      const studentTotals = summaryFees.reduce((acc, fee) => {
+        const id = fee.student?.id;
+        if (!id) return acc;
+        const curr = acc.get(id) ?? { totalAmount: 0, discount: 0, paidAmount: 0, pendingAmount: 0 };
+        curr.totalAmount += Number(fee.totalFee || 0);
+        curr.discount += Math.max(Number(fee.totalFee || 0) - Number(fee.finalFee || 0), 0);
+        curr.paidAmount += Number(fee.amountPaid || 0);
+        curr.pendingAmount += Number(fee.remainingFee || 0);
+        acc.set(id, curr);
+        return acc;
+      }, new Map<string, { totalAmount: number; discount: number; paidAmount: number; pendingAmount: number }>());
+
+      const yearStart = year !== 0 ? year : selectedYear;
+      const from = new Date(yearStart, 3, 1);
+      const to = new Date(yearStart + 1, 2, 31, 23, 59, 59, 999);
+
+      const filteredTx = transactions.filter((tx) => {
+        const created = new Date(tx.createdAt);
+        if (Number.isNaN(created.getTime()) || created < from || created > to) return false;
+        const className = tx.student.class?.name || "";
+        const section = tx.student.class?.section || "";
+        const label = `${className}${section ? `-${section}` : ""}`;
+        if (classId && className !== ((data.classes ?? []).find((c) => c.id === classId)?.name ?? "")) return false;
+        if (feeClassSectionFilter && feeClassSectionFilter !== label) return false;
+        const search = feeSearch.trim().toLowerCase();
+        if (search) {
+          const studentName = (tx.student.user?.name || "").toLowerCase();
+          const admission = (tx.student.admissionNumber || "").toLowerCase();
+          if (!studentName.includes(search) && !admission.includes(search) && !label.toLowerCase().includes(search)) {
+            return false;
+          }
+        }
+        return true;
+      });
+
+      const rows = filteredTx.map((tx) => {
+        const totals = studentTotals.get(tx.student.id) ?? {
+          totalAmount: tx.amount,
+          discount: 0,
+          paidAmount: tx.amount,
+          pendingAmount: 0,
+        };
+        const feeHeadBreakdown =
+          Array.isArray(tx.feeAllocations) && tx.feeAllocations.length > 0
+            ? tx.feeAllocations.map((f) => `${f.name}: ₹${Number(f.amount || 0).toLocaleString("en-IN")}`).join(" | ")
+            : "Default";
+        return {
+          "Date of Payment": new Date(tx.createdAt).toLocaleDateString("en-IN"),
+          "Student Name": tx.student.user?.name || "-",
+          "Admission No": tx.student.admissionNumber || "-",
+          Class: tx.student.class?.name || "-",
+          Section: tx.student.class?.section || "-",
+          "Fee Head Breakdown": feeHeadBreakdown,
+          "Total Amount": Number(totals.totalAmount.toFixed(2)),
+          Discount: Number(totals.discount.toFixed(2)),
+          "Paid Amount": Number(totals.paidAmount.toFixed(2)),
+          "Pending Amount": Number(totals.pendingAmount.toFixed(2)),
+          "Transaction Ref": tx.transactionId || "-",
+        };
+      });
+
+      await exportWithXlsx(
+        rows,
+        "Payment Details",
+        `payment_details_student_wise_${getAcademicYearLabel()}`
+      );
+    } catch (e) {
+      console.error(e);
+      alert("Export failed. Please try again.");
+    }
+  };
 
   /* ---------------- UI ---------------- */
 
   return (
-    <div className="min-h-screen p-3 sm:p-4 md:p-6 text-white">
-      {/* Header */}
-      <PageHeader
-        title="Analysis & Reports"
-        subtitle="Comprehensive insights into school performance"
-        className="border"
-        transparent={false}
-        rightSlot={
-          <div className="flex flex-wrap items-center gap-2 self-center">
+    <div className="min-h-screen p-3 pb-6 text-white sm:p-4 md:p-5">
+      {/* Title, filters, and section nav — single card */}
+      <motion.div
+        initial={{ opacity: 0, y: -8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+        className="mb-4 rounded-xl border border-white/10 bg-white/5 p-4 shadow-[0_8px_28px_-10px_rgba(0,0,0,0.4)] backdrop-blur-xl sm:mb-5 sm:rounded-2xl sm:p-5"
+      >
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between md:gap-4">
+          <div className="min-w-0">
+            <h1 className="text-xl font-bold leading-tight text-white sm:text-2xl">Analysis & Reports</h1>
+            <p className="mt-0.5 text-sm text-white/60">Comprehensive insights into school performance</p>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2 md:justify-end">
             <div className="relative">
               <select
                 value={classId}
@@ -220,15 +788,15 @@ export default function AnalysisDashboard() {
                   </option>
                 ))}
               </select>
-              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-white/60 pointer-events-none" />
+              <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-white/60" />
             </div>
             <div className="relative">
               <select
                 value={
                   year !== 0
                     ? year
-                    : data.availableYears && data.availableYears.length > 0
-                    ? data.availableYears[0]
+                    : availableYears.length > 0
+                    ? availableYears[0]
                     : ""
                 }
                 onChange={(e) => setYear(Number(e.target.value))}
@@ -236,7 +804,7 @@ export default function AnalysisDashboard() {
                   appearance-none
                   bg-black/40
                   text-white
-                  px-6 sm:px-7 py-2 pl-2
+                  px-6 py-2 pl-2
                   rounded-xl
                   text-sm
                   border border-white/10
@@ -245,22 +813,28 @@ export default function AnalysisDashboard() {
                   cursor-pointer
                   text-center
                   min-w-[100px]
+                  sm:px-7
                 "
               >
-                {(data.availableYears ?? []).map((y) => (
+                {availableYears.map((y) => (
                   <option key={y} value={y} className="text-black">
                     {y}-{y + 1}
                   </option>
                 ))}
               </select>
-              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-white/60 pointer-events-none" />
+              <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-white/60" />
             </div>
           </div>
-        }
-      />
+        </div>
 
-      {/* Stats - responsive grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6">
+        <div className="mt-4 border-t border-white/10 pt-4">
+          <AnalysisSectionNav embedded />
+        </div>
+      </motion.div>
+
+      {/* Stats - responsive grid (overview only) */}
+      {section === "overview" ? (
+      <div className={`grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6 ${shellLoading ? "animate-pulse" : ""}`}>
         {stats.map((stat, i) => (
           <div
             key={i}
@@ -293,8 +867,10 @@ export default function AnalysisDashboard() {
           </div>
         ))}
       </div>
+      ) : null}
 
       {/* Charts Row 1 */}
+      {section === "overview" ? (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-4 sm:mb-6">
         <div className="rounded-xl sm:rounded-2xl p-4 sm:p-5 bg-white/10 backdrop-blur-md min-h-[280px] sm:min-h-[320px]">
           <div className="flex items-center gap-2 mb-4">
@@ -352,8 +928,10 @@ export default function AnalysisDashboard() {
           </ResponsiveContainer>
         </div>
       </div>
+      ) : null}
 
       {/* Charts Row 2 */}
+      {section === "overview" ? (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         <div className="rounded-xl sm:rounded-2xl p-4 sm:p-5 bg-white/10 backdrop-blur-md min-h-[280px] sm:min-h-[320px]">
           <div className="flex items-center gap-2 mb-4">
@@ -427,8 +1005,10 @@ export default function AnalysisDashboard() {
           </ResponsiveContainer>
         </div>
       </div>
+      ) : null}
 
       {/* Top Performing Teachers - sorted best first */}
+      {section === "overview" ? (
       <div className="mt-4 sm:mt-6 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
         <div className="mb-4 sm:mb-5">
           <div className="flex items-center gap-2">
@@ -438,8 +1018,8 @@ export default function AnalysisDashboard() {
             </h3>
           </div>
           <p className="text-xs sm:text-sm text-white/50 mt-1">
-            By student exam performance ({data.selectedYear}-
-            {data.selectedYear + 1}), best first
+            By student exam performance ({selectedYear}-
+            {selectedYear + 1}), best first
           </p>
         </div>
 
@@ -480,6 +1060,407 @@ export default function AnalysisDashboard() {
           </div>
         )}
       </div>
+      ) : null}
+
+      {/* Enrollment by gender: class & section */}
+      {section === "gender-enrollment" ? (
+      tablesLoading ? (
+        <div className="mt-4 flex min-h-[240px] items-center justify-center rounded-xl border border-white/10 bg-white/5">
+          <TimellyLoader
+            title="Loading student strength"
+            steps={["Classes", "Gender counts", "Totals"]}
+            compact
+            bare
+          />
+        </div>
+      ) : (
+      <div className="mt-0 sm:mt-0 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 sm:w-5 sm:h-5 text-sky-400 shrink-0" />
+              <h3 className="font-semibold text-white text-sm sm:text-base">
+                Students by class & section (gender)
+              </h3>
+            </div>
+            <p className="text-xs sm:text-sm text-white/50 mt-1 pl-0 sm:pl-7">
+              Male / female counts follow the gender saved on each student; other or blank genders
+              are included in total only.
+            </p>
+          </div>
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+            <input
+              type="text"
+              value={enrollmentSearch}
+              onChange={(e) => setEnrollmentSearch(e.target.value)}
+              placeholder={genderViewMode === "CLASS_WISE" ? "Search class" : "Search class or section"}
+              className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs text-white placeholder:text-white/40 focus:outline-none focus:ring-1 focus:ring-lime-400/40 sm:w-[180px] sm:text-sm"
+            />
+            <div className="w-full sm:w-[165px]">
+              <SelectInput
+                value={genderViewMode}
+                onChange={(value) => {
+                  setGenderViewMode(value as GenderViewMode);
+                  setEnrollmentGroupFilter("");
+                }}
+                options={[
+                  { label: "Class-wise Table", value: "CLASS_WISE" },
+                  { label: "Section-wise Table", value: "SECTION_WISE" },
+                ]}
+              />
+            </div>
+            <div className="w-full sm:w-[165px]">
+              <SelectInput
+                value={enrollmentGroupFilter}
+                onChange={setEnrollmentGroupFilter}
+                options={[
+                  { label: genderViewMode === "CLASS_WISE" ? "All Classes" : "All Class & Section", value: "" },
+                  ...enrollmentGroupOptions.map((value) => ({ label: value, value })),
+                ]}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void exportGenderExcel("CLASS_WISE")}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-lime-500/40 bg-lime-500/15 px-3 py-2 text-xs sm:text-sm font-semibold text-lime-200 hover:bg-lime-500/25 transition-colors"
+            >
+              <Download className="h-4 w-4" />
+              Export Class-wise Excel
+            </button>
+            <button
+              type="button"
+              onClick={() => void exportGenderExcel("SECTION_WISE")}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-lime-500/40 bg-lime-500/15 px-3 py-2 text-xs sm:text-sm font-semibold text-lime-200 hover:bg-lime-500/25 transition-colors"
+            >
+              <Download className="h-4 w-4" />
+              Export Section-wise Excel
+            </button>
+          </div>
+        </div>
+
+        <div className="-mx-1 overflow-x-auto overscroll-x-contain touch-pan-x pb-1 sm:mx-0">
+          <table className="w-full min-w-[520px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/10 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                {genderViewMode === "CLASS_WISE" ? (
+                  <th className="py-3 pr-3 font-medium">Class</th>
+                ) : (
+                  <>
+                    <th className="py-3 pr-3 font-medium">Class</th>
+                    <th className="py-3 pr-3 font-medium">Section</th>
+                  </>
+                )}
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Male</th>
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Female</th>
+                <th className="py-3 pl-2 text-right font-medium whitespace-nowrap">Total</th>
+              </tr>
+            </thead>
+            <tbody className="text-white/90">
+              {enrollmentRowsFiltered.length === 0 ? (
+                <tr>
+                  <td colSpan={genderViewMode === "CLASS_WISE" ? 4 : 5} className="py-8 text-center text-white/40">
+                    No matching class / section found.
+                  </td>
+                </tr>
+              ) : (
+                enrollmentRowsFiltered.map((row) => {
+                  const sectionRow =
+                    genderViewMode === "SECTION_WISE" ? (row as EnrollmentSectionRow) : null;
+                  return (
+                  <tr
+                    key={sectionRow ? `${sectionRow.className}-${sectionRow.section}` : row.groupLabel}
+                    className="border-b border-white/5 last:border-0 hover:bg-white/[0.03]"
+                  >
+                    {genderViewMode === "CLASS_WISE" ? (
+                      <td className="py-3 pr-3 font-semibold text-white">{row.groupLabel}</td>
+                    ) : (
+                      <>
+                        <td className="py-3 pr-3 font-semibold text-white">
+                          {sectionRow?.className ?? row.groupLabel}
+                        </td>
+                        <td className="py-3 pr-3 text-white/80">
+                          {sectionRow?.section ?? "—"}
+                        </td>
+                      </>
+                    )}
+                    <td className="py-3 px-2 text-right tabular-nums text-sky-300">
+                      {row.male.toLocaleString("en-IN")}
+                    </td>
+                    <td className="py-3 px-2 text-right tabular-nums text-fuchsia-300/90">
+                      {row.female.toLocaleString("en-IN")}
+                    </td>
+                    <td className="py-3 pl-2 text-right tabular-nums text-white font-medium">
+                      {row.total.toLocaleString("en-IN")}
+                    </td>
+                  </tr>
+                  );
+                })
+              )}
+              {enrollmentFilteredTotals && enrollmentRowsFiltered.length > 0 ? (
+                <tr className="border-t border-white/20 bg-white/[0.06] font-semibold">
+                  <td
+                    className="py-3 pr-3 text-white"
+                    colSpan={genderViewMode === "CLASS_WISE" ? 1 : 2}
+                  >
+                    Filtered total
+                  </td>
+                  <td className="py-3 px-2 text-right tabular-nums text-sky-300">
+                    {enrollmentFilteredTotals.male.toLocaleString("en-IN")}
+                  </td>
+                  <td className="py-3 px-2 text-right tabular-nums text-fuchsia-300">
+                    {enrollmentFilteredTotals.female.toLocaleString("en-IN")}
+                  </td>
+                  <td className="py-3 pl-2 text-right tabular-nums text-white">
+                    {enrollmentFilteredTotals.total.toLocaleString("en-IN")}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      )
+      ) : null}
+
+      {/* New admission comparison report */}
+      {section === "admission-comparison" ? (
+      tablesLoading ? (
+        <div className="mt-4 flex min-h-[240px] items-center justify-center rounded-xl border border-white/10 bg-white/5">
+          <TimellyLoader
+            title="Loading admissions"
+            steps={["Applications", "Hostel data", "Comparison"]}
+            compact
+            bare
+          />
+        </div>
+      ) : (
+      <div className="mt-0 sm:mt-0 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-300 shrink-0" />
+              <h3 className="font-semibold text-white text-sm sm:text-base">
+                New admission comparison report
+              </h3>
+            </div>
+            <p className="text-xs sm:text-sm text-white/50 mt-1 pl-0 sm:pl-7">
+              Existing vs new admissions by class, day scholar/hostel, and male/female.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void exportAdmissionComparisonExcel()}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-lime-500/40 bg-lime-500/15 px-3 py-2 text-xs sm:text-sm font-semibold text-lime-200 hover:bg-lime-500/25 transition-colors"
+          >
+            <Download className="h-4 w-4" />
+            Export to Excel
+          </button>
+        </div>
+
+        <div className="-mx-1 overflow-x-auto overscroll-x-contain touch-pan-x pb-1 sm:mx-0">
+          <table className="w-full min-w-[980px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/10 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                <th rowSpan={3} className="py-3 pr-3 font-medium align-bottom">Class</th>
+                <th colSpan={4} className="py-3 px-2 text-center font-medium">Existing</th>
+                <th colSpan={4} className="py-3 px-2 text-center font-medium">New</th>
+              </tr>
+              <tr className="border-b border-white/10 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                <th colSpan={2} className="py-2 px-2 text-center font-medium">Day Scholar</th>
+                <th colSpan={2} className="py-2 px-2 text-center font-medium">Hostel</th>
+                <th colSpan={2} className="py-2 px-2 text-center font-medium">Day Scholar</th>
+                <th colSpan={2} className="py-2 px-2 text-center font-medium">Hostel</th>
+              </tr>
+              <tr className="border-b border-white/10 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                <th className="py-2 px-2 text-right font-medium">Male</th>
+                <th className="py-2 px-2 text-right font-medium">Female</th>
+                <th className="py-2 px-2 text-right font-medium">Male</th>
+                <th className="py-2 px-2 text-right font-medium">Female</th>
+                <th className="py-2 px-2 text-right font-medium">Male</th>
+                <th className="py-2 px-2 text-right font-medium">Female</th>
+                <th className="py-2 px-2 text-right font-medium">Male</th>
+                <th className="py-2 pl-2 text-right font-medium">Female</th>
+              </tr>
+            </thead>
+            <tbody className="text-white/90">
+              {admissionComparisonRows.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="py-8 text-center text-white/40">
+                    No admission comparison data found.
+                  </td>
+                </tr>
+              ) : (
+                admissionComparisonRows.map((row) => (
+                  <tr
+                    key={row.classLabel}
+                    className="border-b border-white/5 last:border-0 hover:bg-white/[0.03]"
+                  >
+                    <td className="py-3 pr-3 font-semibold text-white">{row.classLabel}</td>
+                    <td className="py-3 px-2 text-right tabular-nums text-sky-300">{row.existingDayScholarMale}</td>
+                    <td className="py-3 px-2 text-right tabular-nums text-fuchsia-300/90">{row.existingDayScholarFemale}</td>
+                    <td className="py-3 px-2 text-right tabular-nums text-sky-300">{row.existingHostelMale}</td>
+                    <td className="py-3 px-2 text-right tabular-nums text-fuchsia-300/90">{row.existingHostelFemale}</td>
+                    <td className="py-3 px-2 text-right tabular-nums text-cyan-300">{row.newDayScholarMale}</td>
+                    <td className="py-3 px-2 text-right tabular-nums text-rose-300/90">{row.newDayScholarFemale}</td>
+                    <td className="py-3 px-2 text-right tabular-nums text-cyan-300">{row.newHostelMale}</td>
+                    <td className="py-3 pl-2 text-right tabular-nums text-rose-300/90">{row.newHostelFemale}</td>
+                  </tr>
+                ))
+              )}
+              {admissionComparisonTotals ? (
+                <tr className="border-t border-white/20 bg-white/[0.06] font-semibold">
+                  <td className="py-3 pr-3 text-white">Total</td>
+                  <td className="py-3 px-2 text-right tabular-nums text-sky-300">{admissionComparisonTotals.existingDayScholarMale}</td>
+                  <td className="py-3 px-2 text-right tabular-nums text-fuchsia-300">{admissionComparisonTotals.existingDayScholarFemale}</td>
+                  <td className="py-3 px-2 text-right tabular-nums text-sky-300">{admissionComparisonTotals.existingHostelMale}</td>
+                  <td className="py-3 px-2 text-right tabular-nums text-fuchsia-300">{admissionComparisonTotals.existingHostelFemale}</td>
+                  <td className="py-3 px-2 text-right tabular-nums text-cyan-300">{admissionComparisonTotals.newDayScholarMale}</td>
+                  <td className="py-3 px-2 text-right tabular-nums text-rose-300">{admissionComparisonTotals.newDayScholarFemale}</td>
+                  <td className="py-3 px-2 text-right tabular-nums text-cyan-300">{admissionComparisonTotals.newHostelMale}</td>
+                  <td className="py-3 pl-2 text-right tabular-nums text-rose-300">{admissionComparisonTotals.newHostelFemale}</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      )
+      ) : null}
+
+      {/* Fee collection: class & section */}
+      {section === "fee-collection" ? (
+      tablesLoading ? (
+        <div className="mt-4 flex min-h-[240px] items-center justify-center rounded-xl border border-white/10 bg-white/5">
+          <TimellyLoader
+            title="Loading fee collection"
+            steps={["Fees", "Payments", "Pending"]}
+            compact
+            bare
+          />
+        </div>
+      ) : (
+      <div className="mt-0 sm:mt-0 rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/10 backdrop-blur-md border border-white/10">
+        <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <IndianRupee className="w-4 h-4 sm:w-5 sm:h-5 text-lime-400 shrink-0" />
+              <h3 className="font-semibold text-white text-sm sm:text-base">
+                Fee collection (class & section)
+              </h3>
+            </div>
+            <p className="text-xs sm:text-sm text-white/50 mt-1 pl-0 sm:pl-7">
+              From student fee records for each class / section.
+            </p>
+          </div>
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+            <input
+              type="text"
+              value={feeSearch}
+              onChange={(e) => setFeeSearch(e.target.value)}
+              placeholder="Search class / section"
+              className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs text-white placeholder:text-white/40 focus:outline-none focus:ring-1 focus:ring-lime-400/40 sm:w-[180px] sm:text-sm"
+            />
+            <div className="w-full sm:w-[180px]">
+              <SelectInput
+                value={feeClassSectionFilter}
+                onChange={setFeeClassSectionFilter}
+                options={[
+                  { label: "All class / section", value: "" },
+                  ...feeClassSectionOptions.map((label) => ({ label, value: label })),
+                ]}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void exportPaymentDetailsExcel()}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-lime-500/40 bg-lime-500/15 px-3 py-2 text-xs sm:text-sm font-semibold text-lime-200 hover:bg-lime-500/25 transition-colors"
+            >
+              <Download className="h-4 w-4" />
+              Export to Excel
+            </button>
+          </div>
+        </div>
+
+        <div className="-mx-1 overflow-x-auto overscroll-x-contain touch-pan-x pb-1 sm:mx-0">
+          <table className="w-full min-w-[880px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/10 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                <th className="py-3 pr-3 font-medium">Class / section</th>
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Total fees</th>
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Avg discount %</th>
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Final fees</th>
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Paid</th>
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Pending</th>
+                <th className="py-3 px-2 text-right font-medium whitespace-nowrap">Collection %</th>
+                <th className="py-3 pl-2 text-right font-medium whitespace-nowrap">Due %</th>
+              </tr>
+            </thead>
+            <tbody className="text-white/90">
+              {feeRowsFiltered.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="py-8 text-center text-white/40">
+                    No matching class / section found.
+                  </td>
+                </tr>
+              ) : (
+                feeRowsFiltered.map((row) => (
+                  <tr
+                    key={row.classId}
+                    className="border-b border-white/5 last:border-0 hover:bg-white/[0.03]"
+                  >
+                    <td className="py-3 pr-3 font-semibold text-white">{row.label}</td>
+                    <td className="py-3 px-2 text-right tabular-nums text-gray-300">
+                      {formatInr(row.totalFees)}
+                    </td>
+                    <td className="py-3 px-2 text-right tabular-nums text-cyan-300/90">
+                      {row.avgDiscountPercent.toLocaleString("en-IN")}%
+                    </td>
+                    <td className="py-3 px-2 text-right tabular-nums text-amber-200/90">
+                      {formatInr(row.finalFees)}
+                    </td>
+                    <td className="py-3 px-2 text-right tabular-nums text-lime-400">
+                      {formatInr(row.paidFee)}
+                    </td>
+                    <td className="py-3 px-2 text-right tabular-nums text-rose-300/90">
+                      {formatInr(row.pendingFee)}
+                    </td>
+                    <td className="py-3 px-2 text-right tabular-nums text-lime-300/80">
+                      {row.collectionPercent.toLocaleString("en-IN")}%
+                    </td>
+                    <td className="py-3 pl-2 text-right tabular-nums text-amber-300/80">
+                      {row.duePercent.toLocaleString("en-IN")}%
+                    </td>
+                  </tr>
+                ))
+              )}
+              {feeFilteredTotals && feeRowsFiltered.length > 0 ? (
+                <tr className="border-t border-white/20 bg-white/[0.06] font-semibold">
+                  <td className="py-3 pr-3 text-white">Filtered total</td>
+                  <td className="py-3 px-2 text-right tabular-nums">{formatInr(feeFilteredTotals.totalFees)}</td>
+                  <td className="py-3 px-2 text-right tabular-nums text-cyan-300">
+                    {feeFilteredAvgDiscountPercent.toLocaleString("en-IN")}%
+                  </td>
+                  <td className="py-3 px-2 text-right tabular-nums">{formatInr(feeFilteredTotals.finalFees)}</td>
+                  <td className="py-3 px-2 text-right tabular-nums text-lime-400">
+                    {formatInr(feeFilteredTotals.paidFee)}
+                  </td>
+                  <td className="py-3 px-2 text-right tabular-nums text-rose-300">
+                    {formatInr(feeFilteredTotals.pendingFee)}
+                  </td>
+                  <td className="py-3 px-2 text-right tabular-nums text-lime-300">
+                    {feeFilteredCollectionPercent.toLocaleString("en-IN")}%
+                  </td>
+                  <td className="py-3 pl-2 text-right tabular-nums text-amber-300">
+                    {feeFilteredDuePercent.toLocaleString("en-IN")}%
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      )
+      ) : null}
     </div>
   );
 }

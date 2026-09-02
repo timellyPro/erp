@@ -1,23 +1,25 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, GraduationCap, Users } from "lucide-react";
-import StatCard from "../../common/statCard";
-import Spinner from "../../common/Spinner";
+import { ArrowRightLeft } from "lucide-react";
+import TimellyLoader from "../../common/TimellyLoader";
+import HeaderActionButton from "../../common/HeaderActionButton";
 import { useTeacherClasses } from "./hooks/useTeacherClasses";
 import { useClassMetrics } from "./hooks/useClassMetrics";
 import ClassCards from "./components/ClassCards";
 import StudentsSection from "./components/StudentsSection";
 import PageHeader from "../../common/PageHeader";
+import AssignSectionPanel from "../../schooladmin/classes-panels/AssignSectionPanel";
 
 const getClassLabel = (name?: string | null, section?: string | null) =>
   name ? `${name}${section ? `-${section}` : ""}` : "—";
 
 export default function TeacherClasses() {
-  const { classes, students, loading, error } = useTeacherClasses();
+  const { classes, students, loading, error, reload } = useTeacherClasses();
   const [selectedClassId, setSelectedClassId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [expandedStudentId, setExpandedStudentId] = useState<string | null>(null);
+  const [showAssignSection, setShowAssignSection] = useState(false);
 
   useEffect(() => {
     if (!selectedClassId && classes.length > 0) {
@@ -67,13 +69,31 @@ export default function TeacherClasses() {
 
   return (
     <div className="min-h-screen text-white sm:lg:space-y-6">
-      <PageHeader title="My Classes" subtitle="Manage your classes and view student information."/>
+      <PageHeader
+        title="My Classes"
+        subtitle="Manage your classes and view student information."
+        rightSlot={
+          <HeaderActionButton
+            icon={ArrowRightLeft}
+            label={showAssignSection ? "Hide Assign Section" : "Assign Section"}
+            primary={showAssignSection}
+            onClick={() => setShowAssignSection((prev) => !prev)}
+          />
+        }
+      />
 
-      {loading ? (
-        <div className="rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl p-6">
-          <Spinner label="Loading classes..." />
-        </div>
-      ) : error ? (
+      {showAssignSection && (
+        <AssignSectionPanel
+          onCancel={() => setShowAssignSection(false)}
+          onSuccess={() => {
+            void reload();
+          }}
+        />
+      )}
+
+      {loading && classes.length === 0 ? (
+        <TimellyLoader title="Loading classes" steps={["Classes", "Students", "Roster"]} />
+      ) : error && classes.length === 0 ? (
         <div className="rounded-3xl border border-red-500/30 bg-red-500/10 p-6 text-red-200">
           {error}
         </div>
@@ -113,7 +133,7 @@ export default function TeacherClasses() {
           />
           {metrics.loading && (
             <div className="text-sm text-white/60 flex items-center gap-2">
-              <Spinner size={16} label="Loading class metrics..." />
+              <TimellyLoader compact bare title="Loading metrics" steps={["Attendance", "Marks"]} />
             </div>
           )}
           {metrics.error && (

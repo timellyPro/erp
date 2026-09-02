@@ -5,11 +5,25 @@ import { Column } from "../../../types/superadmin";
 import { AVATAR_URL } from "../../../constants/images";
 import { StudentRow } from "./types";
 import { getAge } from "./utils";
+import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
+
+const getResidencyLabel = (value?: string) => {
+  const raw = (value || "").trim();
+  if (!raw) return "-";
+  return formatResidencyTypeForDisplay(raw);
+};
 
 type Actions = {
   onView: (student: StudentRow) => void;
   onEdit: (student: StudentRow) => void;
   onDelete: (student: StudentRow) => void;
+};
+
+const statusBadgeClass = (status?: string | null) => {
+  const isInactive = status === "Inactive";
+  return isInactive
+    ? "px-3 py-1 rounded-full text-xs font-semibold border bg-red-400/10 text-red-400 border-red-400/20"
+    : "px-3 py-1 rounded-full text-xs font-semibold border bg-lime-400/10 text-lime-400 border-lime-400/20 shadow-[0_0_8px_rgba(163,230,53,0.2)]";
 };
 
 export const buildStudentColumns = ({
@@ -67,13 +81,29 @@ export const buildStudentColumns = ({
     ),
   },
   {
-    header: "Status",
+    header: "Type",
     render: (row) => (
-      <span className="px-3 py-1 rounded-full text-xs font-semibold border bg-lime-400/10
-       text-lime-400 border-lime-400/20 shadow-[0_0_8px_rgba(163,230,53,0.2)]">
-        {row.status || "Active"}
-      </span>
+      <span className="text-sm text-gray-300">{getResidencyLabel(row.residencyType)}</span>
     ),
+    hideOnMobile: true,
+  },
+  {
+    header: "Status",
+    render: (row) => {
+      const status = row.status || "Active";
+      const isInactive = status === "Inactive";
+      return (
+        <span
+          className={`px-3 py-1 rounded-full text-xs font-semibold border ${
+            isInactive
+              ? "bg-red-400/10 text-red-400 border-red-400/20"
+              : "bg-lime-400/10 text-lime-400 border-lime-400/20 shadow-[0_0_8px_rgba(163,230,53,0.2)]"
+          }`}
+        >
+          {status}
+        </span>
+      );
+    },
   },
   {
     header: "Actions",

@@ -70,7 +70,13 @@ export async function POST(req: NextRequest) {
     const local = emailLocalPartFromFullName(String(name));
     let finalEmail = emailTrimmed && emailRegex.test(emailTrimmed) ? emailTrimmed : `${local}@${schoolDomain}`;
     let counter = 1;
-    while (await prisma.user.findUnique({ where: { email: finalEmail }, select: { id: true } })) {
+    const createSchoolId = session.user.schoolId as string;
+    while (
+      await prisma.user.findUnique({
+        where: { schoolId_email: { schoolId: createSchoolId, email: finalEmail } },
+        select: { id: true },
+      })
+    ) {
       finalEmail = `${local}.${counter}@${schoolDomain}`;
       counter++;
       if (counter > 1000) {

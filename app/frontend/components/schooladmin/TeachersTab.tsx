@@ -1,159 +1,155 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState, useMemo, useEffect, useCallback } from "react";
+import { useSession } from "next-auth/react";
 import {
   Eye, Pencil, Trash2, Download, UserCheck,
-  Coffee, Clock, XCircle, Search, Save, Calendar
+  Coffee, Clock, XCircle, Save, Calendar
 } from "lucide-react";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import PageHeader from "../common/PageHeader";
 import StatCard from "../common/statCard";
-import DataTable from "../common/TableLayout";
 import TeacherStatCard from "./teachersTab/teacherStatCard";
 import AppointTeacher from "./teachersTab/AppointTeacher";
 import TeachersList, { TeacherRow } from "./teachersTab/TeachersList";
 import EditTeacher from "./teachersTab/EditTeacher";
-import Spinner from "../common/Spinner";
+import TimellyLoader from "../common/TimellyLoader";
+import {
+  fetchTeacherAttendance,
+  fetchTeachersList,
+  invalidateTeachersPageCache,
+  mapApiTeachersToRows,
+  peekTeacherAttendance,
+  peekTeacherAttendanceAny,
+  peekTeachersList,
+  peekTeachersListAny,
+  setTeacherAttendanceCache,
+  warmTeachersPage,
+} from "@/lib/fetchTeachersPage";
+import { downloadTeacherAttendanceReportPdf } from "@/lib/teacherAttendanceReportPdf";
 
-const DEFAULT_AVATAR = "https://randomuser.me/api/portraits/lego/1.jpg";
 const ATTENDANCE_STATUSES = ["PRESENT", "ABSENT", "LATE", "ON_LEAVE"] as const;
 type AttendanceStatus = typeof ATTENDANCE_STATUSES[number];
 
-/* ================= Types ================= */
+const todayStr = () => new Date().toISOString().slice(0, 10);
 
-/* ================= Mobile Card Component ================= */
-
-const MobileTeacherCard = ({ teacher, onEdit, onDelete }: {
-  teacher: TeacherRow;
-  onEdit: (t: TeacherRow) => void;
-  onDelete: (id: string) => void;
-}) => (
-  <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-[2rem] p-5 space-y-4 shadow-xl">
-    <div className="flex items-center gap-4">
-      <img src={teacher.avatar} alt="" className="w-14 h-14 rounded-2xl border border-white/10 object-cover" />
-      <div className="flex-1">
-        <h4 className="font-bold text-gray-100 text-lg leading-tight">{teacher.name}</h4>
-        <p className="text-xs text-gray-500 font-mono">{teacher.teacherId}</p>
-        <span className={`inline-block mt-1 px-3 py-0.5 rounded-full text-[10px] font-bold border ${teacher.status === "Active" ? "bg-lime-400/10 text-lime-400 border-lime-400/20" : "bg-orange-400/10 text-orange-400 border-orange-400/20"
-          }`}>
-          {teacher.status.toUpperCase()}
-        </span>
-      </div>
-    </div>
-
-    <div className="bg-white/5 border border-white/5 rounded-2xl p-3">
-      <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Subject</p>
-      <p className="text-gray-200 font-medium">{teacher.subject}</p>
-    </div>
-
-    <div className="bg-white/5 border border-white/5 rounded-2xl p-3 flex justify-between items-center">
-      <div>
-        <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Attendance</p>
-        <p className="text-lime-400 font-bold">{teacher.attendance}% Present</p>
-      </div>
-      <div className="w-24 h-1.5 bg-white/10 rounded-full overflow-hidden">
-        <div className="h-full bg-lime-400" style={{ width: `${teacher.attendance}%` }} />
-      </div>
-    </div>
-
-    <div className="bg-white/5 border border-white/5 rounded-2xl p-3">
-      <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Phone</p>
-      <p className="text-gray-200 font-medium">{teacher.phone}</p>
-    </div>
-
-
-    <div className="flex gap-2 pt-2">
-      <button className="flex-1 bg-white/5 hover:bg-white/10 py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium text-gray-300 transition-colors">
-        <Eye size={18} /> View
-      </button>
-      <button
-        onClick={() => onEdit(teacher)}
-        className="flex-[1.5] bg-white/5 hover:bg-lime-400/10 py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium text-lime-400 transition-colors border border-white/5"
-      >
-        <Pencil size={18} /> Edit
-      </button>
-      <button
-        onClick={() => onDelete(teacher.id)}
-        className="bg-red-500/10 hover:bg-red-500/20 p-3 rounded-xl text-red-400 transition-colors border border-red-500/20"
-      >
-        <Trash2 size={18} />
-      </button>
-    </div>
-  </div>
-);
+function attendanceRowsToMap(
+  rows: { teacherId: string; status: string }[] | null | undefined
+): Record<string, AttendanceStatus> {
+  const map: Record<string, AttendanceStatus> = {};
+  rows?.forEach((a) => {
+    if (ATTENDANCE_STATUSES.includes(a.status as AttendanceStatus)) {
+      map[a.teacherId] = a.status as AttendanceStatus;
+    }
+  });
+  return map;
+}
 
 /* ================= Main Component ================= */
 
-const todayStr = () => new Date().toISOString().slice(0, 10);
-
 const SchoolAdminTeacherTab = () => {
-  const router = useRouter();
+  const { data: session } = useSession();
+  const schoolId = session?.user?.schoolId ?? null;
+
+  const initialList = peekTeachersListAny();
+  const initialAttendance = peekTeacherAttendanceAny(todayStr());
+
   const [searchTerm, setSearchTerm] = useState("");
   const [page, setPage] = useState(1);
-  const [teachers, setTeachers] = useState<TeacherRow[]>([]);
-  const [teachersLoading, setTeachersLoading] = useState(true);
+  const [teachers, setTeachers] = useState<TeacherRow[]>(() =>
+    initialList ? mapApiTeachersToRows(initialList) : []
+  );
+  const [teachersLoading, setTeachersLoading] = useState(() => !initialList);
+  const [teachersRevalidating, setTeachersRevalidating] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState<TeacherRow | null>(null);
-  const [attendanceDate, setAttendanceDate] = useState(todayStr);
-  const [attendanceMap, setAttendanceMap] = useState<Record<string, AttendanceStatus>>({});
-  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [attendanceDate, setAttendanceDate] = useState(() => todayStr());
+  const [attendanceMap, setAttendanceMap] = useState<Record<string, AttendanceStatus>>(
+    () => attendanceRowsToMap(initialAttendance)
+  );
+  const [attendanceLoading, setAttendanceLoading] = useState(() => !initialAttendance);
   const [saveAttendanceLoading, setSaveAttendanceLoading] = useState(false);
 
-  const loadTeachers = useCallback(async () => {
-    setTeachersLoading(true);
-    try {
-      const res = await fetch("/api/teacher/list", {
-        credentials: "include",
-        cache: "no-store",
-      });
-      const data = await res.json();
-      if (!res.ok) return;
-      const list: TeacherRow[] = (data.teachers || []).map((t: { id: string; name: string | null; email: string | null; mobile: string | null; teacherId: string | null; subject: string | null; photoUrl: string | null }) => ({
-        id: t.id,
-        teacherId: t.teacherId || t.id.slice(0, 6).toUpperCase(),
-        name: t.name || "Teacher",
-        avatar: t.photoUrl || DEFAULT_AVATAR,
-        subject: t.subject || "-",
-        attendance: 0,
-        phone: t.mobile || "-",
-        status: "Active" as const,
-      }));
-      setTeachers(list);
-    } finally {
-      setTeachersLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
-    void loadTeachers();
-  }, [loadTeachers]);
+    if (schoolId) warmTeachersPage(schoolId);
+  }, [schoolId]);
 
-  const loadAttendanceForDate = useCallback(async () => {
-    if (!attendanceDate) return;
-    setAttendanceLoading(true);
-    try {
-      const r = await fetch(`/api/teacher/attendance?date=${attendanceDate}`, {
-        credentials: "include",
-        cache: "no-store",
-      });
-      const data = await r.json();
-      const map: Record<string, AttendanceStatus> = {};
-      (data.attendances || []).forEach((a: { teacherId: string; status: string }) => {
-        if (ATTENDANCE_STATUSES.includes(a.status as AttendanceStatus)) {
-          map[a.teacherId] = a.status as AttendanceStatus;
+  const loadTeachers = useCallback(
+    async (revalidate = false) => {
+      if (!schoolId) return;
+
+      if (!revalidate) {
+        const cached = peekTeachersList(schoolId) ?? peekTeachersListAny();
+        if (cached) {
+          setTeachers(mapApiTeachersToRows(cached));
+          setTeachersLoading(false);
+          setTeachersRevalidating(true);
+          void loadTeachers(true);
+          return;
         }
-      });
-      setAttendanceMap(map);
-    } catch {
-      setAttendanceMap({});
-    } finally {
-      setAttendanceLoading(false);
-    }
-  }, [attendanceDate]);
+      }
+
+      setTeachersLoading((prev) => (teachers.length === 0 ? true : prev));
+      setTeachersRevalidating(teachers.length > 0);
+      try {
+        const list = await fetchTeachersList(schoolId, { revalidate: true });
+        setTeachers(mapApiTeachersToRows(list));
+      } catch (err) {
+        console.error("Failed to load teachers:", err);
+      } finally {
+        setTeachersLoading(false);
+        setTeachersRevalidating(false);
+      }
+    },
+    [schoolId, teachers.length]
+  );
 
   useEffect(() => {
-    void loadAttendanceForDate();
-  }, [loadAttendanceForDate]);
+    if (!schoolId) return;
+    void loadTeachers(false);
+  }, [schoolId, loadTeachers]);
+
+  const loadAttendance = useCallback(
+    async (revalidate = false) => {
+      if (!schoolId || !attendanceDate) return;
+
+      if (!revalidate) {
+        const cached =
+          peekTeacherAttendance(schoolId, attendanceDate) ??
+          (attendanceDate === todayStr() ? peekTeacherAttendanceAny(attendanceDate) : null);
+        if (cached) {
+          setAttendanceMap(attendanceRowsToMap(cached));
+          setAttendanceLoading(false);
+          void loadAttendance(true);
+          return;
+        }
+        setAttendanceLoading(true);
+      }
+
+      try {
+        const rows = await fetchTeacherAttendance(schoolId, attendanceDate, { revalidate: true });
+        setAttendanceMap(attendanceRowsToMap(rows));
+      } catch (err) {
+        if (!(err instanceof DOMException && err.name === "AbortError")) {
+          console.error("Failed to load attendance:", err);
+        }
+      } finally {
+        setAttendanceLoading(false);
+      }
+    },
+    [schoolId, attendanceDate]
+  );
+
+  useEffect(() => {
+    if (!schoolId || !attendanceDate) return;
+    void loadAttendance(false);
+  }, [schoolId, attendanceDate, loadAttendance]);
+
+  const refreshTeachers = useCallback(() => {
+    if (!schoolId) return;
+    invalidateTeachersPageCache(schoolId);
+    void fetchTeachersList(schoolId, { revalidate: true }).then((list) =>
+      setTeachers(mapApiTeachersToRows(list))
+    );
+  }, [schoolId]);
 
   const teachersWithAttendance = useMemo(() => {
     return teachers.map((t) => {
@@ -213,12 +209,15 @@ const SchoolAdminTeacherTab = () => {
   };
 
   const saveAttendance = async () => {
+    if (!schoolId) return;
     setSaveAttendanceLoading(true);
+    const attendances = teachers.map((t) => ({
+      teacherId: t.id,
+      status: attendanceMap[t.id] || "PRESENT",
+    }));
+    // Optimistic: keep UI responsive and warm client cache immediately.
+    setTeacherAttendanceCache(schoolId, attendanceDate, attendances);
     try {
-      const attendances = teachers.map((t) => ({
-        teacherId: t.id,
-        status: attendanceMap[t.id] || "PRESENT",
-      }));
       const res = await fetch("/api/teacher/attendance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -227,12 +226,10 @@ const SchoolAdminTeacherTab = () => {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Failed to save");
-      await loadAttendanceForDate();
-      try {
-        router.refresh();
-      } catch {
-        /* noop */
-      }
+      // Soft refresh in background — don't block UI or wipe the list.
+      void fetchTeacherAttendance(schoolId, attendanceDate, { revalidate: true })
+        .then((rows) => setAttendanceMap(attendanceRowsToMap(rows)))
+        .catch(() => {});
       if (typeof window !== "undefined") window.alert("Attendance saved successfully.");
     } catch (e) {
       if (typeof window !== "undefined") window.alert(e instanceof Error ? e.message : "Failed to save attendance.");
@@ -285,72 +282,34 @@ const SchoolAdminTeacherTab = () => {
         });
       });
 
-      const pdfDoc = await PDFDocument.create();
-      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-      const isLandscape = dates.length > 14;
-      const pageWidth = isLandscape ? 842 : 595;
-      const pageHeight = isLandscape ? 595 : 842;
-      let currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
-      let y = pageHeight - 50;
+      const schoolRes = await fetch("/api/school/mine", { credentials: "include", cache: "no-store" });
+      const schoolPayload = await schoolRes.json().catch(() => ({}));
+      const school = schoolPayload?.school as
+        | {
+            name?: string;
+            address?: string;
+            location?: string;
+            affiliationLine?: string;
+            logoUrl?: string | null;
+          }
+        | null
+        | undefined;
 
-      const drawText = (text: string, x: number, size: number, useBold: boolean) => {
-        currentPage.drawText(text, {
-          x,
-          y,
-          size,
-          font: useBold ? boldFont : font,
-          color: rgb(0.1, 0.1, 0.1),
-        });
-      };
-
-      drawText("Teacher Attendance Report", 50, 18, true);
-      y -= 22;
-      drawText(`Period: ${periodStart} to ${periodEnd} (all days)`, 50, 11, false);
-      y -= 28;
-
-      const dayColWidth = dates.length > 20 ? 18 : 22;
-      const colWidths = [52, 80, 50, 48, ...dates.map(() => dayColWidth)];
-      const headers = ["ID", "Name", "Subject", "Phone", ...dates.map((d) => d.slice(8))];
-      const rowHeight = 16;
-
-      headers.forEach((h, i) => {
-        const x = 50 + colWidths.slice(0, i).reduce((a, b) => a + b, 0);
-        drawText(h.slice(0, 8), x, 8, true);
+      await downloadTeacherAttendanceReportPdf({
+        filename: `teacher-attendance-${periodStart}-to-${periodEnd}.pdf`,
+        school,
+        periodStart,
+        periodEnd,
+        dates,
+        teachers: teachersWithAttendance.map((t) => ({
+          id: t.id,
+          teacherId: t.teacherId,
+          name: t.name,
+          subject: t.subject,
+          phone: t.phone,
+        })),
+        byDate,
       });
-      y -= rowHeight;
-
-      for (const t of teachersWithAttendance) {
-        if (y < 50) {
-          currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
-          y = pageHeight - 40;
-        }
-        const dayStatuses = dates.map((date) => {
-          const s = byDate[date]?.[t.id] || "-";
-          return s === "PRESENT" ? "P" : s === "ABSENT" ? "A" : s === "LATE" ? "L" : s === "ON_LEAVE" ? "OL" : s;
-        });
-        const row = [
-          t.teacherId.slice(0, 6),
-          t.name.slice(0, 10),
-          t.subject.slice(0, 6),
-          t.phone.slice(0, 8),
-          ...dayStatuses,
-        ];
-        row.forEach((cell, i) => {
-          const x = 50 + colWidths.slice(0, i).reduce((a, b) => a + b, 0);
-          drawText(String(cell).slice(0, 8), x, 7, false);
-        });
-        y -= rowHeight;
-      }
-
-      const pdfBytes = await pdfDoc.save();
-      const blob = new Blob([new Uint8Array(pdfBytes)], { type: "application/pdf" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `teacher-attendance-${periodStart}-to-${periodEnd}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
     } catch (e) {
       window.alert(e instanceof Error ? e.message : "Failed to generate PDF.");
     } finally {
@@ -426,7 +385,11 @@ const SchoolAdminTeacherTab = () => {
 
       <PageHeader
         title="Teachers"
-        subtitle="Overview of teaching staff, attendance, and assignments"
+        subtitle={
+          teachersRevalidating
+            ? "Overview of teaching staff — updating…"
+            : "Overview of teaching staff, attendance, and assignments"
+        }
         transparent
         rightSlot={
           <button
@@ -469,7 +432,7 @@ const SchoolAdminTeacherTab = () => {
       </div>
 
       {/* Attendance Card */}
-      <div className=" bg-white/[0.04]
+      <div className=" bg-white/4
   backdrop-blur-2xl
   rounded-3xl
   border border-white/10
@@ -505,8 +468,12 @@ const SchoolAdminTeacherTab = () => {
         </div>
 
         <div className="p-4 md:p-5">
-          {attendanceLoading ? (
-            <div className="text-center py-8 text-gray-400"><Spinner/></div>
+          {teachersLoading && teachers.length === 0 ? (
+            <TimellyLoader
+              compact
+              title="Loading teachers"
+              steps={["Teacher list", "Attendance", "Roster"]}
+            />
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {teachers.map((t) => {
@@ -537,6 +504,9 @@ const SchoolAdminTeacherTab = () => {
                   />
                 );
               })}
+              {attendanceLoading && teachers.length > 0 ? (
+                <p className="col-span-full text-xs text-white/40">Updating attendance…</p>
+              ) : null}
             </div>
           )}
         </div>
@@ -560,7 +530,7 @@ const SchoolAdminTeacherTab = () => {
       ">
       <div className="w-full min-w-0 overflow-hidden">
         <TeachersList
-          teachersLoading={teachersLoading}
+          teachersLoading={teachersLoading && teachers.length === 0}
           filteredTeachers={filteredTeachers}
           pagedTeachers={pagedTeachers}
           attendanceDate={attendanceDate}
@@ -584,12 +554,7 @@ const SchoolAdminTeacherTab = () => {
           onSave={(t) => {
             handleSaveTeacher(t);
             setEditingTeacher(null);
-            void loadTeachers();
-            try {
-              router.refresh();
-            } catch {
-              /* noop */
-            }
+            refreshTeachers();
           }}
         />
       )}
@@ -599,13 +564,9 @@ const SchoolAdminTeacherTab = () => {
 
       <div className="w-full min-w-0">
         <AppointTeacher
+          schoolId={schoolId}
           onRosterChange={() => {
-            void loadTeachers();
-            try {
-              router.refresh();
-            } catch {
-              /* noop */
-            }
+            refreshTeachers();
           }}
         />
       </div>

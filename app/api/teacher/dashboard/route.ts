@@ -35,14 +35,21 @@ export async function GET() {
         prisma.notification.findMany({
           where: { userId },
           orderBy: { createdAt: "desc" },
-          take: 4,
+          take: 25,
         }),
         prisma.notification.count({
           where: { userId, isRead: false },
         }),
         prisma.appointment.findMany({
           where: { teacherId: userId },
-          include: { student: { include: { user: true } } },
+          include: {
+            student: {
+              select: {
+                fatherName: true,
+                user: { select: { name: true } },
+              },
+            },
+          },
           orderBy: { createdAt: "desc" },
           take: 4,
         }),

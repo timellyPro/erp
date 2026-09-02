@@ -56,7 +56,7 @@ describe("lib/features", () => {
     expect(ids).toContain("school");
     expect(ids).toContain("payments");
     expect(ids).toContain("tc");
-    expect(ids).toContain("profile");
+    expect(ids).toContain("student-details");
     expect(ids).toContain("newsfeed");
   });
 });

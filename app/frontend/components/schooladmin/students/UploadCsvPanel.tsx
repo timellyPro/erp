@@ -1,15 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { motion } from "framer-motion";
 import { CheckCircle2, FileSpreadsheet, Loader2, Upload, X, XCircle } from "lucide-react";
+import { downloadBulkStudentTemplateXlsx } from "@/lib/bulkStudentTemplateXlsx";
 
 type Props = {
   uploadFile: File | null;
   onFileChange: (file: File | null) => void;
   uploading: boolean;
   onCancel: () => void;
-  onUpload: () => Promise<{ createdCount?: number; failedCount?: number } | void>;
+  onUpload: () => Promise<{
+    createdCount?: number;
+    failedCount?: number;
+    failed?: { row?: number; error?: string }[];
+  } | void>;
 };
 
 export default function UploadCsvPanel({
@@ -19,9 +24,29 @@ export default function UploadCsvPanel({
   onCancel,
   onUpload,
 }: Props) {
+  const downloadTemplate = useCallback(() => {
+    downloadBulkStudentTemplateXlsx();
+  }, []);
+
+  const formatUploadError = (message?: string) => {
+    const text = (message || "").trim();
+    const normalized = text.toLowerCase();
+    if (normalized.includes("student name and timelly id already exist")) {
+      return "Student with same name and Timelly ID already exists.";
+    }
+    if (normalized.includes("timelly id already exists")) {
+      return "Timelly ID already exists.";
+    }
+    if (normalized.includes("aadhaar number already exists in another school")) {
+      return "Aadhaar number already exists in another school.";
+    }
+    return text || "Something went wrong.";
+  };
+
   const [result, setResult] = useState<{
     createdCount?: number;
     failedCount?: number;
+    failed?: { row?: number; error?: string }[];
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,8 +71,8 @@ export default function UploadCsvPanel({
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] animate-fadeIn p-4">
       <div className="bg-[#0F172A] rounded-2xl shadow-2xl max-w-lg w-full animate-scaleIn border border-white/10">
         <div className="flex items-center justify-between px-6 py-5 border-b border-white/10">
-          <div className="text-lg md:text-xl font-bold text-gray-100">Upload CSV File</div>
-          <button onClick={onCancel} className="text-white/60 hover:text-white">
+          <div className="text-lg md:text-xl font-bold text-gray-100">Bulk upload students</div>
+          <button type="button" onClick={onCancel} className="text-white/60 hover:text-white">
             <X size={18} />
           </button>
         </div>
@@ -80,18 +105,25 @@ export default function UploadCsvPanel({
                 <Upload className="w-9 h-9" />
                 <div className="text-center">
                   <p className="font-semibold text-white">Click to upload or drag and drop</p>
-                  <p className="text-xs mt-1">CSV file (max. 10MB)</p>
+                  <p className="text-xs mt-1">CSV or Excel (max. 10MB)</p>
                 </div>
               </div>
             )}
           </label>
 
-          <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+          <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 space-y-2">
             <p className="text-xs text-blue-300">
-              <strong className="text-[#8fd3ff]">Note:</strong> CSV should include: Student ID,
-              Name, Class, Section, Date of Birth, Parent Name, Parent Email, Parent Phone,
-              Address, Status.
+              <strong className="text-[#8fd3ff]">Note:</strong> Same layout as admission bulk export: required fields include First Name, Last Name, Parent Name, Parent Phone, Aadhar No, and Date of Birth. Optional leading columns{" "}
+              <strong className="text-white/90">Timelly ID</strong>, <strong className="text-white/90">PEN Number</strong>, and <strong className="text-white/90">APAAR ID</strong> (roll number, or e.g.{" "}
+              <code className="text-lime-300/90">ADM/2026/123</code> → <code className="text-lime-300/90">123</code>).
             </p>
+            <button
+              type="button"
+              onClick={downloadTemplate}
+              className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-white hover:bg-white/10"
+            >
+              Download Excel template
+            </button>
           </div>
 
           {result && (
@@ -120,6 +152,23 @@ export default function UploadCsvPanel({
                   </p>
                 </div>
               </div>
+              {Array.isArray(result.failed) && result.failed.length > 0 && (
+                <div className="mt-3 border-t border-white/10 pt-3">
+                  <p className="text-xs text-yellow-300 mb-2">Failed rows</p>
+                  <div className="max-h-36 overflow-auto space-y-1 pr-1">
+                    {result.failed.slice(0, 5).map((item, idx) => (
+                      <p key={`${item.row ?? idx}-${idx}`} className="text-xs text-yellow-200">
+                        {`Row ${item.row ?? "-"}: ${formatUploadError(item.error)}`}
+                      </p>
+                    ))}
+                    {result.failed.length > 5 && (
+                      <p className="text-[11px] text-yellow-300/80">
+                        +{result.failed.length - 5} more failed rows
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
             </motion.div>
           )}
 
@@ -136,6 +185,7 @@ export default function UploadCsvPanel({
 
           <div className="flex items-center justify-end gap-3 pt-1">
             <button
+              type="button"
               onClick={onCancel}
               className="flex-1 px-4 md:px-6 py-2.5 border border-white/10 rounded-xl 
               text-gray-400 font-medium hover:bg-white/5 transition-all text-sm"
@@ -143,6 +193,7 @@ export default function UploadCsvPanel({
               Cancel
             </button>
             <motion.button
+              type="button"
               onClick={handleUpload}
               disabled={uploading || !uploadFile}
               whileHover={{ scale: uploadFile && !uploading ? 1.02 : 1 }}

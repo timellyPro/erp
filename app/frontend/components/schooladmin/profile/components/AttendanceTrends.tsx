@@ -23,14 +23,14 @@ export const AttendanceTrends = ({ data = [] }: Props) => {
   });
 
   return (
-    <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-[2rem] p-4 sm:p-6 overflow-hidden min-w-0">
-      <h3 className="text-white text-lg font-semibold flex items-center gap-2 mb-6 sm:mb-8">
+    <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl sm:rounded-[2rem] p-4 sm:p-6 overflow-hidden min-w-0">
+      <h3 className="text-white text-base sm:text-lg font-semibold flex items-center gap-2 mb-4 sm:mb-8">
         <Calendar className="w-5 h-5 text-blue-400 flex-shrink-0" /> Attendance Trends
       </h3>
-      <div className="h-48 w-full min-h-[200px]">
+      <div className="h-52 sm:h-48 w-full min-h-[200px]">
         {chartData.length > 0 ? (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ left: -20 }}>
+            <LineChart data={chartData} margin={{ left: -8, right: 4, bottom: 4 }}>
               <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
               <XAxis 
                 dataKey="monthLabel" 

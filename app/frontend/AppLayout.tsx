@@ -47,7 +47,7 @@ export default function AppLayout({
     <ToastProvider>
       <div className="relative z-10 flex h-screen overflow-hidden">
         {/* DESKTOP SIDEBAR - profile from layout (sidebar + header show same) */}
-        <aside className="hidden lg:block">
+        <aside className="hidden lg:block shrink-0">
           <AppSidebar
             menuItems={menuItems}
             profile={profile}
@@ -58,14 +58,14 @@ export default function AppLayout({
         </aside>
 
         {/* MAIN */}
-        <div className="flex-1 flex flex-col pb-16 xl:pb-0">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col pb-16 xl:pb-0">
           <AppHeader
             title={title}
             profile={profile}
             hideSearchAndNotifications={hideSearchAndNotifications}
           />
 
-          <main className="flex-1 overflow-y-auto overflow-x-hidden no-scrollbar px-3 py-3 sm:p-4 md:p-6 min-h-0">
+          <main className="min-h-0 min-w-0 w-full max-w-full flex-1 overflow-y-auto overflow-x-auto px-3 py-3 sm:p-4 md:p-6 [scrollbar-gutter:stable]">
             {children}
           </main>
         </div>

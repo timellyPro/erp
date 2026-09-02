@@ -12,7 +12,7 @@ interface StatCardProps {
 
 export default function StatCard({ icon, label, value, sub, tag }: StatCardProps) {
   return (
-    <div className={`${glass} rounded-2xl p-5`}>
+    <div className={`${glass} rounded-2xl p-4 sm:p-5`}>
       <div className="flex justify-between mb-3">
         <div className="bg-white/10 p-2 rounded-lg">{icon}</div>
         <span className="text-xs text-lime-400 bg-lime-400/10 px-2 py-1 rounded">

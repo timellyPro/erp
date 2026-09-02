@@ -2,7 +2,13 @@
 
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { signIn } from "next-auth/react";
+import { signIn, getSession } from "next-auth/react";
+import {
+  markSuperAdminBrowserSession,
+  clearSuperAdminBrowserSession,
+  setSuperAdminLoginInProgress,
+  clearSuperAdminLoginInProgress,
+} from "@/lib/superAdminBrowserSession";
 import { Mail, Lock, Eye, EyeOff, ArrowRight } from "lucide-react";
 const LOGO_SRC = "/timelylogo.webp";
 
@@ -28,23 +34,35 @@ export default function LoginForm() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setSuperAdminLoginInProgress();
 
-    const result = await signIn("credentials", {
-      redirect: false,
-      email,
-      password,
-    });
+    try {
+      const result = await signIn("credentials", {
+        redirect: false,
+        email,
+        password,
+      });
 
-    if (result?.error) {
-      if (result.error.includes("deactivated") || result.error.includes("password not set")) {
-        setError("This account is deactivated or has no password set. Please contact your administrator.");
-      } else {
-        setError(isSwitchAccount ? "Incorrect password" : "Invalid email or password");
+      if (result?.error) {
+        if (result.error.includes("deactivated") || result.error.includes("password not set")) {
+          setError("This account is deactivated or has no password set. Please contact your administrator.");
+        } else {
+          setError(isSwitchAccount ? "Incorrect password" : "Invalid email or password");
+        }
+        return;
       }
+
+      // Set marker immediately so SuperAdminSessionGuard does not sign out during session refresh.
+      markSuperAdminBrowserSession();
+
+      const session = await getSession();
+      if (session?.user?.role !== "SUPERADMIN") {
+        clearSuperAdminBrowserSession();
+      }
+    } finally {
+      clearSuperAdminLoginInProgress();
       setLoading(false);
-      return;
     }
-    setLoading(false);
   };
 
   return (

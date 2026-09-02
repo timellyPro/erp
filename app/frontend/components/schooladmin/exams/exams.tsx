@@ -3,8 +3,13 @@
 import { useEffect, useState, useMemo } from "react";
 import { BookOpen, Calendar, CheckCircle2, Plus, Trash2 } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
-import Spinner from "../../common/Spinner";
+import TimellyLoader from "../../common/TimellyLoader";
 import { ChevronDown } from "lucide-react";
+import {
+    loadExamsPage,
+    peekExamsPage,
+    setExamsPageCache,
+} from "@/lib/loadSchoolAdminFastTabs";
 
 interface SyllabusUnit {
     id: string;
@@ -54,6 +59,11 @@ export default function ExamsTab() {
     const [newExamType, setNewExamType] = useState("");
     const [examTypeError, setExamTypeError] = useState("");
     const [examTypeSaving, setExamTypeSaving] = useState(false);
+    const [subjects, setSubjects] = useState<string[]>([]);
+    const [subjectsLoading, setSubjectsLoading] = useState(true);
+    const [newSubject, setNewSubject] = useState("");
+    const [subjectError, setSubjectError] = useState("");
+    const [subjectSaving, setSubjectSaving] = useState(false);
 
     const [rawData, setRawData] = useState<TermData[]>([]);
     const [classes, setClasses] = useState<ClassData[]>([]);
@@ -63,19 +73,13 @@ export default function ExamsTab() {
     const [loading, setLoading] = useState(true);
     const [showAllSchedules, setShowAllSchedules] = useState(false);
 
-    const fetchExamTypes = async () => {
-        setExamTypesLoading(true);
-        try {
-            const res = await fetch("/api/exam-types", { cache: "no-store", credentials: "include" });
-            const data = await res.json();
-            const list: string[] = Array.isArray(data.examTypes) ? data.examTypes : [];
-            setExamTypes(list);
-        } catch (e) {
-            console.error("Failed to load exam types", e);
-            setExamTypes([]);
-        } finally {
-            setExamTypesLoading(false);
-        }
+    const updateExamsCache = (partial: Partial<{ examTypes: string[]; subjects: string[]; terms: TermData[]; classes: ClassData[] }>) => {
+        setExamsPageCache({
+            terms: partial.terms ?? rawData,
+            classes: partial.classes ?? classes,
+            examTypes: partial.examTypes ?? examTypes,
+            subjects: partial.subjects ?? subjects,
+        });
     };
 
     const deleteExamType = async (name: string) => {
@@ -110,7 +114,9 @@ export default function ExamsTab() {
                 return;
             }
 
-            await fetchExamTypes();
+            const next = examTypes.filter((type) => type.toUpperCase() !== upperName);
+            setExamTypes(next);
+            updateExamsCache({ examTypes: next });
         } catch (e) {
             console.error("Failed to delete exam type", e);
             setExamTypeError("Failed to delete exam type");
@@ -149,7 +155,9 @@ export default function ExamsTab() {
                 return;
             }
             setNewExamType("");
-            await fetchExamTypes();
+            const next = Array.from(new Set([...examTypes, name])).sort();
+            setExamTypes(next);
+            updateExamsCache({ examTypes: next });
         } catch (e) {
             console.error("Failed to add exam type", e);
             setExamTypeError("Failed to add exam type");
@@ -158,36 +166,138 @@ export default function ExamsTab() {
         }
     };
 
+    const deleteSubject = async (name: string) => {
+        const upperName = name.trim().toUpperCase();
+        if (!upperName) return;
+
+        if (subjects.length <= 1) {
+            const confirmed = window.confirm(
+                `\"${upperName}\" is the only subject.\n\nAre you sure you want to delete it?`
+            );
+            if (!confirmed) return;
+        } else {
+            const confirmed = window.confirm(
+                `Are you sure you want to delete subject \"${upperName}\"?`
+            );
+            if (!confirmed) return;
+        }
+
+        setSubjectError("");
+        setSubjectSaving(true);
+        try {
+            const res = await fetch(`/api/exam-subjects?name=${encodeURIComponent(upperName)}`, {
+                method: "DELETE",
+                credentials: "include",
+            });
+            const data = await res.json().catch(() => ({}));
+
+            if (!res.ok) {
+                setSubjectError(
+                    data?.message || "Failed to delete subject. It may be in use."
+                );
+                return;
+            }
+
+            const next = subjects.filter((subject) => subject.toUpperCase() !== upperName);
+            setSubjects(next);
+            updateExamsCache({ subjects: next });
+        } catch (e) {
+            console.error("Failed to delete subject", e);
+            setSubjectError("Failed to delete subject");
+        } finally {
+            setSubjectSaving(false);
+        }
+    };
+
+    const addSubject = async () => {
+        const name = newSubject.trim().toUpperCase();
+        if (!name) {
+            setSubjectError("Enter subject name");
+            return;
+        }
+        if (subjects.some((t) => t.toUpperCase() === name)) {
+            setSubjectError("This subject name already exists");
+            return;
+        }
+
+        setSubjectError("");
+        setSubjectSaving(true);
+        try {
+            const res = await fetch("/api/exam-subjects", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ name }),
+            });
+            const data = await res.json();
+            if (res.status === 409) {
+                setSubjectError("This subject name already exists");
+                return;
+            }
+            if (!res.ok) {
+                setSubjectError(data?.message || "Failed to add subject");
+                return;
+            }
+            setNewSubject("");
+            const next = Array.from(new Set([...subjects, name])).sort();
+            setSubjects(next);
+            updateExamsCache({ subjects: next });
+        } catch (e) {
+            console.error("Failed to add subject", e);
+            setSubjectError("Failed to add subject");
+        } finally {
+            setSubjectSaving(false);
+        }
+    };
+
     useEffect(() => {
-        const fetchExams = async () => {
+        const applyPayload = (payload: { terms: unknown[]; classes: unknown[]; examTypes: string[]; subjects: string[] }) => {
+            const data = payload.terms as TermData[];
+            const classData = payload.classes as ClassData[];
+            setRawData(data);
+            setClasses(classData);
+            setExamTypes(payload.examTypes);
+            setSubjects(payload.subjects);
+            setExamTypesLoading(false);
+            setSubjectsLoading(false);
+
+            if (!selectedClassId && classData.length > 0) {
+                setSelectedClassId(classData[0].id);
+            }
+
+            if (!selectedTermName && data.length > 0) {
+                const firstUpcoming = data.find((t) => t.status === "UPCOMING");
+                setSelectedTermName(firstUpcoming ? firstUpcoming.name : data[0].name);
+            }
+        };
+
+        const fetchExams = async (revalidate = false) => {
+            if (!revalidate) {
+                const cached = peekExamsPage();
+                if (cached) {
+                    applyPayload(cached);
+                    setLoading(false);
+                    void fetchExams(true);
+                    return;
+                }
+            }
+
             try {
-                const res = await fetch("/api/exams/terms");
-                const result = await res.json();
-                const data: TermData[] = result.terms || [];
-                const classData: ClassData[] = result.classes || [];
-                setRawData(data);
-                setClasses(classData);
-
-                if (classData.length > 0) {
-                    setSelectedClassId(classData[0].id);
-                }
-
-                if (data.length > 0) {
-                    const firstUpcoming = data.find((t) => t.status === "UPCOMING");
-                    setSelectedTermName(firstUpcoming ? firstUpcoming.name : data[0].name);
-                }
+                setLoading(rawData.length === 0);
+                setExamTypesLoading(examTypes.length === 0);
+                setSubjectsLoading(subjects.length === 0);
+                const payload = await loadExamsPage({ revalidate });
+                applyPayload(payload);
             } catch (e) {
                 console.error("Fetch failed", e);
             } finally {
                 setLoading(false);
+                setExamTypesLoading(false);
+                setSubjectsLoading(false);
             }
         };
         fetchExams();
-    }, []);
-
-    useEffect(() => {
-        fetchExamTypes();
-    }, []);
+    }, [examTypes.length, rawData.length, selectedClassId, selectedTermName, subjects.length]);
 
     const filteredDataByClass = useMemo(() => {
         return selectedClassId
@@ -230,9 +340,10 @@ export default function ExamsTab() {
 
     if (loading)
         return (
-            <div className="p-10 flex justify-center">
-                <Spinner />
-            </div>
+            <TimellyLoader
+                title="Loading exams"
+                steps={["Terms", "Schedules", "Subjects"]}
+            />
         );
 
     return (
@@ -266,11 +377,11 @@ export default function ExamsTab() {
                         </div>
                     </div>
                 }
-                className="somu border-none !bg-white/5 mb-6"
+                className="somu border-none bg-white/5! mb-6"
             />
 
             {/* EXAM TYPES MANAGER */}
-            <div className="somu border-none !bg-white/5 rounded-3xl p-5 mb-6">
+            <div className="somu border-none bg-white/5! rounded-3xl p-5 mb-6">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <div>
                         <h3 className="text-lg font-bold">Exam Types</h3>
@@ -318,6 +429,64 @@ export default function ExamsTab() {
                                     onClick={() => deleteExamType(t)}
                                     className="ml-1 inline-flex items-center justify-center rounded-full p-0.5 hover:bg-red-500/20 disabled:opacity-50"
                                     title="Delete exam type"
+                                >
+                                    <Trash2 className="w-3 h-3 text-red-400" />
+                                </button>
+                            </div>
+                        ))
+                    )}
+                </div>
+            </div>
+
+            {/* SUBJECTS MANAGER */}
+            <div className="somu border-none bg-white/5! rounded-3xl p-5 mb-6">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                    <div>
+                        <h3 className="text-lg font-bold">Subjects</h3>
+                        <p className="text-xs text-white/50">CAPS only. Duplicate names are not allowed.</p>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                        <input
+                            value={newSubject}
+                            onChange={(e) => setNewSubject(e.target.value.toUpperCase())}
+                            placeholder="e.g. MATHEMATICS, SCIENCE"
+                            className="px-4 py-2.5 rounded-2xl bg-black/40 border border-white/10 text-white text-sm outline-none focus:border-[#B4F42A]/50 uppercase"
+                        />
+                        <button
+                            type="button"
+                            onClick={addSubject}
+                            disabled={subjectSaving}
+                            className="px-4 py-2.5 rounded-2xl bg-[#B4F42A] text-black text-sm font-bold inline-flex items-center justify-center gap-2 disabled:opacity-60"
+                        >
+                            <Plus size={16} />
+                            {subjectSaving ? "Saving..." : "Add"}
+                        </button>
+                    </div>
+                </div>
+
+                {subjectError && (
+                    <p className="mt-2 text-xs font-bold text-red-400">{subjectError}</p>
+                )}
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                    {subjectsLoading ? (
+                        <span className="text-xs text-white/50">Loading subjects...</span>
+                    ) : subjects.length === 0 ? (
+                        <span className="text-xs text-white/50">No subjects found.</span>
+                    ) : (
+                        subjects.map((t) => (
+                            <div
+                                key={t}
+                                className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold bg-white/5 border border-white/10 text-white/80"
+                            >
+                                <span>{t}</span>
+                                <button
+                                    type="button"
+                                    disabled={subjectSaving}
+                                    onClick={() => deleteSubject(t)}
+                                    className="ml-1 inline-flex items-center justify-center rounded-full p-0.5 hover:bg-red-500/20 disabled:opacity-50"
+                                    title="Delete subject"
                                 >
                                     <Trash2 className="w-3 h-3 text-red-400" />
                                 </button>

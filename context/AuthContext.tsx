@@ -3,6 +3,7 @@
 import { createContext, useContext } from "react";
 import { SessionProvider, useSession } from "next-auth/react";
 import type { Session } from "next-auth";
+import SuperAdminSessionGuard from "@/app/frontend/auth/SuperAdminSessionGuard";
 
 interface AuthContextType {
   user: Session["user"] | null;
@@ -23,6 +24,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       refetchInterval={0}
       refetchOnWindowFocus={false}
     >
+      <SuperAdminSessionGuard />
       {children}
     </SessionProvider>
   );

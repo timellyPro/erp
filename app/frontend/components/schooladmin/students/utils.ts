@@ -1,4 +1,34 @@
 import { ClassItem, StudentFormState, StudentRow } from "./types";
+import type { StudentApplicationSummary } from "../../../interfaces/student";
+import { ageFromDob, formatDobYmd } from "@/lib/dobCalendar";
+
+export const isAdmissionStudent = (student: StudentRow): boolean => {
+  const app = student.application;
+  if (!app) return false;
+  if (app.workflowStatus === "APPROVED") return true;
+  if ((app.admissionNo ?? "").trim()) return true;
+  if ((app.fedenaNo ?? "").trim()) return true;
+  return false;
+};
+
+const getStudentSortTimestamp = (
+  student: StudentRow,
+  app?: StudentApplicationSummary | null
+): number => {
+  const raw = app?.createdAt ?? student.createdAt;
+  if (!raw) return 0;
+  const time = new Date(raw).getTime();
+  return Number.isNaN(time) ? 0 : time;
+};
+
+/** Admission students first (latest admission on top), then previous students. */
+export const sortStudentsForDisplay = (students: StudentRow[]): StudentRow[] =>
+  [...students].sort((a, b) => {
+    const aAdmission = isAdmissionStudent(a);
+    const bAdmission = isAdmissionStudent(b);
+    if (aAdmission !== bAdmission) return aAdmission ? -1 : 1;
+    return getStudentSortTimestamp(b, b.application) - getStudentSortTimestamp(a, a.application);
+  });
 
 export const getInitials = (name?: string | null) => {
   if (!name) return "ST";
@@ -7,19 +37,18 @@ export const getInitials = (name?: string | null) => {
 };
 
 export const getAge = (dob?: string | null) => {
-  if (!dob) return "-";
-  const date = new Date(dob);
-  if (Number.isNaN(date.getTime())) return "-";
-  const diff = Date.now() - date.getTime();
-  const ageDate = new Date(diff);
-  return Math.abs(ageDate.getUTCFullYear() - 1970).toString();
+  const age = ageFromDob(dob);
+  return age == null ? "-" : String(age);
 };
 
 export const toStudentForm = (student: StudentRow): StudentFormState => ({
   name: student.user?.name || student.name || "",
   rollNo: student.rollNo || "",
+  penNumber: (student as { penNumber?: string }).penNumber || "",
+  apaarId: (student as { apaarId?: string }).apaarId || "",
   gender: student.gender || "",
-  dob: student.dob || "",
+  residencyType: student.residencyType || "Day Scholar",
+  dob: formatDobYmd(student.dob) || "",
   classId: student.class?.id || "",
   section: student.class?.section || "",
   status: student.status || "Active",
@@ -58,6 +87,9 @@ export const toStudentForm = (student: StudentRow): StudentFormState => ({
   emergencyFatherNo: "",
   emergencyMotherNo: "",
   emergencyGuardianNo: "",
+  subjects: Array.isArray((student as { subjects?: string[] }).subjects)
+    ? [...((student as { subjects?: string[] }).subjects || [])]
+    : [],
 });
 
 /** Merge edit form values into a list row for immediate UI updates after a successful save. */
@@ -81,15 +113,19 @@ export function mergeStudentAfterEdit(
     ...prev,
     name,
     rollNo: form.rollNo.trim() || prev.rollNo,
+    penNumber: form.penNumber.trim() || (prev as { penNumber?: string }).penNumber,
+    apaarId: form.apaarId.trim() || (prev as { apaarId?: string }).apaarId,
     fatherName: form.fatherName.trim() || prev.fatherName,
     motherName: form.motherName.trim() || prev.motherName,
     occupation: form.occupation.trim() || prev.occupation,
     phoneNo: form.phoneNo.trim() || prev.phoneNo,
     address: form.address.trim() || prev.address,
     gender: form.gender.trim() || prev.gender,
+    residencyType: form.residencyType.trim() || prev.residencyType,
     previousSchool: form.previousSchool.trim() || prev.previousSchool,
     status: form.status || prev.status,
     class: nextClass,
+    subjects: Array.isArray(form.subjects) ? [...form.subjects] : prev.subjects,
     user: prev.user ? { ...prev.user, name } : prev.user,
   };
 }

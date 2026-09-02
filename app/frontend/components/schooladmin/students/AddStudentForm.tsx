@@ -1,9 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import { Plus } from "lucide-react";
 import InputField from "../schooladmincomponents/InputField";
 import SelectInput from "../../common/SelectInput";
 import { SelectOption, StudentFormErrors, StudentFormState } from "./types";
+import StudentSubjectsMultiSelect from "./StudentSubjectsMultiSelect";
 
 type Props = {
   form: StudentFormState;
@@ -16,7 +18,8 @@ type Props = {
   title?: string;
   subtitle?: string;
   submitLabel?: string;
-  onFieldChange: (key: keyof StudentFormState, value: string) => void;
+  editMode?: boolean;
+  onFieldChange: (key: keyof StudentFormState, value: string | string[]) => void;
   onCancel: () => void;
   onReset: () => void;
   onSave: () => void;
@@ -44,16 +47,28 @@ export default function AddStudentForm({
   title = "Add New Student",
   subtitle = "Enter student details below",
   submitLabel = "Save Student",
+  editMode = false,
   onFieldChange,
   onCancel,
   onReset,
   onSave,
 }: Props) {
+  const [showParentSection, setShowParentSection] = useState(!editMode);
+  const [showAdmissionSection, setShowAdmissionSection] = useState(!editMode);
+
   return (
     <div className="bg-[#0F172A]/50 rounded-2xl p-6 border border-white/10">
       <div className="flex items-center justify-between gap-3 mb-4">
         <div>
-          <h3 className="text-lg font-bold text-gray-100 mb-4">{title}</h3>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <h3 className="text-lg font-bold text-gray-100">{title}</h3>
+            {editMode ? (
+              <span className="rounded-full border border-lime-500/40 bg-lime-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-lime-200">
+                Edit Mode
+              </span>
+            ) : null}
+          </div>
+          {subtitle ? <p className="text-xs text-white/55">{subtitle}</p> : null}
         </div>
       </div>
 
@@ -65,18 +80,38 @@ export default function AddStudentForm({
             onChange={(value) => onFieldChange("name", value)}
             placeholder="Student Name"
             bgColor="white"
+            error={errors.name}
           />
-          {renderError(errors, "name")}
         </div>
         <div>
           <InputField
-            label="Student ID"
+            label="Timelly ID"
             value={form.rollNo}
             onChange={(value) => onFieldChange("rollNo", value.slice(0, 40))}
             placeholder="e.g. STU001"
             bgColor="white"
+            error={errors.rollNo}
           />
-          {renderError(errors, "rollNo")}
+        </div>
+        <div>
+          <InputField
+            label="PEN Number"
+            value={form.penNumber}
+            onChange={(value) => onFieldChange("penNumber", value.slice(0, 40))}
+            placeholder="Optional"
+            bgColor="white"
+            error={errors.penNumber}
+          />
+        </div>
+        <div>
+          <InputField
+            label="APAAR ID"
+            value={form.apaarId}
+            onChange={(value) => onFieldChange("apaarId", value.slice(0, 40))}
+            placeholder="Optional"
+            bgColor="white"
+            error={errors.apaarId}
+          />
         </div>
         <div>
           <InputField
@@ -103,6 +138,18 @@ export default function AddStudentForm({
             ]}
             bgColor="white"
             error={errors.gender}
+          />
+        </div>
+        <div>
+          <SelectInput
+            label="Residency Type"
+            value={form.residencyType}
+            onChange={(value) => onFieldChange("residencyType", value)}
+            options={[
+              { label: "Day Scholar", value: "Day Scholar" },
+              { label: "Hostel", value: "Hosteller" },
+            ]}
+            bgColor="white"
           />
         </div>
         <div>
@@ -157,55 +204,29 @@ export default function AddStudentForm({
             bgColor="white"
           />
         </div>
-        <div>
-          <InputField
-            label="Total Fee*"
-            value={form.totalFee}
-            onChange={(value) => onFieldChange("totalFee", value)}
-            placeholder="e.g. 12000"
-            type="number"
-            bgColor="white"
-          />
-          {renderError(errors, "totalFee")}
-        </div>
-        <div>
-          <InputField
-            label="Discount (%)"
-            value={form.discountPercent}
-            onChange={(value) => onFieldChange("discountPercent", value)}
-            placeholder="e.g. 10"
-            type="number"
-            bgColor="white"
-          />
-          {renderError(errors, "discountPercent")}
-        </div>
-        <div>
-          <InputField
-            label="Application Fee (record only)"
-            value={form.applicationFee}
-            onChange={(value) => onFieldChange("applicationFee", value)}
-            placeholder="e.g. 500"
-            type="number"
-            bgColor="white"
-          />
-        </div>
-        <div>
-          <InputField
-            label="Admission Fee (record only)"
-            value={form.admissionFee}
-            onChange={(value) => onFieldChange("admissionFee", value)}
-            placeholder="e.g. 5000"
-            type="number"
-            bgColor="white"
-          />
-        </div>
+        <StudentSubjectsMultiSelect
+          selected={form.subjects || []}
+          classId={form.classId}
+          onChange={(subjects) => onFieldChange("subjects", subjects)}
+          error={errors.subjects}
+        />
       </div>
 
+      <p className="text-xs text-white/50 mt-2 mb-4">
+        Tuition is set from{" "}
+        <span className="text-white/70">Fees → Global fee breakdown</span> for the student&apos;s class (plus any extra fees). It is not entered here.
+      </p>
+
       <div className="mt-6">
-        <h3 className="text-sm font-semibold text-white/80 mb-3">
-          Parent Information
-        </h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <button
+          type="button"
+          onClick={() => setShowParentSection((prev) => !prev)}
+          className="mb-3 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm font-semibold text-white/80 hover:bg-white/10"
+        >
+          {showParentSection ? "Hide" : "Show"} Parent Information
+        </button>
+        {showParentSection ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <InputField
               label="Parent Name*"
@@ -255,9 +276,9 @@ export default function AddStudentForm({
             />
             {renderError(errors, "phoneNo")}
           </div>
-          <div>
+          <div className="md:col-span-2">
             <InputField
-              label="Email (optional)"
+              label="Parent / guardian email (optional)"
               value={form.email}
               onChange={(value) => onFieldChange("email", value)}
               placeholder="parent@example.com"
@@ -265,6 +286,9 @@ export default function AddStudentForm({
               autoComplete="email"
               bgColor="white"
             />
+            <p className="mt-1.5 text-[11px] text-white/50 leading-snug">
+              Used for parent contact on the admission record only. The student&apos;s login email is created automatically as their name @ your school domain.
+            </p>
             {renderError(errors, "email")}
           </div>
           <div>
@@ -299,12 +323,20 @@ export default function AddStudentForm({
             />
             {renderError(errors, "address")}
           </div>
-        </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-6">
-        <h3 className="text-sm font-semibold text-white/80 mb-3">Admission Details (optional)</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <button
+          type="button"
+          onClick={() => setShowAdmissionSection((prev) => !prev)}
+          className="mb-3 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm font-semibold text-white/80 hover:bg-white/10"
+        >
+          {showAdmissionSection ? "Hide" : "Show"} Admission Details
+        </button>
+        {showAdmissionSection ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           <InputField label="House No" value={form.houseNo} onChange={(v) => onFieldChange("houseNo", v)} bgColor="white" />
           <InputField label="Street" value={form.street} onChange={(v) => onFieldChange("street", v)} bgColor="white" />
           <InputField label="City" value={form.city} onChange={(v) => onFieldChange("city", v)} bgColor="white" />
@@ -318,24 +350,28 @@ export default function AddStudentForm({
           <InputField label="Emergency Father No" value={form.emergencyFatherNo} onChange={(v) => onFieldChange("emergencyFatherNo", v)} bgColor="white" />
           <InputField label="Emergency Mother No" value={form.emergencyMotherNo} onChange={(v) => onFieldChange("emergencyMotherNo", v)} bgColor="white" />
           <InputField label="Emergency Guardian No" value={form.emergencyGuardianNo} onChange={(v) => onFieldChange("emergencyGuardianNo", v)} bgColor="white" />
-        </div>
+          </div>
+        ) : null}
       </div>
 
 
       <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
         <button
+          type="button"
           onClick={onReset}
           className="rounded-xl border border-white/10 bg-white/5 px-5 py-2 text-sm font-semibold text-white/70 hover:bg-white/10"
         >
           Reset
         </button>
         <button
+          type="button"
           onClick={onCancel}
           className="rounded-xl border border-white/10 bg-white/5 px-5 py-2 text-sm font-semibold text-white/70 hover:bg-white/10"
         >
           Cancel
         </button>
         <button
+          type="button"
           onClick={onSave}
           disabled={saving}
           className="inline-flex items-center gap-2 rounded-xl bg-lime-400

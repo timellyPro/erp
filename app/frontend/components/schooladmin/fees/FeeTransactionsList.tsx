@@ -6,18 +6,25 @@ import { RotateCcw, Search } from "lucide-react";
 import SelectInput from "../../common/SelectInput";
 import SearchInput from "../../common/SearchInput";
 import RefundModal, { type TransactionItem } from "./RefundModal";
-import type { Student } from "./types";
-import { schoolAdminStudentDetailsFeesUrl } from "./studentDetailsNav";
+import type { Class } from "./types";
+import {
+  schoolAdminStudentDetailsFeesUrl,
+  warmSchoolAdminStudentDetails,
+} from "./studentDetailsNav";
+import InlinePagination from "../schooladmincomponents/InlinePagination";
+import {
+  fetchFeesTransactions,
+  peekFeesTransactions,
+  resolveFeesTransactionsCacheKey,
+} from "@/lib/feesTransactionsCache";
+import { isOfflinePaymentGateway } from "@/lib/feePaymentGateway";
+
+const PAGE_SIZE = 20;
 
 interface FeeTransactionsListProps {
-  students: Student[];
+  schoolId: string | null;
+  classes: Class[];
   onSuccess: () => void;
-}
-
-interface ClassItem {
-  id: string;
-  name: string;
-  section: string | null;
 }
 
 interface ClassDetailStudent {
@@ -27,53 +34,28 @@ interface ClassDetailStudent {
   class?: { section?: string | null } | null;
 }
 
-export default function FeeTransactionsList({ students: _students, onSuccess }: FeeTransactionsListProps) {
+export default function FeeTransactionsList({
+  schoolId,
+  classes,
+  onSuccess,
+}: FeeTransactionsListProps) {
   const router = useRouter();
-  const [transactions, setTransactions] = useState<TransactionItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [classLoading, setClassLoading] = useState(false);
+  const cacheKey = resolveFeesTransactionsCacheKey(schoolId);
+  const initialTx = peekFeesTransactions(cacheKey);
+  const [transactions, setTransactions] = useState<TransactionItem[]>(initialTx ?? []);
+  const [loading, setLoading] = useState(initialTx === null);
   const [sectionLoading, setSectionLoading] = useState(false);
-  const [classes, setClasses] = useState<ClassItem[]>([]);
   const [selectedClassId, setSelectedClassId] = useState("");
   const [selectedSection, setSelectedSection] = useState("");
   const [selectedYear, setSelectedYear] = useState("");
   const [studentSearch, setStudentSearch] = useState("");
   const [classStudents, setClassStudents] = useState<ClassDetailStudent[]>([]);
   const [refundTarget, setRefundTarget] = useState<TransactionItem | null>(null);
-
-  const fetchTransactions = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/fees/transactions");
-      const data = await res.json();
-      if (res.ok) {
-        setTransactions(data.transactions || []);
-      } else {
-        setTransactions([]);
-      }
-    } catch {
-      setTransactions([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchClasses = async () => {
-    setClassLoading(true);
-    try {
-      const res = await fetch("/api/class/list");
-      const data = await res.json();
-      if (res.ok) {
-        setClasses(Array.isArray(data.classes) ? data.classes : []);
-      } else {
-        setClasses([]);
-      }
-    } catch {
-      setClasses([]);
-    } finally {
-      setClassLoading(false);
-    }
-  };
+  const [page, setPage] = useState(1);
+  const [collectorOptions, setCollectorOptions] = useState<Array<{ label: string; value: string }>>([
+    { label: "All staff", value: "" },
+  ]);
+  const [selectedCollectorUserId, setSelectedCollectorUserId] = useState("");
 
   const fetchClassDetails = async (classId: string) => {
     if (!classId) {
@@ -101,12 +83,58 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
   };
 
   useEffect(() => {
-    fetchClasses();
-  }, []);
+    const controller = new AbortController();
+    void fetch("/api/fees/collectors", { credentials: "include", signal: controller.signal })
+      .then((res) => res.json())
+      .then((data) => {
+        const rows = Array.isArray(data?.collectors) ? data.collectors : [];
+        setCollectorOptions([
+          { label: "All staff", value: "" },
+          ...rows.map((c: { userId: string; name: string }) => ({
+            label: c.name,
+            value: c.userId,
+          })),
+        ]);
+      })
+      .catch(() => {
+        /* ignore */
+      });
+    return () => controller.abort();
+  }, [schoolId]);
 
   useEffect(() => {
-    fetchTransactions();
-  }, []);
+    const key = resolveFeesTransactionsCacheKey(schoolId);
+    const cached = !selectedCollectorUserId ? peekFeesTransactions(key) : null;
+    if (!selectedCollectorUserId) {
+      if (cached && cached.length > 0) {
+        setTransactions(cached);
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
+    } else {
+      setLoading(true);
+    }
+
+    const controller = new AbortController();
+    void fetchFeesTransactions(schoolId, {
+      revalidate: Boolean(selectedCollectorUserId) || Boolean(cached?.length),
+      collectedByUserId: selectedCollectorUserId || undefined,
+      limit: selectedCollectorUserId ? 500 : 200,
+      signal: controller.signal,
+    })
+      .then((rows) => {
+        if (!controller.signal.aborted) setTransactions(rows);
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("Fee transactions load error:", err);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [schoolId, selectedCollectorUserId]);
 
   useEffect(() => {
     fetchClassDetails(selectedClassId);
@@ -167,17 +195,37 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
     });
   }, [transactions, selectedClass, selectedSection, selectedYear, studentSearch]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [selectedClassId, selectedSection, selectedYear, studentSearch, selectedCollectorUserId]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / PAGE_SIZE));
+  const paginatedTransactions = useMemo(
+    () => filteredTransactions.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [filteredTransactions, page]
+  );
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
   return (
     <section className="w-full rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur sm:p-6">
-      <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-        <RotateCcw className="w-5 h-5 text-amber-400" />
-        Fee Transactions & Refunds
+      <h3 className="text-lg font-semibold mb-4 flex flex-wrap items-center gap-2">
+        <RotateCcw className="w-5 h-5 shrink-0 text-amber-400" />
+        <span>
+          {`Fee Transactions & Refunds (${filteredTransactions.length}${
+            filteredTransactions.length > PAGE_SIZE
+              ? ` · rows ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, filteredTransactions.length)}`
+              : ""
+          })`}
+        </span>
       </h3>
       <p className="text-sm text-gray-400 mb-4">
         View successful payments and process refunds when needed.
       </p>
       <div className="mb-5 w-full rounded-2xl border border-white/10 bg-white/5 p-3 sm:p-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
           <div>
             <SearchInput
               label="Search Student"
@@ -187,6 +235,14 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
               showSearchIcon
               placeholder="Name or ID..."
               variant="glass"
+            />
+          </div>
+          <div>
+            <SelectInput
+              label="Collected by"
+              value={selectedCollectorUserId}
+              onChange={setSelectedCollectorUserId}
+              options={collectorOptions}
             />
           </div>
           <div>
@@ -202,7 +258,6 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
               label="Class"
               value={selectedClassId}
               onChange={setSelectedClassId}
-              disabled={classLoading}
               options={[
                 { label: "All Classes", value: "" },
                 ...classes.map((c) => ({
@@ -234,12 +289,15 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
       ) : (
         <>
           <div className="space-y-3 sm:hidden">
-            {filteredTransactions.map((t) => (
+            {paginatedTransactions.map((t) => (
               <div key={t.id} className="rounded-xl border border-white/10 bg-black/10 p-4">
                 <button
                   type="button"
                   className="text-left text-base font-semibold text-white underline-offset-2 hover:underline"
-                  onMouseEnter={() => router.prefetch(schoolAdminStudentDetailsFeesUrl(t.student.id))}
+                  onMouseEnter={() => {
+                    warmSchoolAdminStudentDetails(t.student.id);
+                    router.prefetch(schoolAdminStudentDetailsFeesUrl(t.student.id));
+                  }}
                   onClick={() => router.push(schoolAdminStudentDetailsFeesUrl(t.student.id))}
                 >
                   {t.student.user?.name || t.student.admissionNumber || "-"}
@@ -274,6 +332,20 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
                         </div>
                       ) : null}
                     </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-gray-400">Reference / UTR</span>
+                    <span className="text-right text-gray-300 break-all">
+                      {t.transactionId || "-"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-gray-400">Collected by</span>
+                    <span className="text-right text-gray-300">
+                      {isOfflinePaymentGateway(t.gateway)
+                        ? t.collectedByName || "—"
+                        : "—"}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-gray-400">Amount</span>
@@ -313,16 +385,18 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
                 <th className="pb-3 font-medium">Student</th>
                 <th className="pb-3 font-medium">Class</th>
                 <th className="pb-3 font-medium">Gateway</th>
+                <th className="pb-3 font-medium">Collected by</th>
+                <th className="pb-3 font-medium">Reference No / UTR</th>
                 <th className="pb-3 font-medium">Amount</th>
                 <th className="pb-3 font-medium">Refunded</th>
                 <th className="pb-3 font-medium text-right">Action</th>
               </tr>
             </thead>
             <tbody>
-              {filteredTransactions.map((t) => (
+              {paginatedTransactions.map((t) => (
                 <tr
                   key={t.id}
-                  className="border-b border-white/5 last:border-0 hover:bg-white/[0.02]"
+                  className="border-b border-white/5 last:border-0 hover:bg-white/2"
                 >
                   <td className="py-3 text-gray-400 whitespace-nowrap">
                     {new Date(t.createdAt).toLocaleDateString("en-IN", {
@@ -334,7 +408,10 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
                   <td
                     className="py-3 text-white font-medium cursor-pointer select-none underline-offset-2 hover:underline"
                     title="Double-click to open student fee details"
-                    onMouseEnter={() => router.prefetch(schoolAdminStudentDetailsFeesUrl(t.student.id))}
+                    onMouseEnter={() => {
+                      warmSchoolAdminStudentDetails(t.student.id);
+                      router.prefetch(schoolAdminStudentDetailsFeesUrl(t.student.id));
+                    }}
                     onDoubleClick={() => router.push(schoolAdminStudentDetailsFeesUrl(t.student.id))}
                   >
                     {t.student.user?.name || t.student.admissionNumber || "-"}
@@ -354,6 +431,12 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
                         </span>
                       ) : null}
                     </div>
+                  </td>
+                  <td className="py-3 text-gray-400">
+                    {isOfflinePaymentGateway(t.gateway) ? t.collectedByName || "—" : "—"}
+                  </td>
+                  <td className="py-3 text-gray-300 break-all">
+                    {t.transactionId || "-"}
                   </td>
                   <td className="py-3 text-emerald-400">₹{t.amount.toLocaleString()}</td>
                   <td className="py-3">
@@ -382,6 +465,9 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
             </tbody>
           </table>
           </div>
+          <div className="mt-4">
+            <InlinePagination page={page} totalPages={totalPages} onChange={setPage} />
+          </div>
         </>
       )}
 
@@ -389,7 +475,9 @@ export default function FeeTransactionsList({ students: _students, onSuccess }: 
         transaction={refundTarget}
         onClose={() => setRefundTarget(null)}
         onSuccess={() => {
-          fetchTransactions();
+          if (schoolId) {
+            void fetchFeesTransactions(schoolId, { revalidate: true }).then(setTransactions);
+          }
           onSuccess();
         }}
       />

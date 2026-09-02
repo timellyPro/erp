@@ -2,8 +2,21 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
+import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
+import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
+import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
+import { computeCurrentAndPreviousFeeStats } from "@/lib/computeFeeSummaryStats";
+import { withRequestTiming } from "@/lib/requestTiming";
+import { tenantCacheKey, swrGet, swrSet } from "@/lib/tenantCache";
+import {
+  getSchoolDashboardServerCached,
+  setSchoolDashboardServerCached,
+} from "@/lib/schoolDashboardServerCache";
+import { activeStudentWhere } from "@/lib/studentStatus";
 
-export async function GET() {
+export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
 
   if (!session?.user) {
@@ -11,23 +24,16 @@ export async function GET() {
   }
 
   const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
-  if (!isAdmin) {
+  const isTeacher = session.user.role === "TEACHER";
+  if (!isAdmin && !isTeacher) {
     return NextResponse.json(
-      { message: "Only admins can view fee summary" },
+      { message: "Only school staff can view fee summary" },
       { status: 403 }
     );
   }
 
   try {
-    let schoolId = session.user.schoolId;
-
-    if (!schoolId) {
-      const adminSchool = await prisma.school.findFirst({
-        where: { admins: { some: { id: session.user.id } } },
-        select: { id: true },
-      });
-      schoolId = adminSchool?.id ?? null;
-    }
+    const schoolId = await resolveFeesSchoolId(session);
 
     if (!schoolId) {
       return NextResponse.json(
@@ -35,34 +41,113 @@ export async function GET() {
         { status: 400 }
       );
     }
-    const fees = await prisma.studentFee.findMany({
-      where: { student: { schoolId } },
-      include: {
-        student: {
-          select: {
-            id: true,
-            class: { select: { id: true, name: true, section: true } },
-            user: { select: { id: true, name: true, email: true } },
+    return await withRequestTiming(
+      { route: "GET /api/fees/summary", schoolId, userId: session.user.id },
+      async () => {
+        // Cursor pagination (by studentFee.studentId which is unique).
+        const { searchParams } = new URL(req.url);
+        const statsOnly = searchParams.get("statsOnly") === "1";
+
+        if (statsOnly) {
+          const memKey = `fees:summary:stats:active:${schoolId}`;
+          const memCached = getSchoolDashboardServerCached<{
+            fees: unknown[];
+            stats: unknown;
+            nextCursor: null;
+          }>(memKey);
+          if (memCached) {
+            return NextResponse.json(memCached, { status: 200 });
+          }
+
+          const stats = await computeCurrentAndPreviousFeeStats(schoolId);
+
+          const payload = { fees: [] as unknown[], stats, nextCursor: null };
+          setSchoolDashboardServerCached(memKey, payload, 20_000);
+          return NextResponse.json(payload, { status: 200 });
+        }
+
+        const takeParam = searchParams.get("take");
+        const takeRaw = takeParam ? Number(takeParam) : 50;
+        const take = Math.min(100, Math.max(1, Number.isFinite(takeRaw) ? takeRaw : 50));
+        const cursor = searchParams.get("cursor")?.trim() || null;
+
+        const memPageKey = `fees:summary:page:active:${schoolId}:${take}:${cursor ?? "0"}`;
+        const memPage = getSchoolDashboardServerCached(memPageKey);
+        if (memPage) {
+          return NextResponse.json(memPage, { status: 200 });
+        }
+
+        const cacheKey = await tenantCacheKey(schoolId, "api", "fees:summary:page:active", { take, cursor });
+        const cached = await swrGet<{ fees: unknown[]; stats: unknown; nextCursor: string | null }>(cacheKey);
+        const now = Date.now();
+        if (cached && now < cached.freshUntil) {
+          return NextResponse.json({ ...(cached.value as any), cache: "fresh" }, { status: 200 });
+        }
+
+        const fees = await prisma.studentFee.findMany({
+          where: { student: { schoolId, ...activeStudentWhere } },
+          include: {
+            student: {
+              select: {
+                id: true,
+                status: true,
+                residencyType: true,
+                class: { select: { id: true, name: true, section: true } },
+                user: { select: { id: true, name: true, email: true } },
+              },
+            },
           },
+          orderBy: [{ updatedAt: "desc" }, { studentId: "desc" }],
+          take: take + 1,
+          ...(cursor ? { cursor: { studentId: cursor }, skip: 1 } : {}),
+        });
+
+        const hasNext = fees.length > take;
+        const pageFees = hasNext ? fees.slice(0, take) : fees;
+        const nextCursor = hasNext ? pageFees[pageFees.length - 1]?.studentId ?? null : null;
+
+        const studentIds = pageFees.map((f) => f.studentId);
+
+        const classIds = Array.from(
+          new Set(
+            pageFees
+              .map((f) => f.student.class?.id)
+              .filter((x): x is string => typeof x === "string" && x.length > 0)
+          )
+        );
+
+    const [structures, extraFees, latestPayments, stats] = await Promise.all([
+      prisma.classFeeStructure.findMany({
+        where: { classId: { in: classIds } },
+        select: { classId: true, components: true },
+      }),
+      prisma.extraFee.findMany({
+        where: { schoolId },
+        select: {
+          id: true,
+          name: true,
+          amount: true,
+          targetType: true,
+          targetClassId: true,
+          targetSection: true,
+          targetStudentId: true,
+          residencyScope: true,
         },
-      },
-      orderBy: { updatedAt: "desc" },
-    });
-
-    const studentIds = fees.map((f) => f.studentId);
-
-    const classIds = Array.from(
-      new Set(
-        fees
-          .map((f) => f.student.class?.id)
-          .filter((x): x is string => typeof x === "string" && x.length > 0)
-      )
-    );
-
-    const structures = await prisma.classFeeStructure.findMany({
-      where: { classId: { in: classIds } },
-      select: { classId: true, components: true },
-    });
+      }),
+      // Pick the fee-head that was allocated in the latest SUCCESS payment for each student.
+      // This keeps the UI to "only one" fee type (the last one they selected).
+      prisma.payment.findMany({
+        where: {
+          studentId: { in: studentIds },
+          status: "SUCCESS",
+          purpose: "FEES",
+        },
+        distinct: ["studentId"],
+        orderBy: [{ studentId: "asc" }, { createdAt: "desc" }],
+        select: { id: true, studentId: true },
+      }),
+      computeCurrentAndPreviousFeeStats(schoolId),
+    ]);
 
     const componentsByClassId = new Map<string, Array<{ name: string; amount: number }>>(
       structures.map((s) => [
@@ -73,32 +158,6 @@ export async function GET() {
         })),
       ])
     );
-
-    const extraFees = await prisma.extraFee.findMany({
-      where: { schoolId },
-      select: {
-        id: true,
-        name: true,
-        amount: true,
-        targetType: true,
-        targetClassId: true,
-        targetSection: true,
-        targetStudentId: true,
-      },
-    });
-
-    // Pick the fee-head that was allocated in the latest SUCCESS payment for each student.
-    // This keeps the UI to "only one" fee type (the last one they selected).
-    const latestPayments = await prisma.payment.findMany({
-      where: {
-        studentId: { in: studentIds },
-        status: "SUCCESS",
-        purpose: "FEES",
-      },
-      distinct: ["studentId"],
-      orderBy: [{ studentId: "asc" }, { createdAt: "desc" }],
-      select: { id: true, studentId: true },
-    });
 
     const latestPaymentIdByStudentId = new Map(latestPayments.map((p) => [p.studentId, p.id]));
     const latestPaymentIds = Array.from(latestPaymentIdByStudentId.values());
@@ -181,7 +240,7 @@ export async function GET() {
         where: {
           studentId: { in: studentIds },
           allocationType: "PAYMENT",
-          payment: { status: "SUCCESS" },
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
         },
         select: {
           studentId: true,
@@ -196,7 +255,7 @@ export async function GET() {
         where: {
           studentId: { in: studentIds },
           allocationType: "REFUND",
-          payment: { status: "SUCCESS" },
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
         },
         select: {
           studentId: true,
@@ -237,7 +296,7 @@ export async function GET() {
       }
     }
 
-    const feesWithTypes = fees.map((fee) => {
+        const feesWithTypes = pageFees.map((fee) => {
       const studentId = fee.studentId;
       const classId = fee.student.class?.id ?? null;
       const classSection = fee.student.class?.section ?? null;
@@ -245,14 +304,18 @@ export async function GET() {
       const selectedHead = selectedHeadByStudentId.get(studentId) ?? null;
       const targetHeadKey = selectedHead?.headKey ?? null;
 
-      const discountRatio = fee.totalFee > 0 ? fee.finalFee / fee.totalFee : 0;
+      const structMult = structureMultiplierAfterDiscount(fee.discountPercent);
       const totalSnapshotDue = Math.max(fee.finalFee, 0);
       const allocationsNetTotal = allocationsNetTotalByStudent.get(studentId) ?? 0;
       const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);
 
       const baseComponents = classId ? componentsByClassId.get(classId) ?? [] : [];
 
+      const residency = fee.student.residencyType ?? "Day Scholar";
       const applicableExtraFees = extraFees.filter((ef) => {
+        if (!extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, residency))
+          return false;
+        if (isStudentRte(residency) && isTuitionNamedExtraFee(ef.name)) return false;
         if (ef.targetType === "SCHOOL") return true;
         if (ef.targetType === "CLASS") return !!classId && ef.targetClassId === classId;
         if (ef.targetType === "SECTION")
@@ -266,7 +329,7 @@ export async function GET() {
 
       for (let i = 0; i < baseComponents.length; i++) {
         const headKey = `BASE:${i}`;
-        const snapshotDue = baseComponents[i].amount * discountRatio;
+        const snapshotDue = isStudentRte(residency) ? 0 : baseComponents[i].amount * structMult;
         const paidAlloc = netPaidByStudentHead.get(`${studentId}|${headKey}`) ?? 0;
         const paidLegacy = totalSnapshotDue > 0 ? legacyPaidTotal * (snapshotDue / totalSnapshotDue) : 0;
         const paidBefore = Math.max(paidAlloc + paidLegacy, 0);
@@ -284,7 +347,7 @@ export async function GET() {
 
       for (const ef of applicableExtraFees) {
         const headKey = `EXTRA:${ef.id}`;
-        const snapshotDue = Number(ef.amount) * discountRatio;
+        const snapshotDue = Number(ef.amount) || 0;
         const paidAlloc = netPaidByStudentHead.get(`${studentId}|${headKey}`) ?? 0;
         const paidLegacy = totalSnapshotDue > 0 ? legacyPaidTotal * (snapshotDue / totalSnapshotDue) : 0;
         const paidBefore = Math.max(paidAlloc + paidLegacy, 0);
@@ -307,22 +370,17 @@ export async function GET() {
       };
     });
 
-    const stats = fees.reduce(
-      (acc, fee) => {
-        acc.totalStudents += 1;
-        acc.totalCollected += fee.amountPaid;
-        acc.totalDue += fee.remainingFee;
-        if (fee.remainingFee <= 0) {
-          acc.paid += 1;
-        } else {
-          acc.pending += 1;
-        }
-        return acc;
-      },
-      { totalStudents: 0, paid: 0, pending: 0, totalCollected: 0, totalDue: 0 }
-    );
+        const payload = { fees: feesWithTypes, stats, nextCursor };
+        setSchoolDashboardServerCached(memPageKey, payload, 15_000);
+        await swrSet(
+          cacheKey,
+          { value: payload, freshUntil: now + 5_000, staleUntil: now + 60_000 },
+          60
+        );
 
-    return NextResponse.json({ fees: feesWithTypes, stats }, { status: 200 });
+        return NextResponse.json(payload, { status: 200 });
+      }
+    );
   } catch (error: any) {
     console.error("Fee summary error:", error);
     return NextResponse.json(

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { assertTeacherCanEnterMarks } from "@/lib/teacherMarksScope";
 
 function calculateGrade(marks: number, totalMarks: number): string {
   const percentage = (marks / totalMarks) * 100;
@@ -28,7 +29,7 @@ export async function PUT(
 
     const { id } = await params;
     const markId = id;
-    const { subject, marks, totalMarks, suggestions, examType } =
+    const { subject, marks, totalMarks, suggestions, examType, grade: gradeOverride } =
       await req.json();
 
     const existingMark = await prisma.mark.findUnique({
@@ -63,8 +64,20 @@ export async function PUT(
       }
     }
 
+    const nextSubject =
+      subject !== undefined && typeof subject === "string" ? subject.trim() : existingMark.subject;
+    const scope = await assertTeacherCanEnterMarks({
+      role: session.user.role,
+      userId: session.user.id,
+      classId: existingMark.classId,
+      subject: nextSubject,
+    });
+    if (!scope.ok) {
+      return NextResponse.json({ message: scope.message }, { status: scope.status });
+    }
+
     const updateData: any = {};
-    if (subject !== undefined) updateData.subject = subject;
+    if (subject !== undefined) updateData.subject = nextSubject;
     if (marks !== undefined) updateData.marks = marks;
     if (totalMarks !== undefined) updateData.totalMarks = totalMarks;
     if (suggestions !== undefined) updateData.suggestions = suggestions;
@@ -75,8 +88,9 @@ export async function PUT(
           : null;
     }
 
-    // Recalculate grade if marks changed
-    if (marks !== undefined || totalMarks !== undefined) {
+    if (gradeOverride === "AB") {
+      updateData.grade = "AB";
+    } else if (marks !== undefined || totalMarks !== undefined) {
       const finalMarks = marks !== undefined ? marks : existingMark.marks;
       const finalTotal = totalMarks !== undefined ? totalMarks : existingMark.totalMarks;
       updateData.grade = calculateGrade(finalMarks, finalTotal);

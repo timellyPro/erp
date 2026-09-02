@@ -7,6 +7,7 @@ import StatCard from "../../common/statCard";
 import CertificateRequestCard from "./CertificateRequestCard";
 import CertificatesCard from "./CertificatesCard";
 import ApprovedCertificates from "./ApprovedCertificates";
+import ParentTimellyLoader from "../ParentTimellyLoader";
 
 interface CertificateRequest {
   id: string;
@@ -65,12 +66,16 @@ export default function ParentCertificatesTab() {
 
     setLoading(true);
     try {
-      const certReqRes = await fetch("/api/certificates/requests/list", { credentials: "include" });
+      let certReqRes = await fetch("/api/tc/list", { credentials: "include" });
+      if (certReqRes.status === 404) {
+        certReqRes = await fetch("/api/certificates/requests/list", { credentials: "include" });
+      }
       if (certReqRes.ok) {
         const certReqData = await certReqRes.json();
-        setCertificateRequests(certReqData.certificateRequests || []);
-        if (certReqData.certificateRequests?.[0]?.student?.user?.name) {
-          setStudentName((prev) => prev || certReqData.certificateRequests[0].student.user.name || "");
+        const requests = certReqData.certificateRequests || certReqData.tcs || [];
+        setCertificateRequests(requests);
+        if (requests?.[0]?.student?.user?.name) {
+          setStudentName((prev) => prev || requests[0].student.user.name || "");
         }
       }
 
@@ -179,6 +184,14 @@ export default function ParentCertificatesTab() {
     return d.toISOString();
   };
 
+  if (loading && certificateRequests.length === 0 && certificates.length === 0) {
+    return (
+      <div className="min-h-[calc(100vh-80px)] flex items-center justify-center px-4">
+        <ParentTimellyLoader preset="certificates" className="w-full max-w-2xl" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-[calc(100vh-80px)]">
       <div className="space-y-6 md:space-y-8 animate-fadeIn">
@@ -243,7 +256,7 @@ export default function ParentCertificatesTab() {
           </div>
 
           {loading ? (
-            <div className="py-6 text-center text-gray-400 text-sm">Loading requests…</div>
+            <ParentTimellyLoader preset="certificates" compact className="w-full" />
           ) : certificateRequests.length === 0 ? (
             <div className="py-6 text-center text-gray-400 text-sm">No certificate requests yet.</div>
           ) : (

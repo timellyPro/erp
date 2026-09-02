@@ -14,7 +14,6 @@ interface StudentFee {
   finalFee: number;
   amountPaid: number;
   remainingFee: number;
-  installments: number;
 }
 
 interface FeeWithStudent extends StudentFee {
@@ -29,6 +28,8 @@ interface FeeStats {
   totalStudents: number;
   paid: number;
   pending: number;
+  totalFee?: number;
+  totalDiscount?: number;
   totalCollected: number;
   totalDue: number;
 }
@@ -39,13 +40,11 @@ export default function Page() {
   const verifiedRef = useRef(false);
   const [fee, setFee] = useState<StudentFee | null>(null);
   const [loading, setLoading] = useState(true);
-  const [plan, setPlan] = useState<1 | 3>(1);
   const [adminFees, setAdminFees] = useState<FeeWithStudent[]>([]);
   const [stats, setStats] = useState<FeeStats | null>(null);
   const [selectedFee, setSelectedFee] = useState<FeeWithStudent | null>(null);
   const [totalFeeInput, setTotalFeeInput] = useState<number | "">("");
-  const [discountInput, setDiscountInput] = useState<number | "">("");
-  const [installmentsInput, setInstallmentsInput] = useState<number | "">("");
+  const [feesInput, setFeesInput] = useState<number | "">("");
   const [saving, setSaving] = useState(false);
 
   const fetchFee = async () => {
@@ -81,8 +80,7 @@ export default function Page() {
         const first = data.fees[0];
         setSelectedFee(first);
         setTotalFeeInput(first.totalFee);
-        setDiscountInput(first.discountPercent);
-        setInstallmentsInput(first.installments);
+        setFeesInput(first.finalFee);
       } else {
         setSelectedFee(null);
       }
@@ -203,7 +201,7 @@ export default function Page() {
 
   if (role === "STUDENT" && fee) {
     const remainingAmount = fee.remainingFee;
-    const payable = plan === 1 ? remainingAmount : remainingAmount / plan;
+    const payable = remainingAmount;
     const progress =
       fee.finalFee > 0 ? Math.min((fee.amountPaid / fee.finalFee) * 100, 100) : 0;
 
@@ -228,7 +226,7 @@ export default function Page() {
                 Total Fee: <span className="font-semibold text-white">₹{fee.totalFee}</span>
               </p>
               <p className="text-[#808080] text-sm">
-                Discount: {fee.discountPercent}% &nbsp; | &nbsp; Payable after discount:{" "}
+                Fees:{" "}
                 <span className="font-semibold text-white">₹{fee.finalFee}</span>
               </p>
               <p className="text-[#808080] text-sm">
@@ -237,45 +235,14 @@ export default function Page() {
               </p>
             </div>
 
-            {/* Plan Selector */}
-            <div className="space-y-3">
-              {[1, 3].map((p) => (
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.97 }}
-                  key={p}
-                  onClick={() => setPlan(p as 1 | 3)}
-                  className={`w-full p-4 rounded-xl border flex justify-between items-center transition-all duration-300 ${
-                    plan === p
-                      ? "bg-gradient-to-r from-green-500/20 to-green-600/20 border-green-500/50 text-white shadow-lg"
-                      : "bg-[#2d2d2d] border-[#404040] text-[#808080] hover:border-[#808080] hover:text-white hover:bg-[#404040]"
-                  }`}
-                >
-                  <span className="font-medium">
-                    {p === 1 ? "Pay Full Remaining" : `${p} Installments`}
-                  </span>
-                  <span className="font-semibold">
-                    ₹{(remainingAmount / p).toFixed(2)}
-                  </span>
-                </motion.button>
-              ))}
-            </div>
-
             {/* Payment Summary */}
             <div className="bg-[#2d2d2d]/50 border border-[#404040] rounded-xl p-4 space-y-2">
               <div className="flex justify-between">
-                <span className="text-[#808080]">Pay Now</span>
+                <span className="text-[#808080]">Pay now (full remaining)</span>
                 <span className="font-bold text-green-400">
                   ₹{payable.toFixed(2)}
                 </span>
               </div>
-
-              {plan !== 1 && (
-                <div className="flex justify-between text-sm text-[#808080]">
-                  <span>Remaining</span>
-                  <span>₹{(remainingAmount - payable).toFixed(2)}</span>
-                </div>
-              )}
             </div>
 
             {/* Progress Bar */}
@@ -374,8 +341,7 @@ export default function Page() {
                   onClick={() => {
                     setSelectedFee(feeItem);
                     setTotalFeeInput(feeItem.totalFee);
-                    setDiscountInput(feeItem.discountPercent);
-                    setInstallmentsInput(feeItem.installments);
+                    setFeesInput(feeItem.finalFee);
                   }}
                   className={`w-full text-left p-3 rounded-xl border transition-all duration-300 ${
                     selectedFee?.student.id === feeItem.student.id
@@ -438,18 +404,18 @@ export default function Page() {
                         whileHover={{ scale: 1.05 }}
                         className="p-5 rounded-xl bg-blue-500/20 border border-blue-500/30"
                       >
-                        <p className="text-sm text-[#808080] mb-2">Discount</p>
+                        <p className="text-sm text-[#808080] mb-2">Fees</p>
                         <p className="text-3xl font-bold text-blue-400">
-                          {selectedFee.discountPercent}%
+                          Rs. {selectedFee.finalFee}
                         </p>
                       </motion.div>
                       <motion.div
                         whileHover={{ scale: 1.05 }}
                         className="p-5 rounded-xl bg-yellow-500/20 border border-yellow-500/30"
                       >
-                        <p className="text-sm text-[#808080] mb-2">Payable</p>
+                        <p className="text-sm text-[#808080] mb-2">Remaining</p>
                         <p className="text-3xl font-bold text-yellow-400">
-                          ₹{selectedFee.finalFee}
+                          Rs. {selectedFee.remainingFee}
                         </p>
                       </motion.div>
                       <motion.div
@@ -479,15 +445,12 @@ export default function Page() {
                           className="h-3 bg-gradient-to-r from-green-500 to-green-600 rounded-full"
                         />
                       </div>
-                      <p className="text-xs text-[#808080] mt-3">
-                        Installments allowed: {selectedFee.installments}
-                      </p>
                     </div>
                     <div className="p-5 rounded-xl bg-[#2d2d2d]/50 border border-[#404040] space-y-4">
                       <h4 className="font-semibold text-white text-sm flex items-center gap-2">
                         💰 Update Fees
                       </h4>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                         <div className="space-y-2">
                           <label className="text-[#808080] block">Total Fee</label>
                           <input
@@ -498,23 +461,13 @@ export default function Page() {
                           />
                         </div>
                         <div className="space-y-2">
-                          <label className="text-[#808080] block">Discount %</label>
+                          <label className="text-[#808080] block">Fees</label>
                           <input
                             type="number"
-                            value={discountInput}
+                            min="0"
+                            value={feesInput}
                             onChange={(e) =>
-                              setDiscountInput(e.target.value === "" ? "" : Number(e.target.value))
-                            }
-                            className="w-full bg-[#1a1a1a] border border-[#404040] text-white rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#808080] focus:border-transparent hover:border-[#808080] transition placeholder-[#6b6b6b]"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-[#808080] block">Installments</label>
-                          <input
-                            type="number"
-                            value={installmentsInput}
-                            onChange={(e) =>
-                              setInstallmentsInput(e.target.value === "" ? "" : Number(e.target.value))
+                              setFeesInput(e.target.value === "" ? "" : Number(e.target.value))
                             }
                             className="w-full bg-[#1a1a1a] border border-[#404040] text-white rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#808080] focus:border-transparent hover:border-[#808080] transition placeholder-[#6b6b6b]"
                           />
@@ -526,18 +479,34 @@ export default function Page() {
                         whileTap={{ scale: saving ? 1 : 0.98 }}
                         onClick={async () => {
                           if (!selectedFee) return;
+                          const nextTotalFee =
+                            totalFeeInput === "" ? selectedFee.totalFee : Number(totalFeeInput);
+                          const nextFees =
+                            feesInput === "" ? selectedFee.finalFee : Number(feesInput);
+
+                          if (nextTotalFee <= 0) {
+                            alert("Total Fee must be a positive number.");
+                            return;
+                          }
+
+                          if (nextFees < 0 || nextFees > nextTotalFee) {
+                            alert("Fees must be between 0 and the Total Fee.");
+                            return;
+                          }
+
+                          const derivedDiscountPercent =
+                            nextTotalFee > 0
+                              ? Number((((nextTotalFee - nextFees) / nextTotalFee) * 100).toFixed(2))
+                              : 0;
+
                           setSaving(true);
                           try {
                             const res = await fetch(`/api/fees/student/${selectedFee.student.id}`, {
                               method: "PATCH",
                               headers: { "Content-Type": "application/json" },
                               body: JSON.stringify({
-                                totalFee:
-                                  totalFeeInput === "" ? undefined : Number(totalFeeInput),
-                                discountPercent:
-                                  discountInput === "" ? undefined : Number(discountInput),
-                                installments:
-                                  installmentsInput === "" ? undefined : Number(installmentsInput),
+                                totalFee: nextTotalFee,
+                                discountPercent: derivedDiscountPercent,
                               }),
                             });
                             const data = await res.json();
@@ -588,3 +557,4 @@ export default function Page() {
     
   );
 }
+

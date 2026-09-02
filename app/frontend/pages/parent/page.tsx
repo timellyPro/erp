@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 import RequiredRoles from "../../auth/RequiredRoles";
 import AppLayout from "../../AppLayout";
 import { PARENT_MENU_ITEMS } from "../../constants/sidebar";
@@ -9,6 +10,7 @@ import ParentHomeTab from "../../components/parent/home/ParentHome";
 import ParentProfileTab from "../../components/parent/profile/ParentProfile";
 import ParentAttendanceTab from "../../components/parent/attendance/ParentAttendance";
 import ParentHomeworkTab from "../../components/parent/homework/ParentHomework";
+import ParentTimetableTab from "../../components/parent/timetable/ParentTimetable";
 import ParentMarksTab from "../../components/parent/marks/ParentMarksTab";
 import ParentExamsTab from "../../components/parent/examsSyllabus/ParentExamsTab";
 import ParentFeesTab from "../../components/parent/fees/ParentFeesTab";
@@ -18,18 +20,23 @@ import ParentCertificatesTab from "../../components/parent/certificates/ParentCe
 import ParentLeavesTab from "../../components/parent/leaves/LeaveApplications";
 import ParentSettingsTab from "../../components/parent/settings/ParentSettings";
 import ParentAnalyticsTab from "../../components/parent/analytics/ParentAnalyticsTab";
-import Spinner from "../../components/common/Spinner";
+import ParentTimellyLoader from "../../components/parent/ParentTimellyLoader";
 import ParentSubscriptionTab from "../../components/parent/subscription/ParentSubscriptionTab";
+import {
+  peekParentDetailsFromBootstrap,
+  warmParentPortalBootstrap,
+} from "@/lib/loadParentPortal";
 import { Lock } from "lucide-react";
 
 const PARENT_TAB_TITLES: Record<string, string> = {
   dashboard: "Home",
   profile: "Profile",
   homework: "Homework",
+  timetable: "Timetable",
   attendance: "Attendance",
   marks: "Marks",
   exams: "Exams & Syllabus",
-  // fees: "Fees",
+  fees: "Fees",
   chat: "Chat",
   workshops: "Workshops",
   certificates: "Certificates",
@@ -52,17 +59,17 @@ type SubscriptionStatusResponse = {
 };
 
 function ParentDashboardInner() {
+  const { data: session } = useSession();
   const tab = useSearchParams().get("tab") ?? "dashboard";
   const title = PARENT_TAB_TITLES[tab] ?? tab.toUpperCase();
-
   const [profile, setProfile] = useState({
-    name: "Parent",
+    name: session?.user?.name ?? "Parent",
     subtitle: "Parent",
-    image: null as string | null,
-    email: undefined as string | undefined,
-    phone: undefined as string | undefined,
+    image: (session?.user as any)?.image ?? null,
+    email: session?.user?.email ?? undefined,
+    phone: (session?.user as any)?.mobile ?? undefined,
     address: undefined as string | undefined,
-    userId: undefined as string | undefined,
+    userId: (session?.user as any)?.id ?? undefined,
   });
 
   const [subStatus, setSubStatus] = useState<SubscriptionStatusResponse | null>(null);
@@ -78,14 +85,16 @@ function ParentDashboardInner() {
         return <ParentProfileTab />;
       case "homework":
         return <ParentHomeworkTab />;
+      case "timetable":
+        return <ParentTimetableTab />;
       case "attendance":
         return <ParentAttendanceTab />;
       case "marks":
         return <ParentMarksTab />;
       case "exams":
         return <ParentExamsTab />;
-      // case "fees":
-      //   return <ParentFeesTab />;
+      case "fees":
+        return <ParentFeesTab />;
       case "subscription":
         return <ParentSubscriptionTab />;
       case "chat":
@@ -105,28 +114,41 @@ function ParentDashboardInner() {
 
   useEffect(() => {
     let cancelled = false;
+    const studentId = session?.user?.studentId;
 
     (async () => {
       try {
-        const [userRes, parentDetailsRes] = await Promise.all([
-          fetch("/api/user/me"),
-          fetch("/api/student/parent-details"),
-        ]);
+        if (studentId) {
+          const boot = await warmParentPortalBootstrap(studentId).catch(() => null);
+          if (cancelled) return;
+          if (boot?.parentDetails?.address) {
+            setProfile((prev) => ({
+              ...prev,
+              address: boot.parentDetails.address || prev.address,
+            }));
+          }
+        }
+
+        const cachedDetails = peekParentDetailsFromBootstrap();
+        if (cachedDetails?.address) {
+          setProfile((prev) => ({ ...prev, address: cachedDetails.address || prev.address }));
+        }
+
+        const userRes = await fetch("/api/user/me");
         const userData = await userRes.json();
-        const parentData = await parentDetailsRes.json().catch(() => ({}));
         if (cancelled || !userRes.ok) return;
 
         const u = userData.user;
         if (u) {
-          setProfile({
-            name: u.name ?? "Parent",
+          setProfile((prev) => ({
+            name: u.name ?? prev.name ?? session?.user?.name ?? "Parent",
             subtitle: "Parent",
-            image: u.photoUrl ?? null,
-            email: u.email ?? undefined,
-            phone: u.mobile ?? undefined,
-            address: parentDetailsRes.ok ? parentData?.address ?? undefined : undefined,
-            userId: u.id ?? undefined,
-          });
+            image: u.photoUrl ?? prev.image ?? session?.user?.image ?? null,
+            email: u.email ?? prev.email ?? session?.user?.email ?? undefined,
+            phone: u.mobile ?? prev.phone ?? (session?.user as any)?.mobile ?? undefined,
+            address: prev.address ?? cachedDetails?.address ?? undefined,
+            userId: u.id ?? prev.userId ?? (session?.user as any)?.id ?? undefined,
+          }));
         }
       } catch {
         // fallback default
@@ -136,13 +158,25 @@ function ParentDashboardInner() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [
+    session?.user?.studentId,
+    session?.user?.name,
+    session?.user?.image,
+    session?.user?.email,
+    (session?.user as any)?.mobile,
+    (session?.user as any)?.id,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         setLoadingSub(true);
+        const studentId = session?.user?.studentId;
+        if (studentId) {
+          await warmParentPortalBootstrap(studentId).catch(() => undefined);
+        }
+        if (cancelled) return;
         const res = await fetch("/api/parent/subscription/status", { credentials: "include" });
         const data = await res.json();
         if (!cancelled && res.ok) {
@@ -157,7 +191,7 @@ function ParentDashboardInner() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [session?.user?.studentId]);
 
   const isLocked =
     subStatus &&
@@ -225,8 +259,8 @@ export default function ParentDashboardContent() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen flex items-center justify-center text-white/70">
-          <Spinner />
+        <div className="min-h-screen flex items-center justify-center px-4 py-10">
+          <ParentTimellyLoader preset="shell" className="w-full max-w-lg" />
         </div>
       }
     >

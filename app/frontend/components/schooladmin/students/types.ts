@@ -14,7 +14,10 @@ export type SelectOption = {
 export type StudentFormState = {
   name: string;
   rollNo: string;
+  penNumber: string;
+  apaarId: string;
   gender: string;
+  residencyType: string;
   dob: string;
   classId: string;
   section: string;
@@ -48,8 +51,12 @@ export type StudentFormState = {
   emergencyFatherNo: string;
   emergencyMotherNo: string;
   emergencyGuardianNo: string;
+  /** Subjects from exam/syllabus catalog */
+  subjects: string[];
 };
 
 export type StudentFormErrors = Partial<Record<keyof StudentFormState, string>>;
+
+export type StudentStatusFilter = "Active" | "Inactive" | "All";
 
 export type StudentRow = IStudent;

@@ -2,6 +2,13 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { computeAdminStudentFeeBreakdown } from "@/lib/computeAdminStudentFeeBreakdown";
+import { isRedisEnabled } from "@/lib/redis";
+import {
+  getBreakdownMemCached,
+  setBreakdownMemCached,
+} from "@/lib/studentFeeReadCache";
+import { tenantCacheKey, swrGet, swrSet } from "@/lib/tenantCache";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -12,19 +19,32 @@ async function getSchoolId(session: { user: { id: string; schoolId?: string | nu
     });
     schoolId = adminSchool?.id ?? null;
   }
+  if (!schoolId) {
+    const teacherClass = await prisma.class.findFirst({
+      where: { teacherId: session.user.id },
+      select: { schoolId: true },
+    });
+    schoolId = teacherClass?.schoolId ?? null;
+  }
+  if (!schoolId) {
+    const teacherSchool = await prisma.school.findFirst({
+      where: { teachers: { some: { id: session.user.id } } },
+      select: { id: true },
+    });
+    schoolId = teacherSchool?.id ?? null;
+  }
   return schoolId;
 }
-
-type HeadDueResponse =
-  | { key: string; headType: "BASE_COMPONENT"; label: string; dueBefore: number }
-  | { key: string; headType: "EXTRA_FEE"; label: string; dueBefore: number };
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
 
-  const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
-  if (!isAdmin) return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+  const canManageFees =
+    session.user.role === "SCHOOLADMIN" ||
+    session.user.role === "SUPERADMIN" ||
+    session.user.role === "TEACHER";
+  if (!canManageFees) return NextResponse.json({ message: "Forbidden" }, { status: 403 });
 
   try {
     const schoolId = await getSchoolId(session);
@@ -34,116 +54,60 @@ export async function GET(req: Request) {
     const studentId = searchParams.get("studentId")?.trim();
     if (!studentId) return NextResponse.json({ message: "studentId is required" }, { status: 400 });
 
-    const student = await prisma.student.findFirst({
-      where: { id: studentId, schoolId },
-      include: { fee: true, class: true },
-    });
-    if (!student) return NextResponse.json({ message: "Student not found in your school" }, { status: 404 });
-    if (!student.fee) return NextResponse.json({ message: "Fee record not found for this student" }, { status: 404 });
+    const skipMigrate =
+      searchParams.get("skipMigrate") === "1" ||
+      searchParams.get("fast") === "1";
+    const bypassCache = searchParams.get("refresh") === "1";
 
-    const fee = student.fee;
-    const discountRatio = fee.totalFee > 0 ? fee.finalFee / fee.totalFee : 0;
+    const now = Date.now();
+    const memKey = `${schoolId}:${studentId}:fast`;
+    if (skipMigrate && !bypassCache) {
+      const memHit = getBreakdownMemCached(memKey);
+      if (memHit) {
+        return NextResponse.json(memHit, { status: 200 });
+      }
+    }
 
-    const classFeeStructure = student.class?.id
-      ? await prisma.classFeeStructure.findUnique({
-          where: { classId: student.class.id },
-          select: { components: true },
+    const cacheableFastPath = skipMigrate && !bypassCache && isRedisEnabled();
+    const cacheKey = cacheableFastPath
+      ? await tenantCacheKey(schoolId, "api", "fees:admin:breakdown", {
+          studentId,
+          fast: true,
         })
       : null;
-
-    const baseComps =
-      ((classFeeStructure?.components as Array<{ name: string; amount: number }> | null) ?? []).map((c) => ({
-        name: c.name,
-        amount: Number(c.amount) || 0,
-      }));
-
-    const classId = student.class?.id ?? null;
-    const classSection = student.class?.section ?? null;
-
-    const extraFees = await prisma.extraFee.findMany({
-      where: {
-        schoolId,
-        OR: [
-          { targetType: "SCHOOL" },
-          ...(classId ? [{ targetType: "CLASS", targetClassId: classId }] : []),
-          ...(classId && classSection
-            ? [{ targetType: "SECTION", targetClassId: classId, targetSection: classSection }]
-            : []),
-          { targetType: "STUDENT", targetStudentId: student.id },
-        ],
-      },
-      select: { id: true, name: true, amount: true },
-    });
-
-    const allHeads = [
-      ...baseComps.map((c, idx) => ({
-        key: `BASE:${idx}`,
-        headType: "BASE_COMPONENT" as const,
-        label: c.name,
-        snapshotDue: c.amount * discountRatio,
-      })),
-      ...extraFees.map((ef) => ({
-        key: `EXTRA:${ef.id}`,
-        headType: "EXTRA_FEE" as const,
-        label: ef.name,
-        snapshotDue: Number(ef.amount) * discountRatio,
-      })),
-    ];
-
-    // Net already-paid by head via allocations (new payments only).
-    const [paymentAllocations, refundAllocations] = await Promise.all([
-      prisma.paymentFeeAllocation.findMany({
-        where: { studentId: student.id, allocationType: "PAYMENT", payment: { status: "SUCCESS" } },
-        select: { headType: true, componentIndex: true, extraFeeId: true, allocatedAmount: true },
-      }),
-      prisma.paymentFeeAllocation.findMany({
-        where: { studentId: student.id, allocationType: "REFUND", payment: { status: "SUCCESS" } },
-        select: { headType: true, componentIndex: true, extraFeeId: true, allocatedAmount: true },
-      }),
-    ]);
-
-    const netPaidByHead = new Map<string, number>();
-    for (const a of paymentAllocations) {
-      const key = a.headType === "BASE_COMPONENT" ? `BASE:${a.componentIndex}` : `EXTRA:${a.extraFeeId}`;
-      netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) + a.allocatedAmount);
-    }
-    for (const a of refundAllocations) {
-      const key = a.headType === "BASE_COMPONENT" ? `BASE:${a.componentIndex}` : `EXTRA:${a.extraFeeId}`;
-      netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) - a.allocatedAmount);
-    }
-
-    const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);
-    const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);
-    const totalSnapshotDue = Math.max(fee.finalFee, 0);
-
-    const headsDue: HeadDueResponse[] = allHeads.map((h) => {
-      const paidAlloc = netPaidByHead.get(h.key) ?? 0;
-      const paidLegacy = totalSnapshotDue > 0 ? legacyPaidTotal * (h.snapshotDue / totalSnapshotDue) : 0;
-      const paidBefore = Math.max(paidAlloc + paidLegacy, 0);
-      const dueBefore = Math.max(h.snapshotDue - paidBefore, 0);
-
-      if (h.headType === "BASE_COMPONENT") {
-        return { key: h.key, headType: "BASE_COMPONENT", label: h.label, dueBefore };
+    if (cacheKey) {
+      const cached = await swrGet<Awaited<ReturnType<typeof computeAdminStudentFeeBreakdown>>>(cacheKey);
+      if (cached && now < cached.freshUntil) {
+        return NextResponse.json(cached.value, { status: 200 });
       }
-      return { key: h.key, headType: "EXTRA_FEE", label: h.label, dueBefore };
-    });
+    }
 
-    return NextResponse.json(
-      {
-        studentId: student.id,
-        remainingFee: fee.remainingFee,
-        amountPaid: fee.amountPaid,
-        finalFee: fee.finalFee,
-        dueHeads: headsDue,
-      },
-      { status: 200 }
-    );
-  } catch (error: any) {
+    const result = await computeAdminStudentFeeBreakdown(schoolId, studentId, {
+      migrateLumps: !skipMigrate,
+      /** Deletes duplicate hostel/mess ExtraFee rows in DB — skip on read-only fast path. */
+      cleanupHostelMessDuplicates: !skipMigrate,
+      reconcileTotals: !skipMigrate,
+    });
+    if (skipMigrate && !bypassCache) {
+      setBreakdownMemCached(memKey, result);
+    }
+    if (cacheKey) {
+      await swrSet(
+        cacheKey,
+        { value: result, freshUntil: now + 8_000, staleUntil: now + 20_000 },
+        20
+      );
+    }
+    return NextResponse.json(result, { status: 200 });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Internal server error";
+    if (message.includes("Fee record not found")) {
+      return NextResponse.json({ message }, { status: 404 });
+    }
+    if (message.includes("not found")) {
+      return NextResponse.json({ message }, { status: 404 });
+    }
     console.error("Admin fee breakdown error:", error);
-    return NextResponse.json(
-      { message: error?.message || "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ message }, { status: 500 });
   }
 }
-
