@@ -375,8 +375,11 @@ export const FeesBreakdown = ({
     setHeadCards(splitHeads);
     setHeadsTotalAmount(
       roundRupee(
-        Number(data?.totalAmount) ||
-          splitHeads.reduce((s: number, h: { amount: number }) => s + h.amount, 0)
+        Number(data?.totalAmount) > 0
+          ? Number(data.totalAmount)
+          : splitHeads
+              .filter((h: { label: string }) => !isPreviousYearFeeHeadName(h.label))
+              .reduce((s: number, h: { amount: number }) => s + h.amount, 0)
       )
     );
     setHeadsRemainingAmount(roundRupee(Number(data?.remainingFee) || 0));
@@ -603,7 +606,15 @@ export const FeesBreakdown = ({
       if (!response.ok) {
         throw new Error(typeof data.message === "string" ? data.message : "Failed to record payment");
       }
+      if (data.idempotent === true) {
+        throw new Error(
+          typeof data.message === "string"
+            ? data.message
+            : "This UTR / reference was already recorded for this fee head."
+        );
+      }
       const paidCardKey = payingHead.key;
+      const paidPreviousYear = isPreviousYearFeeHeadName(payingHead.label);
       setPayingHead(null);
       setPaymentSaving(false);
       setHeadCards((prev) =>
@@ -616,7 +627,11 @@ export const FeesBreakdown = ({
           };
         })
       );
-      setHeadsRemainingAmount((prev) => roundRupee(Math.max((prev ?? 0) - amount, 0)));
+      if (paidPreviousYear) {
+        setPreviousYearRemainingAmount((prev) => roundRupee(Math.max(prev - amount, 0)));
+      } else {
+        setHeadsRemainingAmount((prev) => roundRupee(Math.max((prev ?? 0) - amount, 0)));
+      }
       onFeeModified?.({
         payment: {
           id: String(data.payment?.id ?? ""),

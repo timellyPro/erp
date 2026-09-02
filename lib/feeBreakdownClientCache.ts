@@ -3,7 +3,7 @@ import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFe
 const MEMORY_TTL_MS = 30 * 60 * 1000;
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 /** Bump when breakdown attribution logic changes so stale session totals are dropped. */
-const SESSION_KEY = "erp:fee-breakdown:v4";
+const SESSION_KEY = "erp:fee-breakdown:v5";
 const MAX_SESSION_ENTRIES = 80;
 
 const memory = new Map<string, { expiresAt: number; value: AdminStudentFeeBreakdownResult }>();
