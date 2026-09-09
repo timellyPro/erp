@@ -4,6 +4,7 @@ import { authOptions } from "../../../../lib/authOptions";
 import prisma from "../../../../lib/db";
 import bcrypt from "bcryptjs";
 import { purgeSchoolDashboardServerCacheMatching } from "@/lib/schoolDashboardServerCache";
+import { sanitizeTeachingClassIds } from "@/lib/teacherClassAccess";
 
 type Params = Promise<{ id: string }>;
 
@@ -36,6 +37,7 @@ export async function GET(req: NextRequest, { params }: { params: Params }) {
         teacherStatus: true,
         mobile: true,
         address: true,
+        teachingClassIds: true,
         assignedClasses: { select: { id: true, name: true, section: true } },
       },
     });
@@ -52,14 +54,16 @@ export async function GET(req: NextRequest, { params }: { params: Params }) {
       );
     }
 
-    const assignedClassIds = "assignedClasses" in user
-      ? (user.assignedClasses as { id: string }[]).map((c) => c.id)
+    const assignedClassIds = Array.isArray(user.teachingClassIds)
+      ? user.teachingClassIds.filter((id) => typeof id === "string" && id.trim())
       : [];
-    const { assignedClasses, ...rest } = user;
+    const { assignedClasses, teachingClassIds, ...rest } = user;
     return NextResponse.json({
       ...rest,
+      teachingClassIds,
       designation: user.subject,
       assignedClassIds,
+      assignedClasses,
     });
   } catch (error: any) {
     console.error("User fetch error:", error);
@@ -132,6 +136,8 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
       }
     }
 
+    const schoolId = (user.schoolId || session.user.schoolId) as string;
+
     const updateData: Record<string, unknown> = {};
     if (name !== undefined) updateData.name = name;
     if (email !== undefined) updateData.email = email;
@@ -149,6 +155,13 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
         const arr = Array.isArray(subjects) && subjects.every((s: unknown) => typeof s === "string") ? (subjects as string[]).filter(Boolean) : [];
         updateData.subjects = arr;
         if (arr[0]) updateData.subject = arr[0];
+      }
+      if (assignedClassIds !== undefined) {
+        // Teaching assignments (marks/homework) — do NOT overwrite Class.teacherId (class teacher).
+        updateData.teachingClassIds = await sanitizeTeachingClassIds(
+          assignedClassIds,
+          schoolId
+        );
       }
       if (qualification !== undefined) updateData.qualification = qualification && String(qualification).trim() ? String(qualification).trim() : null;
       if (experience !== undefined) updateData.experience = experience && String(experience).trim() ? String(experience).trim() : null;
@@ -174,46 +187,27 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
       updateData.photoUrl = photoUrl && String(photoUrl).trim() ? String(photoUrl).trim() : null;
     }
 
-    const schoolId = session.user.schoolId as string;
-
-    const updatedUser = await prisma.$transaction(async (tx) => {
-      const userRow = await tx.user.update({
-        where: { id },
-        data: updateData,
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          subject: true,
-          subjects: true,
-          allowedFeatures: true,
-          teacherId: true,
-          qualification: true,
-          experience: true,
-          joiningDate: true,
-          teacherStatus: true,
-          mobile: true,
-          address: true,
-          photoUrl: true,
-        },
-      });
-
-      if (user.role === "TEACHER" && Array.isArray(assignedClassIds)) {
-        const classIds = assignedClassIds.filter((c: unknown) => typeof c === "string") as string[];
-        await tx.class.updateMany({
-          where: { teacherId: id },
-          data: { teacherId: null },
-        });
-        if (classIds.length > 0) {
-          await tx.class.updateMany({
-            where: { id: { in: classIds }, schoolId },
-            data: { teacherId: id },
-          });
-        }
-      }
-
-      return userRow;
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: updateData,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        subject: true,
+        subjects: true,
+        allowedFeatures: true,
+        teacherId: true,
+        teachingClassIds: true,
+        qualification: true,
+        experience: true,
+        joiningDate: true,
+        teacherStatus: true,
+        mobile: true,
+        address: true,
+        photoUrl: true,
+      },
     });
     if (user.role === "TEACHER") {
       purgeSchoolDashboardServerCacheMatching(`teacher:list:${schoolId}`);
@@ -225,6 +219,7 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
       user: {
         ...updatedUser,
         designation: updatedUser.subject,
+        assignedClassIds: updatedUser.teachingClassIds ?? [],
       },
     });
   } catch (error: any) {

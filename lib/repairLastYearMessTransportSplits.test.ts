@@ -85,7 +85,7 @@ describe("repairLastYearMessTransportSplits", () => {
       payment: {},
     };
 
-    const result = await repairLastYearMessTransportSplits(db as never, "school-1");
+    const result = await repairLastYearMessTransportSplits(db as never, "school-1", { force: true });
 
     expect(result).toEqual({ scanned: 1, repaired: 1, skipped: 0 });
     expect(mockSplit).toHaveBeenCalledTimes(1);
@@ -140,8 +140,23 @@ describe("repairLastYearMessTransportSplits", () => {
       payment: {},
     };
 
-    const result = await repairLastYearMessTransportSplits(db as never, "school-1");
+    const result = await repairLastYearMessTransportSplits(db as never, "school-1", { force: true });
     expect(result).toEqual({ scanned: 1, repaired: 0, skipped: 1 });
+    expect(mockBreakdown).not.toHaveBeenCalled();
+    expect(mockSplit).not.toHaveBeenCalled();
+  });
+
+  it("no-ops without force so student profile load cannot rewrite last-year payments", async () => {
+    const db = {
+      extraFee: { findMany: jest.fn() },
+      paymentFeeAllocation: { findMany: jest.fn() },
+      student: { findUnique: jest.fn() },
+      payment: {},
+    };
+
+    const result = await repairLastYearMessTransportSplits(db as never, "school-1");
+    expect(result).toEqual({ scanned: 0, repaired: 0, skipped: 0 });
+    expect(db.extraFee.findMany).not.toHaveBeenCalled();
     expect(mockBreakdown).not.toHaveBeenCalled();
     expect(mockSplit).not.toHaveBeenCalled();
   });

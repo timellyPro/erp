@@ -6,7 +6,6 @@ import {
   isStudentHosteller,
 } from "@/lib/extraFeeResidencyScope";
 import { repairOrphanExtraFeeAllocations } from "@/lib/repairOrphanExtraFeeAllocations";
-import { repairLastYearMessTransportSplits } from "@/lib/repairLastYearMessTransportSplits";
 
 type BackfillDb = Pick<
   typeof prisma,
@@ -16,6 +15,10 @@ type BackfillDb = Pick<
 /**
  * Persist fee head names on payment allocations and re-link orphan extraFeeIds
  * to live hostel/mess rows so Fees Sheet paid columns stay in sync.
+ *
+ * Intentionally does NOT call repairLastYearMessTransportSplits — that heuristic
+ * rewrote legitimate "Last Year Fee Due" payments onto Transport/Mess whenever
+ * those heads still had unpaid balance (e.g. SAI AARVI K ₹8600 receipt).
  */
 export async function backfillPaymentAllocationComponentNames(
   db: BackfillDb,
@@ -23,7 +26,6 @@ export async function backfillPaymentAllocationComponentNames(
   options?: { studentId?: string }
 ): Promise<{ fromExtraFee: number; inferredHostelMess: number; reassigned: number; lastYearSplit: number }> {
   const repaired = await repairOrphanExtraFeeAllocations(db, schoolId, options);
-  const lastYearSplit = await repairLastYearMessTransportSplits(db, schoolId, options);
   let fromExtraFee = 0;
   let inferredHostelMess = 0;
 
@@ -47,7 +49,7 @@ export async function backfillPaymentAllocationComponentNames(
   });
 
   if (orphanAllocations.length === 0) {
-    return { fromExtraFee: 0, inferredHostelMess: 0, reassigned: repaired.reassigned, lastYearSplit: lastYearSplit.repaired };
+    return { fromExtraFee: 0, inferredHostelMess: 0, reassigned: repaired.reassigned, lastYearSplit: 0 };
   }
 
   const extraFeeIds = Array.from(
@@ -79,7 +81,7 @@ export async function backfillPaymentAllocationComponentNames(
     (a) => a.extraFeeId && !extraFeeNameById.has(a.extraFeeId)
   );
   if (stillOrphan.length === 0) {
-    return { fromExtraFee, inferredHostelMess, reassigned: repaired.reassigned, lastYearSplit: lastYearSplit.repaired };
+    return { fromExtraFee, inferredHostelMess, reassigned: repaired.reassigned, lastYearSplit: 0 };
   }
 
   const [schoolHostelFees, schoolMessFees, students] = await Promise.all([
@@ -153,7 +155,7 @@ export async function backfillPaymentAllocationComponentNames(
     inferredHostelMess += result.count;
   }
 
-  return { fromExtraFee, inferredHostelMess, reassigned: repaired.reassigned, lastYearSplit: lastYearSplit.repaired };
+  return { fromExtraFee, inferredHostelMess, reassigned: repaired.reassigned, lastYearSplit: 0 };
 }
 
 /** Snapshot fee name onto allocations before deleting an extra-fee row. */

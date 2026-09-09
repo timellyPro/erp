@@ -63,10 +63,23 @@ export async function GET(req: Request) {
       SELECT "name" FROM "ExamType" WHERE "schoolId" = ${schoolId}
     `;
 
+    const fromMarks = await prisma.mark.findMany({
+      where: {
+        class: { schoolId },
+        examType: { not: null },
+      },
+      select: { examType: true },
+      distinct: ["examType"],
+      take: 200,
+    });
+
     const names = new Set<string>();
     DEFAULT_EXAM_TYPES.forEach((n) => names.add(n));
     customTypes.forEach((t) => {
       if (t.name) names.add(t.name.trim().toUpperCase());
+    });
+    fromMarks.forEach((t) => {
+      if (t.examType) names.add(t.examType.trim().toUpperCase());
     });
 
     return NextResponse.json(

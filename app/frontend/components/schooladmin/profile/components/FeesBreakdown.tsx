@@ -285,16 +285,40 @@ export const FeesBreakdown = ({
 
   const displayPreDiscountTotal = breakdownGrossTotal;
 
+  /** Prefer breakdown head sum when loaded — stored StudentFee can be stale after bulk extra cleanup. */
+  const displayTotalAmount =
+    headsTotalAmount != null && headsTotalAmount > 0
+      ? headsTotalAmount
+      : totalFee > 0
+        ? totalFee
+        : 0;
+
+  /**
+   * Discount rupees must compare gross vs net from the same source.
+   * Using stale StudentFee.totalFee (often 0) against live head gross falsely shows a
+   * full "approved" concession (e.g. B HETVIKA ₹88,000 with no approval row).
+   */
+  const netForDiscount =
+    breakdownNetTotal != null && breakdownNetTotal >= 0
+      ? breakdownNetTotal
+      : displayTotalAmount > 0
+        ? displayTotalAmount
+        : totalFee;
   const discountAmount =
     typeof discountFixedAmount === "number" && discountFixedAmount > 0
       ? discountFixedAmount
-      : storedDiscountRupeeAmount(displayPreDiscountTotal, totalFee, discountFixedAmount);
+      : storedDiscountRupeeAmount(
+          displayPreDiscountTotal > 0 ? displayPreDiscountTotal : totalFee,
+          netForDiscount,
+          discountFixedAmount
+        );
   const raisedDiscountAmount =
     typeof approvalState[0]?.discountFixedAmount === "number" && approvalState[0].discountFixedAmount > 0
       ? approvalState[0].discountFixedAmount
       : null;
   const latestApprovalState = approvalState[0] ?? null;
-  const approvalStatus = latestApprovalState?.status ?? (discountAmount > 0 ? "APPROVED" : null);
+  /** Never invent APPROVED from a totals mismatch — only real approval rows count. */
+  const approvalStatus = latestApprovalState?.status ?? null;
   const approvalUi =
     approvalStatus === "PENDING"
       ? {
@@ -324,13 +348,6 @@ export const FeesBreakdown = ({
               dot: "bg-lime-300",
             }
           : null;
-  /** Prefer breakdown head sum when loaded — stored StudentFee can be stale after bulk extra cleanup. */
-  const displayTotalAmount =
-    headsTotalAmount != null && headsTotalAmount > 0
-      ? headsTotalAmount
-      : totalFee > 0
-        ? totalFee
-        : 0;
   const displayAmountPaid =
     headCards.length > 0
       ? roundRupee(headCards.filter((h) => !isPreviousYearFeeHeadName(h.label)).reduce((s, h) => s + h.paid, 0))

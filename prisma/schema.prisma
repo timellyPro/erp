@@ -101,6 +101,8 @@ model User {
   teacherStatus     String?          @default("Active") // Active, Inactive
   address           String?          @db.Text
   leaveAprrover     Boolean          @default(false)
+  /** Classes this teacher teaches (marks/homework) — independent of Class.teacherId (class teacher). */
+  teachingClassIds  String[]         @default([])
   assignedClasses   Class[]          @relation("TeacherClass")
   attendances       Attendance[]     @relation("TeacherAttendance")
   marks             Mark[]           @relation("TeacherMarks")

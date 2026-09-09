@@ -99,7 +99,9 @@ function formDataFromApi(userData: Record<string, unknown>): UserFormData {
       ? (userData.allowedFeatures as string[])
       : [],
     teacherId: String(userData.teacherId || ""),
-    subjects: Array.isArray(subjects) && subjects.length ? (subjects as string[]) : [],
+    subjects: Array.isArray(subjects)
+      ? subjects.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      : [],
     assignedClassIds: Array.isArray(userData.assignedClassIds)
       ? (userData.assignedClassIds as string[])
       : [],
@@ -189,6 +191,8 @@ export default function UserForm({
 
   const shellAppliedForUserRef = React.useRef<string | null>(null);
   const formDirtyRef = React.useRef(false);
+  /** Fields the user edited — only these override API data when detail load finishes. */
+  const touchedFieldsRef = React.useRef<Set<keyof UserFormData>>(new Set());
 
   useEffect(() => {
     if (!listShellUser || initialData || !userId) return;
@@ -244,6 +248,7 @@ export default function UserForm({
   // Reset edit state when switching users
   useEffect(() => {
     formDirtyRef.current = false;
+    touchedFieldsRef.current = new Set();
     shellAppliedForUserRef.current = null;
   }, [userId]);
 
@@ -264,13 +269,17 @@ export default function UserForm({
       .then((userData: Record<string, unknown>) => {
         const fromApi = formDataFromApi(userData);
         setFormData((prev) => {
-          if (!formDirtyRef.current) return fromApi;
-          return {
-            ...fromApi,
-            assignedClassIds: prev.assignedClassIds,
-            subjects: prev.subjects,
-            allowedFeatures: prev.allowedFeatures,
-          };
+          if (!formDirtyRef.current || touchedFieldsRef.current.size === 0) {
+            return fromApi;
+          }
+          // Keep only fields the user actually edited; never wipe API
+          // subjects / classes with empty shell defaults from a dirty name/role edit.
+          const merged: UserFormData = { ...fromApi };
+          for (const field of touchedFieldsRef.current) {
+            const value = prev[field];
+            (merged as unknown as Record<string, unknown>)[field] = value;
+          }
+          return merged;
         });
       })
       .catch((err) => {
@@ -286,8 +295,13 @@ export default function UserForm({
     return () => controller.abort();
   }, [userId, initialData]);
 
-  const handleChange = (field: keyof UserFormData, value: unknown) => {
+  const markFieldTouched = (field: keyof UserFormData) => {
     formDirtyRef.current = true;
+    touchedFieldsRef.current.add(field);
+  };
+
+  const handleChange = (field: keyof UserFormData, value: unknown) => {
+    markFieldTouched(field);
     setFormData((prev) => ({ ...prev, [field]: value }));
     setError(null);
     setFieldErrors((prev) => {
@@ -300,7 +314,7 @@ export default function UserForm({
   };
 
   const handleFeatureToggle = (feature: string) => {
-    formDirtyRef.current = true;
+    markFieldTouched("allowedFeatures");
     setFormData((prev) => ({
       ...prev,
       allowedFeatures: prev.allowedFeatures.includes(feature)
@@ -329,6 +343,11 @@ export default function UserForm({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (detailLoading) {
+      setError("Still loading teacher profile — wait a moment, then save.");
+      return;
+    }
 
     if (!validateForm()) return;
 
@@ -604,7 +623,17 @@ export default function UserForm({
                               type="button"
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => {
-                                handleChange("subjects", [...(formData.subjects || []), s]);
+                                const normalized = s.trim().toUpperCase();
+                                if (
+                                  !(formData.subjects || [])
+                                    .map((x) => x.toUpperCase())
+                                    .includes(normalized)
+                                ) {
+                                  handleChange("subjects", [
+                                    ...(formData.subjects || []),
+                                    normalized,
+                                  ]);
+                                }
                                 setSubjectInput("");
                                 setSubjectsDropdownOpen(false);
                               }}
@@ -655,7 +684,9 @@ export default function UserForm({
                       <span className="text-white/40 text-sm">No classes found. Create classes first.</span>
                     )}
                   </div>
-                  <p className="text-[11px] text-white/50 mt-1">e.g. 10-A, 10-B — click to toggle</p>
+                  <p className="text-[11px] text-white/50 mt-1">
+                    Classes this teacher can enter marks for. Class teacher (homeroom) is set under Teachers → Appoint Teacher.
+                  </p>
                 </div>
                 <InputField
                   label="Qualification"
@@ -768,6 +799,7 @@ export default function UserForm({
             checked={formData.allowedFeatures.length === AVAILABLE_FEATURES_FOR_TEACHERS.length}
             onChange={() => {
               const allSelected = formData.allowedFeatures.length === AVAILABLE_FEATURES_FOR_TEACHERS.length;
+              markFieldTouched("allowedFeatures");
               setFormData((prev) => ({
                 ...prev,
                 allowedFeatures: allSelected
@@ -829,10 +861,10 @@ export default function UserForm({
       <div className="flex justify-end pt-4 gap-3">
         <motion.button
           type="submit"
-          disabled={submitting}
+          disabled={submitting || detailLoading}
           whileHover={{ x: 4 }}
           className="px-6 py-3 bg-lime-400 hover:bg-lime-500 text-black font-bold rounded-xl 
-          shadow-lg shadow-lime-400/20 transition-all flex items-center gap-2"
+          shadow-lg shadow-lime-400/20 transition-all flex items-center gap-2 disabled:opacity-60 disabled:pointer-events-none"
         >
           {submitting ? (
             <>

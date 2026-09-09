@@ -7,6 +7,7 @@ import {
   setSchoolDashboardServerCached,
 } from "@/lib/schoolDashboardServerCache";
 import { activeStudentWhere } from "@/lib/studentStatus";
+import { getTeacherAccessibleClassIds } from "@/lib/teacherClassAccess";
 
 async function resolveSchoolId(session: { user: { id: string; schoolId?: string | null; role: string } }) {
   let schoolId = session.user.schoolId;
@@ -17,11 +18,11 @@ async function resolveSchoolId(session: { user: { id: string; schoolId?: string 
     });
     schoolId = teacherClass?.schoolId ?? null;
     if (!schoolId) {
-      const teacherSchool = await prisma.school.findFirst({
-        where: { teachers: { some: { id: session.user.id } } },
-        select: { id: true },
+      const teacherSchool = await prisma.user.findUnique({
+        where: { id: session.user.id },
+        select: { schoolId: true },
       });
-      schoolId = teacherSchool?.id ?? null;
+      schoolId = teacherSchool?.schoolId ?? null;
     }
   }
   if (!schoolId) {
@@ -51,13 +52,20 @@ export async function GET(req: Request) {
       );
     }
 
-    const where: any = {
+    const where: Record<string, unknown> = {
       schoolId: schoolId,
     };
 
-    // Teachers only see classes assigned to them (Class.teacherId)
+    // Teachers see teachingClassIds + class-teacher (homeroom) classes
     if (session.user.role === "TEACHER") {
-      where.teacherId = session.user.id;
+      const accessibleIds = await getTeacherAccessibleClassIds(
+        session.user.id,
+        schoolId
+      );
+      if (accessibleIds.length === 0) {
+        return NextResponse.json({ classes: [] }, { status: 200 });
+      }
+      where.id = { in: accessibleIds };
     }
     const lite = new URL(req.url).searchParams.get("lite") === "1";
 
@@ -91,7 +99,10 @@ export async function GET(req: Request) {
         orderBy: [{ name: "asc" }, { section: "asc" }],
       });
       const payload = { classes };
-      setSchoolDashboardServerCached(memKey, payload, 60_000);
+      // Don't cache empty teacher lists — assignments change often via Add User
+      if (!(session.user.role === "TEACHER" && classes.length === 0)) {
+        setSchoolDashboardServerCached(memKey, payload, 60_000);
+      }
       return NextResponse.json(payload, { status: 200 });
     }
 
@@ -119,10 +130,10 @@ export async function GET(req: Request) {
     }));
 
     return NextResponse.json({ classes: classesWithTeacherId }, { status: 200 });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("List classes error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: error instanceof Error ? error.message : "Internal server error" },
       { status: 500 }
     );
   }
