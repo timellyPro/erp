@@ -73,9 +73,10 @@ export default function ExtraFeesList({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: editName.trim(),
+          amount: Number(editAmount),
           ...(editSplitIntoTwoInstallments
             ? { combinedInstallmentTotal: Number(editAmount) }
-            : { amount: Number(editAmount) }),
+            : {}),
           splitIntoTwoInstallments: editSplitIntoTwoInstallments,
         }),
       });

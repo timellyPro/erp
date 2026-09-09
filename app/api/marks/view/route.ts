@@ -57,8 +57,13 @@ export async function GET(req: Request) {
       if (classId) where.classId = classId;
     }
 
-    if (subject) where.subject = subject;
-    if (examType) where.examType = examType.toUpperCase();
+    // Case-insensitive so "Mathematics" matches "MATHEMATICS" from teacher subject chips
+    if (subject) {
+      where.subject = { equals: subject.trim(), mode: "insensitive" };
+    }
+    if (examType) {
+      where.examType = { equals: examType.trim(), mode: "insensitive" };
+    }
 
     if (session.user.studentId && !bypassCache) {
       const sid = session.user.studentId;
@@ -94,7 +99,38 @@ export async function GET(req: Request) {
       take: session.user.studentId ? 500 : undefined,
     });
 
-    const payload = { marks };
+    // Distinct exam types already saved for this class (+ optional subject) so the UI can show prior entries
+    let examTypesInUse: string[] = [];
+    let latestExamType: string | null = null;
+    if (classId && !session.user.studentId) {
+      const examWhere: Record<string, unknown> = {
+        classId,
+        class: { schoolId },
+        examType: { not: null },
+      };
+      if (subject) {
+        examWhere.subject = { equals: subject.trim(), mode: "insensitive" };
+      }
+      const [distinctExams, latest] = await Promise.all([
+        prisma.mark.findMany({
+          where: examWhere,
+          select: { examType: true },
+          distinct: ["examType"],
+          orderBy: { examType: "asc" },
+        }),
+        prisma.mark.findFirst({
+          where: examWhere,
+          select: { examType: true },
+          orderBy: { createdAt: "desc" },
+        }),
+      ]);
+      examTypesInUse = distinctExams
+        .map((r) => (r.examType || "").trim().toUpperCase())
+        .filter(Boolean);
+      latestExamType = latest?.examType?.trim().toUpperCase() || null;
+    }
+
+    const payload = { marks, examTypesInUse, latestExamType };
 
     if (session.user.studentId && !bypassCache) {
       const sid = session.user.studentId;

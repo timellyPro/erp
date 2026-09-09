@@ -36,18 +36,26 @@ function findExtraFeeDueHead(
 }
 
 /**
- * When a payment was posted entirely to "Last Year Fee Due" but the receipt / intent
- * was mess + transport (common data-entry mistake), split allocations so Fees Sheet
- * and transaction history show the correct heads.
+ * @deprecated Do not call from student profile / backfill paths.
+ *
+ * Older heuristic: when a payment was posted entirely to "Last Year Fee Due",
+ * reallocate it onto mess + transport. That silently corrupted legitimate last-year
+ * receipts (payment showed as Transportation Fee while the printed receipt said
+ * "Last Year …"). Kept only for explicit one-off admin use / tests.
  */
 export async function repairLastYearMessTransportSplits(
   db: RepairDb,
   schoolId: string,
-  options?: { studentId?: string; dryRun?: boolean }
+  options?: { studentId?: string; dryRun?: boolean; force?: boolean }
 ): Promise<{ scanned: number; repaired: number; skipped: number }> {
   let scanned = 0;
   let repaired = 0;
   let skipped = 0;
+
+  // Refuse by default — callers must pass force: true for intentional one-offs.
+  if (!options?.force) {
+    return { scanned, repaired, skipped };
+  }
 
   const lastYearExtras = await db.extraFee.findMany({
     where: {

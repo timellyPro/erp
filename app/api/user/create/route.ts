@@ -4,6 +4,8 @@ import { authOptions } from "../../../../lib/authOptions";
 import prisma from "../../../../lib/db";
 import bcrypt from "bcryptjs";
 import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
+import { purgeSchoolDashboardServerCacheMatching } from "@/lib/schoolDashboardServerCache";
+import { sanitizeTeachingClassIds } from "@/lib/teacherClassAccess";
 
 export async function POST(req: NextRequest) {
   try {
@@ -136,9 +138,9 @@ export async function POST(req: NextRequest) {
       Array.isArray(subjects) && subjects.every((s: unknown) => typeof s === "string")
         ? (subjects as string[]).filter(Boolean)
         : [];
-    const classIds =
-      Array.isArray(assignedClassIds) && assignedClassIds.every((c: unknown) => typeof c === "string")
-        ? (assignedClassIds as string[])
+    const teachingClassIds =
+      finalRole === "TEACHER"
+        ? await sanitizeTeachingClassIds(assignedClassIds, schoolId)
         : [];
 
     // Create user
@@ -156,6 +158,7 @@ export async function POST(req: NextRequest) {
           teacherId: teacherId && String(teacherId).trim() ? String(teacherId).trim() : null,
           subject: teacherSubjects[0] || designation || null,
           subjects: teacherSubjects,
+          teachingClassIds,
           qualification: qualification && String(qualification).trim() ? String(qualification).trim() : null,
           experience: experience && String(experience).trim() ? String(experience).trim() : null,
           joiningDate: joiningDateParsed || null,
@@ -166,15 +169,9 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Assign teacher to classes (only for TEACHER role, and classes must belong to same school)
-    if (finalRole === "TEACHER" && classIds.length > 0 && schoolId) {
-      await prisma.class.updateMany({
-        where: {
-          id: { in: classIds },
-          schoolId,
-        },
-        data: { teacherId: user.id },
-      });
+    if (finalRole === "TEACHER" && schoolId) {
+      purgeSchoolDashboardServerCacheMatching(`teacher:list:${schoolId}`);
+      purgeSchoolDashboardServerCacheMatching(`class:list:lite:${schoolId}`);
     }
 
     return NextResponse.json(

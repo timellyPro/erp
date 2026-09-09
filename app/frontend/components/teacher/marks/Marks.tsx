@@ -109,6 +109,7 @@ export default function TeacherMarksTab() {
   const [editingMaxId, setEditingMaxId] = useState<string | null>(null);
   const [editingMaxValue, setEditingMaxValue] = useState("");
   const userSelectedClassRef = useRef(false);
+  const userSelectedExamTypeRef = useRef(false);
 
   const classOptions = classes.map((c) => ({
     value: c.id,
@@ -167,7 +168,7 @@ export default function TeacherMarksTab() {
   }, []);
 
   const fetchStudentsAndMarks = useCallback(async () => {
-    if (!form.classId) {
+    if (!form.classId || !form.subject) {
       setRows([]);
       return;
     }
@@ -193,6 +194,31 @@ export default function TeacherMarksTab() {
       const marksData = await marksRes.json();
       const students: StudentApi[] = Array.isArray(studentsData.students) ? studentsData.students : [];
       const marks: MarkApi[] = Array.isArray(marksData.marks) ? marksData.marks : [];
+      const examTypesInUse: string[] = Array.isArray(marksData.examTypesInUse)
+        ? marksData.examTypesInUse.map((t: string) => String(t).trim().toUpperCase()).filter(Boolean)
+        : [];
+      const latestExamType =
+        typeof marksData.latestExamType === "string"
+          ? marksData.latestExamType.trim().toUpperCase()
+          : "";
+
+      if (examTypesInUse.length > 0) {
+        setExamTypeOptions((prev) => Array.from(new Set([...examTypesInUse, ...prev])));
+      }
+
+      // If this exam type has no saved marks but another does, switch to the latest saved exam
+      // (unless the teacher manually picked the exam type).
+      const currentExam = (form.examType || "").trim().toUpperCase();
+      if (
+        marks.length === 0 &&
+        latestExamType &&
+        latestExamType !== currentExam &&
+        !userSelectedExamTypeRef.current
+      ) {
+        setForm((prev) => ({ ...prev, examType: latestExamType }));
+        return;
+      }
+
       const markByStudent: Record<string, MarkApi> = {};
       for (const m of marks) {
         const existing = markByStudent[m.studentId];
@@ -278,7 +304,9 @@ export default function TeacherMarksTab() {
       if (allExamNames.size > 0) {
         setExamTypeOptions((prev) => Array.from(new Set([...allExamNames, ...prev])));
         setForm((prev) =>
-          allExamNames.has(prev.examType) ? prev : { ...prev, examType: Array.from(allExamNames)[0] }
+          allExamNames.has(prev.examType) || userSelectedExamTypeRef.current
+            ? prev
+            : { ...prev, examType: Array.from(allExamNames)[0] }
         );
       }
 
@@ -317,13 +345,20 @@ export default function TeacherMarksTab() {
   }, [fetchStudentsAndMarks]);
 
   const handleChange = (key: string, value: string) => {
+    if (key === "examType") {
+      userSelectedExamTypeRef.current = true;
+      setForm((prev) => ({ ...prev, examType: value.toUpperCase() }));
+      return;
+    }
     if (key === "class") {
       if (!value || value === "Select class") {
         userSelectedClassRef.current = false;
+        userSelectedExamTypeRef.current = false;
         setForm((prev) => ({ ...prev, classId: "", classLabel: "", section: "" }));
         return;
       }
       userSelectedClassRef.current = true;
+      userSelectedExamTypeRef.current = false;
       const opt = classOptions.find((o) => o.value === value || o.label === value);
       const c = classes.find((x) => x.id === value || (x.section ? `${x.name} - ${x.section}` : x.name) === value);
       setForm((prev) => ({
@@ -338,8 +373,9 @@ export default function TeacherMarksTab() {
       setForm((prev) => ({ ...prev, section: value }));
       return;
     }
-    if (key === "examType") {
-      setForm((prev) => ({ ...prev, examType: value.toUpperCase() }));
+    if (key === "subject") {
+      userSelectedExamTypeRef.current = false;
+      setForm((prev) => ({ ...prev, subject: value }));
       return;
     }
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -502,9 +538,10 @@ export default function TeacherMarksTab() {
           prev.map((row) => {
             const savedMark = successMap.get(row.id);
             if (!savedMark) return row;
+            const isAbsent = savedMark.grade === "AB";
             return {
               ...row,
-              marks: savedMark.marks,
+              marks: isAbsent ? ("AB" as const) : Number(savedMark.marks),
               maxMarks: savedMark.totalMarks,
               markId: savedMark.id,
             };

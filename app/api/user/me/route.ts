@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { getTeacherAccessibleClassIds } from "@/lib/teacherClassAccess";
 
 export async function GET() {
   try {
@@ -25,6 +26,7 @@ export async function GET() {
         teacherId: true,
         subject: true,
         subjects: true,
+        teachingClassIds: true,
         createdAt: true,
         assignedClasses: {
           select: {
@@ -42,7 +44,41 @@ export async function GET() {
       },
     });
 
-    return NextResponse.json({ user }, { status: 200 });
+    if (!user) {
+      return NextResponse.json({ message: "User not found" }, { status: 404 });
+    }
+
+    let assignedClasses = user.assignedClasses;
+    if (user.role === "TEACHER") {
+      const accessibleIds = await getTeacherAccessibleClassIds(user.id, session.user.schoolId);
+      if (accessibleIds.length > 0) {
+        assignedClasses = await prisma.class.findMany({
+          where: { id: { in: accessibleIds } },
+          select: {
+            id: true,
+            name: true,
+            section: true,
+            _count: { select: { students: true } },
+          },
+          orderBy: [{ name: "asc" }, { section: "asc" }],
+        });
+      } else {
+        assignedClasses = [];
+      }
+    }
+
+    const { teachingClassIds, ...rest } = user;
+    return NextResponse.json(
+      {
+        user: {
+          ...rest,
+          teachingClassIds,
+          assignedClasses,
+          assignedClassIds: teachingClassIds ?? [],
+        },
+      },
+      { status: 200 }
+    );
   } catch (e: unknown) {
     console.error("User me GET:", e);
     return NextResponse.json(

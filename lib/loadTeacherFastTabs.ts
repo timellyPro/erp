@@ -349,6 +349,10 @@ export async function loadTeacherMarksClasses(options?: { revalidate?: boolean; 
   );
 }
 
+export function invalidateTeacherMarksClasses() {
+  invalidateTeacherResource(ns.marksClasses);
+}
+
 /* ---------- Exams list (teacher flattened schedules) ---------- */
 
 export function peekTeacherExamsList() {

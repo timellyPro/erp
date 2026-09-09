@@ -57,9 +57,12 @@ export const EditExtraFeeModal = ({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: name.trim(),
-          ...(splitIntoTwoInstallments
+          amount: feeAmount,
+          // Always send combined total when editing a two-installment head so amount
+          // corrections apply even if the checkbox was toggled off by mistake.
+          ...(splitIntoTwoInstallments || initialSplitIntoTwoInstallments
             ? { combinedInstallmentTotal: feeAmount }
-            : { amount: feeAmount }),
+            : {}),
           splitIntoTwoInstallments,
         }),
       });

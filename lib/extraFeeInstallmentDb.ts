@@ -10,6 +10,7 @@ import {
   shouldPersistAsTwoInstallmentRecords,
   splitAmountInHalf,
 } from "@/lib/extraFeeInstallments";
+import { FEE_MUTATION_TX } from "@/lib/prismaFeeMutationTx";
 
 const LOG_PREFIX = "[ExtraFee Installments]";
 
@@ -177,7 +178,7 @@ export async function migrateUnsplitLumpExtraFee(
     await reassignAllocationsToInstallmentPair(t, lump.id, created1.id, created2.id, a1);
     await t.extraFee.delete({ where: { id: lump.id } });
     return [created1, created2] as const;
-  });
+  }, FEE_MUTATION_TX);
 
   logExtraFeeInstallment("MIGRATE complete", {
     deletedLumpId: lump.id,
@@ -218,10 +219,10 @@ export async function updateInstallmentPairTotal(
   newTotal: number
 ) {
   const [a1, a2] = splitAmountInHalf(newTotal);
-  await db.$transaction([
-    db.extraFee.update({ where: { id: firstId }, data: { amount: a1 } }),
-    db.extraFee.update({ where: { id: secondId }, data: { amount: a2 } }),
-  ]);
+  await db.$transaction(async (tx) => {
+    await tx.extraFee.update({ where: { id: firstId }, data: { amount: a1 } });
+    await tx.extraFee.update({ where: { id: secondId }, data: { amount: a2 } });
+  }, FEE_MUTATION_TX);
 }
 
 export async function updateInstallmentPairNames(
@@ -231,10 +232,16 @@ export async function updateInstallmentPairNames(
   baseName: string
 ) {
   const [n1, n2] = buildInstallmentFeeNames(baseName.trim());
-  await db.$transaction([
-    db.extraFee.update({ where: { id: firstId }, data: { name: n1, splitIntoTwoInstallments: false } }),
-    db.extraFee.update({ where: { id: secondId }, data: { name: n2, splitIntoTwoInstallments: false } }),
-  ]);
+  await db.$transaction(async (tx) => {
+    await tx.extraFee.update({
+      where: { id: firstId },
+      data: { name: n1, splitIntoTwoInstallments: false },
+    });
+    await tx.extraFee.update({
+      where: { id: secondId },
+      data: { name: n2, splitIntoTwoInstallments: false },
+    });
+  }, FEE_MUTATION_TX);
 }
 
 function sameExtraFeeTargetScope(
@@ -309,12 +316,26 @@ export async function patchExtraFeeWithInstallmentSupport(
     body.splitIntoTwoInstallments === true ||
     (body.splitIntoTwoInstallments !== false && extraFee.splitIntoTwoInstallments);
 
-  const combinedTotal =
+  /** Prefer combinedInstallmentTotal; otherwise use amount as the admin-entered total. */
+  const requestedTotal =
     typeof body.combinedInstallmentTotal === "number" && body.combinedInstallmentTotal > 0
       ? body.combinedInstallmentTotal
-      : typeof body.amount === "number" && body.amount > 0 && wantsSplit && !isInstallmentFeeName(extraFee.name)
+      : typeof body.amount === "number" && body.amount > 0
         ? body.amount
         : null;
+
+  /**
+   * Combined pair/lump total — when the checkbox is off the modal only sends `amount`,
+   * which previously left combinedTotal null so Mess/Hostel amount edits were ignored
+   * while still triggering installment migration.
+   */
+  const combinedTotal =
+    requestedTotal !== null &&
+    (typeof body.combinedInstallmentTotal === "number" ||
+      wantsSplit ||
+      !isInstallmentFeeName(extraFee.name))
+      ? requestedTotal
+      : null;
 
   const baseName = isInstallmentFeeName(extraFee.name)
     ? baseNameFromInstallmentFee(extraFee.name)
@@ -396,16 +417,19 @@ export async function patchExtraFeeWithInstallmentSupport(
   }
 
   if (shouldMigrateLumpToInstallmentsOnPatch(extraFee, wantsSplit)) {
+    const migrateAmount =
+      combinedTotal ??
+      (typeof body.amount === "number" && body.amount > 0 ? body.amount : null);
     logExtraFeeInstallment("PATCH → will split single row into 2", {
       feeId: extraFee.id,
       feeName: extraFee.name,
-      combinedTotal,
+      combinedTotal: migrateAmount,
     });
     let lump = { ...extraFee };
     let studentFeeDelta = 0;
-    if (combinedTotal !== null && combinedTotal !== extraFee.amount) {
-      lump = { ...lump, amount: combinedTotal };
-      studentFeeDelta = combinedTotal - extraFee.amount;
+    if (migrateAmount !== null && Math.abs(migrateAmount - extraFee.amount) > 0.001) {
+      lump = { ...lump, amount: migrateAmount };
+      studentFeeDelta = migrateAmount - extraFee.amount;
     }
     if (body.name !== undefined && String(body.name).trim()) {
       lump = { ...lump, name: String(body.name).trim() };
@@ -479,7 +503,7 @@ export async function deleteLumpKeepingInstallmentPair(
   await db.$transaction(async (tx) => {
     await reassignAllocationsToInstallmentPair(tx, lumpId, firstId, secondId, firstAmount);
     await tx.extraFee.delete({ where: { id: lumpId } });
-  });
+  }, FEE_MUTATION_TX);
 }
 
 /** Merge duplicate installment row allocations into the keeper, then delete the duplicate. */
@@ -494,7 +518,7 @@ export async function mergeDuplicateExtraFeeIntoKeeper(
       data: { extraFeeId: keeperId },
     });
     await tx.extraFee.delete({ where: { id: duplicateId } });
-  });
+  }, FEE_MUTATION_TX);
 }
 
 export async function migrateUnsplitLumpExtraFees(
