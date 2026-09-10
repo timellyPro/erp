@@ -11,6 +11,7 @@ import {
   Search,
 } from "lucide-react";
 import { downloadConsolidatedMarksPdf } from "@/lib/consolidatedMarksPdf";
+import { normalizeExamTypes } from "@/lib/examTypes";
 
 type ClassOption = {
   id: string;
@@ -126,7 +127,7 @@ export default function SchoolAdminDownloadReports() {
         ]);
         if (examRes.ok) {
           const data = await examRes.json();
-          const names: string[] = Array.isArray(data.examTypes) ? data.examTypes : [];
+          const names = normalizeExamTypes(data.examTypes).map((t) => t.name);
           if (names.length > 0) setExamTypeOptions(["ALL", ...names]);
         }
         if (subRes.ok) {

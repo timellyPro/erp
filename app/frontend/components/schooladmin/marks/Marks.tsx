@@ -6,6 +6,7 @@ import { ClipboardList, Download } from "lucide-react";
 
 const TeacherReportCard = lazy(() => import("../../teacher/marks/ReportCard"));
 const SchoolAdminDownloadReports = lazy(() => import("./DownloadReports"));
+const DownloadClassPdf = lazy(() => import("./DownloadClassPdf"));
 
 export default function SchoolAdminMarksTab() {
   const [subTab, setSubTab] = useState<"report-card" | "download">("download");
@@ -17,7 +18,7 @@ export default function SchoolAdminMarksTab() {
           title={subTab === "report-card" ? "Report Card" : "Download Reports"}
           subtitle={
             subTab === "report-card"
-              ? "View and download student report cards"
+              ? "View student report cards and download class PDFs (2 students per A4)"
               : "Download consolidated marks for all classes or selected sections as Excel or PDF"
           }
         />
@@ -55,7 +56,10 @@ export default function SchoolAdminMarksTab() {
               </div>
             }
           >
-            <TeacherReportCard scope="school" />
+            <div className="space-y-6">
+              <DownloadClassPdf />
+              <TeacherReportCard scope="school" />
+            </div>
           </Suspense>
         ) : (
           <Suspense

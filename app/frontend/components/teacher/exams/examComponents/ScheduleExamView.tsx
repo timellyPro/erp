@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { X, Plus, BookOpen, CheckCircle2, Trash2, Save } from "lucide-react";
 import PageHeader from "../../../common/PageHeader";
 import TimellyLoader from "../../../common/TimellyLoader";
+import { normalizeExamTypes } from "@/lib/examTypes";
 
 interface ClassItem {
     id: string;
@@ -63,9 +64,7 @@ export default function ScheduleExamView({
                 const data = await res.json();
                 if (cancelled) return;
                 if (res.ok && Array.isArray(data.examTypes)) {
-                    const options = data.examTypes
-                        .map((name: string) => name?.trim().toUpperCase())
-                        .filter((name: string) => Boolean(name));
+                    const options = normalizeExamTypes(data.examTypes).map((t) => t.name);
                     setExamTypeOptions(options);
                 }
             } catch {

@@ -94,6 +94,7 @@ export async function GET(req: Request) {
             },
         class: { select: { id: true, name: true, section: true } },
         teacher: { select: { id: true, name: true, email: true } },
+        components: { orderBy: { name: "asc" } },
       },
       orderBy: { createdAt: "desc" },
       take: session.user.studentId ? 500 : undefined,
