@@ -22,6 +22,7 @@ import MarksReportTemplate, {
 } from "@/app/frontend/components/pdf/MarksReportTemplate";
 import { generatePDF, waitForPdfMountReady } from "@/lib/pdfUtils";
 import { resolveSchoolLogoFetchUrl } from "@/lib/feeDayReportExcel";
+import { normalizeExamTypes } from "@/lib/examTypes";
 
 type ClassOption = { id: string; name: string; section: string | null };
 type StudentOption = { id: string; name: string; rollNo: string | null };
@@ -213,7 +214,7 @@ export default function TeacherReportCard({
         const res = await fetch("/api/exam-types", { cache: "no-store" });
         if (!res.ok) return;
         const data = await res.json();
-        const names: string[] = Array.isArray(data.examTypes) ? data.examTypes : [];
+        const names = normalizeExamTypes(data.examTypes).map((t) => t.name);
         if (names.length > 0) {
           setExamTypeOptions(["ALL", ...names]);
         }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { BookOpen, Calendar, CheckCircle2, Plus, Trash2 } from "lucide-react";
+import { BookOpen, Calendar, CheckCircle2, Plus, Trash2, Pencil, Check, X } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
 import TimellyLoader from "../../common/TimellyLoader";
 import { ChevronDown } from "lucide-react";
@@ -10,6 +10,7 @@ import {
     peekExamsPage,
     setExamsPageCache,
 } from "@/lib/loadSchoolAdminFastTabs";
+import type { ExamTypeOption } from "@/lib/examTypes";
 
 interface SyllabusUnit {
     id: string;
@@ -54,16 +55,26 @@ interface ClassData {
 }
 
 export default function ExamsTab() {
-    const [examTypes, setExamTypes] = useState<string[]>([]);
+    const [examTypes, setExamTypes] = useState<ExamTypeOption[]>([]);
     const [examTypesLoading, setExamTypesLoading] = useState(true);
     const [newExamType, setNewExamType] = useState("");
+    const [newExamTypeMax, setNewExamTypeMax] = useState("");
     const [examTypeError, setExamTypeError] = useState("");
     const [examTypeSaving, setExamTypeSaving] = useState(false);
+    const [maxMarksDrafts, setMaxMarksDrafts] = useState<Record<string, string>>({});
+    const [sectionDraftsByType, setSectionDraftsByType] = useState<
+        Record<string, Array<{ id?: string; name: string; maxMarks: string }>>
+    >({});
+    const [expandedExamType, setExpandedExamType] = useState<string | null>(null);
+    const [sectionSaving, setSectionSaving] = useState(false);
+    const [sectionError, setSectionError] = useState("");
     const [subjects, setSubjects] = useState<string[]>([]);
     const [subjectsLoading, setSubjectsLoading] = useState(true);
     const [newSubject, setNewSubject] = useState("");
     const [subjectError, setSubjectError] = useState("");
     const [subjectSaving, setSubjectSaving] = useState(false);
+    const [editingSubject, setEditingSubject] = useState<string | null>(null);
+    const [editingSubjectValue, setEditingSubjectValue] = useState("");
 
     const [rawData, setRawData] = useState<TermData[]>([]);
     const [classes, setClasses] = useState<ClassData[]>([]);
@@ -73,13 +84,33 @@ export default function ExamsTab() {
     const [loading, setLoading] = useState(true);
     const [showAllSchedules, setShowAllSchedules] = useState(false);
 
-    const updateExamsCache = (partial: Partial<{ examTypes: string[]; subjects: string[]; terms: TermData[]; classes: ClassData[] }>) => {
+    const updateExamsCache = (partial: Partial<{
+        examTypes: ExamTypeOption[];
+        subjects: string[];
+        terms: TermData[];
+        classes: ClassData[];
+    }>) => {
         setExamsPageCache({
             terms: partial.terms ?? rawData,
             classes: partial.classes ?? classes,
             examTypes: partial.examTypes ?? examTypes,
             subjects: partial.subjects ?? subjects,
         });
+    };
+
+    const syncMaxDrafts = (types: ExamTypeOption[]) => {
+        const next: Record<string, string> = {};
+        const nextSections: Record<string, Array<{ id?: string; name: string; maxMarks: string }>> = {};
+        types.forEach((t) => {
+            next[t.name] = t.maxMarks != null ? String(t.maxMarks) : "";
+            nextSections[t.name] = (t.sections ?? []).map((s) => ({
+                id: s.id,
+                name: s.name,
+                maxMarks: String(s.maxMarks),
+            }));
+        });
+        setMaxMarksDrafts(next);
+        setSectionDraftsByType(nextSections);
     };
 
     const deleteExamType = async (name: string) => {
@@ -114,12 +145,57 @@ export default function ExamsTab() {
                 return;
             }
 
-            const next = examTypes.filter((type) => type.toUpperCase() !== upperName);
+            const next = examTypes.filter((type) => type.name.toUpperCase() !== upperName);
             setExamTypes(next);
+            syncMaxDrafts(next);
             updateExamsCache({ examTypes: next });
         } catch (e) {
             console.error("Failed to delete exam type", e);
             setExamTypeError("Failed to delete exam type");
+        } finally {
+            setExamTypeSaving(false);
+        }
+    };
+
+    const saveExamTypeMaxMarks = async (name: string) => {
+        const upperName = name.trim().toUpperCase();
+        const raw = maxMarksDrafts[upperName] ?? "";
+        const maxMarks = raw.trim() === "" ? null : Number(raw);
+        if (raw.trim() !== "" && (!Number.isFinite(maxMarks) || (maxMarks as number) <= 0)) {
+            setExamTypeError("Max marks must be a positive number");
+            return;
+        }
+
+        setExamTypeError("");
+        setExamTypeSaving(true);
+        try {
+            const res = await fetch("/api/exam-types", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ name: upperName, maxMarks }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setExamTypeError(data?.message || "Failed to update max marks");
+                return;
+            }
+            const updatedMax = data?.examType?.maxMarks ?? maxMarks;
+            let next = examTypes.map((t) =>
+                t.name === upperName ? { ...t, maxMarks: updatedMax } : t
+            );
+            if (!next.some((t) => t.name === upperName) && data?.examType) {
+                next = [
+                    ...next,
+                    { name: data.examType.name, maxMarks: data.examType.maxMarks ?? null, sections: data.examType.sections ?? [] },
+                ].sort((a, b) => a.name.localeCompare(b.name));
+            }
+            setExamTypes(next);
+            syncMaxDrafts(next);
+            updateExamsCache({ examTypes: next });
+        } catch (e) {
+            console.error("Failed to update max marks", e);
+            setExamTypeError("Failed to update max marks");
         } finally {
             setExamTypeSaving(false);
         }
@@ -131,8 +207,15 @@ export default function ExamsTab() {
             setExamTypeError("Enter exam type name");
             return;
         }
-        if (examTypes.some((t) => t.toUpperCase() === name)) {
+        if (examTypes.some((t) => t.name.toUpperCase() === name)) {
             setExamTypeError("This exam type name already exists");
+            return;
+        }
+
+        const maxRaw = newExamTypeMax.trim();
+        const maxMarks = maxRaw === "" ? null : Number(maxRaw);
+        if (maxRaw !== "" && (!Number.isFinite(maxMarks) || (maxMarks as number) <= 0)) {
+            setExamTypeError("Max marks must be a positive number");
             return;
         }
 
@@ -143,7 +226,7 @@ export default function ExamsTab() {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 credentials: "include",
-                body: JSON.stringify({ name }),
+                body: JSON.stringify({ name, maxMarks }),
             });
             const data = await res.json();
             if (res.status === 409) {
@@ -155,8 +238,17 @@ export default function ExamsTab() {
                 return;
             }
             setNewExamType("");
-            const next = Array.from(new Set([...examTypes, name])).sort();
+            setNewExamTypeMax("");
+            const created: ExamTypeOption = {
+                name: data?.examType?.name ?? name,
+                maxMarks: data?.examType?.maxMarks ?? maxMarks,
+                sections: Array.isArray(data?.examType?.sections) ? data.examType.sections : [],
+            };
+            const next = [...examTypes.filter((t) => t.name !== created.name), created].sort(
+                (a, b) => a.name.localeCompare(b.name)
+            );
             setExamTypes(next);
+            syncMaxDrafts(next);
             updateExamsCache({ examTypes: next });
         } catch (e) {
             console.error("Failed to add exam type", e);
@@ -170,17 +262,10 @@ export default function ExamsTab() {
         const upperName = name.trim().toUpperCase();
         if (!upperName) return;
 
-        if (subjects.length <= 1) {
-            const confirmed = window.confirm(
-                `\"${upperName}\" is the only subject.\n\nAre you sure you want to delete it?`
-            );
-            if (!confirmed) return;
-        } else {
-            const confirmed = window.confirm(
-                `Are you sure you want to delete subject \"${upperName}\"?`
-            );
-            if (!confirmed) return;
-        }
+        const confirmed = window.confirm(
+            `Remove \"${upperName}\" from the subjects list?\n\nExisting marks are not deleted.`
+        );
+        if (!confirmed) return;
 
         setSubjectError("");
         setSubjectSaving(true);
@@ -193,7 +278,7 @@ export default function ExamsTab() {
 
             if (!res.ok) {
                 setSubjectError(
-                    data?.message || "Failed to delete subject. It may be in use."
+                    data?.message || "Failed to delete subject."
                 );
                 return;
             }
@@ -201,9 +286,59 @@ export default function ExamsTab() {
             const next = subjects.filter((subject) => subject.toUpperCase() !== upperName);
             setSubjects(next);
             updateExamsCache({ subjects: next });
+            if (editingSubject === upperName) {
+                setEditingSubject(null);
+                setEditingSubjectValue("");
+            }
         } catch (e) {
             console.error("Failed to delete subject", e);
             setSubjectError("Failed to delete subject");
+        } finally {
+            setSubjectSaving(false);
+        }
+    };
+
+    const renameSubject = async (from: string) => {
+        const fromName = from.trim().toUpperCase();
+        const toName = editingSubjectValue.trim().toUpperCase();
+        if (!fromName || !toName) {
+            setSubjectError("Enter a subject name");
+            return;
+        }
+        if (fromName === toName) {
+            setEditingSubject(null);
+            setEditingSubjectValue("");
+            return;
+        }
+        if (subjects.some((s) => s.toUpperCase() === toName && s.toUpperCase() !== fromName)) {
+            setSubjectError("This subject name already exists");
+            return;
+        }
+
+        setSubjectError("");
+        setSubjectSaving(true);
+        try {
+            const res = await fetch("/api/exam-subjects", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ from: fromName, to: toName }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setSubjectError(data?.message || "Failed to rename subject");
+                return;
+            }
+            const next = Array.from(
+                new Set(subjects.map((s) => (s.toUpperCase() === fromName ? toName : s)))
+            ).sort();
+            setSubjects(next);
+            updateExamsCache({ subjects: next });
+            setEditingSubject(null);
+            setEditingSubjectValue("");
+        } catch (e) {
+            console.error("Failed to rename subject", e);
+            setSubjectError("Failed to rename subject");
         } finally {
             setSubjectSaving(false);
         }
@@ -251,12 +386,18 @@ export default function ExamsTab() {
     };
 
     useEffect(() => {
-        const applyPayload = (payload: { terms: unknown[]; classes: unknown[]; examTypes: string[]; subjects: string[] }) => {
+        const applyPayload = (payload: {
+            terms: unknown[];
+            classes: unknown[];
+            examTypes: ExamTypeOption[];
+            subjects: string[];
+        }) => {
             const data = payload.terms as TermData[];
             const classData = payload.classes as ClassData[];
             setRawData(data);
             setClasses(classData);
             setExamTypes(payload.examTypes);
+            syncMaxDrafts(payload.examTypes);
             setSubjects(payload.subjects);
             setExamTypesLoading(false);
             setSubjectsLoading(false);
@@ -318,6 +459,73 @@ export default function ExamsTab() {
     const activeTermData = useMemo(() => {
         return filteredDataByClass.filter((t) => t.name === selectedTermName);
     }, [filteredDataByClass, selectedTermName]);
+
+    const saveExamTypeSections = async (examTypeName: string) => {
+        const upper = examTypeName.trim().toUpperCase();
+        const drafts = sectionDraftsByType[upper] ?? [];
+        for (const row of drafts) {
+            if (!row.name.trim()) {
+                setSectionError("Each subsection needs a name");
+                return;
+            }
+            const n = Number(row.maxMarks);
+            if (!Number.isFinite(n) || n <= 0) {
+                setSectionError(`"${row.name}": max marks must be a positive number`);
+                return;
+            }
+        }
+        setSectionError("");
+        setSectionSaving(true);
+        try {
+            const res = await fetch("/api/exam-types/sections", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({
+                    name: upper,
+                    sections: drafts.map((s, i) => ({
+                        name: s.name.trim(),
+                        maxMarks: Number(s.maxMarks),
+                        order: i,
+                    })),
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setSectionError(data?.message || "Failed to save subsections");
+                return;
+            }
+            const et = data?.examType;
+            const sections = Array.isArray(et?.sections) ? et.sections : [];
+            const next = examTypes.map((t) =>
+                t.name === upper
+                    ? {
+                          ...t,
+                          maxMarks: et?.maxMarks ?? (sections.length
+                              ? sections.reduce((a: number, s: { maxMarks: number }) => a + s.maxMarks, 0)
+                              : t.maxMarks),
+                          sections,
+                      }
+                    : t
+            );
+            if (!next.some((t) => t.name === upper) && et) {
+                next.push({
+                    name: et.name,
+                    maxMarks: et.maxMarks ?? null,
+                    sections,
+                });
+                next.sort((a, b) => a.name.localeCompare(b.name));
+            }
+            setExamTypes(next);
+            syncMaxDrafts(next);
+            updateExamsCache({ examTypes: next });
+        } catch (e) {
+            console.error(e);
+            setSectionError("Failed to save subsections");
+        } finally {
+            setSectionSaving(false);
+        }
+    };
 
     const isTermCompleted = activeTermData.every((t) => t.status === "COMPLETED");
 
@@ -385,15 +593,23 @@ export default function ExamsTab() {
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <div>
                         <h3 className="text-lg font-bold">Exam Types</h3>
-                        <p className="text-xs text-white/50">CAPS only. Duplicate names are not allowed.</p>
+                        <p className="text-xs text-white/50">
+                            Set max marks and optional subsections (Written/Practical) per exam type. Teachers inherit these.
+                        </p>
                     </div>
 
                     <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
                         <input
                             value={newExamType}
                             onChange={(e) => setNewExamType(e.target.value.toUpperCase())}
-                            placeholder="e.g. HALF YEARLY, MID 1"
+                            placeholder="e.g. HALF YEARLY"
                             className="px-4 py-2.5 rounded-2xl bg-black/40 border border-white/10 text-white text-sm outline-none focus:border-[#B4F42A]/50 uppercase"
+                        />
+                        <input
+                            value={newExamTypeMax}
+                            onChange={(e) => setNewExamTypeMax(e.target.value.replace(/[^\d.]/g, ""))}
+                            placeholder="Max marks"
+                            className="w-28 px-4 py-2.5 rounded-2xl bg-black/40 border border-white/10 text-white text-sm outline-none focus:border-[#B4F42A]/50"
                         />
                         <button
                             type="button"
@@ -411,31 +627,177 @@ export default function ExamsTab() {
                     <p className="mt-2 text-xs font-bold text-red-400">{examTypeError}</p>
                 )}
 
-                <div className="mt-4 flex flex-wrap gap-2">
+                <div className="mt-4 flex flex-col gap-3">
                     {examTypesLoading ? (
                         <span className="text-xs text-white/50">Loading exam types...</span>
                     ) : examTypes.length === 0 ? (
                         <span className="text-xs text-white/50">No exam types found.</span>
                     ) : (
-                        examTypes.map((t) => (
-                            <div
-                                key={t}
-                                className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold bg-white/5 border border-white/10 text-white/80"
-                            >
-                                <span>{t}</span>
-                                <button
-                                    type="button"
-                                    disabled={examTypeSaving}
-                                    onClick={() => deleteExamType(t)}
-                                    className="ml-1 inline-flex items-center justify-center rounded-full p-0.5 hover:bg-red-500/20 disabled:opacity-50"
-                                    title="Delete exam type"
+                        examTypes.map((t) => {
+                            const drafts = sectionDraftsByType[t.name] ?? [];
+                            const sum = drafts.reduce((a, s) => {
+                                const n = Number(s.maxMarks);
+                                return a + (Number.isFinite(n) ? n : 0);
+                            }, 0);
+                            const expanded = expandedExamType === t.name;
+                            return (
+                                <div
+                                    key={t.name}
+                                    className="rounded-2xl bg-white/5 border border-white/10 overflow-hidden"
                                 >
-                                    <Trash2 className="w-3 h-3 text-red-400" />
-                                </button>
-                            </div>
-                        ))
+                                    <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs font-bold text-white/80">
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                setExpandedExamType((prev) =>
+                                                    prev === t.name ? null : t.name
+                                                )
+                                            }
+                                            className="min-w-[7rem] text-left hover:text-[#B4F42A]"
+                                            title="Edit subsections"
+                                        >
+                                            {t.name}
+                                            {(t.sections?.length ?? 0) > 0 ? (
+                                                <span className="ml-2 text-[10px] font-medium text-white/40">
+                                                    ({t.sections.length} parts)
+                                                </span>
+                                            ) : null}
+                                        </button>
+                                        <span className="text-white/40 font-medium">Max</span>
+                                        <input
+                                            value={maxMarksDrafts[t.name] ?? ""}
+                                            onChange={(e) =>
+                                                setMaxMarksDrafts((prev) => ({
+                                                    ...prev,
+                                                    [t.name]: e.target.value.replace(/[^\d.]/g, ""),
+                                                }))
+                                            }
+                                            placeholder="—"
+                                            disabled={(t.sections?.length ?? 0) > 0 || drafts.length > 0}
+                                            className="w-20 px-2 py-1.5 rounded-xl bg-black/40 border border-white/10 text-white text-xs outline-none focus:border-[#B4F42A]/50 disabled:opacity-50"
+                                        />
+                                        <button
+                                            type="button"
+                                            disabled={examTypeSaving || drafts.length > 0}
+                                            onClick={() => saveExamTypeMaxMarks(t.name)}
+                                            className="px-2.5 py-1.5 rounded-xl bg-[#B4F42A]/20 text-[#B4F42A] border border-[#B4F42A]/30 hover:bg-[#B4F42A]/30 disabled:opacity-50"
+                                        >
+                                            Save
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                setExpandedExamType((prev) =>
+                                                    prev === t.name ? null : t.name
+                                                )
+                                            }
+                                            className="px-2.5 py-1.5 rounded-xl bg-white/5 border border-white/10 text-white/70"
+                                        >
+                                            {expanded ? "Hide parts" : "Subsections"}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={examTypeSaving}
+                                            onClick={() => deleteExamType(t.name)}
+                                            className="ml-auto inline-flex items-center justify-center rounded-full p-1.5 hover:bg-red-500/20 disabled:opacity-50"
+                                            title="Delete exam type"
+                                        >
+                                            <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                                        </button>
+                                    </div>
+                                    {expanded && (
+                                        <div className="px-3 pb-3 border-t border-white/10 pt-3 space-y-2">
+                                            <p className="text-[10px] text-white/40">
+                                                Optional. Leave empty for a single score. With subsections, max becomes the sum
+                                                {drafts.length > 0 ? ` (currently ${sum})` : ""}.
+                                            </p>
+                                            {drafts.map((row, idx) => (
+                                                <div key={row.id ?? idx} className="flex gap-2 items-center">
+                                                    <input
+                                                        value={row.name}
+                                                        onChange={(e) =>
+                                                            setSectionDraftsByType((prev) => ({
+                                                                ...prev,
+                                                                [t.name]: (prev[t.name] ?? []).map((r, i) =>
+                                                                    i === idx ? { ...r, name: e.target.value } : r
+                                                                ),
+                                                            }))
+                                                        }
+                                                        placeholder="e.g. Written"
+                                                        className="flex-1 px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white text-xs outline-none focus:border-[#B4F42A]/50"
+                                                    />
+                                                    <input
+                                                        value={row.maxMarks}
+                                                        onChange={(e) =>
+                                                            setSectionDraftsByType((prev) => ({
+                                                                ...prev,
+                                                                [t.name]: (prev[t.name] ?? []).map((r, i) =>
+                                                                    i === idx
+                                                                        ? {
+                                                                              ...r,
+                                                                              maxMarks: e.target.value.replace(
+                                                                                  /[^\d.]/g,
+                                                                                  ""
+                                                                              ),
+                                                                          }
+                                                                        : r
+                                                                ),
+                                                            }))
+                                                        }
+                                                        placeholder="Max"
+                                                        className="w-16 px-2 py-2 rounded-xl bg-black/40 border border-white/10 text-white text-xs outline-none focus:border-[#B4F42A]/50"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            setSectionDraftsByType((prev) => ({
+                                                                ...prev,
+                                                                [t.name]: (prev[t.name] ?? []).filter(
+                                                                    (_, i) => i !== idx
+                                                                ),
+                                                            }))
+                                                        }
+                                                        className="p-1.5 rounded-full hover:bg-red-500/20"
+                                                    >
+                                                        <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                            <div className="flex gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                        setSectionDraftsByType((prev) => ({
+                                                            ...prev,
+                                                            [t.name]: [
+                                                                ...(prev[t.name] ?? []),
+                                                                { name: "", maxMarks: "" },
+                                                            ],
+                                                        }))
+                                                    }
+                                                    className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-xs font-bold text-white/80 inline-flex items-center gap-1"
+                                                >
+                                                    <Plus size={14} /> Add
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    disabled={sectionSaving}
+                                                    onClick={() => saveExamTypeSections(t.name)}
+                                                    className="px-3 py-2 rounded-xl bg-[#B4F42A] text-black text-xs font-bold disabled:opacity-60"
+                                                >
+                                                    {sectionSaving ? "Saving..." : "Save subsections"}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })
                     )}
                 </div>
+                {sectionError && (
+                    <p className="mt-2 text-xs font-bold text-red-400">{sectionError}</p>
+                )}
             </div>
 
             {/* SUBJECTS MANAGER */}
@@ -443,7 +805,9 @@ export default function ExamsTab() {
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <div>
                         <h3 className="text-lg font-bold">Subjects</h3>
-                        <p className="text-xs text-white/50">CAPS only. Duplicate names are not allowed.</p>
+                        <p className="text-xs text-white/50">
+                            Add, rename, or remove subjects. Only removes from this list — your choice.
+                        </p>
                     </div>
 
                     <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
@@ -480,16 +844,75 @@ export default function ExamsTab() {
                                 key={t}
                                 className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold bg-white/5 border border-white/10 text-white/80"
                             >
-                                <span>{t}</span>
-                                <button
-                                    type="button"
-                                    disabled={subjectSaving}
-                                    onClick={() => deleteSubject(t)}
-                                    className="ml-1 inline-flex items-center justify-center rounded-full p-0.5 hover:bg-red-500/20 disabled:opacity-50"
-                                    title="Delete subject"
-                                >
-                                    <Trash2 className="w-3 h-3 text-red-400" />
-                                </button>
+                                {editingSubject === t ? (
+                                    <>
+                                        <input
+                                            autoFocus
+                                            value={editingSubjectValue}
+                                            onChange={(e) =>
+                                                setEditingSubjectValue(e.target.value.toUpperCase())
+                                            }
+                                            onKeyDown={(e) => {
+                                                if (e.key === "Enter") {
+                                                    e.preventDefault();
+                                                    void renameSubject(t);
+                                                }
+                                                if (e.key === "Escape") {
+                                                    setEditingSubject(null);
+                                                    setEditingSubjectValue("");
+                                                }
+                                            }}
+                                            className="w-36 px-2 py-0.5 rounded-lg bg-black/40 border border-[#B4F42A]/40 text-white text-xs outline-none uppercase"
+                                        />
+                                        <button
+                                            type="button"
+                                            disabled={subjectSaving}
+                                            onClick={() => renameSubject(t)}
+                                            className="inline-flex items-center justify-center rounded-full p-0.5 hover:bg-[#B4F42A]/20 disabled:opacity-50"
+                                            title="Save name"
+                                        >
+                                            <Check className="w-3 h-3 text-[#B4F42A]" />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={subjectSaving}
+                                            onClick={() => {
+                                                setEditingSubject(null);
+                                                setEditingSubjectValue("");
+                                            }}
+                                            className="inline-flex items-center justify-center rounded-full p-0.5 hover:bg-white/10 disabled:opacity-50"
+                                            title="Cancel"
+                                        >
+                                            <X className="w-3 h-3 text-white/60" />
+                                        </button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <span>{t}</span>
+                                        <button
+                                            type="button"
+                                            disabled={subjectSaving}
+                                            onClick={() => {
+                                                setSubjectError("");
+                                                setEditingSubject(t);
+                                                setEditingSubjectValue(t);
+                                            }}
+                                            className="ml-1 inline-flex items-center justify-center rounded-full p-0.5 hover:bg-white/10 disabled:opacity-50"
+                                            title="Edit subject"
+                                        >
+                                            <Pencil className="w-3 h-3 text-white/50" />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={subjectSaving}
+                                            onClick={() => deleteSubject(t)}
+                                            className="inline-flex items-center justify-center rounded-full p-0.5 hover:bg-red-500/20 disabled:opacity-50"
+                                            title="Delete subject"
+                                        >
+                                            <Trash2 className="w-3 h-3 text-red-400" />
+                                        </button>
+                                    </>
+                                )}
                             </div>
                         ))
                     )}

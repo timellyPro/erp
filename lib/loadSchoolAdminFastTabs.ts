@@ -4,6 +4,7 @@ import {
   peekSchoolAdminResource,
   setSchoolAdminResource,
 } from "@/lib/schoolAdminFastTabCache";
+import { normalizeExamTypes, type ExamTypeOption } from "@/lib/examTypes";
 
 export type SchoolAdminClassRow = {
   id: string;
@@ -146,7 +147,7 @@ export type CertificateRequestListItem = {
 export type ExamsPagePayload = {
   terms: unknown[];
   classes: unknown[];
-  examTypes: string[];
+  examTypes: ExamTypeOption[];
   subjects: string[];
 };
 
@@ -521,13 +522,13 @@ export async function loadExamsPage(options?: { revalidate?: boolean; signal?: A
       ]);
       const [termsData, typesData, subjectsData] = await Promise.all([
         jsonOrThrow<{ terms?: unknown[]; classes?: unknown[] }>(termsRes, "Failed to load exams"),
-        jsonOrThrow<{ examTypes?: string[] }>(typesRes, "Failed to load exam types"),
+        jsonOrThrow<{ examTypes?: unknown[] }>(typesRes, "Failed to load exam types"),
         jsonOrThrow<{ subjects?: string[] }>(subjectsRes, "Failed to load subjects"),
       ]);
       return {
         terms: Array.isArray(termsData.terms) ? termsData.terms : [],
         classes: Array.isArray(termsData.classes) ? termsData.classes : [],
-        examTypes: Array.isArray(typesData.examTypes) ? typesData.examTypes : [],
+        examTypes: normalizeExamTypes(typesData.examTypes),
         subjects: Array.isArray(subjectsData.subjects) ? subjectsData.subjects : [],
       };
     },

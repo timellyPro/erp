@@ -147,6 +147,7 @@ export async function GET(req: Request) {
           class: { include: { teacher: { select: { name: true } } } },
           schedules: { orderBy: { examDate: "asc" } },
           syllabus: { orderBy: { subject: "asc" }, include: { units: { orderBy: { order: "asc" } } } },
+          sections: { orderBy: { order: "asc" } },
         },
         orderBy: { createdAt: "desc" },
       });
@@ -174,6 +175,7 @@ export async function GET(req: Request) {
           class: { include: { teacher: { select: { name: true } } } },
           schedules: { orderBy: { examDate: "asc" } },
           syllabus: { orderBy: { subject: "asc" }, include: { units: { orderBy: { order: "asc" } } } },
+          sections: { orderBy: { order: "asc" } },
         },
         orderBy: { createdAt: "desc" },
       });

@@ -4,10 +4,12 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { createNotification } from "@/lib/notificationService";
 import { assertTeacherCanEnterMarks } from "@/lib/teacherMarksScope";
+import { parseMarkComponents, sumComponents } from "@/lib/markComponents";
+import { randomUUID } from "crypto";
 
 function calculateGrade(marks: number, totalMarks: number): string {
   const percentage = (marks / totalMarks) * 100;
-  
+
   if (percentage >= 90) return "A+";
   if (percentage >= 80) return "A";
   if (percentage >= 70) return "B+";
@@ -25,26 +27,47 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
+    const body = await req.json();
     const {
       studentId,
       classId,
       subject,
-      marks,
-      totalMarks,
       suggestions,
       examType,
       grade: gradeOverride,
-    } = await req.json();
+    } = body;
+
+    let components;
+    try {
+      components = parseMarkComponents(body.components);
+    } catch (err) {
+      return NextResponse.json(
+        { message: err instanceof Error ? err.message : "Invalid components" },
+        { status: 400 }
+      );
+    }
+
+    let marks = Number(body.marks);
+    let totalMarks = Number(body.totalMarks);
+
+    if (components && components.length > 0) {
+      const summed = sumComponents(components);
+      marks = summed.marks;
+      totalMarks = summed.totalMarks;
+    }
 
     if (
       !studentId ||
       !classId ||
       !subject ||
-      marks === undefined ||
-      totalMarks === undefined
+      !Number.isFinite(marks) ||
+      !Number.isFinite(totalMarks)
     ) {
       return NextResponse.json(
-        { message: "Missing required fields: studentId, classId, subject, marks, totalMarks" },
+        {
+          message:
+            "Missing required fields: studentId, classId, subject, marks, totalMarks",
+        },
         { status: 400 }
       );
     }
@@ -66,7 +89,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // Verify class belongs to teacher's school
     const classData = await prisma.class.findFirst({
       where: {
         id: classId,
@@ -96,7 +118,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: scope.message }, { status: scope.status });
     }
 
-    // Verify student belongs to the class
     const student = await prisma.student.findFirst({
       where: {
         id: studentId,
@@ -117,10 +138,45 @@ export async function POST(req: Request) {
         ? examType.trim().toUpperCase()
         : null;
 
-    const grade = gradeOverride === "AB" ? "AB" : calculateGrade(marks, totalMarks);
+    const hasComponents = !!(components && components.length > 0);
 
+    if (examTypeValue && !hasComponents) {
+      const configured = await prisma.examType.findFirst({
+        where: { schoolId, name: examTypeValue },
+        select: {
+          maxMarks: true,
+          sections: { select: { id: true } },
+        },
+      });
+      if (configured?.sections?.length) {
+        return NextResponse.json(
+          {
+            message: `${examTypeValue} requires subsection marks (configured by school admin)`,
+          },
+          { status: 400 }
+        );
+      }
+      if (
+        configured?.maxMarks != null &&
+        configured.maxMarks > 0 &&
+        Number(totalMarks) !== Number(configured.maxMarks)
+      ) {
+        return NextResponse.json(
+          {
+            message: `Max marks for ${examTypeValue} must be ${configured.maxMarks} (set by school admin)`,
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    const grade = gradeOverride === "AB" ? "AB" : calculateGrade(marks, totalMarks);
+    const markId = randomUUID();
+
+    // Nested create avoids interactive $transaction (remote DB often exceeds 5s default)
     const mark = await prisma.mark.create({
       data: {
+        id: markId,
         studentId,
         classId,
         subject: subjectName,
@@ -130,6 +186,18 @@ export async function POST(req: Request) {
         suggestions: suggestions || null,
         teacherId,
         examType: examTypeValue,
+        ...(hasComponents && components
+          ? {
+              components: {
+                create: components.map((c) => ({
+                  id: randomUUID(),
+                  name: c.name,
+                  marks: c.marks,
+                  totalMarks: c.totalMarks,
+                })),
+              },
+            }
+          : {}),
       },
       include: {
         student: {
@@ -145,6 +213,7 @@ export async function POST(req: Request) {
         teacher: {
           select: { id: true, name: true, email: true },
         },
+        components: { orderBy: { name: "asc" } },
       },
     });
 
@@ -163,10 +232,13 @@ export async function POST(req: Request) {
       { message: "Marks added successfully", mark },
       { status: 201 }
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Create marks error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      {
+        message:
+          error instanceof Error ? error.message : "Internal server error",
+      },
       { status: 500 }
     );
   }

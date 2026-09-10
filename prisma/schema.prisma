@@ -290,6 +290,9 @@ model SchoolSettings {
   // Email domain override for auto-generated emails (e.g. "myschool.in")
   emailDomain String?
 
+  // Subjects removed from the school exam catalog (so defaults/teacher-sourced names stay gone)
+  hiddenExamSubjects String[] @default([])
+
   // Tenant payment credentials - payments go to school's account. Fallback to global env if not set.
 
   hyperpgMerchantId String?
@@ -450,6 +453,7 @@ model ExamTerm {
 
   schedules ExamSchedule[]
   syllabus  SyllabusTracking[]
+  sections  ExamTermSection[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -459,6 +463,22 @@ model ExamTerm {
   @@index([status])
   @@index([schoolId, classId, createdAt])
   @@index([schoolId, classId, status])
+}
+
+model ExamTermSection {
+  id       String @id @default(cuid())
+  name     String // e.g. "Written", "Practical"
+  maxMarks Float
+  order    Int    @default(0)
+
+  termId String
+  term   ExamTerm @relation(fields: [termId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([termId])
+  @@unique([termId, name])
 }
 
 model ExamSchedule {
@@ -667,6 +687,8 @@ model Mark {
   teacherId String
   teacher   User   @relation("TeacherMarks", fields: [teacherId], references: [id], onDelete: Cascade)
 
+  components MarkComponent[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -677,17 +699,52 @@ model Mark {
   @@index([examType])
 }
 
+model MarkComponent {
+  id         String @id @default(cuid())
+  name       String // e.g. "Written", "Practical"
+  marks      Float
+  totalMarks Float
+
+  markId String
+  mark   Mark   @relation(fields: [markId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([markId])
+  @@unique([markId, name])
+}
+
 model ExamType {
-  id   String @id @default(cuid())
-  name String // stored in CAPS only
+  id       String @id @default(cuid())
+  name     String // stored in CAPS only
+  maxMarks Float? // school-admin configured default max for this exam type
 
   schoolId String
   school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  sections ExamTypeSection[]
 
   createdAt DateTime @default(now())
 
   @@unique([schoolId, name])
   @@index([schoolId])
+}
+
+model ExamTypeSection {
+  id       String @id @default(cuid())
+  name     String // e.g. "Written", "Practical"
+  maxMarks Float
+  order    Int    @default(0)
+
+  examTypeId String
+  examType   ExamType @relation(fields: [examTypeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([examTypeId])
+  @@unique([examTypeId, name])
 }
 
 model ExamSubject {
