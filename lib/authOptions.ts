@@ -28,21 +28,10 @@ export const authOptions: NextAuthOptions = {
           // so we cannot use `findUnique({ where: { email } })`.
           // Until the login UI becomes school-aware, we accept the first match and
           // hard-fail if there are duplicates across tenants.
-          const candidates = await prisma.user.findMany({
+          // Single query (take: 2) — avoids a second round-trip when the pool is slow.
+          const matches = await prisma.user.findMany({
             where: { email: credentials.email },
             take: 2,
-            select: { id: true },
-          });
-          if (candidates.length === 0) {
-            console.log("Auth: User not found for email:", credentials.email);
-            return null;
-          }
-          if (candidates.length > 1) {
-            throw new Error("Multiple accounts exist for this email. Please contact your administrator.");
-          }
-
-          const user = await prisma.user.findUnique({
-            where: { id: candidates[0].id },
             select: {
               id: true,
               name: true,
@@ -58,11 +47,15 @@ export const authOptions: NextAuthOptions = {
               school: true,
             },
           });
-
-          if (!user) {
+          if (matches.length === 0) {
             console.log("Auth: User not found for email:", credentials.email);
             return null;
           }
+          if (matches.length > 1) {
+            throw new Error("Multiple accounts exist for this email. Please contact your administrator.");
+          }
+
+          const user = matches[0];
 
           // Check if password is explicitly null (deactivated account)
           // Only block login if password is null - allow password verification for all other cases

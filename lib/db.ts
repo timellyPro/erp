@@ -25,9 +25,13 @@ export async function runWithDeferredCacheInvalidation<T>(fn: () => Promise<T>):
   });
 }
 
-// Prefer DATABASE_URL (port 6543, transaction pooler) for runtime - better for serverless and avoids
-// connection resets. Use DIRECT_URL only for migrations (schema directUrl).
-const base = process.env.DATABASE_URL || process.env.DIRECT_URL;
+// Prefer DATABASE_URL (port 6543, transaction pooler) in production.
+// In local/dev, prefer DIRECT_URL (session pooler :5432) — far more reliable for
+// long-lived Next.js + auth when the transaction pooler is saturated/slow.
+const base =
+  process.env.NODE_ENV === "development" && process.env.DIRECT_URL
+    ? process.env.DIRECT_URL
+    : process.env.DATABASE_URL || process.env.DIRECT_URL;
 
 if (!base) {
   console.error("DATABASE_URL or DIRECT_URL environment variable is not set");
@@ -35,23 +39,34 @@ if (!base) {
 
 function withParam(url: string, key: string, value: string) {
   if (!url) return url;
-  const hasQuery = url.includes("?");
   const encodedKey = `${key}=`;
-  if (url.includes(encodedKey)) return url;
+  if (url.includes(encodedKey)) {
+    return url.replace(new RegExp(`([?&])${key}=[^&]*`), `$1${key}=${value}`);
+  }
+  const hasQuery = url.includes("?");
   return `${url}${hasQuery ? "&" : "?"}${key}=${value}`;
 }
 
 let connectionString = base || "";
 if (connectionString) {
-  connectionString = withParam(connectionString, "statement_timeout", "120000");
-  // Default was 3 and exhausted quickly with concurrent API + NextAuth JWT work.
-  // Override with PRISMA_CONNECTION_LIMIT in .env if your host requires a specific cap.
-  const poolLimit = process.env.PRISMA_CONNECTION_LIMIT || "15";
-  if (!connectionString.includes("connection_limit=")) {
-    connectionString = withParam(connectionString, "connection_limit", poolLimit);
+  // Supabase transaction pooler (6543 / pgbouncer=true): keep Prisma's pool modest.
+  // connection_limit=1 breaks Promise.all dashboards; too high exhausts PgBouncer.
+  const isPgBouncer =
+    /(?:^|[?&])pgbouncer=true(?:&|$)/i.test(connectionString) ||
+    /:6543(?:\/|\?|$)/.test(connectionString);
+  if (!isPgBouncer) {
+    connectionString = withParam(connectionString, "statement_timeout", "120000");
   }
+  const poolLimit =
+    process.env.PRISMA_CONNECTION_LIMIT ||
+    (isPgBouncer
+      ? process.env.NODE_ENV === "development"
+        ? "2"
+        : "1"
+      : "5");
+  connectionString = withParam(connectionString, "connection_limit", poolLimit);
   connectionString = withParam(connectionString, "pool_timeout", "30");
-  connectionString = withParam(connectionString, "connect_timeout", "15");
+  connectionString = withParam(connectionString, "connect_timeout", "10");
 }
 
 const prismaClientSingleton = () => {
@@ -125,6 +140,7 @@ const READ_OPERATIONS = new Set([
 
 declare const globalThis: {
   prismaGlobal?: ReturnType<typeof createPrisma>;
+  prismaConnectionString?: string;
 } & typeof global;
 
 const createPrisma = () => {
@@ -163,17 +179,22 @@ const createPrisma = () => {
 
           if (!isDeferredCacheInvalidation() && isWriteOperation(operation)) {
             clearLocalCache();
-            const a = args as { data?: { schoolId?: string }; where?: { schoolId?: string } };
-            const schoolId =
-              typeof a?.data?.schoolId === "string"
-                ? a.data.schoolId
-                : typeof a?.where?.schoolId === "string"
-                  ? a.where.schoolId
-                  : null;
-            if (schoolId) {
-              bumpTenantCacheVersion(schoolId).catch(() => {
-                // ignore cache invalidation errors; DB write already committed
-              });
+            // Backup schedule / global config writes are not school portal data.
+            if (model === "BackupEmailSchedule") {
+              // no tenant cache bump
+            } else {
+              const a = args as { data?: { schoolId?: string }; where?: { schoolId?: string } };
+              const schoolId =
+                typeof a?.data?.schoolId === "string"
+                  ? a.data.schoolId
+                  : typeof a?.where?.schoolId === "string"
+                    ? a.where.schoolId
+                    : null;
+              if (schoolId) {
+                bumpTenantCacheVersion(schoolId).catch(() => {
+                  // ignore cache invalidation errors; DB write already committed
+                });
+              }
             }
           }
         }
@@ -182,21 +203,35 @@ const createPrisma = () => {
   });
 };
 
-let prisma: ReturnType<typeof createPrisma> = globalThis.prismaGlobal ?? createPrisma();
+let prisma: ReturnType<typeof createPrisma>;
+if (
+  globalThis.prismaGlobal &&
+  globalThis.prismaConnectionString === connectionString
+) {
+  prisma = globalThis.prismaGlobal;
+} else {
+  // Recreate when pool params / URL change (dev HMR otherwise keeps connection_limit=1 forever)
+  void globalThis.prismaGlobal?.$disconnect().catch(() => {});
+  prisma = createPrisma();
+}
 
 // Next.js dev HMR can keep a Prisma singleton from before `prisma generate`; new models are then undefined.
 const delegate = prisma as unknown as {
   extraFeeHeadTemplate?: { create?: unknown };
   timetable?: { create?: unknown };
+  backupEmailSchedule?: { findFirst?: unknown };
 };
 if (
   process.env.NODE_ENV === "development" &&
   (typeof delegate.extraFeeHeadTemplate?.create !== "function" ||
-    typeof delegate.timetable?.create !== "function")
+    typeof delegate.timetable?.create !== "function" ||
+    typeof delegate.backupEmailSchedule?.findFirst !== "function")
 ) {
+  void prisma.$disconnect().catch(() => {});
   prisma = createPrisma();
 }
 
 globalThis.prismaGlobal = prisma;
+globalThis.prismaConnectionString = connectionString;
 
 export default prisma;
