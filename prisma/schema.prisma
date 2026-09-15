@@ -277,6 +277,24 @@ model School {
   studentApplications   StudentApplication[]
   feeDiscountApprovals  FeeDiscountApproval[]
   timetables            Timetable[]
+  backupEmailSchedules  BackupEmailSchedule[]
+}
+
+model BackupEmailSchedule {
+  id           String    @id @default(cuid())
+  enabled      Boolean   @default(false)
+  /// Daily send time in IST, format HH:mm (e.g. 06:00)
+  scheduleTime String    @default("06:00")
+  recipient    String    @default("timelly26@gmail.com")
+  /// When set, only this school is included; otherwise all active schools
+  schoolId     String?
+  school       School?   @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+  lastSentAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([enabled])
+  @@index([schoolId])
 }
 
 model SchoolSettings {

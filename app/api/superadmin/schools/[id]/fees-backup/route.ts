@@ -1,11 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
-import {
-  buildSchoolFeesBackupWorkbook,
-  schoolFeesBackupFilename,
-} from "@/lib/buildSchoolFeesBackupWorkbook";
-import { loadSchoolFeesBackupData } from "@/lib/loadSchoolFeesBackupData";
+import { generateSchoolFeesBackupBuffer } from "@/lib/generateSchoolFeesBackupBuffer";
 
 /**
  * Download a full fees backup Excel for one school (superadmin only).
@@ -23,15 +19,13 @@ export async function GET(
     }
 
     const { id: schoolId } = await params;
-    const data = await loadSchoolFeesBackupData(schoolId);
-    if (!data) {
+    const backup = await generateSchoolFeesBackupBuffer(schoolId);
+    if (!backup) {
       return NextResponse.json({ message: "School not found" }, { status: 404 });
     }
 
-    const workbook = await buildSchoolFeesBackupWorkbook(data);
-    const buf = await workbook.xlsx.writeBuffer();
-    const bytes = new Uint8Array(Buffer.isBuffer(buf) ? buf : Buffer.from(buf as ArrayBuffer));
-    const filename = schoolFeesBackupFilename(data.school.name);
+    const bytes = new Uint8Array(backup.buffer);
+    const filename = backup.filename;
 
     return new NextResponse(bytes, {
       status: 200,

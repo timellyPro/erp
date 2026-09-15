@@ -11,6 +11,7 @@ import TableLayout from "../common/TableLayout";
 import { Column } from "../../types/superadmin";
 import { useDebounce } from "@/app/frontend/hooks/useDebounce";
 import { AVATAR_URL } from "../../constants/images";
+import BackupEmailPanel from "./BackupEmailPanel";
 
 export interface SchoolRow {
   slNo: number;
@@ -332,6 +333,12 @@ export default function Schools({ variant = "default" }: SchoolsProps) {
             </div>
           }
         />
+
+        {variant === "default" && !loading && (
+          <BackupEmailPanel
+            schools={schools.map((s) => ({ id: s.id, name: s.name }))}
+          />
+        )}
 
         {error && (
           <div className="text-red-400 text-sm py-1 px-1" role="alert">
