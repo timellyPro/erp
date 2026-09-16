@@ -22,6 +22,14 @@ export async function GET() {
     const auth = await requireSuperAdmin();
     if ("error" in auth && auth.error) return auth.error;
 
+    // Ensure local auto-scheduler is running (instrumentation may not load in all Turbopack cases)
+    if (!process.env.VERCEL) {
+      const { startLocalFeesBackupScheduler } = await import(
+        "@/lib/localFeesBackupScheduler"
+      );
+      startLocalFeesBackupScheduler();
+    }
+
     const schedule = await getOrCreateBackupSchedule();
     return NextResponse.json({
       schedule: {
