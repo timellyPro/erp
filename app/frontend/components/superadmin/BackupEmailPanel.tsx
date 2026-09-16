@@ -115,8 +115,9 @@ export default function BackupEmailPanel({ schools }: { schools: SchoolOption[] 
             Automated fees backup email
           </h2>
           <p className="text-xs text-white/55 mt-1 max-w-2xl">
-            Click <span className="text-white/80">Send backup now</span> to email the Excel immediately.
-            Daily automation only runs after deploy (Vercel cron), and only when the toggle is on.
+            <span className="text-white/80">Send backup now</span> emails immediately.
+            With daily automation on, keep the server running — it checks every ~2 minutes and
+            sends <span className="text-white/80">once per day</span> after your IST time.
           </p>
         </div>
         <label className="inline-flex items-center gap-2 text-sm text-white/80 cursor-pointer shrink-0">

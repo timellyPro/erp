@@ -431,7 +431,7 @@ export const TEACHER_MENU_ITEMS: SidebarItem[] = [
         permission: Permission.ATTENDANCE,
     },
     {
-        label: "Exams & Syllabus",
+        label: "Exams",
         tab: "exams",
         href: "/frontend/pages/teacher?tab=exams",
         icon: FileText,

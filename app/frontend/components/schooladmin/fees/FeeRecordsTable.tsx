@@ -40,7 +40,8 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
   const [selectedClass, setSelectedClass] = useState("");
   const [studentStatusFilter, setStudentStatusFilter] = useState<StudentStatusFilter>("Active");
   const [reportPeriod, setReportPeriod] = useState<ReportPeriod>("DAY_WISE");
-  const [reportDate, setReportDate] = useState(() => todayYmdLocal());
+  const [reportDateFrom, setReportDateFrom] = useState(() => todayYmdLocal());
+  const [reportDateTo, setReportDateTo] = useState(() => todayYmdLocal());
   const [reportMonth, setReportMonth] = useState(new Date().toISOString().slice(0, 7));
   const [reportYear, setReportYear] = useState(String(new Date().getFullYear()));
   const [academicYear, setAcademicYear] = useState(() => {
@@ -430,14 +431,22 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     });
 
   const getReportPeriodLabel = (value: ReportPeriod) => {
-    if (value === "DAY_WISE") return "Day Wise";
+    if (value === "DAY_WISE") return "Date Range";
     if (value === "MONTH_WISE") return "Month Wise";
     if (value === "YEAR_WISE") return "Year Wise";
     return "Academic Year Wise";
   };
 
+  const formatDateRangeLabel = (from: string, to: string) => {
+    const fromLabel = formatDdMmYyyyFromYmdInput(from);
+    const toLabel = formatDdMmYyyyFromYmdInput(to);
+    if (!from && !to) return "-";
+    if (from === to || !to) return fromLabel || from || "-";
+    return `${fromLabel || from} – ${toLabel || to}`;
+  };
+
   const getReportPeriodValue = () => {
-    if (reportPeriod === "DAY_WISE") return reportDate || "-";
+    if (reportPeriod === "DAY_WISE") return formatDateRangeLabel(reportDateFrom, reportDateTo);
     if (reportPeriod === "MONTH_WISE") return reportMonth || "-";
     if (reportPeriod === "YEAR_WISE") return reportYear || "-";
     return academicYear || "-";
@@ -459,9 +468,13 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     const d = new Date(createdAt);
     if (Number.isNaN(d.getTime())) return false;
     if (reportPeriod === "DAY_WISE") {
-      const picked = parseYmdLocal(reportDate);
-      if (Number.isNaN(picked.getTime())) return false;
-      return toDateOnly(d).getTime() === toDateOnly(picked).getTime();
+      const from = parseYmdLocal(reportDateFrom);
+      const to = parseYmdLocal(reportDateTo || reportDateFrom);
+      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return false;
+      const day = toDateOnly(d).getTime();
+      const start = toDateOnly(from).getTime();
+      const end = toDateOnly(to).getTime();
+      return day >= Math.min(start, end) && day <= Math.max(start, end);
     }
     if (reportPeriod === "MONTH_WISE") {
       const [y, m] = reportMonth.split("-").map((v) => Number(v));
@@ -480,7 +493,10 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
 
   const getReportDateRange = (): { from: string; to: string } => {
     if (reportPeriod === "DAY_WISE") {
-      return { from: reportDate, to: reportDate };
+      const from = reportDateFrom;
+      const to = reportDateTo || reportDateFrom;
+      if (from && to && from > to) return { from: to, to: from };
+      return { from, to };
     }
     if (reportPeriod === "MONTH_WISE") {
       const [y, m] = reportMonth.split("-").map((v) => Number(v));
@@ -515,6 +531,13 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     });
 
   const exportFinalTemplate = async () => {
+    if (reportPeriod === "DAY_WISE") {
+      if (!reportDateFrom || !reportDateTo) {
+        alert("Please select both From date and To date.");
+        return;
+      }
+    }
+
     const txQs = buildReportTxQueryParams();
     const [txRes, schoolRes] = await Promise.all([
       fetch(`/api/fees/transactions?${txQs.toString()}`, { credentials: "include" }),
@@ -548,13 +571,23 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
       return;
     }
 
+    const { from: rangeFrom, to: rangeTo } = getReportDateRange();
     const headerDateLabel =
-      reportPeriod === "DAY_WISE" ? formatDdMmYyyyFromYmdInput(reportDate) : getReportPeriodValue();
+      reportPeriod === "DAY_WISE" ? formatDateRangeLabel(rangeFrom, rangeTo) : getReportPeriodValue();
     const dayReportTitle =
-      reportPeriod === "DAY_WISE" ? "Day Report" : `${getReportPeriodLabel(reportPeriod)} — collections`;
+      reportPeriod === "DAY_WISE"
+        ? rangeFrom === rangeTo
+          ? "Day Report"
+          : "Date Range Report"
+        : `${getReportPeriodLabel(reportPeriod)} — collections`;
 
-    const fileDate = new Date().toISOString().slice(0, 10);
-    const safePeriod = reportPeriod.toLowerCase();
+    const fileDate =
+      reportPeriod === "DAY_WISE"
+        ? rangeFrom === rangeTo
+          ? rangeFrom
+          : `${rangeFrom}_to_${rangeTo}`
+        : new Date().toISOString().slice(0, 10);
+    const safePeriod = reportPeriod === "DAY_WISE" ? "date_range" : reportPeriod.toLowerCase();
     const baseName = `fee-report-${safePeriod}-${fileDate}`;
     const rows = filteredTx.map((t) => ({
       Date: new Date(t.createdAt).toLocaleDateString("en-GB"),
@@ -713,33 +746,54 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
           <div>
             <p className="text-sm font-semibold text-white">Fee collection report</p>
             <p className="mt-0.5 text-xs text-gray-400">
-              Pick a period, then export or view collections.
+              Pick a from–to date range (or month/year), then export collections.
             </p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <SelectInput
             label="Report period"
             value={reportPeriod}
             onChange={(value) => setReportPeriod(value as ReportPeriod)}
             options={[
-              { label: "Day Wise", value: "DAY_WISE" },
+              { label: "Date Range", value: "DAY_WISE" },
               { label: "Month Wise", value: "MONTH_WISE" },
               { label: "Year Wise", value: "YEAR_WISE" },
               { label: "Academic Year Wise", value: "ACADEMIC_YEAR_WISE" },
             ]}
           />
           {reportPeriod === "DAY_WISE" && (
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-gray-400">Date</label>
-              <input
-                type="date"
-                value={reportDate}
-                onChange={(e) => setReportDate(e.target.value)}
-                className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-white"
-              />
-            </div>
+            <>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-gray-400">From date</label>
+                <input
+                  type="date"
+                  value={reportDateFrom}
+                  max={reportDateTo || undefined}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setReportDateFrom(next);
+                    if (reportDateTo && next > reportDateTo) setReportDateTo(next);
+                  }}
+                  className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-white"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-gray-400">To date</label>
+                <input
+                  type="date"
+                  value={reportDateTo}
+                  min={reportDateFrom || undefined}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setReportDateTo(next);
+                    if (reportDateFrom && next < reportDateFrom) setReportDateFrom(next);
+                  }}
+                  className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-white"
+                />
+              </div>
+            </>
           )}
           {reportPeriod === "MONTH_WISE" && (
             <div className="flex flex-col gap-1">
