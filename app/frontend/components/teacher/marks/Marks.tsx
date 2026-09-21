@@ -1135,38 +1135,101 @@ export default function TeacherMarksTab() {
                           </span>
                         </div>
                         <div className="mt-4 flex flex-col gap-3">
-                          <div className="flex items-center justify-between gap-4">
-                            <label className="text-xs text-white/60 shrink-0">Marks Obtained</label>
-                            <div className="flex items-center gap-2">
-                              {student.marks === "AB" ? (
-                                <span className="w-24 text-center text-red-400 font-semibold text-sm py-2">Absent</span>
-                              ) : (
-                                <input
-                                  type="number"
-                                  inputMode="numeric"
-                                  min={0}
-                                  max={student.maxMarks === "" ? undefined : student.maxMarks}
-                                  value={student.marks === "" ? "" : student.marks}
-                                  onChange={(e) => updateMarks(student.id, e.target.value)}
-                                  className="w-24 text-center rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-white text-sm outline-none focus:border-lime-400/50"
-                                />
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => toggleAbsent(student.id)}
-                                className={`px-2.5 py-2 rounded-lg text-xs font-bold border transition ${
-                                  student.marks === "AB"
-                                    ? "bg-red-500/20 text-red-400 border-red-500/30"
-                                    : "bg-white/5 text-white/40 border-white/10"
-                                }`}
-                              >
-                                AB
-                              </button>
+                          {hasSubsections ? (
+                            <>
+                              {termSections.map((sec) => {
+                                const val = student.componentScores?.[sec.name];
+                                return (
+                                  <div
+                                    key={sec.name}
+                                    className="flex items-center justify-between gap-4"
+                                  >
+                                    <label className="text-xs text-white/60 shrink-0 min-w-0">
+                                      <span className="block truncate">{sec.name}</span>
+                                      <span className="text-white/40">/ {sec.maxMarks}</span>
+                                    </label>
+                                    <div className="flex items-center gap-2">
+                                      {val === "AB" || student.marks === "AB" ? (
+                                        <span className="w-24 text-center text-red-400 font-semibold text-sm py-2">
+                                          AB
+                                        </span>
+                                      ) : (
+                                        <input
+                                          type="number"
+                                          inputMode="numeric"
+                                          min={0}
+                                          max={sec.maxMarks}
+                                          value={val === undefined || val === "" ? "" : val}
+                                          onChange={(e) =>
+                                            updateComponentScore(student.id, sec.name, e.target.value)
+                                          }
+                                          className="w-24 text-center rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-white text-sm outline-none focus:border-lime-400/50"
+                                        />
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                              <div className="flex items-center justify-between gap-4 pt-1 border-t border-white/10">
+                                <span className="text-xs text-white/60">Total</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="w-24 text-center text-white font-semibold text-sm py-2">
+                                    {student.marks === "AB"
+                                      ? "AB"
+                                      : student.marks === ""
+                                        ? "—"
+                                        : student.marks}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleAbsent(student.id)}
+                                    className={`px-2.5 py-2 rounded-lg text-xs font-bold border transition ${
+                                      student.marks === "AB"
+                                        ? "bg-red-500/20 text-red-400 border-red-500/30"
+                                        : "bg-white/5 text-white/40 border-white/10"
+                                    }`}
+                                  >
+                                    AB
+                                  </button>
+                                </div>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex items-center justify-between gap-4">
+                              <label className="text-xs text-white/60 shrink-0">Marks Obtained</label>
+                              <div className="flex items-center gap-2">
+                                {student.marks === "AB" ? (
+                                  <span className="w-24 text-center text-red-400 font-semibold text-sm py-2">
+                                    Absent
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={0}
+                                    max={student.maxMarks === "" ? undefined : student.maxMarks}
+                                    value={student.marks === "" ? "" : student.marks}
+                                    onChange={(e) => updateMarks(student.id, e.target.value)}
+                                    className="w-24 text-center rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-white text-sm outline-none focus:border-lime-400/50"
+                                  />
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => toggleAbsent(student.id)}
+                                  className={`px-2.5 py-2 rounded-lg text-xs font-bold border transition ${
+                                    student.marks === "AB"
+                                      ? "bg-red-500/20 text-red-400 border-red-500/30"
+                                      : "bg-white/5 text-white/40 border-white/10"
+                                  }`}
+                                >
+                                  AB
+                                </button>
+                              </div>
                             </div>
-                          </div>
+                          )}
                           <div className="flex justify-between text-sm items-center gap-3">
                             <span className="text-white/60 shrink-0">Max</span>
-                            {editingMaxId === student.id ? (
+                            {editingMaxId === student.id && !maxMarksLocked ? (
                               <input
                                 type="number"
                                 autoFocus
@@ -1190,8 +1253,16 @@ export default function TeacherMarksTab() {
                             ) : (
                               <button
                                 type="button"
-                                title="Double-tap to edit max marks"
-                                onDoubleClick={() => startEditMaxMarks(student.id, student.maxMarks)}
+                                title={
+                                  maxMarksLocked
+                                    ? "Locked by school admin"
+                                    : "Double-tap to edit max marks"
+                                }
+                                onDoubleClick={() => {
+                                  if (!maxMarksLocked) {
+                                    startEditMaxMarks(student.id, student.maxMarks);
+                                  }
+                                }}
                                 className="text-white font-semibold px-2 py-1 rounded-lg hover:bg-white/10"
                               >
                                 {student.maxMarks === "" ? "—" : student.maxMarks}
