@@ -19,7 +19,7 @@ function getISTParts(date: Date): { hour: number; minute: number; dateKey: strin
   const day = get("day");
 
   return {
-    hour: parseInt(get("hour"), 10),
+    hour: parseInt(get("hour"), 10) % 24,
     minute: parseInt(get("minute"), 10),
     dateKey: `${year}-${month}-${day}`,
   };

@@ -196,8 +196,15 @@ export default function AppSidebar({ menuItems, profile, activeTab = "dashboard"
     if (!isTeacher) return true;
     if (!item.tab && !item.permission) return true;
     if (!allowedFeatures || allowedFeatures.length === 0) return true;
-    if (item.tab && allowedFeatures.includes(item.tab)) return true;
-    if (item.permission && allowedFeatures.includes(String(item.permission))) return true;
+
+    const allowedNormalized = allowedFeatures.map((a: string) => String(a).toLowerCase());
+    const tabKey = item.tab ? String(item.tab).toLowerCase() : null;
+    const permKey = item.permission ? String(item.permission).toLowerCase() : null;
+
+    if (tabKey && allowedNormalized.includes(tabKey)) return true;
+    if (permKey && allowedNormalized.includes(permKey)) return true;
+    // Marks / exams aliases (and similar: attendance-view, etc.)
+    if (tabKey && allowedNormalized.some((a: string) => a.startsWith(tabKey))) return true;
     return false;
   };
 
