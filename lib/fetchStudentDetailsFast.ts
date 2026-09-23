@@ -362,12 +362,67 @@ async function refreshStudentFeesAfterMutationInner(
   }
 
   try {
+    const patchedBreakdown = getFeeBreakdownCached(studentId);
+    const excludeIds = new Set(options?.excludePaymentIds ?? []);
+
+    // After a confirmed DB payment: paint from POST patch immediately.
+    // Network refresh runs in background — must not delay receipt / UI.
+    if (options?.keepPatchedBreakdown) {
+      const immediate = toBundle(
+        existingShell,
+        {
+          payments: existingShell.payments ?? [],
+          attendanceTrends: existingShell.attendanceTrends ?? [],
+          academicPerformance: existingShell.academicPerformance ?? [],
+          certificates: existingShell.certificates ?? [],
+        },
+        patchedBreakdown
+      );
+      cacheBundle(studentId, immediate);
+      options?.onPartial?.(immediate);
+
+      void (async () => {
+        try {
+          const extrasRes = await fetch(
+            `/api/student/${encodeURIComponent(studentId)}/details-bundle?extras=1&scope=payments&refresh=1`,
+            { credentials: "include", cache: "no-store" }
+          );
+          const extras = extrasRes.ok
+            ? parseExtras(await extrasRes.json().catch(() => ({})))
+            : emptyExtras();
+          const mergedPayments = mergeStudentPayments(existingShell.payments ?? [], extras.payments, {
+            excludeIds,
+            trustPrimaryIds: options?.trustClientPaymentList,
+            optimisticPendingId: options?.optimisticPendingId,
+          });
+          const breakdown = await fetchFeeBreakdownFast(studentId, { force: true });
+          const effectiveBreakdown = preferFreshBreakdown(breakdown, patchedBreakdown);
+          if (effectiveBreakdown) setFeeBreakdownCache(studentId, effectiveBreakdown);
+          const full = toBundle(
+            { ...existingShell, payments: mergedPayments },
+            {
+              payments: mergedPayments,
+              attendanceTrends: existingShell.attendanceTrends ?? [],
+              academicPerformance: existingShell.academicPerformance ?? [],
+              certificates: existingShell.certificates ?? [],
+            },
+            effectiveBreakdown ?? patchedBreakdown
+          );
+          cacheBundle(studentId, full);
+          options?.onPartial?.(full);
+        } catch {
+          /* keep immediate patch */
+        }
+      })();
+
+      return immediate;
+    }
+
     const extrasRes = await fetch(
       `/api/student/${encodeURIComponent(studentId)}/details-bundle?extras=1&scope=payments&refresh=1`,
       { credentials: "include", cache: "no-store" }
     );
     const extras = extrasRes.ok ? parseExtras(await extrasRes.json().catch(() => ({}))) : emptyExtras();
-    const excludeIds = new Set(options?.excludePaymentIds ?? []);
     const mergedPayments = mergeStudentPayments(existingShell.payments ?? [], extras.payments, {
       excludeIds,
       trustPrimaryIds: options?.trustClientPaymentList,
@@ -379,7 +434,6 @@ async function refreshStudentFeesAfterMutationInner(
       academicPerformance: existingShell.academicPerformance ?? [],
       certificates: existingShell.certificates ?? [],
     };
-    const patchedBreakdown = getFeeBreakdownCached(studentId);
 
     // Keep optimistic breakdown visible — only replace UI when fresh server data arrives.
     void fetchFeeBreakdownFast(studentId, { force: true }).then(async (breakdown) => {
@@ -471,7 +525,11 @@ async function fetchPaymentsExtras(
     signal,
   })
     .then(async (res) => (res.ok ? parseExtras(await res.json().catch(() => ({}))) : emptyExtras()))
-    .catch(() => emptyExtras());
+    .catch((err) => {
+      if (err instanceof DOMException && err.name === "AbortError") throw err;
+      if (err instanceof Error && err.name === "AbortError") throw err;
+      return emptyExtras();
+    });
 }
 
 /**
@@ -526,53 +584,73 @@ export async function fetchStudentDetailsFast(
     const cachedBreakdown = getFeeBreakdownCached(studentId);
     if (cachedBreakdown) options?.onBreakdownLoaded?.(cachedBreakdown);
 
-    const shellQuery = "shell=1&refresh=1";
-    let breakdownPromise =
-      cachedBreakdown && !options?.force
-        ? Promise.resolve(cachedBreakdown)
-        : fetchFeeBreakdownFast(studentId, {
-            signal: options?.signal,
-            force: options?.force,
-          });
+    // Prefer core=1 (shell + breakdown, one student read) over shell + separate breakdown HTTP.
+    // Cuts pool contention that showed as 7–18s prisma_slow_query storms.
+    const paymentsPromise = fetchPaymentsExtras(
+      studentId,
+      options?.signal,
+      options?.force
+    );
 
-    const shellRes = await fetch(
-      `/api/student/${encodeURIComponent(studentId)}/details-bundle?${shellQuery}`,
+    const useCore = !cachedBreakdown || Boolean(options?.force);
+    const primaryQuery = useCore
+      ? options?.force
+        ? "core=1&refresh=1"
+        : "core=1"
+      : options?.force
+        ? "shell=1&refresh=1"
+        : "shell=1";
+
+    const primaryRes = await fetch(
+      `/api/student/${encodeURIComponent(studentId)}/details-bundle?${primaryQuery}`,
       { credentials: "include", cache: "no-store", signal: options?.signal }
     );
-    const shellData = await shellRes.json().catch(() => ({}));
-    if (!shellRes.ok) {
+    const primaryData = await primaryRes.json().catch(() => ({}));
+    if (!primaryRes.ok) {
       throw new Error(
-        (shellData as { message?: string })?.message || "Failed to load student profile"
+        (primaryData as { message?: string })?.message || "Failed to load student profile"
       );
     }
-    if (!(shellData as { student?: unknown })?.student) {
+    if (!(primaryData as { student?: unknown })?.student) {
       throw new Error("Invalid student details response");
     }
 
-    const shell = parseShell(shellData);
+    const shell = parseShell(primaryData);
     const shellPaid = Number(shell.fee?.amountPaid) || 0;
-    options?.onShellLoaded?.(toBundle(shell, emptyExtras(), cachedBreakdown ?? null));
+    let feeBreakdown: AdminStudentFeeBreakdownResult | null =
+      (primaryData as { feeBreakdown?: AdminStudentFeeBreakdownResult | null }).feeBreakdown ??
+      cachedBreakdown ??
+      null;
+
+    options?.onShellLoaded?.(toBundle(shell, emptyExtras(), feeBreakdown));
+    if (feeBreakdown) options?.onBreakdownLoaded?.(feeBreakdown);
+
     const hasApprovedDiscount =
       shell.fee?.discountApprovals?.some((approval) => approval.status === "APPROVED") ?? false;
     const cachedUndercounts =
-      Boolean(cachedBreakdown) && shellPaid > (cachedBreakdown?.amountPaid ?? 0) + 0.02;
-    if (cachedBreakdown && !options?.force && (hasApprovedDiscount || cachedUndercounts)) {
+      Boolean(feeBreakdown) && shellPaid > (feeBreakdown?.amountPaid ?? 0) + 0.02;
+    if (feeBreakdown && !options?.force && (hasApprovedDiscount || cachedUndercounts)) {
       invalidateFeeBreakdownCache(studentId);
-      breakdownPromise = fetchFeeBreakdownFast(studentId, {
+      feeBreakdown = await fetchFeeBreakdownFast(studentId, {
         signal: options?.signal,
         force: true,
         minAmountPaid: shellPaid,
       });
+      if (feeBreakdown) options?.onBreakdownLoaded?.(feeBreakdown);
+    } else if (!feeBreakdown) {
+      feeBreakdown = await fetchFeeBreakdownFast(studentId, {
+        signal: options?.signal,
+        force: options?.force,
+      });
+      if (feeBreakdown) options?.onBreakdownLoaded?.(feeBreakdown);
     }
 
-    // Load payment history first; attendance/marks/certificates can arrive later.
-    const [paymentExtras, feeBreakdown] = await Promise.all([
-      fetchPaymentsExtras(studentId, options?.signal, options?.force),
-      breakdownPromise,
-    ]);
+    const paymentExtras = await paymentsPromise;
+    if (options?.signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
     if (feeBreakdown) {
       setFeeBreakdownCache(studentId, feeBreakdown);
-      options?.onBreakdownLoaded?.(feeBreakdown);
     }
 
     const initial = toBundle(shell, paymentExtras, feeBreakdown ?? cachedBreakdown ?? null);
@@ -580,6 +658,7 @@ export async function fetchStudentDetailsFast(
     options?.onExtrasLoaded?.(initial);
 
     void fetchExtras(studentId, options?.signal, options?.force).then((extras) => {
+      if (options?.signal?.aborted) return;
       const current = bundleMemory.get(studentId)?.value ?? initial;
       const full = toBundle(
         { ...current, payments: mergeStudentPayments(current.payments, extras.payments) },

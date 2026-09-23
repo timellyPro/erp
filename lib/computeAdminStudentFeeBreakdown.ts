@@ -281,7 +281,7 @@ export async function computeAdminStudentFeeBreakdown(
     studentFeeRecord,
     classFeeStructure,
     extraFeesRawFirst,
-    groupedAllocations,
+    successPayments,
     approvedDiscounts,
   ] = await Promise.all([
     prisma.studentFee.findUnique({
@@ -298,14 +298,12 @@ export async function computeAdminStudentFeeBreakdown(
     }),
     classId ? loadClassFeeStructure(classId) : Promise.resolve(null),
     loadExtraFees(),
-    prisma.paymentFeeAllocation.groupBy({
-      by: ["allocationType", "headType", "componentIndex", "extraFeeId"],
+    prisma.payment.findMany({
       where: {
         studentId: student.id,
-        allocationType: { in: ["PAYMENT", "REFUND"] },
-        payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+        status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] },
       },
-      _sum: { allocatedAmount: true },
+      select: { id: true },
     }),
     prisma.feeDiscountApproval.findMany({
       where: {
@@ -321,6 +319,21 @@ export async function computeAdminStudentFeeBreakdown(
       },
     }),
   ]);
+
+  // Avoid nested payment.status join in groupBy (slow under remote poolers).
+  const paymentIds = successPayments.map((p) => p.id);
+  const groupedAllocations =
+    paymentIds.length === 0
+      ? []
+      : await prisma.paymentFeeAllocation.groupBy({
+          by: ["allocationType", "headType", "componentIndex", "extraFeeId"],
+          where: {
+            studentId: student.id,
+            paymentId: { in: paymentIds },
+            allocationType: { in: ["PAYMENT", "REFUND"] },
+          },
+          _sum: { allocatedAmount: true },
+        });
   let fee = studentFeeRecord;
 
   if (reconcileTotals && fee) {
