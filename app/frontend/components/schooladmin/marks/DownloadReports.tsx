@@ -94,7 +94,7 @@ export default function SchoolAdminDownloadReports() {
     (async () => {
       setClassesLoading(true);
       try {
-        const res = await fetch("/api/class/list?lite=1", {
+        const res = await fetch("/api/class/list?lite=1&all=1", {
           credentials: "include",
           cache: "no-store",
         });
@@ -121,15 +121,19 @@ export default function SchoolAdminDownloadReports() {
   useEffect(() => {
     (async () => {
       try {
-        const [examRes, subRes] = await Promise.all([
-          fetch("/api/exam-types", { cache: "no-store", credentials: "include" }),
-          fetch("/api/exam-subjects", { cache: "no-store", credentials: "include" }),
-        ]);
+        const examRes = await fetch("/api/exam-types", {
+          cache: "no-store",
+          credentials: "include",
+        });
         if (examRes.ok) {
           const data = await examRes.json();
           const names = normalizeExamTypes(data.examTypes).map((t) => t.name);
           if (names.length > 0) setExamTypeOptions(["ALL", ...names]);
         }
+        const subRes = await fetch("/api/exam-subjects", {
+          cache: "no-store",
+          credentials: "include",
+        });
         if (subRes.ok) {
           const data = await subRes.json();
           const names: string[] = Array.isArray(data.subjects) ? data.subjects : [];
@@ -536,7 +540,7 @@ export default function SchoolAdminDownloadReports() {
               {selectMode === "class" ? "CLASSES" : "SECTIONS"}{" "}
               <span className="text-lime-400">({selectedKeys.size} selected)</span>
             </label>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
               <div className="relative flex-1 sm:w-56">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40" />
                 <input
@@ -600,12 +604,12 @@ export default function SchoolAdminDownloadReports() {
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 pt-2">
+        <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3 pt-2">
           <button
             type="button"
             disabled={downloading || selectedKeys.size === 0}
             onClick={handleDownloadExcel}
-            className={`px-5 py-3 rounded-xl flex items-center gap-2 text-sm font-bold transition ${
+            className={`w-full sm:w-auto justify-center px-5 py-3 rounded-xl flex items-center gap-2 text-sm font-bold transition ${
               !downloading && selectedKeys.size > 0
                 ? "bg-lime-400 text-black hover:bg-lime-300"
                 : "bg-white/5 text-white/40 border border-white/10 cursor-not-allowed"
@@ -622,7 +626,7 @@ export default function SchoolAdminDownloadReports() {
             type="button"
             disabled={downloading || selectedKeys.size === 0}
             onClick={handleDownloadPdf}
-            className={`px-5 py-3 rounded-xl flex items-center gap-2 text-sm font-bold transition ${
+            className={`w-full sm:w-auto justify-center px-5 py-3 rounded-xl flex items-center gap-2 text-sm font-bold transition ${
               !downloading && selectedKeys.size > 0
                 ? "bg-blue-500 text-white hover:bg-blue-400"
                 : "bg-white/5 text-white/40 border border-white/10 cursor-not-allowed"

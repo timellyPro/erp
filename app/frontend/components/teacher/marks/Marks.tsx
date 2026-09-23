@@ -21,7 +21,12 @@ import {
 } from "@/lib/examTypes";
 
 const TeacherReportCard = lazy(() => import("./ReportCard"));
-const TeacherDownloadReports = lazy(() => import("./DownloadReports"));
+const SchoolAdminDownloadReports = lazy(
+  () => import("../../schooladmin/marks/DownloadReports")
+);
+const DownloadClassPdf = lazy(
+  () => import("../../schooladmin/marks/DownloadClassPdf")
+);
 
 /* ---------------- TYPES ---------------- */
 
@@ -941,49 +946,55 @@ export default function TeacherMarksTab() {
         />
 
         {/* SUB-TAB TOGGLE */}
-        <div className="flex gap-2">
+        <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 pb-0.5">
           <button
             onClick={() => setSubTab("entry")}
-            className={`px-5 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition ${
+            className={`shrink-0 px-3.5 sm:px-5 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition ${
               subTab === "entry"
                 ? "bg-lime-400/20 text-lime-400 border border-lime-400/40 shadow-md"
                 : "bg-white/5 text-white/60 border border-white/10 hover:bg-white/10"
             }`}
           >
-            <PenLine size={15} />
-            Marks Entry
+            <PenLine size={15} className="shrink-0" />
+            <span className="sm:hidden">Entry</span>
+            <span className="hidden sm:inline">Marks Entry</span>
           </button>
           <button
             onClick={() => setSubTab("report-card")}
-            className={`px-5 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition ${
+            className={`shrink-0 px-3.5 sm:px-5 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition ${
               subTab === "report-card"
                 ? "bg-lime-400/20 text-lime-400 border border-lime-400/40 shadow-md"
                 : "bg-white/5 text-white/60 border border-white/10 hover:bg-white/10"
             }`}
           >
-            <ClipboardList size={15} />
-            Report Card
+            <ClipboardList size={15} className="shrink-0" />
+            <span className="sm:hidden">Reports</span>
+            <span className="hidden sm:inline">Report Card</span>
           </button>
           <button
             onClick={() => setSubTab("download")}
-            className={`px-5 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition ${
+            className={`shrink-0 px-3.5 sm:px-5 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition ${
               subTab === "download"
                 ? "bg-lime-400/20 text-lime-400 border border-lime-400/40 shadow-md"
                 : "bg-white/5 text-white/60 border border-white/10 hover:bg-white/10"
             }`}
           >
-            <Download size={15} />
-            Download Reports
+            <Download size={15} className="shrink-0" />
+            <span className="sm:hidden">Download</span>
+            <span className="hidden sm:inline">Download Reports</span>
           </button>
         </div>
 
         {subTab === "report-card" ? (
           <Suspense fallback={<div className="flex justify-center py-16"><div className="w-10 h-10 border-2 border-lime-500/30 border-t-lime-500 rounded-full animate-spin" /></div>}>
-            <TeacherReportCard />
+            <div className="space-y-6">
+              <DownloadClassPdf />
+              <TeacherReportCard scope="school" />
+            </div>
           </Suspense>
         ) : subTab === "download" ? (
           <Suspense fallback={<div className="flex justify-center py-16"><div className="w-10 h-10 border-2 border-lime-500/30 border-t-lime-500 rounded-full animate-spin" /></div>}>
-            <TeacherDownloadReports />
+            <SchoolAdminDownloadReports />
           </Suspense>
         ) : (
         <>

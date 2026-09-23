@@ -9,11 +9,27 @@ async function resolveSchoolId(session: {
 }) {
   let schoolId = session.user.schoolId;
   if (!schoolId) {
-    const school = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = school?.id ?? null;
+    if (session.user.role === "TEACHER") {
+      const teacherClass = await prisma.class.findFirst({
+        where: { teacherId: session.user.id },
+        select: { schoolId: true },
+      });
+      schoolId = teacherClass?.schoolId ?? null;
+      if (!schoolId) {
+        const teacherSchool = await prisma.school.findFirst({
+          where: { teachers: { some: { id: session.user.id } } },
+          select: { id: true },
+        });
+        schoolId = teacherSchool?.id ?? null;
+      }
+    }
+    if (!schoolId) {
+      const school = await prisma.school.findFirst({
+        where: { admins: { some: { id: session.user.id } } },
+        select: { id: true },
+      });
+      schoolId = school?.id ?? null;
+    }
   }
   return schoolId;
 }
@@ -25,7 +41,7 @@ export async function PUT(req: Request) {
     if (!session) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
-    if (session.user.role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 

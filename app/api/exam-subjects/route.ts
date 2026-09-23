@@ -129,19 +129,18 @@ export async function GET() {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
 
-    const [customSubjects, teacherSubjects, hidden] = await Promise.all([
-      prisma.examSubject.findMany({
-        where: { schoolId },
-        select: { name: true },
-      }),
-      prisma.$queryRaw<Array<{ subjects: string[] }>>`
-        SELECT "subjects" FROM "User"
-        WHERE "schoolId" = ${schoolId}
-          AND "role" = 'TEACHER'
-          AND array_length("subjects", 1) > 0
-      `,
-      getHiddenSubjects(schoolId),
-    ]);
+    // Sequential reads — PgBouncer pool is tiny; parallel queries cause P2024 under tab warm.
+    const customSubjects = await prisma.examSubject.findMany({
+      where: { schoolId },
+      select: { name: true },
+    });
+    const teacherSubjects = await prisma.$queryRaw<Array<{ subjects: string[] }>>`
+      SELECT "subjects" FROM "User"
+      WHERE "schoolId" = ${schoolId}
+        AND "role" = 'TEACHER'
+        AND array_length("subjects", 1) > 0
+    `;
+    const hidden = await getHiddenSubjects(schoolId);
 
     const names = new Set<string>();
     DEFAULT_EXAM_SUBJECTS.forEach((n) => names.add(n));
@@ -176,7 +175,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    if (session.user.role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
@@ -249,7 +248,7 @@ export async function PATCH(req: Request) {
     if (!session) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
-    if (session.user.role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
@@ -329,7 +328,7 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    if (session.user.role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 

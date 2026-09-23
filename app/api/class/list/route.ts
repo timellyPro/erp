@@ -52,12 +52,17 @@ export async function GET(req: Request) {
       );
     }
 
+    const { searchParams } = new URL(req.url);
+    const lite = searchParams.get("lite") === "1";
+    const wantAllClasses = searchParams.get("all") === "1";
+
     const where: Record<string, unknown> = {
       schoolId: schoolId,
     };
 
-    // Teachers see teachingClassIds + class-teacher (homeroom) classes
-    if (session.user.role === "TEACHER") {
+    // Teachers normally see assigned classes only; all=1 unlocks school-wide
+    // lists for Exams/Marks tools that mirror school admin.
+    if (session.user.role === "TEACHER" && !wantAllClasses) {
       const accessibleIds = await getTeacherAccessibleClassIds(
         session.user.id,
         schoolId
@@ -67,12 +72,11 @@ export async function GET(req: Request) {
       }
       where.id = { in: accessibleIds };
     }
-    const lite = new URL(req.url).searchParams.get("lite") === "1";
 
     if (lite) {
       const memKey =
         session.user.role === "TEACHER"
-          ? `class:list:lite:${schoolId}:teacher:${session.user.id}`
+          ? `class:list:lite:${schoolId}:teacher:${session.user.id}:${wantAllClasses ? "all" : "assigned"}`
           : `class:list:lite:${schoolId}`;
       const cached = getSchoolDashboardServerCached<{ classes: unknown[] }>(memKey);
       if (cached) {

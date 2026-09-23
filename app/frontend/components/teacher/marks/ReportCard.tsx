@@ -153,7 +153,7 @@ export default function TeacherReportCard({
       if (scope === "school") {
         setClassesLoading(true);
         try {
-          const res = await fetch("/api/class/list?lite=1", {
+          const res = await fetch("/api/class/list?lite=1&all=1", {
             credentials: "include",
             cache: "no-store",
           });

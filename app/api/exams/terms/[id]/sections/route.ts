@@ -89,7 +89,7 @@ export async function PUT(
     if (!session) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
-    if (session.user.role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
