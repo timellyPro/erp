@@ -113,15 +113,16 @@ export async function GET() {
       },
     });
 
-    const fromMarks = await prisma.mark.findMany({
-      where: {
-        class: { schoolId },
-        examType: { not: null },
-      },
-      select: { examType: true },
-      distinct: ["examType"],
-      take: 200,
-    });
+    // Distinct exam types from marks — avoid heavy findMany+join that holds pool slots.
+    const fromMarks = await prisma.$queryRaw<Array<{ examType: string }>>`
+      SELECT DISTINCT m."examType" AS "examType"
+      FROM "Mark" m
+      INNER JOIN "Class" c ON c.id = m."classId"
+      WHERE c."schoolId" = ${schoolId}
+        AND m."examType" IS NOT NULL
+        AND btrim(m."examType") <> ''
+      LIMIT 200
+    `;
 
     const byName = new Map<string, ExamTypePayload>();
     DEFAULT_EXAM_TYPES.forEach((n) =>
@@ -166,7 +167,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    if (session.user.role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
@@ -241,7 +242,7 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    if (session.user.role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
@@ -332,7 +333,7 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    if (session.user.role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 

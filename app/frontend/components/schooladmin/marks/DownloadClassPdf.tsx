@@ -56,11 +56,10 @@ export default function DownloadClassPdf() {
     (async () => {
       setClassesLoading(true);
       try {
-        const [classRes, examRes, subRes] = await Promise.all([
-          fetch("/api/class/list?lite=1", { credentials: "include", cache: "no-store" }),
-          fetch("/api/exam-types", { credentials: "include", cache: "no-store" }),
-          fetch("/api/exam-subjects", { credentials: "include", cache: "no-store" }),
-        ]);
+        const classRes = await fetch("/api/class/list?lite=1&all=1", {
+          credentials: "include",
+          cache: "no-store",
+        });
         if (classRes.ok) {
           const data = await classRes.json().catch(() => ({}));
           const list = Array.isArray(data.classes)
@@ -79,11 +78,21 @@ export default function DownloadClassPdf() {
           setClasses(mapped);
           if (mapped.length > 0) setClassId(mapped[0].id);
         }
+
+        const examRes = await fetch("/api/exam-types", {
+          credentials: "include",
+          cache: "no-store",
+        });
         if (examRes.ok) {
           const data = await examRes.json().catch(() => ({}));
           const names = normalizeExamTypes(data.examTypes).map((t) => t.name);
           if (names.length) setExamTypeOptions(["ALL", ...names]);
         }
+
+        const subRes = await fetch("/api/exam-subjects", {
+          credentials: "include",
+          cache: "no-store",
+        });
         if (subRes.ok) {
           const data = await subRes.json().catch(() => ({}));
           const names: string[] = Array.isArray(data.subjects) ? data.subjects : [];
@@ -295,7 +304,7 @@ export default function DownloadClassPdf() {
         type="button"
         disabled={downloading || !classId}
         onClick={handleDownload}
-        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-lime-400 text-black text-sm font-bold disabled:opacity-60"
+        className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-lime-400 text-black text-sm font-bold disabled:opacity-60"
       >
         {downloading ? (
           <Loader2 size={16} className="animate-spin" />

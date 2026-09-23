@@ -515,16 +515,37 @@ export async function loadExamsPage(options?: { revalidate?: boolean; signal?: A
     ns.exams,
     "default",
     async () => {
-      const [termsRes, typesRes, subjectsRes] = await Promise.all([
-        fetch("/api/exams/terms", { credentials: "include", cache: "no-store", signal: options?.signal }),
-        fetch("/api/exam-types", { credentials: "include", cache: "no-store", signal: options?.signal }),
-        fetch("/api/exam-subjects", { credentials: "include", cache: "no-store", signal: options?.signal }),
-      ]);
-      const [termsData, typesData, subjectsData] = await Promise.all([
-        jsonOrThrow<{ terms?: unknown[]; classes?: unknown[] }>(termsRes, "Failed to load exams"),
-        jsonOrThrow<{ examTypes?: unknown[] }>(typesRes, "Failed to load exam types"),
-        jsonOrThrow<{ subjects?: string[] }>(subjectsRes, "Failed to load subjects"),
-      ]);
+      // Sequential fetches — avoid starving Prisma's small PgBouncer pool (P2024).
+      const termsRes = await fetch("/api/exams/terms", {
+        credentials: "include",
+        cache: "no-store",
+        signal: options?.signal,
+      });
+      const termsData = await jsonOrThrow<{ terms?: unknown[]; classes?: unknown[] }>(
+        termsRes,
+        "Failed to load exams"
+      );
+
+      const typesRes = await fetch("/api/exam-types", {
+        credentials: "include",
+        cache: "no-store",
+        signal: options?.signal,
+      });
+      const typesData = await jsonOrThrow<{ examTypes?: unknown[] }>(
+        typesRes,
+        "Failed to load exam types"
+      );
+
+      const subjectsRes = await fetch("/api/exam-subjects", {
+        credentials: "include",
+        cache: "no-store",
+        signal: options?.signal,
+      });
+      const subjectsData = await jsonOrThrow<{ subjects?: string[] }>(
+        subjectsRes,
+        "Failed to load subjects"
+      );
+
       return {
         terms: Array.isArray(termsData.terms) ? termsData.terms : [],
         classes: Array.isArray(termsData.classes) ? termsData.classes : [],

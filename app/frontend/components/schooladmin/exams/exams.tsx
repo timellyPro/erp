@@ -555,13 +555,13 @@ export default function ExamsTab() {
         );
 
     return (
-        <div className="min-h-screen text-white max-w-7xl mx-auto md:p-0">
+        <div className="min-h-screen text-white max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 pb-8">
             <PageHeader
                 title={
-                    <div className="flex items-center gap-3">
-                        <span>Exams & Syllabus</span>
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
+                        <span className="truncate">Exams & Syllabus</span>
                         <span
-                            className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md uppercase ${isTermCompleted ? "bg-white/20 text-white" : "bg-[#B4F42A] text-black"
+                            className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md uppercase shrink-0 ${isTermCompleted ? "bg-white/20 text-white" : "bg-[#B4F42A] text-black"
                                 }`}
                         >
                             {isTermCompleted ? "Completed" : "Active Term"}
@@ -570,8 +570,8 @@ export default function ExamsTab() {
                 }
                 subtitle={`Viewing details for ${selectedTermName}`}
                 rightSlot={
-                    <div className="flex gap-2 md:gap-6">
-                        <div className="text-right md:text-center border-r border-white/10 pr-6 text-white/40">
+                    <div className="flex gap-4 sm:gap-6 justify-between sm:justify-end w-full md:w-auto">
+                        <div className="text-left sm:text-right md:text-center border-r border-white/10 pr-4 sm:pr-6 text-white/40">
                             <p className="text-xs">Next Exam</p>
                             <p className="text-sm font-bold text-white">
                                 {nextExamDate
@@ -579,43 +579,43 @@ export default function ExamsTab() {
                                     : "--"}
                             </p>
                         </div>
-                        <div className="text-right md:text-center">
+                        <div className="text-left sm:text-right md:text-center">
                             <p className="text-xs">Days Left</p>
                             <p className="text-sm font-bold text-[#B4F42A]">{daysLeft}</p>
                         </div>
                     </div>
                 }
-                className="somu border-none bg-white/5! mb-6"
+                className="somu border-none bg-white/5! mb-4 sm:mb-6"
             />
 
             {/* EXAM TYPES MANAGER */}
-            <div className="somu border-none bg-white/5! rounded-3xl p-5 mb-6">
+            <div className="somu border-none bg-white/5! rounded-2xl sm:rounded-3xl p-4 sm:p-5 mb-4 sm:mb-6">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <div>
-                        <h3 className="text-lg font-bold">Exam Types</h3>
+                        <h3 className="text-base sm:text-lg font-bold">Exam Types</h3>
                         <p className="text-xs text-white/50">
                             Set max marks and optional subsections (Written/Practical) per exam type. Teachers inherit these.
                         </p>
                     </div>
 
-                    <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                    <div className="flex flex-col sm:flex-row gap-2 sm:items-center w-full md:w-auto">
                         <input
                             value={newExamType}
                             onChange={(e) => setNewExamType(e.target.value.toUpperCase())}
                             placeholder="e.g. HALF YEARLY"
-                            className="px-4 py-2.5 rounded-2xl bg-black/40 border border-white/10 text-white text-sm outline-none focus:border-[#B4F42A]/50 uppercase"
+                            className="w-full sm:w-auto px-4 py-2.5 rounded-2xl bg-black/40 border border-white/10 text-white text-sm outline-none focus:border-[#B4F42A]/50 uppercase"
                         />
                         <input
                             value={newExamTypeMax}
                             onChange={(e) => setNewExamTypeMax(e.target.value.replace(/[^\d.]/g, ""))}
                             placeholder="Max marks"
-                            className="w-28 px-4 py-2.5 rounded-2xl bg-black/40 border border-white/10 text-white text-sm outline-none focus:border-[#B4F42A]/50"
+                            className="w-full sm:w-28 px-4 py-2.5 rounded-2xl bg-black/40 border border-white/10 text-white text-sm outline-none focus:border-[#B4F42A]/50"
                         />
                         <button
                             type="button"
                             onClick={addExamType}
                             disabled={examTypeSaving}
-                            className="px-4 py-2.5 rounded-2xl bg-[#B4F42A] text-black text-sm font-bold inline-flex items-center justify-center gap-2 disabled:opacity-60"
+                            className="w-full sm:w-auto px-4 py-2.5 rounded-2xl bg-[#B4F42A] text-black text-sm font-bold inline-flex items-center justify-center gap-2 disabled:opacity-60"
                         >
                             <Plus size={16} />
                             {examTypeSaving ? "Saving..." : "Add"}
@@ -801,27 +801,27 @@ export default function ExamsTab() {
             </div>
 
             {/* SUBJECTS MANAGER */}
-            <div className="somu border-none bg-white/5! rounded-3xl p-5 mb-6">
+            <div className="somu border-none bg-white/5! rounded-2xl sm:rounded-3xl p-4 sm:p-5 mb-4 sm:mb-6">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <div>
-                        <h3 className="text-lg font-bold">Subjects</h3>
+                        <h3 className="text-base sm:text-lg font-bold">Subjects</h3>
                         <p className="text-xs text-white/50">
                             Add, rename, or remove subjects. Only removes from this list — your choice.
                         </p>
                     </div>
 
-                    <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                    <div className="flex flex-col sm:flex-row gap-2 sm:items-center w-full md:w-auto">
                         <input
                             value={newSubject}
                             onChange={(e) => setNewSubject(e.target.value.toUpperCase())}
                             placeholder="e.g. MATHEMATICS, SCIENCE"
-                            className="px-4 py-2.5 rounded-2xl bg-black/40 border border-white/10 text-white text-sm outline-none focus:border-[#B4F42A]/50 uppercase"
+                            className="w-full sm:w-auto px-4 py-2.5 rounded-2xl bg-black/40 border border-white/10 text-white text-sm outline-none focus:border-[#B4F42A]/50 uppercase"
                         />
                         <button
                             type="button"
                             onClick={addSubject}
                             disabled={subjectSaving}
-                            className="px-4 py-2.5 rounded-2xl bg-[#B4F42A] text-black text-sm font-bold inline-flex items-center justify-center gap-2 disabled:opacity-60"
+                            className="w-full sm:w-auto px-4 py-2.5 rounded-2xl bg-[#B4F42A] text-black text-sm font-bold inline-flex items-center justify-center gap-2 disabled:opacity-60"
                         >
                             <Plus size={16} />
                             {subjectSaving ? "Saving..." : "Add"}

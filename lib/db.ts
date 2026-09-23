@@ -57,15 +57,17 @@ if (connectionString) {
   if (!isPgBouncer) {
     connectionString = withParam(connectionString, "statement_timeout", "120000");
   }
+  // Dev used to use 2; parallel tab warmers (exams terms+types+subjects) hit P2024.
+  // Keep prod conservative; override anytime with PRISMA_CONNECTION_LIMIT.
   const poolLimit =
     process.env.PRISMA_CONNECTION_LIMIT ||
     (isPgBouncer
       ? process.env.NODE_ENV === "development"
-        ? "2"
+        ? "5"
         : "1"
       : "5");
   connectionString = withParam(connectionString, "connection_limit", poolLimit);
-  connectionString = withParam(connectionString, "pool_timeout", "30");
+  connectionString = withParam(connectionString, "pool_timeout", "60");
   connectionString = withParam(connectionString, "connect_timeout", "10");
 }
 

@@ -15,7 +15,6 @@ import {
   loadNewsFeeds,
   loadTeacherAuditTeachers,
   loadTeacherLeavesPage,
-  warmSchoolAdminFastTabs,
 } from "@/lib/loadSchoolAdminFastTabs";
 import { warmTeachersPage } from "@/lib/fetchTeachersPage";
 
@@ -537,14 +536,13 @@ export function warmTeacherFastTabs(schoolId?: string | null): void {
   void loadTeacherChats().catch(() => {});
   void loadTeacherAttendanceClasses().catch(() => {});
   void loadTeacherMarksClasses().catch(() => {});
-  void loadTeacherExamsList().catch(() => {});
   void loadTeacherProfile().catch(() => {});
   void loadEventsPage().catch(() => {});
   void loadNewsFeeds().catch(() => {});
   void loadCertificatesPage().catch(() => {});
   void loadTeacherLeavesPage().catch(() => {});
+  // Single exams warm — avoid warmSchoolAdminFastTabs stampede (P2024 on PgBouncer).
   void loadExamsPage().catch(() => {});
-  warmSchoolAdminFastTabs();
   if (schoolId) warmTeachersPage(schoolId);
 }
 
@@ -576,7 +574,6 @@ export function warmTeacherTab(tab: string, schoolId?: string | null): void {
       void loadTeacherMarksClasses().catch(() => {});
       break;
     case "exams":
-      void loadTeacherExamsList().catch(() => {});
       void loadExamsPage().catch(() => {});
       break;
     case "workshops":

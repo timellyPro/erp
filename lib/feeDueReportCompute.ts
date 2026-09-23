@@ -363,15 +363,34 @@ function computeStudentHeads(
     if (!extraByNorm.has(nk)) extraByNorm.set(nk, []);
     extraByNorm.get(nk)!.push(ef);
   }
+  const scopePriority = (f: ExtraFeeLite) => {
+    if (f.targetType === "STUDENT" && f.targetStudentId === fee.studentId) return 4;
+    if (f.targetType === "SECTION") return 3;
+    if (f.targetType === "CLASS") return 2;
+    if (f.targetType === "SCHOOL") return 1;
+    return 0;
+  };
   const normKeys = [...extraByNorm.keys()].sort((a, b) => a.localeCompare(b));
   for (const nk of normKeys) {
     const efs = extraByNorm.get(nk)!;
+    /**
+     * Catalog often has duplicate rows with the same name+amount (e.g. two Mess 2nd installments).
+     * Student Details dedupes these; summing them here inflated Fee Due / Backup / StudentFee totals.
+     * Keep one row per amount (prefer tighter scope), then sum distinct amounts only.
+     */
+    const bestByAmount = new Map<string, ExtraFeeLite>();
+    for (const ef of efs) {
+      const amtKey = String(Math.round((Number(ef.amount) || 0) * 100) / 100);
+      const cur = bestByAmount.get(amtKey);
+      if (!cur || scopePriority(ef) > scopePriority(cur)) bestByAmount.set(amtKey, ef);
+    }
+    const uniqueEfs = [...bestByAmount.values()];
     const slug = extraNameSlugFromNorm(nk);
     const groupId = `EXTRA_NAME@${slug}`;
     const headKey = groupId;
     let gross = 0;
     let snapshotDue = 0;
-    for (const ef of efs) {
+    for (const ef of uniqueEfs) {
       const g = Number(ef.amount) || 0;
       gross += g;
       snapshotDue += discountedSnapshotDueForHead(`EXTRA:${ef.id}`, g, discount);
@@ -385,6 +404,7 @@ function computeStudentHeads(
       snapshotDue,
       gross,
       concession,
+      // Keep all ids so payments allocated to duplicate catalog rows still roll into this column
       extraFeeIds: efs.map((e) => e.id),
     });
   }
