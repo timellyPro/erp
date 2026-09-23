@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
@@ -582,10 +582,25 @@ export async function POST(req: Request) {
     );
 
     if (!paymentAndAllocations.idempotent) {
-      await reconcileStudentFeeIntegrity(schoolId, studentId, {
-        repairAllocations: true,
-        apply: true,
-      });
+      invalidateStudentFeeReadCaches({ studentId, schoolId });
+      const runIntegrity = async () => {
+        try {
+          await reconcileStudentFeeIntegrity(schoolId, studentId, {
+            repairAllocations: true,
+            apply: true,
+          });
+        } catch (err) {
+          console.error("[offline-payment] post-commit integrity failed", {
+            studentId,
+            err,
+          });
+        }
+      };
+      try {
+        after(runIntegrity);
+      } catch {
+        void runIntegrity();
+      }
     } else {
       invalidateStudentFeeReadCaches({ studentId, schoolId });
     }
@@ -630,9 +645,7 @@ export async function POST(req: Request) {
       }));
     }
 
-    const updatedFeeRow = !paymentAndAllocations.idempotent
-      ? await prisma.studentFee.findUnique({ where: { studentId } })
-      : paymentAndAllocations.updatedFee;
+    const updatedFeeRow = paymentAndAllocations.updatedFee;
     if (!updatedFeeRow) {
       return NextResponse.json({ message: "Fee record not found for this student" }, { status: 404 });
     }

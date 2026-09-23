@@ -1,4 +1,5 @@
 import prisma from "@/lib/db";
+import { after } from "next/server";
 import { canonicalizeGatewayForStorage } from "@/lib/feePaymentGateway";
 import {
   findExistingOfflinePaymentByRef,
@@ -116,6 +117,8 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
     select: {
       id: true,
       schoolId: true,
+      residencyType: true,
+      class: { select: { id: true, section: true } },
       fee: {
         select: {
           amountPaid: true,
@@ -133,10 +136,17 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
 
   const fee = student.fee;
 
+  // Light due-map only — no migrate/reconcile writes before the payment commit.
+  // Client Fees Sheet already computed heads; DB write is the critical path.
   const breakdown = await computeAdminStudentFeeBreakdown(schoolId, studentId, {
-    migrateLumps: true,
+    student: {
+      id: student.id,
+      residencyType: student.residencyType,
+      class: student.class,
+    },
+    migrateLumps: false,
     cleanupHostelMessDuplicates: false,
-    reconcileTotals: true,
+    reconcileTotals: false,
   });
   const dueByKey = new Map<string, number>();
   for (const head of breakdown.dueHeads) {
@@ -365,7 +375,7 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
       ? result.appendedAmount
       : amount;
 
-  let reconciledFee = {
+  const updatedFee = {
     amountPaid: result.idempotent ? fee.amountPaid : roundRupee(fee.amountPaid + appliedAmount),
     remainingFee: result.idempotent
       ? fee.remainingFee
@@ -374,20 +384,27 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
     totalFee: fee.totalFee,
   };
 
+  // DB commit is done. Return immediately with tx totals; integrity runs after response.
+  invalidateStudentFeeReadCaches({ studentId, schoolId });
   if (!result.idempotent) {
-    const integrity = await reconcileStudentFeeIntegrity(schoolId, studentId, {
-      repairAllocations: true,
-      apply: true,
-    });
-    if (integrity) {
-      reconciledFee = {
-        amountPaid: integrity.after.amountPaid,
-        remainingFee: integrity.after.remainingFee,
-        finalFee: integrity.after.finalFee,
-        totalFee: integrity.after.totalFee,
-      };
-    } else {
-      invalidateStudentFeeReadCaches({ studentId, schoolId });
+    const runIntegrity = async () => {
+      try {
+        await reconcileStudentFeeIntegrity(schoolId, studentId, {
+          repairAllocations: true,
+          apply: true,
+        });
+      } catch (err) {
+        console.error("[offline-payment] post-commit integrity failed", {
+          studentId,
+          err,
+        });
+      }
+    };
+    try {
+      after(runIntegrity);
+    } catch {
+      // Outside a Next.js request scope (scripts/tests) — still run without blocking callers that await.
+      void runIntegrity();
     }
   }
 
@@ -401,7 +418,7 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
 
   return {
     payment: result.payment,
-    updatedFee: reconciledFee,
+    updatedFee,
     feeAllocations: allocationLines,
     idempotent: result.idempotent,
     appendedToExistingRef:

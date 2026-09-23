@@ -644,7 +644,7 @@ function StudentDetailsPageContent() {
 
     (async () => {
       try {
-        const classesRes = await fetch("/api/class/list", { credentials: "include" });
+        const classesRes = await fetch("/api/class/list?lite=1", { credentials: "include" });
         if (!cancelled && classesRes.ok) {
           const c = await classesRes.json();
           setClasses(c.classes ?? []);
@@ -670,44 +670,18 @@ function StudentDetailsPageContent() {
   // Deep link (?studentId=…): follow the URL when it changes. Do NOT depend on `students` here — that
   // was resetting selection back to the URL id on every list refresh and overwrote the student's dropdown pick.
   useEffect(() => {
-    if (studentIdFromUrl) {
-      setSelectedId(studentIdFromUrl);
+    if (!studentIdFromUrl) return;
+    if (selectedIdRef.current !== studentIdFromUrl) {
+      setFeeBreakdown(null);
+      setFeeBreakdownPending(true);
+      setTransactionsReady(false);
+      setDetail(buildPlaceholderById(studentIdFromUrl));
     }
+    setSelectedId(studentIdFromUrl);
   }, [studentIdFromUrl]);
 
-  /** Deep link: fetch one row by id so the sidebar shows name/class immediately (not "Loading…"). */
-  useEffect(() => {
-    if (!studentIdFromUrl) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetch(
-          `/api/student/list?search=1&studentId=${encodeURIComponent(studentIdFromUrl)}&take=1`,
-          { credentials: "include", cache: "no-store" }
-        );
-        if (!res.ok || cancelled) return;
-        const data = await res.json().catch(() => ({}));
-        const row = Array.isArray(data?.students) ? data.students[0] : null;
-        if (!row?.id || cancelled) return;
-        const option = mapListRow(row);
-        setStudents((prev) => {
-          if (prev.some((s) => s.id === option.id)) {
-            return prev.map((s) => (s.id === option.id ? { ...s, ...option } : s));
-          }
-          return [option, ...prev];
-        });
-        setDetail((prev) => {
-          if (prev?.student.id === option.id && prev.student.name !== "Loading…") return prev;
-          return buildPlaceholderDetail(normalizeStudentOption(option));
-        });
-      } catch {
-        /* shell fetch will replace placeholder */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [studentIdFromUrl, mapListRow]);
+  // Deep-link name/class comes from details-bundle (core/shell). Do not also hit
+  // /api/student/list — that competed for the Prisma pool (~7s findUnique in logs).
 
   useEffect(() => {
     if (studentIdFromUrl) return;
@@ -735,6 +709,13 @@ function StudentDetailsPageContent() {
         }
         return [student, ...prev];
       });
+      if (selectedIdRef.current !== student.id) {
+        // Immediate clear so the next paint never shows the previous student's fees.
+        setFeeBreakdown(null);
+        setFeeBreakdownPending(true);
+        setTransactionsReady(false);
+        setDetail(buildPlaceholderDetail(student));
+      }
       setSelectedId(student.id);
       syncStudentIdInUrl(student.id);
     },
@@ -743,22 +724,24 @@ function StudentDetailsPageContent() {
 
   const warmFeeBreakdown = useCallback(() => {
     if (!selectedId) return;
+    const requestId = selectedId;
     const shellPaid = Number(detail?.fee?.amountPaid) || 0;
-    const cached = getFeeBreakdownCached(selectedId);
+    const cached = getFeeBreakdownCached(requestId);
     if (cached && cached.amountPaid + 0.02 >= shellPaid) {
-      setFeeBreakdown(cached);
-      setFeeBreakdownPending(false);
+      if (selectedIdRef.current === requestId) {
+        setFeeBreakdown(cached);
+        setFeeBreakdownPending(false);
+      }
       return;
     }
     if (feeBreakdown && feeBreakdown.amountPaid + 0.02 >= shellPaid) return;
-    void fetchFeeBreakdownFast(selectedId, {
+    void fetchFeeBreakdownFast(requestId, {
       force: Boolean(cached && shellPaid > cached.amountPaid + 0.02),
       minAmountPaid: shellPaid,
     }).then((breakdown) => {
-      if (breakdown) {
-        setFeeBreakdown(breakdown);
-        setFeeBreakdownPending(false);
-      }
+      if (!breakdown || selectedIdRef.current !== requestId) return;
+      setFeeBreakdown(breakdown);
+      setFeeBreakdownPending(false);
     });
   }, [selectedId, feeBreakdown, detail?.fee?.amountPaid]);
 
@@ -778,6 +761,8 @@ function StudentDetailsPageContent() {
     (bundle: Awaited<ReturnType<typeof loadStudentDetailsBundle>>) => {
       const { feeBreakdown: breakdown, ...rest } = bundle;
       if (rest?.student) {
+        // Never paint another student's fees/payments onto the current selection.
+        if (selectedIdRef.current && rest.student.id !== selectedIdRef.current) return;
         const payments = (rest.payments ?? []).filter(
           (p) => !deletedPaymentIdsRef.current.has(p.id)
         );
@@ -883,7 +868,7 @@ function StudentDetailsPageContent() {
       });
 
       void fetchFeeBreakdownFast(studentId, { force: true }).then((bd) => {
-        if (!bd) return;
+        if (!bd || selectedIdRef.current !== studentId) return;
         setFeeBreakdown(bd);
         setFeeBreakdownCache(studentId, bd);
       });
@@ -901,39 +886,45 @@ function StudentDetailsPageContent() {
     if (!selectedId) {
       setDetail(null);
       setFeeBreakdown(null);
+      setFeeBreakdownPending(false);
       setTransactionsReady(false);
       return;
     }
 
     let cancelled = false;
+    const controller = new AbortController();
+    const requestId = selectedId;
 
-    const cachedBreakdown = getFeeBreakdownCached(selectedId);
-    const cachedBundle = reloadKey === 0 ? peekStudentDetailsBundle(selectedId) : null;
+    const cachedBreakdown = getFeeBreakdownCached(requestId);
+    const cachedBundle = reloadKey === 0 ? peekStudentDetailsBundle(requestId) : null;
     if (cachedBundle?.student) {
       applyDetailsBundle(cachedBundle);
     } else {
       setTransactionsReady(false);
       setDetail((prev) => {
-        if (prev?.student.id === selectedId) return prev;
-        const fromList = students.find((s) => s.id === selectedId);
+        if (prev?.student.id === requestId) return prev;
+        const fromList = students.find((s) => s.id === requestId);
         return fromList
           ? buildPlaceholderDetail(normalizeStudentOption(fromList))
-          : buildPlaceholderById(selectedId);
+          : buildPlaceholderById(requestId);
       });
     }
     if (cachedBreakdown) {
       setFeeBreakdown(cachedBreakdown);
       setFeeBreakdownPending(false);
     } else {
+      // Clear previous student's fees immediately — never show A while loading B.
+      setFeeBreakdown(null);
       setFeeBreakdownPending(true);
     }
 
-    loadStudentDetailsBundle(selectedId, {
+    loadStudentDetailsBundle(requestId, {
       force: reloadKey > 0,
+      signal: controller.signal,
       onShellLoaded: (partial) => {
-        if (cancelled) return;
+        if (cancelled || selectedIdRef.current !== requestId) return;
         const { feeBreakdown: bd, ...rest } = partial;
-        if (rest?.student) {
+        if (rest?.student?.id === requestId) {
           setDetail((prev) => patchDetailShell(prev, rest as StudentDetail));
           setStudents((prev) => {
             const row = normalizeStudentOption({
@@ -958,29 +949,34 @@ function StudentDetailsPageContent() {
         }
       },
       onBreakdownLoaded: (bd) => {
-        if (cancelled) return;
+        if (cancelled || selectedIdRef.current !== requestId) return;
         setFeeBreakdown(bd);
         setFeeBreakdownPending(false);
       },
       onExtrasLoaded: (full) => {
-        if (cancelled) return;
+        if (cancelled || selectedIdRef.current !== requestId) return;
         applyDetailsBundle(full);
       },
     })
       .then((bundle) => {
-        if (cancelled) return;
+        if (cancelled || selectedIdRef.current !== requestId) return;
         applyDetailsBundle(bundle);
       })
       .catch((err) => {
-        if (cancelled) return;
+        if (cancelled || selectedIdRef.current !== requestId) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (err instanceof Error && err.name === "AbortError") return;
         console.error("Student details error:", err);
       })
       .finally(() => {
-        if (!cancelled) setFeeBreakdownPending(false);
+        if (!cancelled && selectedIdRef.current === requestId) {
+          setFeeBreakdownPending(false);
+        }
       });
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
     // `students` read for placeholder only — must not restart fetch when list hydrates
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
@@ -1144,6 +1140,26 @@ function StudentDetailsPageContent() {
               value={selectedId ?? ""}
               onChange={(value) => {
                 const next = value || null;
+                if (!next) {
+                  setSelectedId(null);
+                  setFeeBreakdown(null);
+                  setFeeBreakdownPending(false);
+                  setTransactionsReady(false);
+                  setDetail(null);
+                  syncStudentIdInUrl(null);
+                  return;
+                }
+                if (selectedIdRef.current !== next) {
+                  const fromList = students.find((s) => s.id === next);
+                  setFeeBreakdown(null);
+                  setFeeBreakdownPending(true);
+                  setTransactionsReady(false);
+                  setDetail(
+                    fromList
+                      ? buildPlaceholderDetail(normalizeStudentOption(fromList))
+                      : buildPlaceholderById(next)
+                  );
+                }
                 setSelectedId(next);
                 syncStudentIdInUrl(next);
               }}
@@ -1347,6 +1363,7 @@ function StudentDetailsPageContent() {
             <div className="w-full min-w-0 basis-full space-y-4 sm:space-y-6 md:space-y-8 relative z-0">
             {detail.fee ? (
               <FeesBreakdown
+                key={`fees-${detail.student.id}`}
                 studentId={detail.student.id}
                 classId={detail.student.class?.id ?? null}
                 feesRecordingDisabled={isSelectedInactive}
@@ -1384,6 +1401,7 @@ function StudentDetailsPageContent() {
             ) : null}
 
             <FeeTransactions
+              key={`txns-${detail.student.id}`}
               fee={detail.fee}
               feeBreakdown={feeBreakdown}
               payments={detail.payments}
@@ -1698,6 +1716,10 @@ function StudentFeesPaymentModal({
             : "This UTR / reference was already recorded for these fee heads."
         );
       }
+      const paymentRow = data.payment as { id?: unknown } | undefined;
+      if (typeof paymentRow?.id !== "string" || !paymentRow.id.trim()) {
+        throw new Error("Payment was not saved. Please try again.");
+      }
       const confirmedResult = buildConfirmedPaymentResult(
         data,
         total,
@@ -1711,6 +1733,9 @@ function StudentFeesPaymentModal({
           collectedByUserId: collectorUserId,
         }
       );
+      if (!confirmedResult.payment.id || confirmedResult.payment.id.startsWith("pending-")) {
+        throw new Error("Payment was not saved. Please try again.");
+      }
       onSuccess(confirmedResult);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Payment failed";

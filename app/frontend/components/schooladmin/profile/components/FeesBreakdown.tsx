@@ -415,9 +415,18 @@ export const FeesBreakdown = ({
   };
 
   useEffect(() => {
-    if (!initialFeeBreakdown?.dueHeads?.length) return;
-    applyBreakdownData(initialFeeBreakdown);
-  }, [initialFeeBreakdown, studentId]);
+    if (initialFeeBreakdown?.dueHeads?.length) {
+      applyBreakdownData(initialFeeBreakdown);
+      return;
+    }
+    // Student switch / pending load — do not keep previous student's head cards.
+    if (feeBreakdownPending || !initialFeeBreakdown) {
+      setHeadCards([]);
+      setHeadsTotalAmount(0);
+      setHeadsRemainingAmount(0);
+      setPreviousYearRemainingAmount(0);
+    }
+  }, [initialFeeBreakdown, studentId, feeBreakdownPending]);
 
   const handleDownloadReceipt = async () => {
     try {

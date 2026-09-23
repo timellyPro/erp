@@ -2,6 +2,7 @@
 
 import { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
+import { warmStudentDetailsBundle } from "@/lib/loadStudentDetailsBundle";
 
 type StudentOption = {
   id: string;
@@ -274,6 +275,7 @@ export const StudentSearchAutocomplete = ({
               onClick={() => handleSelectStudent(student)}
               onMouseEnter={() => {
                 setHighlightedIndex(index);
+                warmStudentDetailsBundle(student.id);
               }}
               className={`w-full px-4 py-3 text-left text-sm border-b border-white/5 last:border-0 transition-colors ${
                 index === highlightedIndex
