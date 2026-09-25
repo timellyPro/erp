@@ -45,7 +45,7 @@ export default function AppLayout({
 
   return (
     <ToastProvider>
-      <div className="relative z-10 flex h-screen overflow-hidden">
+      <div className="relative z-10 flex h-dvh max-h-dvh overflow-hidden">
         {/* DESKTOP SIDEBAR - profile from layout (sidebar + header show same) */}
         <aside className="hidden lg:block shrink-0">
           <AppSidebar
@@ -65,7 +65,7 @@ export default function AppLayout({
             hideSearchAndNotifications={hideSearchAndNotifications}
           />
 
-          <main className="min-h-0 min-w-0 w-full max-w-full flex-1 overflow-y-auto overflow-x-auto px-3 py-3 sm:p-4 md:p-6 [scrollbar-gutter:stable]">
+          <main className="min-h-0 min-w-0 w-full max-w-full flex-1 touch-pan-y overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 py-3 sm:p-4 md:p-6 [scrollbar-gutter:stable] [-webkit-overflow-scrolling:touch]">
             {children}
           </main>
         </div>

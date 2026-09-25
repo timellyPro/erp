@@ -1043,19 +1043,19 @@ function StudentDetailsPageContent() {
   }, [detail?.student]);
   useEffect(() => {
     const aside = sidebarAsideRef.current;
-    if (!aside || !pageStudentName) {
+    const scrollRoot = aside?.closest("main");
+    if (!aside || !pageStudentName || !scrollRoot) {
       setShowStickyStudentName(false);
       return;
     }
-    const scrollRoot = aside.closest("main");
-    const observer = new IntersectionObserver(
-      ([entry]) => setShowStickyStudentName(!entry.isIntersecting),
-      scrollRoot
-        ? { root: scrollRoot, threshold: 0, rootMargin: "-88px 0px 0px 0px" }
-        : { threshold: 0, rootMargin: "-88px 0px 0px 0px" }
-    );
-    observer.observe(aside);
-    return () => observer.disconnect();
+    const update = () => {
+      const asideBottom = aside.getBoundingClientRect().bottom;
+      const rootTop = scrollRoot.getBoundingClientRect().top;
+      setShowStickyStudentName(asideBottom < rootTop + 12);
+    };
+    update();
+    scrollRoot.addEventListener("scroll", update, { passive: true });
+    return () => scrollRoot.removeEventListener("scroll", update);
   }, [pageStudentName, selectedId, detail?.student.id]);
   const classOptions = [{ label: "All Classes", value: "" }, ...classes.map((c) => ({ label: `${c.name}${c.section ? ` - ${c.section}` : ""}`, value: c.id }))];
   const statusOptions = [
@@ -1067,7 +1067,7 @@ function StudentDetailsPageContent() {
   const sectionOptions = [{ label: "All Sections", value: "" }, ...sections.map((s) => ({ label: s, value: s }))];
 
   return (
-    <div className="space-y-4 sm:space-y-6 md:space-y-8 w-full min-h-0 min-w-0 overflow-x-hidden pb-6 sm:pb-8">
+    <div className="w-full min-w-0 space-y-4 pb-6 sm:space-y-6 sm:pb-8 md:space-y-8">
       <PageHeader
         compact
         title="Student Details"
@@ -1177,11 +1177,11 @@ function StudentDetailsPageContent() {
       {detail && (
         <>
           {showStickyStudentName && pageStudentName ? (
-            <div className="hidden xl:block fixed z-30 left-64 top-[5.5rem] w-[280px] 2xl:w-[300px] px-2 pointer-events-none">
+            <div className="pointer-events-none fixed top-[5.75rem] left-[calc(16rem+1.25rem)] z-30 hidden w-[200px] xl:block">
               <StudentNameCard
                 name={pageStudentName}
                 meta={pageStudentMeta}
-                className="pointer-events-auto bg-[#0a0f1a]/95 backdrop-blur-md shadow-lg border-white/15"
+                className="pointer-events-auto border-white/15 bg-[#0a0f1a]/70 shadow-lg backdrop-blur-md"
               />
             </div>
           ) : null}
@@ -1203,7 +1203,7 @@ function StudentDetailsPageContent() {
           <div className="flex flex-col xl:flex-row xl:flex-wrap gap-4 sm:gap-6 md:gap-8 min-w-0 w-full items-start">
             <aside
               ref={sidebarAsideRef}
-              className="w-full xl:w-[280px] 2xl:w-[300px] shrink-0 min-w-0 relative z-10 xl:sticky xl:top-[5.5rem] xl:self-start"
+              className="relative z-10 w-full min-w-0 shrink-0 self-start xl:w-[280px] 2xl:w-[300px]"
             >
             <ProfileSidebar
               studentId={detail.student.id}
@@ -1360,7 +1360,7 @@ function StudentDetailsPageContent() {
             </div>
             </div>
 
-            <div className="w-full min-w-0 basis-full space-y-4 sm:space-y-6 md:space-y-8 relative z-0">
+            <div className="relative z-0 min-w-0 w-full basis-full space-y-4 sm:space-y-6 md:space-y-8">
             {detail.fee ? (
               <FeesBreakdown
                 key={`fees-${detail.student.id}`}
@@ -1596,6 +1596,26 @@ function StudentFeesPaymentModal({
     setShowPaymentStep(false);
   };
 
+  const payableRows = rows.filter((r) => r.dueBefore > 0);
+  const allPayableChecked = payableRows.length > 0 && payableRows.every((r) => r.payEntireHead);
+
+  const togglePayAllHeads = (checked: boolean) => {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.dueBefore <= 0) return { ...r, payEntireHead: false, payAmount: "" };
+        if (checked) {
+          return {
+            ...r,
+            payEntireHead: true,
+            payAmount: dueToPayInputString(r.dueBefore),
+          };
+        }
+        return { ...r, payEntireHead: false, payAmount: "" };
+      })
+    );
+    setShowPaymentStep(false);
+  };
+
   const total = rows.reduce((s, r) => s + (Number(r.payAmount) > 0 ? Number(r.payAmount) : 0), 0);
   const selectedRows = rows.filter((r) => Number(r.payAmount) > 0);
   const totals = rows.reduce(
@@ -1746,8 +1766,9 @@ function StudentFeesPaymentModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/70 p-3 sm:p-4 overflow-y-auto">
-      <div className="w-full max-w-7xl rounded-2xl border border-white/10 bg-[#0B1220] p-4 sm:p-5 shadow-xl">
+    <div className="fixed inset-0 z-[130] overflow-y-auto overscroll-y-contain bg-black/70 [-webkit-overflow-scrolling:touch]">
+      <div className="flex min-h-full items-start justify-center p-3 sm:items-center sm:p-4">
+      <div className="my-2 w-max max-w-[calc(100vw-1.5rem)] rounded-2xl border border-white/10 bg-[#0B1220] p-4 sm:p-5 shadow-xl">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <h4 className="text-lg font-semibold text-white">Fees Sheet — {studentName}</h4>
@@ -1767,25 +1788,32 @@ function StudentFeesPaymentModal({
           <div className="py-10 text-center text-white/70"><Spinner /></div>
         ) : (
           <>
-            <div className="max-h-[min(360px,50vh)] overflow-y-auto overflow-x-hidden rounded-xl border border-white/10">
-              <table className="w-full text-sm">
-                <thead className="bg-white/5 text-left text-white/70 sticky top-0 z-[1]">
+            <div className="rounded-xl border border-white/10">
+              <table className="w-max text-sm">
+                <thead className="bg-white/5 text-left text-white/70">
                   <tr>
-                    <th className="px-3 py-2 min-w-[10rem]">Fee Type</th>
-                    <th className="px-2 py-2 whitespace-nowrap text-right w-[6.5rem]">Total</th>
-                    <th className="px-2 py-2 whitespace-nowrap text-right w-[6rem]">Discount</th>
-                    <th className="px-2 py-2 whitespace-nowrap text-right w-[6rem]">Paid</th>
-                    <th className="px-2 py-2 whitespace-nowrap text-right w-[6rem]">Balance</th>
-                    <th className="w-11 px-1 py-2 text-center" title="Pay full balance for this head">
-                      All
+                    <th className="px-3 py-2 whitespace-nowrap">Fee Type</th>
+                    <th className="px-2 py-2 whitespace-nowrap text-right">Total</th>
+                    <th className="px-2 py-2 whitespace-nowrap text-right">Discount</th>
+                    <th className="px-2 py-2 whitespace-nowrap text-right">Paid</th>
+                    <th className="px-2 py-2 whitespace-nowrap text-right">Balance</th>
+                    <th className="px-1 py-2 text-center whitespace-nowrap" title="Pay full balance for every fee">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 cursor-pointer accent-lime-400 disabled:cursor-not-allowed disabled:opacity-40"
+                        checked={allPayableChecked}
+                        disabled={payableRows.length === 0}
+                        onChange={(e) => togglePayAllHeads(e.target.checked)}
+                        aria-label="Pay full balance for every fee"
+                      />
                     </th>
-                    <th className="px-2 py-2 whitespace-nowrap w-[7.5rem]">Record Fee</th>
+                    <th className="px-2 py-2 whitespace-nowrap">Record Fee</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((r) => (
                     <tr key={r.key} className="border-t border-white/5">
-                      <td className="px-3 py-2 text-white align-top leading-snug break-words">{r.label}</td>
+                      <td className="px-3 py-2 text-white align-top leading-snug whitespace-nowrap">{r.label}</td>
                       <td className="px-2 py-2 text-white whitespace-nowrap text-right align-top">₹{Math.round(r.totalAmount).toLocaleString("en-IN")}</td>
                       <td className="px-2 py-2 text-cyan-300 whitespace-nowrap text-right align-top">₹{Math.round(r.discountAmount).toLocaleString("en-IN")}</td>
                       <td className="px-2 py-2 text-lime-300 whitespace-nowrap text-right align-top">₹{Math.round(r.paidAmount).toLocaleString("en-IN")}</td>
@@ -1807,7 +1835,7 @@ function StudentFeesPaymentModal({
                           autoComplete="off"
                           value={r.payAmount}
                           onChange={(e) => setRowAmount(r.key, e.target.value)}
-                          className="w-full min-w-[5.5rem] rounded-lg border border-white/10 bg-black/30 px-2 py-2 text-white"
+                          className="w-28 rounded-lg border border-white/10 bg-black/30 px-2 py-2 text-white"
                           placeholder="0.00"
                           aria-label={`Record fee for ${r.label}`}
                         />
@@ -1909,6 +1937,7 @@ function StudentFeesPaymentModal({
             </div>
           </>
         )}
+      </div>
       </div>
     </div>
   );
