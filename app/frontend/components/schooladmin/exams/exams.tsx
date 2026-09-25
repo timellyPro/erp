@@ -55,7 +55,7 @@ interface ClassData {
     section: string;
 }
 
-export default function ExamsTab() {
+export default function ExamsTab({ collapseExamTypes = false }: { collapseExamTypes?: boolean }) {
     const [examTypes, setExamTypes] = useState<ExamTypeOption[]>([]);
     const [examTypesLoading, setExamTypesLoading] = useState(true);
     const [newExamType, setNewExamType] = useState("");
@@ -930,7 +930,7 @@ export default function ExamsTab() {
                                     <div className="flex items-center gap-2 px-3 py-2 text-xs font-bold text-white/80">
                                         <button
                                             type="button"
-                                            className="sm:hidden inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full hover:bg-white/10"
+                                            className={`${collapseExamTypes ? "" : "sm:hidden"} inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full hover:bg-white/10`}
                                             aria-expanded={examOpen}
                                             aria-label={examOpen ? `Hide subjects for ${t.name}` : `Show subjects for ${t.name}`}
                                             onClick={() =>
@@ -944,13 +944,13 @@ export default function ExamsTab() {
                                         </button>
                                         <span className="min-w-0 flex-1 text-left">
                                             <span className="block truncate">{t.name}</span>
-                                            <span className="sm:hidden block truncate text-[10px] font-medium text-white/40">
+                                            <span className={`${collapseExamTypes ? "" : "sm:hidden"} block truncate text-[10px] font-medium text-white/40`}>
                                                 {(t.subjectConfigs?.length ?? 0) > 0
                                                     ? `${t.subjectConfigs?.length} subjects set`
                                                     : "Tap to set subject marks"}
                                             </span>
                                         </span>
-                                        <span className="hidden sm:inline shrink-0 text-[10px] font-medium text-white/40">
+                                        <span className={`${collapseExamTypes ? "hidden" : "hidden sm:inline"} shrink-0 text-[10px] font-medium text-white/40`}>
                                             {(t.subjectConfigs?.length ?? 0) > 0
                                                 ? `${t.subjectConfigs?.length} subjects set`
                                                 : "No subject marks yet"}
@@ -965,7 +965,7 @@ export default function ExamsTab() {
                                             <Trash2 className="w-3.5 h-3.5 text-red-400" />
                                         </button>
                                     </div>
-                                    <div className={`${examOpen ? "block" : "hidden"} sm:block border-t border-white/10 px-3 py-3 space-y-2`}>
+                                    <div className={`${examOpen ? "block" : "hidden"} ${collapseExamTypes ? "" : "sm:block"} border-t border-white/10 px-3 py-3 space-y-2`}>
                                         <p className="text-[10px] font-bold uppercase tracking-wide text-white/40">
                                             Subjects for {t.name}
                                         </p>
