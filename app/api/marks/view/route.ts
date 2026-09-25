@@ -78,7 +78,10 @@ export async function GET(req: Request) {
         ttl: PARENT_LIST_TTL,
       });
       if (hit.value) {
-        return NextResponse.json(hit.value, { status: 200 });
+        return NextResponse.json(hit.value, {
+          status: 200,
+          headers: { "Cache-Control": "private, no-store" },
+        });
       }
     }
 
@@ -146,7 +149,10 @@ export async function GET(req: Request) {
       });
     }
 
-    return NextResponse.json(payload, { status: 200 });
+    return NextResponse.json(payload, {
+      status: 200,
+      headers: { "Cache-Control": "private, no-store" },
+    });
   } catch (error: unknown) {
     console.error("View marks error:", error);
     return NextResponse.json(

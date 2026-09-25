@@ -742,11 +742,46 @@ model ExamType {
   school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
 
   sections ExamTypeSection[]
+  subjectConfigs ExamTypeSubject[]
 
   createdAt DateTime @default(now())
 
   @@unique([schoolId, name])
   @@index([schoolId])
+}
+
+// Per exam type + subject. Does not replace ExamType / ExamTypeSection rows.
+model ExamTypeSubject {
+  id       String @id @default(cuid())
+  subject  String // stored in CAPS
+  maxMarks Float?
+
+  examTypeId String
+  examType   ExamType @relation(fields: [examTypeId], references: [id], onDelete: Cascade)
+
+  sections ExamTypeSubjectSection[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([examTypeId, subject])
+  @@index([examTypeId])
+}
+
+model ExamTypeSubjectSection {
+  id       String @id @default(cuid())
+  name     String
+  maxMarks Float
+  order    Int    @default(0)
+
+  examTypeSubjectId String
+  examTypeSubject   ExamTypeSubject @relation(fields: [examTypeSubjectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([examTypeSubjectId])
+  @@unique([examTypeSubjectId, name])
 }
 
 model ExamTypeSection {

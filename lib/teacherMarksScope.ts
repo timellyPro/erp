@@ -1,5 +1,4 @@
 import prisma from "@/lib/db";
-import { getTeacherAccessibleClassIds } from "@/lib/teacherClassAccess";
 
 /** Normalize subject names for case-insensitive comparison. */
 export function normalizeSubjectName(subject: string): string {
@@ -34,15 +33,24 @@ export async function assertTeacherCanEnterMarks(opts: {
     return { ok: true };
   }
 
-  const [accessibleIds, teacher] = await Promise.all([
-    getTeacherAccessibleClassIds(opts.userId),
+  const [teacher, homeroom] = await Promise.all([
     prisma.user.findUnique({
       where: { id: opts.userId },
-      select: { subjects: true, subject: true },
+      select: { teachingClassIds: true, subjects: true, subject: true },
+    }),
+    prisma.class.findMany({
+      where: { teacherId: opts.userId },
+      select: { id: true },
     }),
   ]);
 
-  if (!accessibleIds.includes(opts.classId)) {
+  const accessibleIds = new Set<string>();
+  for (const id of teacher?.teachingClassIds ?? []) {
+    if (typeof id === "string" && id.trim()) accessibleIds.add(id);
+  }
+  for (const row of homeroom) accessibleIds.add(row.id);
+
+  if (!accessibleIds.has(opts.classId)) {
     return {
       ok: false,
       status: 403,

@@ -1,11 +1,10 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from "react";
 import PageHeader from "../../common/PageHeader";
 import TimellyLoader from "../../common/TimellyLoader";
 import { SelectField } from "./MarksSelectField";
-import { Save, ClipboardList, PenLine, Download } from "lucide-react";
+import { Save, ClipboardList, PenLine, Download, X } from "lucide-react";
 import DataTable from "../../common/TableLayout";
 import { Column } from "@/app/frontend/types/superadmin";
 import {
@@ -15,8 +14,7 @@ import {
 } from "@/lib/loadTeacherFastTabs";
 import {
   normalizeExamTypes,
-  maxMarksForExamType,
-  sectionsForExamType,
+  resolveMarkSetup,
   type ExamTypeOption,
 } from "@/lib/examTypes";
 
@@ -81,8 +79,18 @@ function uniqueSubjects(list: string[]): string[] {
   return out;
 }
 
+type SavedMarkRow = {
+  id: string;
+  studentId: string;
+  studentName: string;
+  marks: number;
+  totalMarks: number;
+  grade: string | null;
+  components?: Array<{ name: string; marks: number; totalMarks: number }>;
+  status: "saved" | "already_saved";
+};
+
 export default function TeacherMarksTab() {
-  const router = useRouter();
   const [subTab, setSubTab] = useState<"entry" | "report-card" | "download">("entry");
   const initialClasses = peekTeacherMarksClasses();
   const [classes, setClasses] = useState<ClassOption[]>(() =>
@@ -118,8 +126,12 @@ export default function TeacherMarksTab() {
       maxMarks: 100,
     };
   });
-  const configuredMaxMarks = maxMarksForExamType(examTypeCatalog, form.examType);
-  const termSections = sectionsForExamType(examTypeCatalog, form.examType);
+  const markSetup = useMemo(
+    () => resolveMarkSetup(examTypeCatalog, form.examType, form.subject),
+    [examTypeCatalog, form.examType, form.subject]
+  );
+  const termSections = markSetup.sections;
+  const configuredMaxMarks = markSetup.maxMarks;
   const hasSubsections = termSections.length > 0;
   const sectionsTotalMax = termSections.reduce((a, s) => a + s.maxMarks, 0);
   const maxMarksLocked =
@@ -130,10 +142,12 @@ export default function TeacherMarksTab() {
   const [loading, setLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string>("");
+  const [savePopup, setSavePopup] = useState<SavedMarkRow[] | null>(null);
   const [editingMaxId, setEditingMaxId] = useState<string | null>(null);
   const [editingMaxValue, setEditingMaxValue] = useState("");
   const userSelectedClassRef = useRef(false);
   const userSelectedExamTypeRef = useRef(false);
+  const fetchSeqRef = useRef(0);
 
   const classOptions = classes.map((c) => ({
     value: c.id,
@@ -196,6 +210,7 @@ export default function TeacherMarksTab() {
       setRows([]);
       return;
     }
+    const seq = ++fetchSeqRef.current;
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -217,6 +232,8 @@ export default function TeacherMarksTab() {
       const studentsData = await studentsRes.json();
       const marksData = await marksRes.json();
       const students: StudentApi[] = Array.isArray(studentsData.students) ? studentsData.students : [];
+      if (seq !== fetchSeqRef.current) return;
+
       const marks: MarkApi[] = Array.isArray(marksData.marks) ? marksData.marks : [];
       const examTypesInUse: string[] = Array.isArray(marksData.examTypesInUse)
         ? marksData.examTypesInUse.map((t: string) => String(t).trim().toUpperCase()).filter(Boolean)
@@ -258,11 +275,11 @@ export default function TeacherMarksTab() {
       const latestTotal = savedMarksList.find(
         (m) => typeof m.totalMarks === "number" && m.totalMarks > 0
       )?.totalMarks;
-      // Prefer subsections sum, else school-admin configured max, else saved/previous
+      // Prefer subject or exam-type settings, else what was already saved
       const lockedMax =
         termSections.length > 0
           ? termSections.reduce((a, s) => a + s.maxMarks, 0)
-          : maxMarksForExamType(examTypeCatalog, form.examType);
+          : configuredMaxMarks;
       const defaultMax =
         lockedMax != null && lockedMax > 0
           ? lockedMax
@@ -277,6 +294,8 @@ export default function TeacherMarksTab() {
           prev.maxMarks === defaultMax ? prev : { ...prev, maxMarks: defaultMax }
         );
       }
+
+      if (seq !== fetchSeqRef.current) return;
 
       const newRows: StudentRow[] = students
         .map((s) => {
@@ -318,16 +337,21 @@ export default function TeacherMarksTab() {
             componentScores: termSections.length > 0 ? componentScores : undefined,
           };
         })
-        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+        .sort((a, b) => {
+          const aSaved = a.markId ? 0 : 1;
+          const bSaved = b.markId ? 0 : 1;
+          if (aSaved !== bSaved) return aSaved - bSaved;
+          return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+        });
       setRows(newRows);
       setEditingMaxId(null);
       setSaveMessage("");
     } catch {
-      setRows([]);
+      if (seq === fetchSeqRef.current) setRows([]);
     } finally {
-      setLoading(false);
+      if (seq === fetchSeqRef.current) setLoading(false);
     }
-  }, [form.classId, form.subject, form.examType, examTypeCatalog, termSections]);
+  }, [form.classId, form.subject, form.examType, markSetup, configuredMaxMarks, termSections]);
 
   const fetchMetadata = useCallback(async (classId: string) => {
     setSubjectsLoading(true);
@@ -400,13 +424,13 @@ export default function TeacherMarksTab() {
   }, []);
 
   useEffect(() => {
-    const locked = maxMarksForExamType(examTypeCatalog, form.examType);
+    const locked = markSetup.maxMarks;
     if (locked != null && locked > 0) {
       setForm((prev) =>
         prev.maxMarks === locked ? prev : { ...prev, maxMarks: locked }
       );
     }
-  }, [examTypeCatalog, form.examType]);
+  }, [markSetup.maxMarks]);
 
   useEffect(() => {
     fetchStudentsAndMarks();
@@ -416,7 +440,7 @@ export default function TeacherMarksTab() {
     if (key === "examType") {
       userSelectedExamTypeRef.current = true;
       const nextType = value.toUpperCase();
-      const locked = maxMarksForExamType(examTypeCatalog, nextType);
+      const locked = resolveMarkSetup(examTypeCatalog, nextType, form.subject).maxMarks;
       setForm((prev) => ({
         ...prev,
         examType: nextType,
@@ -459,7 +483,12 @@ export default function TeacherMarksTab() {
     }
     if (key === "subject") {
       userSelectedExamTypeRef.current = false;
-      setForm((prev) => ({ ...prev, subject: value }));
+      const locked = resolveMarkSetup(examTypeCatalog, form.examType, value).maxMarks;
+      setForm((prev) => ({
+        ...prev,
+        subject: value,
+        maxMarks: locked != null && locked > 0 ? locked : prev.maxMarks,
+      }));
       return;
     }
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -643,89 +672,62 @@ export default function TeacherMarksTab() {
     }
     setSaveLoading(true);
     setSaveMessage("");
+    // Drop any in-flight load so a stale response cannot clear marks after this save.
+    fetchSeqRef.current += 1;
+    setLoading(false);
     try {
-      const results = await Promise.all(
-        filledRows.map(async (row) => {
-          const isAbsent = row.marks === "AB";
-          const totalMarks = hasSubsections
-            ? sectionsTotalMax
-            : (row.maxMarks as number);
+      const entries = filledRows.map((row) => {
+        const isAbsent = row.marks === "AB";
+        const totalMarks = hasSubsections ? sectionsTotalMax : (row.maxMarks as number);
+        const components = hasSubsections
+          ? termSections.map((sec) => ({
+              name: sec.name,
+              marks: isAbsent ? 0 : Number(row.componentScores?.[sec.name] ?? 0),
+              totalMarks: sec.maxMarks,
+            }))
+          : undefined;
+        const obtained = hasSubsections
+          ? isAbsent
+            ? 0
+            : termSections.reduce(
+                (a, sec) => a + Number(row.componentScores?.[sec.name] ?? 0),
+                0
+              )
+          : isAbsent
+            ? 0
+            : Number(row.marks);
+        return {
+          studentId: row.id,
+          marks: obtained,
+          totalMarks,
+          ...(isAbsent ? { grade: "AB" as const } : {}),
+          ...(components ? { components } : {}),
+        };
+      });
 
-          const components =
-            hasSubsections && !isAbsent
-              ? termSections.map((sec) => ({
-                  name: sec.name,
-                  marks: Number(row.componentScores?.[sec.name] ?? 0),
-                  totalMarks: sec.maxMarks,
-                }))
-              : hasSubsections && isAbsent
-                ? termSections.map((sec) => ({
-                    name: sec.name,
-                    marks: 0,
-                    totalMarks: sec.maxMarks,
-                  }))
-                : undefined;
+      const res = await fetch("/api/marks/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          classId: form.classId,
+          subject: form.subject,
+          examType: form.examType || null,
+          entries,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setSaveMessage(data?.message || "Failed to save marks.");
+        return;
+      }
 
-          const obtained = hasSubsections
-            ? isAbsent
-              ? 0
-              : termSections.reduce(
-                  (a, sec) => a + Number(row.componentScores?.[sec.name] ?? 0),
-                  0
-                )
-            : isAbsent
-              ? 0
-              : Number(row.marks);
-
-          const payload = {
-            studentId: row.id,
-            classId: form.classId,
-            subject: form.subject,
-            marks: obtained,
-            totalMarks,
-            examType: form.examType || null,
-            ...(isAbsent ? { grade: "AB" } : {}),
-            ...(components ? { components } : {}),
-          };
-
-          const res = row.markId
-            ? await fetch(`/api/marks/${row.markId}`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  marks: payload.marks,
-                  totalMarks: payload.totalMarks,
-                  examType: payload.examType,
-                  ...(isAbsent ? { grade: "AB" } : {}),
-                  ...(components ? { components } : {}),
-                }),
-              })
-            : await fetch("/api/marks/create", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-              });
-
-          const data = await res.json().catch(() => null);
-          return {
-            rowId: row.id,
-            ok: res.ok,
-            mark: data?.mark as MarkApi | undefined,
-            message: data?.message as string | undefined,
-          };
-        })
-      );
-
-      const successMap = new Map(
-        results
-          .filter((result) => result.ok && result.mark)
-          .map((result) => [result.rowId, result.mark as MarkApi])
-      );
-
-      if (successMap.size > 0) {
-        setRows((prev) =>
-          prev.map((row) => {
-            const savedMark = successMap.get(row.id);
+      const savedRows: SavedMarkRow[] = Array.isArray(data?.saved) ? data.saved : [];
+      const byStudent = new Map(savedRows.map((row) => [row.studentId, row]));
+      setRows((prev) =>
+        prev
+          .map((row) => {
+            const savedMark = byStudent.get(row.id);
             if (!savedMark) return row;
             const isAbsent = savedMark.grade === "AB";
             const componentScores: Record<string, number | "" | "AB"> | undefined =
@@ -742,30 +744,22 @@ export default function TeacherMarksTab() {
                 : undefined;
             return {
               ...row,
+              name: savedMark.studentName || row.name,
               marks: isAbsent ? ("AB" as const) : Number(savedMark.marks),
               maxMarks: savedMark.totalMarks,
               markId: savedMark.id,
               componentScores,
             };
           })
-        );
-      }
-
-      const failed = results.filter((result) => !result.ok);
-      if (failed.length > 0) {
-        setSaveMessage(
-          failed[0]?.message || `${failed.length} mark entr${failed.length > 1 ? "ies" : "y"} failed to save.`
-        );
-      } else {
-        setSaveMessage("Marks updated successfully.");
-      }
-
-      await fetchStudentsAndMarks();
-      try {
-        router.refresh();
-      } catch {
-        /* noop */
-      }
+          .sort((a, b) => {
+            const aSaved = a.markId ? 0 : 1;
+            const bSaved = b.markId ? 0 : 1;
+            if (aSaved !== bSaved) return aSaved - bSaved;
+            return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+          })
+      );
+      setSavePopup(savedRows);
+      setSaveMessage("Successfully saved");
     } finally {
       setSaveLoading(false);
     }
@@ -937,8 +931,64 @@ export default function TeacherMarksTab() {
   const displayClass = form.classLabel || form.classId || "Select class";
   const displaySection = form.section || "Section A";
 
+  const alreadySavedNames = (savePopup ?? []).filter((row) => row.status === "already_saved");
+  const newlySavedNames = (savePopup ?? []).filter((row) => row.status === "saved");
+
   return (
     <div className="min-h-screen text-white px-3 sm:px-6 lg:px-8 py-4">
+      {savePopup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#12141c] p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-bold text-white">Successfully saved</h3>
+                <p className="mt-1 text-xs text-white/50">
+                  Names below are the ones stored in the database.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSavePopup(null)}
+                className="rounded-full p-1.5 text-white/60 hover:bg-white/10"
+                aria-label="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {alreadySavedNames.length > 0 && (
+              <div className="mt-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-white/40">
+                  Already saved
+                </p>
+                <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-sm text-white">
+                  {alreadySavedNames.map((row) => (
+                    <li key={row.id}>{row.studentName}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {newlySavedNames.length > 0 && (
+              <div className="mt-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-lime-400/80">
+                  Saved now
+                </p>
+                <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-sm text-white">
+                  {newlySavedNames.map((row) => (
+                    <li key={row.id}>{row.studentName}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setSavePopup(null)}
+              className="mt-5 w-full rounded-xl bg-lime-400 py-2.5 text-sm font-bold text-black"
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      )}
       <div className="max-w-7xl mx-auto space-y-6">
         <PageHeader
           title={subTab === "entry" ? "Marks Entry" : subTab === "report-card" ? "Report Card" : "Download Reports"}
@@ -1058,11 +1108,15 @@ export default function TeacherMarksTab() {
                 className="w-full px-4 py-2.5 bg-black/40 border border-white/10 rounded-xl focus:outline-none focus:border-lime-400/50 text-white text-sm disabled:opacity-70 disabled:cursor-not-allowed"
               />
               <p className="mt-1 text-[10px] text-white/40">
-                {hasSubsections
-                  ? `From exam type subsections (sum ${sectionsTotalMax})`
-                  : maxMarksLocked
-                    ? "Set by school admin for this exam type"
-                    : "Clear this field to clear max marks for all students"}
+                {markSetup.source === "subject" && hasSubsections
+                  ? `From ${form.subject} subsections (sum ${sectionsTotalMax})`
+                  : markSetup.source === "subject"
+                    ? `Set by school admin for ${form.subject}`
+                    : hasSubsections
+                      ? `From exam type subsections (sum ${sectionsTotalMax})`
+                      : maxMarksLocked
+                        ? "Set by school admin for this exam type"
+                        : "Clear this field to clear max marks for all students"}
               </p>
             </div>
           </div>
