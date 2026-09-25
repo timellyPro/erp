@@ -12,7 +12,7 @@ import { storedDiscountRupeeAmount } from "@/lib/studentFeeHeadDiscount";
 import { formatRupee, roundRupee } from "@/lib/formatRupee";
 import { grossTotalFromBreakdown, netTotalFromBreakdown } from "@/lib/feeBreakdownTotals";
 import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
-import { isPreviousYearFeeHeadName } from "@/lib/feeYearClassification";
+import { isApplicationOrAdmissionFeeName, isPreviousYearFeeHeadName } from "@/lib/feeYearClassification";
 
 function baseComponentIndexFromHead(head: {
   key: string;
@@ -265,11 +265,15 @@ export const FeesBreakdown = ({
     [headCards]
   );
 
+  const currentYearCardHeads = headCards.filter(
+    (h) => !isPreviousYearFeeHeadName(h.label) && !isApplicationOrAdmissionFeeName(h.label)
+  );
+
   const breakdownGrossTotal = useMemo(() => {
     if (headCards.length > 0) {
       return roundRupee(
         headCards
-          .filter((h) => !isPreviousYearFeeHeadName(h.label))
+          .filter((h) => !isPreviousYearFeeHeadName(h.label) && !isApplicationOrAdmissionFeeName(h.label))
           .reduce((s, h) => s + (Number(h.gross ?? h.amount) || 0), 0)
       );
     }
@@ -285,13 +289,15 @@ export const FeesBreakdown = ({
 
   const displayPreDiscountTotal = breakdownGrossTotal;
 
-  /** Prefer breakdown head sum when loaded — stored StudentFee can be stale after bulk extra cleanup. */
+  /** Current Year cards: tuition and other yearly heads, not application or admission fees. */
   const displayTotalAmount =
-    headsTotalAmount != null && headsTotalAmount > 0
-      ? headsTotalAmount
-      : totalFee > 0
-        ? totalFee
-        : 0;
+    headCards.length > 0
+      ? roundRupee(currentYearCardHeads.reduce((s, h) => s + h.amount, 0))
+      : headsTotalAmount != null && headsTotalAmount > 0
+        ? headsTotalAmount
+        : totalFee > 0
+          ? totalFee
+          : 0;
 
   /**
    * Discount rupees must compare gross vs net from the same source.
@@ -299,11 +305,13 @@ export const FeesBreakdown = ({
    * full "approved" concession (e.g. B HETVIKA ₹88,000 with no approval row).
    */
   const netForDiscount =
-    breakdownNetTotal != null && breakdownNetTotal >= 0
-      ? breakdownNetTotal
-      : displayTotalAmount > 0
-        ? displayTotalAmount
-        : totalFee;
+    headCards.length > 0
+      ? displayTotalAmount
+      : breakdownNetTotal != null && breakdownNetTotal >= 0
+        ? breakdownNetTotal
+        : displayTotalAmount > 0
+          ? displayTotalAmount
+          : totalFee;
   const discountAmount =
     typeof discountFixedAmount === "number" && discountFixedAmount > 0
       ? discountFixedAmount
@@ -350,16 +358,45 @@ export const FeesBreakdown = ({
           : null;
   const displayAmountPaid =
     headCards.length > 0
-      ? roundRupee(headCards.filter((h) => !isPreviousYearFeeHeadName(h.label)).reduce((s, h) => s + h.paid, 0))
+      ? roundRupee(currentYearCardHeads.reduce((s, h) => s + h.paid, 0))
       : amountPaid;
   const displayRemainingAmount =
     headCards.length > 0
-      ? roundRupee(headCards.filter((h) => !isPreviousYearFeeHeadName(h.label)).reduce((s, h) => s + h.due, 0))
+      ? roundRupee(currentYearCardHeads.reduce((s, h) => s + h.due, 0))
       : headsRemainingAmount != null && headsRemainingAmount >= 0
         ? roundRupee(headsRemainingAmount)
         : roundRupee(Math.max(0, displayTotalAmount - displayAmountPaid));
   const paidPercentage =
     displayTotalAmount > 0 ? (displayAmountPaid / displayTotalAmount) * 100 : 0;
+
+  // Cards follow fee heads only. Application and admission payments are left out.
+  // Paid uses the collected amount so an extra allocation is not dropped when it exceeds one installment.
+  let academicCollected = 0;
+  const seenPaymentIds = new Set<string>();
+  for (const payment of payments) {
+    const status = String(payment.status || "").toUpperCase();
+    if (status !== "SUCCESS" && status !== "PAID" && status !== "COMPLETED") continue;
+    if (seenPaymentIds.has(payment.id)) continue;
+    seenPaymentIds.add(payment.id);
+    const lines =
+      payment.feeAllocations && payment.feeAllocations.length > 0
+        ? payment.feeAllocations
+        : payment.feeTypeName
+          ? [{ name: payment.feeTypeName, amount: payment.feeTypeAmount ?? payment.amount }]
+          : [{ name: "Fee", amount: payment.amount }];
+    for (const line of lines) {
+      const amount = Number(line.amount) || 0;
+      if (amount <= 0) continue;
+      if (isApplicationOrAdmissionFeeName(line.name) || isPreviousYearFeeHeadName(line.name)) continue;
+      academicCollected += amount;
+    }
+  }
+  const academicPaidForCards =
+    academicCollected > 0 ? roundRupee(academicCollected) : displayAmountPaid;
+  const cardTotalAmount = displayTotalAmount;
+  const cardAmountPaid = academicPaidForCards;
+  const cardRemainingAmount = roundRupee(Math.max(0, displayTotalAmount - academicPaidForCards));
+  const cardPaidPercentage = cardTotalAmount > 0 ? (cardAmountPaid / cardTotalAmount) * 100 : 0;
 
   const applyBreakdownData = (data: AdminStudentFeeBreakdownResult) => {
     const dueHeads = Array.isArray(data?.dueHeads) ? data.dueHeads : [];
@@ -752,7 +789,7 @@ export const FeesBreakdown = ({
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
         <div className="bg-amber-400/10 border border-amber-400/20 rounded-xl p-4">
           <p className="text-xs text-amber-300/70 uppercase tracking-widest font-bold">Current Year Fees</p>
-          <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(displayTotalAmount)}</p>
+          <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(cardTotalAmount)}</p>
           <p className="text-xs text-amber-300 mt-1 font-semibold">
             Pre-discount: ₹{formatRupee(displayPreDiscountTotal)}
           </p>
@@ -826,15 +863,15 @@ export const FeesBreakdown = ({
 
         <div className="bg-lime-400/10 border border-lime-400/20 rounded-xl p-4">
           <p className="text-xs text-lime-300/70 uppercase tracking-widest font-bold">Current Year Paid</p>
-          <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(displayAmountPaid)}</p>
-          <p className="text-xs text-lime-400 mt-1 font-semibold">{Math.round(paidPercentage)}% Paid</p>
+          <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(cardAmountPaid)}</p>
+          <p className="text-xs text-lime-400 mt-1 font-semibold">{Math.round(cardPaidPercentage)}% Paid</p>
         </div>
 
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4">
           <p className="text-xs text-red-300/70 uppercase tracking-widest font-bold">Current Year Due</p>
-          <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(displayRemainingAmount)}</p>
+          <p className="text-2xl font-bold text-white mt-2">₹{formatRupee(cardRemainingAmount)}</p>
           <p className="text-xs text-red-400 mt-1 font-semibold">
-            {Math.round(100 - paidPercentage)}% Pending
+            {Math.round(100 - cardPaidPercentage)}% Pending
           </p>
         </div>
 

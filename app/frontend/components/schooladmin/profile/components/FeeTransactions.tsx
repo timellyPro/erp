@@ -9,7 +9,7 @@ import { formatReceiptGeneratedDate, formatReceiptTransactionDate } from "@/lib/
 import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
 import { isOfflinePaymentGateway } from "@/lib/feePaymentGateway";
 import type { AdminStudentFeeBreakdownResult } from "@/lib/computeAdminStudentFeeBreakdown";
-import { isPreviousYearFeeHeadName } from "@/lib/feeYearClassification";
+import { isApplicationOrAdmissionFeeName, isPreviousYearFeeHeadName } from "@/lib/feeYearClassification";
 
 type PaymentFeeAllocationLine = { name: string; amount: number };
 
@@ -539,17 +539,27 @@ export const FeeTransactions = ({
     }
   };
 
-  // FEES PAID / TOTAL is current-year only — exclude previous-year fee rows.
+  // FEES PAID / TOTAL matches the breakdown cards: current year, without application or admission fees.
+  const countsInFeeSummary = (name: string | null | undefined) =>
+    !isPreviousYearFeeHeadName(name) && !isApplicationOrAdmissionFeeName(name);
+  const summaryHeads = (feeBreakdown?.dueHeads ?? []).filter((h) => countsInFeeSummary(h.label));
   const currentYearTxnPaid = transactionRows
-    .filter((r) => isSuccessStatus(r.status) && !isPreviousYearFeeHeadName(r.feeTypeName))
+    .filter((r) => isSuccessStatus(r.status) && countsInFeeSummary(r.feeTypeName))
     .reduce((s, r) => s + r.amount, 0);
+  const summaryPaid = summaryHeads.reduce(
+    (s, h) => s + Math.max(Number(h.snapshotAmount) - Number(h.dueBefore), 0),
+    0
+  );
+  const summaryTotal = summaryHeads.reduce((s, h) => s + (Number(h.snapshotAmount) || 0), 0);
   const totalPaid =
-    feeBreakdown != null
-      ? Math.max(Number(feeBreakdown.amountPaid) || 0, currentYearTxnPaid)
+    summaryHeads.length > 0
+      ? Math.max(summaryPaid, currentYearTxnPaid)
       : Math.max(hasFee ? fee!.amountPaid : 0, currentYearTxnPaid);
   const total =
-    feeBreakdown?.totalAmount ??
-    (hasFee ? Math.max(fee!.amountPaid + fee!.remainingFee, totalPaid) : totalPaid);
+    summaryHeads.length > 0
+      ? summaryTotal
+      : feeBreakdown?.totalAmount ??
+        (hasFee ? Math.max(fee!.amountPaid + fee!.remainingFee, totalPaid) : totalPaid);
   const hasAny = hasFee || transactionRows.length > 0;
 
   const simplifyFeeHeadName = (value?: string) => {
