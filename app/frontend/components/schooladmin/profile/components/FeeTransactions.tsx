@@ -790,7 +790,7 @@ export const FeeTransactions = ({
       ) : transactionsLoading && transactionRows.length === 0 ? (
         <div className="py-8 text-center text-gray-400 text-sm">Loading transaction history…</div>
       ) : (
-        <div className="overflow-x-hidden w-full">
+        <div className="w-full overflow-x-auto overflow-y-hidden overscroll-x-contain">
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="text-[10px] sm:text-[11px] text-gray-400 font-bold tracking-wider uppercase border-b border-white/5">

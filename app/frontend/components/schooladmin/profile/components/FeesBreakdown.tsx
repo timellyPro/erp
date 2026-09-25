@@ -1099,7 +1099,7 @@ export const FeesBreakdown = ({
       {headsLoading ? (
         <div className="text-center py-8 text-gray-500 text-sm">Loading fee breakdown…</div>
       ) : paymentProgressRows.length > 0 ? (
-        <div className="overflow-x-auto -mx-1 sm:mx-0 overscroll-x-contain touch-pan-x pb-1">
+        <div className="overflow-x-auto overflow-y-hidden -mx-1 overscroll-x-contain pb-1 sm:mx-0">
           <table className="w-full text-left min-w-[480px] sm:min-w-0">
             <thead>
               <tr className="text-[11px] text-gray-400 font-bold tracking-wider uppercase border-b border-white/5">
@@ -1140,7 +1140,7 @@ export const FeesBreakdown = ({
           </table>
         </div>
       ) : feeBreakdown.size > 0 ? (
-        <div className="overflow-x-auto -mx-1 sm:mx-0 overscroll-x-contain touch-pan-x pb-1">
+        <div className="overflow-x-auto overflow-y-hidden -mx-1 overscroll-x-contain pb-1 sm:mx-0">
           <table className="w-full text-left min-w-[480px] sm:min-w-0">
             <thead>
               <tr className="text-[11px] text-gray-400 font-bold tracking-wider uppercase border-b border-white/5">
