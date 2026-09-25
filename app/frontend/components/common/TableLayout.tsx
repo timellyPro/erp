@@ -36,6 +36,8 @@ type DataTableProps<T> = {
   scrollableWide?: boolean;
   /** Pin the first column while scrolling horizontally (pair with scrollableWide). */
   stickyFirstColumn?: boolean;
+  /** How many leading columns stay pinned. Defaults to 1 when stickyFirstColumn is set. */
+  stickyLeadingCount?: number;
   /** Pin the last column while scrolling horizontally (e.g. actions on the right). */
   stickyLastColumn?: boolean;
   /** Extra classes on the scroll viewport (e.g. max-h + overflow-auto for in-table vertical scroll). */
@@ -50,18 +52,20 @@ function stickyColumnClass(
   opts: {
     scrollableWide: boolean;
     stickyFirstColumn: boolean;
+    stickyLeadingCount: number;
     stickyLastColumn: boolean;
     header?: boolean;
   }
 ): string {
-  const { scrollableWide, stickyFirstColumn, stickyLastColumn, header } = opts;
+  const { scrollableWide, stickyFirstColumn, stickyLeadingCount, stickyLastColumn, header } = opts;
   if (!scrollableWide) return "";
   const z = header ? "z-20" : "z-10";
   const bg = header
-    ? "bg-white/[0.06] backdrop-blur-xl"
-    : "bg-transparent group-hover:bg-white/[0.04] backdrop-blur-md";
-  if (stickyFirstColumn && index === 0) {
-    return `sticky left-0 ${z} border-r border-white/10 ${bg}`;
+    ? "bg-[#12101c] backdrop-blur-xl"
+    : "bg-[#16141f] group-hover:bg-[#1c1a28]";
+  if (stickyFirstColumn && index < stickyLeadingCount) {
+    const left = index === 0 ? "left-0 min-w-[7.5rem]" : "left-[7.5rem]";
+    return `sticky ${left} ${z} border-r border-white/10 ${bg}`;
   }
   if (stickyLastColumn && index === lastIndex) {
     return `sticky right-0 ${z} border-l border-white/10 ${bg}`;
@@ -99,6 +103,7 @@ function DataTable<T>({
   pagination,
   scrollableWide = false,
   stickyFirstColumn = false,
+  stickyLeadingCount = 1,
   stickyLastColumn = false,
   scrollAreaClassName = "",
   paginationInline = false,
@@ -107,8 +112,8 @@ function DataTable<T>({
   const scrollViewportClass = scrollAreaClassName.trim()
     ? scrollAreaClassName
     : scrollableWide
-      ? "relative z-0 scroll-smooth overflow-x-scroll pb-3 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.35)_rgba(255,255,255,0.08)] [&::-webkit-scrollbar]:h-2.5 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-white/[0.08] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/30 hover:[&::-webkit-scrollbar-thumb]:bg-white/45"
-      : "overflow-x-auto";
+      ? "relative z-0 scroll-smooth overflow-x-scroll overflow-y-hidden overscroll-x-contain pb-3 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.35)_rgba(255,255,255,0.08)] [&::-webkit-scrollbar]:h-2.5 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-white/[0.08] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/30 hover:[&::-webkit-scrollbar-thumb]:bg-white/45"
+      : "overflow-x-auto overflow-y-hidden overscroll-x-contain";
   const stickyHeader = Boolean(scrollAreaClassName.trim());
   const canPaginate =
     Boolean(pagination) &&
@@ -174,7 +179,7 @@ function DataTable<T>({
           </div>
         )}
 
-        <div className={`w-full min-w-0 max-w-full overscroll-contain ${scrollViewportClass}`}>
+        <div className={`w-full min-w-0 max-w-full ${scrollViewportClass}`}>
           <table
             className={`${
               scrollableWide ? "w-max min-w-full table-auto" : "w-full table-fixed"
@@ -198,6 +203,7 @@ function DataTable<T>({
                     } ${stickyColumnClass(i, lastColIndex, {
                       scrollableWide,
                       stickyFirstColumn,
+                      stickyLeadingCount,
                       stickyLastColumn,
                       header: true,
                     })} ${thClassName}`}
@@ -251,6 +257,7 @@ function DataTable<T>({
                         } ${ALIGN_CLASS[col.align ?? "left"]} ${stickyColumnClass(colIndex, lastColIndex, {
                           scrollableWide,
                           stickyFirstColumn,
+                          stickyLeadingCount,
                           stickyLastColumn,
                         })} ${tdClassName}`}
                       >

@@ -436,6 +436,21 @@ export default function TeacherMarksTab() {
     fetchStudentsAndMarks();
   }, [fetchStudentsAndMarks]);
 
+  const marksTableRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const root = marksTableRef.current;
+    if (!root) return;
+    const onWheel = (event: WheelEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement) || target.type !== "number") return;
+      event.preventDefault();
+      const scroller = root.closest("main");
+      scroller?.scrollBy({ top: event.deltaY, left: 0 });
+    };
+    root.addEventListener("wheel", onWheel, { passive: false });
+    return () => root.removeEventListener("wheel", onWheel);
+  }, []);
+
   const handleChange = (key: string, value: string) => {
     if (key === "examType") {
       userSelectedExamTypeRef.current = true;
@@ -772,7 +787,7 @@ export default function TeacherMarksTab() {
       render: (row: StudentRow) => (
         <div className="flex items-center gap-3">
           <img src={row.avatar} alt={row.name} className="w-9 h-9 rounded-full" />
-          <span className="font-medium text-white">{row.name}</span>
+          <span className="whitespace-nowrap font-medium text-white">{row.name}</span>
         </div>
       ),
     },
@@ -1147,7 +1162,7 @@ export default function TeacherMarksTab() {
         </div>
 
         {/* TABLE CARD */}
-        <div className="glass-card rounded-2xl overflow-hidden border border-white/10 flex flex-col">
+        <div ref={marksTableRef} className="glass-card rounded-2xl overflow-hidden border border-white/10 flex flex-col">
           <div className="p-6 border-b border-white/10 bg-white/[0.02]">
             <h3 className="font-bold text-white text-lg">Enter Marks</h3>
             <div className="flex items-center gap-2 mt-2 text-sm text-white/60">
@@ -1169,6 +1184,9 @@ export default function TeacherMarksTab() {
                 <DataTable<StudentRow>
                   columns={columns}
                   rounded={false}
+                  scrollableWide
+                  stickyFirstColumn
+                  stickyLeadingCount={2}
                   data={rows}
                   rowKey={(row) => row.id}
                   emptyText="No students in this class. Select a class above."
