@@ -13,10 +13,17 @@ export type ExamTypeSectionPayload = {
   order: number;
 };
 
+export type ExamTypeSubjectPayload = {
+  subject: string;
+  maxMarks: number | null;
+  sections: ExamTypeSectionPayload[];
+};
+
 export type ExamTypePayload = {
   name: string;
   maxMarks: number | null;
   sections: ExamTypeSectionPayload[];
+  subjectConfigs: ExamTypeSubjectPayload[];
 };
 
 async function resolveSchoolId(session: {
@@ -101,17 +108,85 @@ export async function GET() {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
 
-    const customTypes = await prisma.examType.findMany({
-      where: { schoolId },
-      select: {
-        name: true,
-        maxMarks: true,
-        sections: {
-          orderBy: { order: "asc" },
-          select: { id: true, name: true, maxMarks: true, order: true },
+    const loadCustomTypes = () =>
+      prisma.examType.findMany({
+        where: { schoolId },
+        select: {
+          name: true,
+          maxMarks: true,
+          sections: {
+            orderBy: { order: "asc" },
+            select: { id: true, name: true, maxMarks: true, order: true },
+          },
         },
-      },
-    });
+      });
+    let customTypes;
+    try {
+      customTypes = await loadCustomTypes();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      const retryable =
+        message.includes("Can't reach database server") ||
+        message.includes("max clients reached") ||
+        message.includes("EMAXCONNSESSION");
+      if (!retryable) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      customTypes = await loadCustomTypes();
+    }
+
+    const subjectConfigsByExam = new Map<string, ExamTypeSubjectPayload[]>();
+    try {
+      const subjectRows = await prisma.$queryRaw<
+        Array<{
+          examTypeName: string;
+          subject: string;
+          maxMarks: number | null;
+          sectionId: string | null;
+          sectionName: string | null;
+          sectionMax: number | null;
+          sectionOrder: number | null;
+        }>
+      >`
+        SELECT et.name AS "examTypeName",
+               s.subject AS "subject",
+               s."maxMarks" AS "maxMarks",
+               sec.id AS "sectionId",
+               sec.name AS "sectionName",
+               sec."maxMarks" AS "sectionMax",
+               sec."order" AS "sectionOrder"
+        FROM "ExamTypeSubject" s
+        INNER JOIN "ExamType" et ON et.id = s."examTypeId"
+        LEFT JOIN "ExamTypeSubjectSection" sec ON sec."examTypeSubjectId" = s.id
+        WHERE et."schoolId" = ${schoolId}
+        ORDER BY et.name ASC, s.subject ASC, sec."order" ASC
+      `;
+      for (const row of subjectRows) {
+        const examName = row.examTypeName.trim().toUpperCase();
+        const subject = row.subject.trim().toUpperCase();
+        if (!examName || !subject) continue;
+        const list = subjectConfigsByExam.get(examName) ?? [];
+        let config = list.find((c) => c.subject === subject);
+        if (!config) {
+          config = {
+            subject,
+            maxMarks: row.maxMarks,
+            sections: [],
+          };
+          list.push(config);
+          subjectConfigsByExam.set(examName, list);
+        }
+        if (row.sectionId && row.sectionName && row.sectionMax != null) {
+          config.sections.push({
+            id: row.sectionId,
+            name: row.sectionName,
+            maxMarks: Number(row.sectionMax),
+            order: row.sectionOrder ?? config.sections.length,
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Exam type subject configs:", err);
+    }
 
     // Distinct exam types from marks — avoid heavy findMany+join that holds pool slots.
     const fromMarks = await prisma.$queryRaw<Array<{ examType: string }>>`
@@ -126,7 +201,7 @@ export async function GET() {
 
     const byName = new Map<string, ExamTypePayload>();
     DEFAULT_EXAM_TYPES.forEach((n) =>
-      byName.set(n, { name: n, maxMarks: null, sections: [] })
+      byName.set(n, { name: n, maxMarks: null, sections: [], subjectConfigs: [] })
     );
     customTypes.forEach((t) => {
       const name = t.name.trim().toUpperCase();
@@ -135,6 +210,7 @@ export async function GET() {
         name,
         maxMarks: t.maxMarks ?? null,
         sections: t.sections,
+        subjectConfigs: subjectConfigsByExam.get(name) ?? [],
       });
     });
     fromMarks.forEach((t) => {
@@ -142,7 +218,7 @@ export async function GET() {
       const name = t.examType.trim().toUpperCase();
       if (!name) return;
       if (!byName.has(name)) {
-        byName.set(name, { name, maxMarks: null, sections: [] });
+        byName.set(name, { name, maxMarks: null, sections: [], subjectConfigs: [] });
       }
     });
 

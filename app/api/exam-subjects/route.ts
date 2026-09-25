@@ -130,17 +130,38 @@ export async function GET() {
     }
 
     // Sequential reads — PgBouncer pool is tiny; parallel queries cause P2024 under tab warm.
-    const customSubjects = await prisma.examSubject.findMany({
-      where: { schoolId },
-      select: { name: true },
-    });
-    const teacherSubjects = await prisma.$queryRaw<Array<{ subjects: string[] }>>`
-      SELECT "subjects" FROM "User"
-      WHERE "schoolId" = ${schoolId}
-        AND "role" = 'TEACHER'
-        AND array_length("subjects", 1) > 0
-    `;
-    const hidden = await getHiddenSubjects(schoolId);
+    // One retry: the pooler often drops the first connect after 10s, then the next succeeds.
+    const readSubjects = async () => {
+      const customSubjects = await prisma.examSubject.findMany({
+        where: { schoolId },
+        select: { name: true },
+      });
+      const teacherSubjects = await prisma.$queryRaw<Array<{ subjects: string[] }>>`
+        SELECT "subjects" FROM "User"
+        WHERE "schoolId" = ${schoolId}
+          AND "role" = 'TEACHER'
+          AND array_length("subjects", 1) > 0
+      `;
+      const hidden = await getHiddenSubjects(schoolId);
+      return { customSubjects, teacherSubjects, hidden };
+    };
+    let customSubjects;
+    let teacherSubjects;
+    let hidden;
+    try {
+      ({ customSubjects, teacherSubjects, hidden } = await readSubjects());
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      const retryable =
+        message.includes("Can't reach database server") ||
+        message.includes("Engine is not yet connected") ||
+        message.includes("max clients reached") ||
+        message.includes("EMAXCONNSESSION") ||
+        message.includes("Response from the Engine was empty");
+      if (!retryable) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      ({ customSubjects, teacherSubjects, hidden } = await readSubjects());
+    }
 
     const names = new Set<string>();
     DEFAULT_EXAM_SUBJECTS.forEach((n) => names.add(n));

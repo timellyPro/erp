@@ -25,13 +25,10 @@ export async function runWithDeferredCacheInvalidation<T>(fn: () => Promise<T>):
   });
 }
 
-// Prefer DATABASE_URL (port 6543, transaction pooler) in production.
-// In local/dev, prefer DIRECT_URL (session pooler :5432) — far more reliable for
-// long-lived Next.js + auth when the transaction pooler is saturated/slow.
-const base =
-  process.env.NODE_ENV === "development" && process.env.DIRECT_URL
-    ? process.env.DIRECT_URL
-    : process.env.DATABASE_URL || process.env.DIRECT_URL;
+// Use the transaction pooler (DATABASE_URL, port 6543). The session pooler
+// (DIRECT_URL, port 5432) allows only about 15 clients; dev was hitting
+// EMAXCONNSESSION and exam types/subjects came back empty.
+const base = process.env.DATABASE_URL || process.env.DIRECT_URL;
 
 if (!base) {
   console.error("DATABASE_URL or DIRECT_URL environment variable is not set");
@@ -60,15 +57,20 @@ if (connectionString) {
   // Dev used to use 2; parallel tab warmers (exams terms+types+subjects) hit P2024.
   // Student-details fans out shell/payments/breakdown — need headroom or queries queue for ~7–10s.
   // Keep prod PgBouncer modest; override anytime with PRISMA_CONNECTION_LIMIT.
+  // Supabase session mode (port 5432) allows only pool_size clients (often 15).
+  // A limit of 10 on one Next process, plus HMR, fills that pool and exam-types/subjects 500.
+  const isSessionPooler = !isPgBouncer && /:5432(?:\/|\?|$)/.test(connectionString);
   const poolLimit =
     process.env.PRISMA_CONNECTION_LIMIT ||
     (isPgBouncer
       ? process.env.NODE_ENV === "development"
         ? "8"
         : "5"
-      : process.env.NODE_ENV === "development"
-        ? "10"
-        : "8");
+      : isSessionPooler
+        ? "3"
+        : process.env.NODE_ENV === "development"
+          ? "10"
+          : "8");
   connectionString = withParam(connectionString, "connection_limit", poolLimit);
   connectionString = withParam(connectionString, "pool_timeout", "60");
   connectionString = withParam(connectionString, "connect_timeout", "10");
@@ -131,6 +133,10 @@ function stableArgsKey(args: unknown): string {
   }
 }
 
+// Mark reads must not be cached. An in-flight findMany can finish after a save
+// and store the pre-save snapshot, so assigned marks vanish until the TTL expires.
+const UNCACHED_MODELS = new Set(["Mark", "MarkComponent"]);
+
 const READ_OPERATIONS = new Set([
   "findFirst",
   "findMany",
@@ -158,6 +164,7 @@ const createPrisma = () => {
         const canCache =
           localCacheEnabled &&
           model &&
+          !UNCACHED_MODELS.has(model) &&
           READ_OPERATIONS.has(operation) &&
           !isDeferredCacheInvalidation();
         const cacheKey = canCache ? `pq:${model}:${operation}:${stableArgsKey(args)}` : null;
@@ -215,7 +222,8 @@ if (
 ) {
   prisma = globalThis.prismaGlobal;
 } else {
-  // Recreate when pool params / URL change (dev HMR otherwise keeps connection_limit=1 forever)
+  // Recreate when pool params / URL change (dev HMR otherwise keeps connection_limit=1 forever).
+  // Disconnect first so the old pool does not sit on top of the new one (session mode max is 15).
   void globalThis.prismaGlobal?.$disconnect().catch(() => {});
   prisma = createPrisma();
 }
@@ -225,12 +233,14 @@ const delegate = prisma as unknown as {
   extraFeeHeadTemplate?: { create?: unknown };
   timetable?: { create?: unknown };
   backupEmailSchedule?: { findFirst?: unknown };
+  examTypeSubject?: { findFirst?: unknown };
 };
 if (
   process.env.NODE_ENV === "development" &&
   (typeof delegate.extraFeeHeadTemplate?.create !== "function" ||
     typeof delegate.timetable?.create !== "function" ||
-    typeof delegate.backupEmailSchedule?.findFirst !== "function")
+    typeof delegate.backupEmailSchedule?.findFirst !== "function" ||
+    typeof delegate.examTypeSubject?.findFirst !== "function")
 ) {
   void prisma.$disconnect().catch(() => {});
   prisma = createPrisma();

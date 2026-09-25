@@ -9,7 +9,9 @@ export function middleware(request: NextRequest) {
   // Per-user responses must not be cached by the browser (e.g. parent portal bell).
   const skipApiCache =
     pathname.startsWith("/api/auth/") ||
-    pathname.startsWith("/api/notifications");
+    pathname.startsWith("/api/notifications") ||
+    pathname.startsWith("/api/marks") ||
+    pathname.startsWith("/api/exam-types");
 
   if (
     request.method === "GET" &&
