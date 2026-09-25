@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { ArrowLeft, User } from "lucide-react";
 import AttachmentPreview from "../../common/AttachmentPreview";
+import TimellyLoader from "../../common/TimellyLoader";
 
 export type SubmissionRow = {
   id: string;
@@ -55,9 +56,11 @@ export default function HomeworkSubmissionsView({ homeworkId, onBack }: Homework
 
   if (loading) {
     return (
-      <div className="min-h-[40vh] flex items-center justify-center text-white/60">
-        Loading submissions…
-      </div>
+      <TimellyLoader
+        compact
+        title="Loading submissions"
+        steps={["Students", "Files", "Ready"]}
+      />
     );
   }
 

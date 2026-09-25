@@ -1,9 +1,20 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import {
+  buildSchoolAnalysisFast,
+  buildSchoolAnalysisFull,
+  buildSchoolAnalysisTables,
+  type SchoolAnalysisTableSection,
+} from "@/lib/buildSchoolAnalysis";
+import { resolveAnalysisStartYear } from "@/lib/schoolAnalysisYear";
+import { resolveSchoolAdminSchoolId } from "@/lib/resolveSchoolAdminSchoolId";
+import {
+  getSchoolDashboardServerCached,
+  setSchoolDashboardServerCached,
+} from "@/lib/schoolDashboardServerCache";
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -21,215 +32,45 @@ export async function GET(req: Request) {
   }
 
   try {
-    let schoolId = session.user.schoolId;
-    if (!schoolId) {
-      const adminSchool = await prisma.school.findFirst({
-        where: { admins: { some: { id: session.user.id } } },
-        select: { id: true },
-      });
-      schoolId = adminSchool?.id ?? null;
+    const ctx = await resolveSchoolAdminSchoolId(session);
+    if ("error" in ctx) {
+      return NextResponse.json({ message: ctx.error }, { status: ctx.status });
     }
-
-    if (!schoolId) {
-      return NextResponse.json(
-        { message: "School not found in session" },
-        { status: 400 }
-      );
-    }
+    const schoolId = ctx.schoolId;
 
     const { searchParams } = new URL(req.url);
-    const yearParam = searchParams.get("year");
+    const startYear = resolveAnalysisStartYear(searchParams.get("year"));
     const classIdParam = searchParams.get("classId");
     const classId = classIdParam && classIdParam.trim() ? classIdParam.trim() : null;
+    const fastOnly = searchParams.get("fast") === "1";
+    const tablesOnly = searchParams.get("part") === "tables";
+    const sectionParam = searchParams.get("section");
+    const tableSection: SchoolAnalysisTableSection | null =
+      sectionParam === "gender-enrollment" ||
+      sectionParam === "admission-comparison" ||
+      sectionParam === "fee-collection"
+        ? sectionParam
+        : null;
 
-    // compute academic year start based on parameter or current date
-    const now = new Date();
-    let startYear = yearParam ? parseInt(yearParam, 10) : NaN;
-    if (Number.isNaN(startYear)) {
-      // if after April we already in next academic year, otherwise previous
-      startYear = now.getMonth() >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+    const cacheKey = `analysis:${schoolId}:${startYear}:${classId ?? "all"}:${fastOnly ? "fast" : tablesOnly ? `tables:${tableSection ?? "all"}` : "full"}`;
+    const cached = getSchoolDashboardServerCached<Record<string, unknown>>(cacheKey);
+    if (cached) {
+      return NextResponse.json(cached, { status: 200 });
     }
 
-    const yearStart = new Date(startYear, 5, 1); // June 1 of startYear
-    const yearEnd = new Date(startYear + 1, 4, 31, 23, 59, 59); // May 31 of next year
+    let payload: Record<string, unknown>;
+    const ttlMs = fastOnly ? 300_000 : 120_000;
 
-    // available years: only current and optionally next after April
-    const availableYears: number[] = [startYear];
+    if (fastOnly) {
+      payload = await buildSchoolAnalysisFast(schoolId, startYear, classId);
+    } else if (tablesOnly) {
+      payload = await buildSchoolAnalysisTables(schoolId, startYear, classId, undefined, tableSection);
+    } else {
+      payload = await buildSchoolAnalysisFull(schoolId, startYear, classId);
+    }
 
-    const baseStudentWhere = {
-      schoolId,
-      ...(classId ? { classId } : {}),
-    };
-
-    // Monthly fees collection for the selected year
-    const payments = await prisma.payment.findMany({
-      where: {
-        status: "SUCCESS",
-        student: baseStudentWhere,
-        createdAt: { gte: yearStart, lte: yearEnd },
-      },
-      select: { amount: true, createdAt: true },
-    });
-
-    const byMonth: Record<number, number> = {};
-    MONTHS.forEach((_, i) => { byMonth[i] = 0; });
-    payments.forEach((p) => {
-      const m = new Date(p.createdAt).getMonth();
-      byMonth[m] = (byMonth[m] ?? 0) + p.amount;
-    });
-    const monthlyFeesCollection = MONTHS.map((name, i) => ({
-      month: name,
-      amount: byMonth[i] ?? 0,
-    }));
-
-    // Enrollment growth - only current academic year's student count
-    const enrollmentByYear: { year: number; count: number }[] = [];
-    const countForYear = await prisma.student.count({
-      where: baseStudentWhere,
-    });
-    enrollmentByYear.push({ year: startYear, count: countForYear });
-
-    // Attendance for selected year - aggregate
-    // fetch raw attendance records so we can separate students vs teachers
-    const attendanceRecords = await prisma.attendance.findMany({
-      where: {
-        class: { schoolId, ...(classId ? { id: classId } : {}) },
-        date: { gte: yearStart, lte: yearEnd },
-      },
-      select: { status: true, studentId: true, teacherId: true },
-    });
-
-    let studentPresent = 0;
-    let studentTotal = 0;
-    let teacherPresent = 0;
-    let teacherTotal = 0;
-
-    attendanceRecords.forEach((r) => {
-      if (r.studentId) {
-        studentTotal++;
-        if (r.status === "PRESENT" || r.status === "LATE") studentPresent++;
-      }
-      if (r.teacherId) {
-        teacherTotal++;
-        if (r.status === "PRESENT" || r.status === "LATE") teacherPresent++;
-      }
-    });
-
-    const studentAttendancePct =
-      studentTotal > 0 ? Math.round(((studentPresent) / studentTotal) * 100) : 0;
-    const teacherAttendancePct =
-      teacherTotal > 0 ? Math.round(((teacherPresent) / teacherTotal) * 100) : 0;
-
-    // Subject performance - avg (marks/totalMarks)*100 per subject
-    const marks = await prisma.mark.findMany({
-      where: {
-        class: { schoolId, ...(classId ? { id: classId } : {}) },
-        totalMarks: { gt: 0 },
-        createdAt: { gte: yearStart, lte: yearEnd },
-      },
-      select: { subject: true, marks: true, totalMarks: true },
-    });
-    const bySubject: Record<string, { sum: number; total: number }> = {};
-    marks.forEach((m) => {
-      if (!bySubject[m.subject]) bySubject[m.subject] = { sum: 0, total: 0 };
-      bySubject[m.subject].sum += m.totalMarks > 0 ? (m.marks / m.totalMarks) * 100 : 0;
-      bySubject[m.subject].total += 1;
-    });
-    const subjectPerformance = Object.entries(bySubject).map(([subject, { sum, total }]) => ({
-      subject,
-      percentage: total > 0 ? Math.round((sum / total) * 10) / 10 : 0,
-    })).sort((a, b) => b.percentage - a.percentage).slice(0, 10);
-
-    // Top performing teachers - by average student marks
-    const teacherMarks = await prisma.mark.findMany({
-      where: {
-        class: { schoolId, ...(classId ? { id: classId } : {}) },
-        createdAt: { gte: yearStart, lte: yearEnd },
-      },
-      select: {
-        teacherId: true,
-        marks: true,
-        totalMarks: true,
-        teacher: {
-          select: {
-            id: true,
-            name: true,
-            subject: true,
-            subjects: true,
-          },
-        },
-      },
-    });
-
-    const teacherScores: Record<string, { sum: number; count: number; teacher: typeof teacherMarks[0]["teacher"] }> = {};
-    teacherMarks.forEach((m) => {
-      const id = m.teacherId;
-      if (!teacherScores[id]) {
-        teacherScores[id] = { sum: 0, count: 0, teacher: m.teacher };
-      }
-      if (m.totalMarks > 0) {
-        teacherScores[id].sum += (m.marks / m.totalMarks) * 100;
-        teacherScores[id].count += 1;
-      }
-    });
-
-    // All teachers sorted best to least (first top, then descending)
-    const topTeachers = Object.entries(teacherScores)
-      .map(([id, { sum, count, teacher }]) => ({
-        id,
-        name: teacher?.name ?? "Unknown",
-        subject: teacher?.subjects?.[0] ?? teacher?.subject ?? "—",
-        // convert average percent (0-100) to 0-5 scale
-        rating: count > 0 ? Math.round(((sum / count) / 20) * 10) / 10 : 0,
-      }))
-      .filter((t) => t.rating > 0)
-      .sort((a, b) => b.rating - a.rating);
-
-    // Avg teacher rating use 0-5 scale
-    const avgTeacherRating = topTeachers.length > 0
-      ? Math.round((topTeachers.reduce((s, t) => s + t.rating, 0) / topTeachers.length) * 10) / 10
-      : 0;
-
-    // Total fees collected for the year
-    const feesCollected = payments.reduce((s, p) => s + p.amount, 0);
-
-    // Total enrollment
-    const totalEnrollment = await prisma.student.count({
-      where: baseStudentWhere,
-    });
-
-    // Classes for filter dropdown
-    const classes = await prisma.class.findMany({
-      where: { schoolId },
-      select: { id: true, name: true, section: true },
-      orderBy: { name: "asc" },
-    });
-
-    return NextResponse.json({
-      availableYears,
-      classes,
-      selectedYear: startYear,
-      stats: {
-        feesCollected,
-        totalEnrollment,
-        avgTeacherRating,
-        avgExamScore: subjectPerformance.length > 0
-          ? Math.round(
-              (subjectPerformance.reduce((s, x) => s + x.percentage, 0) / subjectPerformance.length) * 10
-            ) / 10
-          : 0,
-      },
-      charts: {
-        monthlyFeesCollection,
-        enrollmentGrowth: enrollmentByYear,
-        attendance: {
-          students: studentAttendancePct,
-          teachers: teacherAttendancePct,
-        },
-        subjectPerformance,
-      },
-      topTeachers,
-    });
+    setSchoolDashboardServerCached(cacheKey, payload, ttlMs);
+    return NextResponse.json(payload);
   } catch (error) {
     console.error("Analysis API error:", error);
     return NextResponse.json(

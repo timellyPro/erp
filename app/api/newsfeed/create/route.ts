@@ -141,6 +141,18 @@ export async function POST(req: Request) {
       photosArr
     );
 
+    try {
+      const userIds = await getSchoolUserIds(schoolId);
+      await createNotificationsForUserIds(
+        userIds.filter((id) => id !== userId),
+        "NEWS",
+        "New post",
+        title.length > 60 ? title.slice(0, 60) + "…" : title
+      );
+    } catch (nErr) {
+      console.warn("News notification creation failed (raw insert path):", nErr);
+    }
+
     return NextResponse.json(
       {
         message: "News feed created successfully",

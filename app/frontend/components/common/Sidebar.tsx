@@ -196,8 +196,15 @@ export default function AppSidebar({ menuItems, profile, activeTab = "dashboard"
     if (!isTeacher) return true;
     if (!item.tab && !item.permission) return true;
     if (!allowedFeatures || allowedFeatures.length === 0) return true;
-    if (item.tab && allowedFeatures.includes(item.tab)) return true;
-    if (item.permission && allowedFeatures.includes(String(item.permission))) return true;
+
+    const allowedNormalized = allowedFeatures.map((a: string) => String(a).toLowerCase());
+    const tabKey = item.tab ? String(item.tab).toLowerCase() : null;
+    const permKey = item.permission ? String(item.permission).toLowerCase() : null;
+
+    if (tabKey && allowedNormalized.includes(tabKey)) return true;
+    if (permKey && allowedNormalized.includes(permKey)) return true;
+    // Marks / exams aliases (and similar: attendance-view, etc.)
+    if (tabKey && allowedNormalized.some((a: string) => a.startsWith(tabKey))) return true;
     return false;
   };
 
@@ -216,10 +223,10 @@ export default function AppSidebar({ menuItems, profile, activeTab = "dashboard"
     <aside
       className="
         hidden lg:flex
-        w-64 h-full flex-col
+        w-64 shrink-0 h-full flex-col
         bg-white/10 backdrop-blur-2xl
         border-r border-white/10
-        shadow-[8px_0_32px_rgba(0,0,0,0.35)]
+        shadow-[2px_0_12px_rgba(0,0,0,0.2)]
       "
     >
       {/* Logo */}

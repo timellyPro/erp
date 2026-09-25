@@ -3,6 +3,7 @@ export const ROUTES = {
     SCREEN: '/frontend/screen',
     SUPERADMIN: '/frontend/pages/superadmin',
     SCHOOLADMIN: '/frontend/pages/schooladmin',
+    CHAIRMAN: '/frontend/pages/chairman',
     TEACHER: '/frontend/pages/teacher',
     PARENT: '/frontend/pages/parent',
     UNAUTHORIZED: '/unauthorized',

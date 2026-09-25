@@ -2,11 +2,16 @@
 
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
+import {
+  fetchParentHomeworkList,
+  patchParentHomeworkAfterSubmit,
+  peekParentPortalAny,
+} from '@/lib/loadParentPortal';
 import HomeworkHeader from './HomeworkHeader';
 import HomeworkStats from './HomeworkStats';
 import HomeworkFilters from './HomeworkFilters';
 import HomeworkCard from './HomeworkCard';
-import Spinner from '../../common/Spinner';
+import ParentTimellyLoader from '../ParentTimellyLoader';
 
 interface Homework {
   id: string;
@@ -28,81 +33,46 @@ interface Homework {
 
 export default function Page() {
   const { data: session } = useSession();
-  const [homeworks, setHomeworks] = useState<Homework[]>([]);
-  const [loading, setLoading] = useState(true);
+  const studentId = (session?.user as { studentId?: string | null })?.studentId ?? null;
+  const initialPeek = peekParentPortalAny<{ homeworks: Homework[] }>("homework", "all");
+  const [homeworks, setHomeworks] = useState<Homework[]>(() => initialPeek?.homeworks ?? []);
+  const [loading, setLoading] = useState(!initialPeek?.homeworks?.length);
   const [error, setError] = useState<string | null>(null);
   const [subject, setSubject] = useState('All Subjects');
   const [status, setStatus] = useState('All');
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   const [studentName, setStudentName] = useState('Student');
 
-  const fetchStudentName = useCallback(async () => {
-    if (!session?.user) return;
-    
-    const studentId = (session.user as { studentId?: string | null })?.studentId;
+  const fetchHomeworks = useCallback(async (opts?: { revalidate?: boolean }) => {
     if (!studentId) {
-      if (session.user.name) {
-        setStudentName(session.user.name);
-      }
+      setLoading(false);
       return;
     }
-
-    try {
-      const res = await fetch(`/api/student/${studentId}`, {
-        credentials: 'include',
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.student?.user?.name) {
-          setStudentName(data.student.user.name);
-        } else if (session.user.name) {
-          setStudentName(session.user.name);
-        }
-      } else if (session.user.name) {
-        setStudentName(session.user.name);
-      }
-    } catch {
-      if (session.user.name) {
-        setStudentName(session.user.name);
-      }
-    }
-  }, [session]);
-
-  const fetchHomeworks = useCallback(async () => {
-    setLoading(true);
+    const hasCache =
+      !opts?.revalidate &&
+      !!peekParentPortalAny<{ homeworks: Homework[] }>("homework", "all")?.homeworks?.length;
+    if (!hasCache) setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams();
-      if (subject !== 'All Subjects') {
-        params.append('subject', subject);
-      }
-
-      const res = await fetch(`/api/homework/list?${params.toString()}`, {
-        credentials: 'include',
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || 'Failed to fetch homework');
-      }
-
-      const data = await res.json();
-      const fetchedHomeworks = data.homeworks || [];
-      setHomeworks(fetchedHomeworks);
+      const data = await fetchParentHomeworkList(
+        studentId,
+        subject !== 'All Subjects' ? subject : undefined,
+        { revalidate: opts?.revalidate }
+      );
+      setHomeworks((data.homeworks || []) as Homework[]);
     } catch (err) {
       console.error('Error fetching homeworks:', err);
       setError(err instanceof Error ? err.message : 'Failed to load homework');
     } finally {
       setLoading(false);
     }
-  }, [subject]);
+  }, [subject, studentId]);
 
   useEffect(() => {
-    if (session) {
-      fetchStudentName();
-      fetchHomeworks();
-    }
-  }, [session, fetchStudentName, fetchHomeworks]);
+    if (!session) return;
+    if (session.user.name) setStudentName(session.user.name);
+    fetchHomeworks();
+  }, [session, studentId, fetchHomeworks]);
 
   const filteredHomeworks = useMemo(() => {
     return homeworks.filter((item) => {
@@ -193,13 +163,27 @@ export default function Page() {
           }),
         });
 
+        const submitData = await submitRes.json().catch(() => ({}));
         if (!submitRes.ok) {
-          const submitData = await submitRes.json().catch(() => ({}));
           throw new Error(submitData.message || 'Submission failed');
         }
 
-        // Refresh the homework list
-        await fetchHomeworks();
+        if (studentId && submitData.submission) {
+          patchParentHomeworkAfterSubmit(studentId, homeworkId, submitData.submission);
+          setHomeworks((prev) =>
+            prev.map((h) =>
+              h.id === homeworkId
+                ? {
+                    ...h,
+                    hasSubmitted: true,
+                    submission: submitData.submission,
+                  }
+                : h
+            )
+          );
+        } else {
+          await fetchHomeworks({ revalidate: true });
+        }
       } catch (err) {
         console.error('Error submitting homework:', err);
         alert(err instanceof Error ? err.message : 'Failed to submit homework');
@@ -214,7 +198,7 @@ export default function Page() {
   if (loading) {
     return (
       <main className="min-h-screen p-8 flex items-center justify-center">
-        <Spinner/>
+        <ParentTimellyLoader preset="homework" className="w-full max-w-2xl" />
       </main>
     );
   }

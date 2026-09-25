@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import AuthLoadingFallback from "../components/common/AuthLoadingFallback";
 
 // Allowed roles from your schema
-type UserRoles = "SUPERADMIN" | "SCHOOLADMIN" | "TEACHER" | "STUDENT";
+type UserRoles = "SUPERADMIN" | "SCHOOLADMIN" | "CHAIRMAN" | "TEACHER" | "STUDENT";
 
 interface RequireRoleProps {
   children: ReactNode;

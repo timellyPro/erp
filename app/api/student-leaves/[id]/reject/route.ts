@@ -31,8 +31,10 @@ export async function PATCH(
       createNotification(
         leave.student.userId,
         "LEAVE",
-        "Leave rejected",
-        remarks ? `Your leave request was rejected: ${remarks}` : "Your leave request was rejected"
+        "Student leave rejected",
+        remarks
+          ? `Your student leave request was rejected: ${remarks}`
+          : "Your student leave request was rejected"
       ).catch(() => {});
     }
 

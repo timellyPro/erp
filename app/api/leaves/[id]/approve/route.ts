@@ -110,8 +110,10 @@ export async function PATCH(
     createNotification(
       updatedLeave.teacherId,
       "LEAVE",
-      "Leave approved",
-      type === "CONDITIONAL" && remarks ? `Your leave was conditionally approved: ${remarks}` : "Your leave request has been approved"
+      "Teacher leave approved",
+      type === "CONDITIONAL" && remarks
+        ? `Your teacher leave was conditionally approved: ${remarks}`
+        : "Your teacher leave request has been approved"
     ).catch(() => {});
 
     // 5️⃣ Success

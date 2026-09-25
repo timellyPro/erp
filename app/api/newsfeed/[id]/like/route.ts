@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { invalidateParentPortalCaches } from "@/lib/invalidateParentPortalCaches";
 
 export async function POST(
   _req: Request,
@@ -63,6 +64,19 @@ export async function POST(
         likes: updatedFeed.likes ?? 0,
       };
     });
+
+    if (session.user.studentId) {
+      const st = await prisma.student.findUnique({
+        where: { id: session.user.studentId },
+        select: { schoolId: true },
+      });
+      if (st?.schoolId) {
+        invalidateParentPortalCaches({
+          schoolId: st.schoolId,
+          studentId: session.user.studentId,
+        });
+      }
+    }
 
     return NextResponse.json(result, { status: 200 });
   } catch (e: unknown) {

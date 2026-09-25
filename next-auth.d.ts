@@ -34,6 +34,8 @@ declare module "next-auth/jwt" {
     allowedFeatures?: string[];
     schoolIsActive?: boolean;
     image?: string | null;
+    /** Superadmin: session cookie only (no persistent login across browser restarts). */
+    sessionOnly?: boolean;
     /** internal cache timestamp for DB sync (ms since epoch) */
     _dbSyncAt?: number;
   }

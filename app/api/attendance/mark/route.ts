@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { createNotification } from "@/lib/notificationService";
+import { isActiveStudent } from "@/lib/studentStatus";
 
 export async function POST(req: Request) {
   try {
@@ -87,6 +88,10 @@ export async function POST(req: Request) {
 
         if (!student) {
           throw new Error(`Student ${att.studentId} not found in this class`);
+        }
+
+        if (!isActiveStudent(student.status)) {
+          throw new Error(`Student ${att.studentId} is inactive and cannot be marked for attendance`);
         }
 
         // Upsert attendance

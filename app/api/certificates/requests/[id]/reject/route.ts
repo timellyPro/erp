@@ -37,7 +37,7 @@ export async function POST(
         id: id,
         schoolId: schoolId,
       },
-      include: { student: true },
+      include: { student: { select: { userId: true } } },
     });
 
     if (!certificateRequest) {

@@ -14,6 +14,8 @@ export interface TransactionItem {
   hyperpgRefunded?: boolean | null;
   hyperpgAmountRefunded?: number | null;
   createdAt: string;
+  collectedByName?: string | null;
+  collectedByUserId?: string | null;
   student: {
     id: string;
     admissionNumber?: string;

@@ -1,0 +1,26 @@
+# Hits the fees-backup cron every 15 minutes (backup for Vercel Hobby / non-Vercel hosts).
+# Required repo secrets:
+#   APP_URL      = https://your-production-domain.com
+#   CRON_SECRET  = same value as CRON_SECRET in the app env
+name: Fees backup cron
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call fees-backup-email cron
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "Missing APP_URL or CRON_SECRET secrets"
+            exit 1
+          fi
+          curl -fsS -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${APP_URL%/}/api/cron/fees-backup-email"

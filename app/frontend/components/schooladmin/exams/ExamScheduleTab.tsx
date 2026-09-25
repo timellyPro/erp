@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, Clock, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { ExamScheduleItem } from "@/hooks/useExamTerms";
@@ -36,6 +36,7 @@ export default function ExamScheduleTab({ termId, schedules, onScheduleChange }:
   const [startTime, setStartTime] = useState("");
   const [durationMin, setDurationMin] = useState(180);
   const [saving, setSaving] = useState(false);
+  const [subjectOptions, setSubjectOptions] = useState<string[]>([]);
 
   const orderedSchedules = useMemo(
     () =>
@@ -79,6 +80,31 @@ export default function ExamScheduleTab({ termId, schedules, onScheduleChange }:
       setSaving(false);
     }
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/exam-subjects", {
+          cache: "no-store",
+          credentials: "include",
+        });
+        const data = await res.json();
+        if (cancelled || !res.ok) return;
+        const list = Array.isArray(data.subjects)
+          ? data.subjects
+              .map((name: string) => name?.trim())
+              .filter((name: string) => Boolean(name))
+          : [];
+        setSubjectOptions(list);
+      } catch {
+        /* noop */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="space-y-5 bg-transparent">
@@ -180,10 +206,16 @@ export default function ExamScheduleTab({ termId, schedules, onScheduleChange }:
                   value={subject}
                   onChange={(e) => setSubject(e.target.value)}
                   placeholder="e.g. Mathematics"
+                  list="schooladmin-exam-subject-options"
                   required
                   className="w-full rounded-2xl border border-white/15 px-4 py-3.5 text-base"
                   style={{ background: EXAM_INPUT_BG, color: EXAM_TEXT_MAIN }}
                 />
+                <datalist id="schooladmin-exam-subject-options">
+                  {subjectOptions.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

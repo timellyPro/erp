@@ -4,6 +4,9 @@ import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { purgeExpiredNewsFeeds } from "@/lib/newsfeedRetention";
 
+const NEWSFEED_PURGE_INTERVAL_MS = 5 * 60 * 1000;
+let lastPurgeStartedAt = 0;
+
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
   if (!schoolId) {
@@ -105,8 +108,6 @@ export async function GET() {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    await purgeExpiredNewsFeeds();
-
     const schoolId = await getSchoolId(session);
 
     if (!schoolId) {
@@ -114,6 +115,13 @@ export async function GET() {
     }
 
     const userId = session.user.id;
+    const now = Date.now();
+    if (now - lastPurgeStartedAt > NEWSFEED_PURGE_INTERVAL_MS) {
+      lastPurgeStartedAt = now;
+      void purgeExpiredNewsFeeds().catch((error) => {
+        console.warn("News feed retention cleanup failed:", error);
+      });
+    }
 
     try {
       const feeds = await prisma.newsFeed.findMany({

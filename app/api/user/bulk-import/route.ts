@@ -100,8 +100,9 @@ export async function POST(req: NextRequest) {
         }
 
         // Check if email already exists
+        const bulkSchoolId = session.user.schoolId as string;
         const existingUser = await prisma.user.findUnique({
-          where: { email },
+          where: { schoolId_email: { schoolId: bulkSchoolId, email } },
         });
 
         if (existingUser) {

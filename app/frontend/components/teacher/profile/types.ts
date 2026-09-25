@@ -12,7 +12,8 @@ export interface TeacherProfileData {
   email: string;
   phone: string;
   address: string;
-  avatarUrl: string;
+  /** Real photo URL from API; null = show initials (no dummy image). */
+  avatarUrl: string | null;
 }
 
 export interface ClassHandlingItem {

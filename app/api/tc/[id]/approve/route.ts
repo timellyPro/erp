@@ -46,7 +46,21 @@ export async function POST(
         schoolId: schoolId,
       },
       include: {
-        student: true,
+        student: {
+          select: {
+            id: true,
+            userId: true,
+            schoolId: true,
+            classId: true,
+            fatherName: true,
+            aadhaarNo: true,
+            phoneNo: true,
+            rollNo: true,
+            dob: true,
+            address: true,
+            createdAt: true,
+          },
+        },
       },
     });
 

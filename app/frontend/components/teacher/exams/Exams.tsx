@@ -1,13 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import PageHeader from "../../common/PageHeader";
-import { Plus, Calendar as CalendarIcon, Search, BookOpen } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 import ExamCard from "./examComponents/ExamCard";
 import ScheduleExamView from "./examComponents/ScheduleExamView";
 import ExamDetailsView from "./examComponents/ExamDetailsView";
-import Spinner from "../../common/Spinner";
+import TimellyLoader from "../../common/TimellyLoader";
 import DeleteConfirmation from "../../common/DeleteConfirmation";
+import {
+  invalidateTeacherExamsList,
+  loadTeacherExamsList,
+  peekTeacherExamsList,
+  setTeacherExamsListCache,
+} from "@/lib/loadTeacherFastTabs";
 
 type ViewState =
     | { mode: "list" }
@@ -16,38 +22,45 @@ type ViewState =
     | { mode: "view"; examId: string };
 
 export default function TeacherExamsTab() {
+    const initial = peekTeacherExamsList();
     const [view, setView] = useState<ViewState>({ mode: "list" });
-    const [exams, setExams] = useState<any[]>([]);
+    const [exams, setExams] = useState<any[]>(() => (Array.isArray(initial) ? initial : []));
     const [searchQuery, setSearchQuery] = useState("");
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(() => !initial);
     const [examToDelete, setExamToDelete] = useState<any | null>(null);
 
-    useEffect(() => {
-        loadExams();
-    }, []);
-
-    async function loadExams() {
-        setLoading(true);
-        try {
-            const res = await fetch("/api/exams/terms", { cache: "no-store", credentials: "include" });
-            const data = await res.json();
-            if (!res.ok) {
-                setExams([]);
+    const loadExams = useCallback(async (revalidate = false) => {
+        if (!revalidate) {
+            const cached = peekTeacherExamsList();
+            if (cached) {
+                setExams(Array.isArray(cached) ? cached : []);
+                setLoading(false);
+                void loadExams(true);
                 return;
             }
-            // Teacher API returns data.exams (flattened list of schedules from DB)
-            if (data.exams && Array.isArray(data.exams)) {
-                setExams(data.exams);
-            } else {
-                setExams([]);
-            }
+        }
+
+        setLoading((prev) => (exams.length === 0 ? true : prev));
+        try {
+            const list = await loadTeacherExamsList({ revalidate: true });
+            setExams(Array.isArray(list) ? list : []);
         } catch (error) {
             console.error("Failed to load exams:", error);
-            setExams([]);
+            if (exams.length === 0) setExams([]);
         } finally {
             setLoading(false);
         }
-    }
+    }, [exams.length]);
+
+    useEffect(() => {
+        void loadExams(false);
+    }, [loadExams]);
+
+    const handleSaveSuccess = () => {
+        setView({ mode: "list" });
+        invalidateTeacherExamsList();
+        void loadExams(true);
+    };
 
     // Navigation Render Logic
     if (view.mode === "create") {
@@ -55,10 +68,7 @@ export default function TeacherExamsTab() {
             <ScheduleExamView
                 mode="create"
                 onCancel={() => setView({ mode: "list" })}
-                onSave={() => {
-                    loadExams();
-                    setView({ mode: "list" });
-                }}
+                onSave={handleSaveSuccess}
             />
         );
     }
@@ -69,10 +79,7 @@ export default function TeacherExamsTab() {
                 mode="edit"
                 examId={view.examId}
                 onCancel={() => setView({ mode: "list" })}
-                onSave={() => {
-                    loadExams();
-                    setView({ mode: "list" });
-                }}
+                onSave={handleSaveSuccess}
             />
         );
     }
@@ -136,11 +143,8 @@ export default function TeacherExamsTab() {
             </div>  
 
             {/* EXAM CARDS GRID */}
-            {loading ? (
-                <div className="flex flex-col items-center justify-center py-20">
-                    <Spinner/>
-                    
-                </div>
+            {loading && exams.length === 0 ? (
+                <TimellyLoader title="Loading exams" steps={["Schedules", "Syllabus", "Classes"]} />
             ) : (
                 <>
                     {filtered.length === 0 ? (
@@ -173,16 +177,27 @@ export default function TeacherExamsTab() {
                 onCancel={() => setExamToDelete(null)}
                 onConfirm={async () => {
                     if (!examToDelete) return;
-                    const res = await fetch(`/api/exams/schedules/${examToDelete.id}`, {
-                        method: "DELETE",
-                        credentials: "include",
-                    });
-                    if (!res.ok) {
-                        const data = await res.json().catch(() => ({}));
-                        throw new Error(data.message || "Failed to delete exam");
-                    }
+                    const prev = exams;
+                    const next = exams.filter((e) => e.id !== examToDelete.id);
+                    setExams(next);
+                    setTeacherExamsListCache(next);
                     setExamToDelete(null);
-                    await loadExams();
+                    try {
+                        const res = await fetch(`/api/exams/schedules/${examToDelete.id}`, {
+                            method: "DELETE",
+                            credentials: "include",
+                        });
+                        if (!res.ok) {
+                            const data = await res.json().catch(() => ({}));
+                            setExams(prev);
+                            setTeacherExamsListCache(prev);
+                            throw new Error(data.message || "Failed to delete exam");
+                        }
+                        invalidateTeacherExamsList();
+                        void loadExams(true);
+                    } catch (err) {
+                        throw err;
+                    }
                 }}
             />
         </div>

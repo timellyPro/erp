@@ -28,8 +28,8 @@ export async function PATCH(
       createNotification(
         leave.student.userId,
         "LEAVE",
-        "Leave approved",
-        "Your leave request has been approved"
+        "Student leave approved",
+        "Your student leave request has been approved"
       ).catch(() => {});
     }
 

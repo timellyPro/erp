@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { invalidateParentPortalCaches } from "@/lib/invalidateParentPortalCaches";
 
 export async function POST(req: Request) {
   try {
@@ -34,11 +35,12 @@ export async function POST(req: Request) {
       );
     }
 
-    // Verify homework exists and student is in the class
     const homework = await prisma.homework.findUnique({
       where: { id: homeworkId },
-      include: {
-        class: true,
+      select: {
+        id: true,
+        classId: true,
+        class: { select: { schoolId: true } },
       },
     });
 
@@ -79,9 +81,9 @@ export async function POST(req: Request) {
       );
     }
 
+    let submission;
     if (existingSubmission) {
-      // Update existing submission
-      const updated = await prisma.homeworkSubmission.update({
+      submission = await prisma.homeworkSubmission.update({
         where: { id: existingSubmission.id },
         data: {
           content: content || null,
@@ -89,26 +91,31 @@ export async function POST(req: Request) {
           submittedAt: new Date(),
         },
       });
-
-      return NextResponse.json(
-        { message: "Homework submission updated successfully", submission: updated },
-        { status: 200 }
-      );
+    } else {
+      submission = await prisma.homeworkSubmission.create({
+        data: {
+          homeworkId,
+          studentId: session.user.studentId,
+          content: content || null,
+          fileUrl: fileUrl || null,
+        },
+      });
     }
 
-    // Create new submission
-    const submission = await prisma.homeworkSubmission.create({
-      data: {
-        homeworkId,
-        studentId: session.user.studentId,
-        content: content || null,
-        fileUrl: fileUrl || null,
-      },
-    });
+    const schoolId = student.schoolId ?? homework.class?.schoolId;
+    if (schoolId) {
+      invalidateParentPortalCaches({ schoolId, studentId: session.user.studentId });
+    }
 
     return NextResponse.json(
-      { message: "Homework submitted successfully", submission },
-      { status: 201 }
+      {
+        message: existingSubmission
+          ? "Homework submission updated successfully"
+          : "Homework submitted successfully",
+        submission,
+        homeworkId,
+      },
+      { status: existingSubmission ? 200 : 201 }
     );
   } catch (error: any) {
     console.error("Submit homework error:", error);

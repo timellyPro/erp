@@ -1,7 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { X, Loader2 } from "lucide-react";
+
+/** How often to refetch the full list while the panel is open */
+const PANEL_POLL_MS = 5000;
+
+function isAbortError(e: unknown): boolean {
+  if (e instanceof DOMException && e.name === "AbortError") return true;
+  if (e instanceof Error && e.name === "AbortError") return true;
+  return false;
+}
 
 interface Notification {
   id: string;
@@ -14,37 +23,105 @@ interface Notification {
 
 interface NotificationPanelProps {
   onClose: () => void;
+  /** Student/parent portal: leave items are always student leave — label clearly */
+  parentPortal?: boolean;
+  /** Keeps header bell count in sync while this panel auto-refreshes */
+  onSnapshot?: (payload: { unreadCount: number }) => void;
 }
 
-export default function NotificationPanel({ onClose }: NotificationPanelProps) {
+const TYPE_LABELS: Record<string, string> = {
+  LEAVE: "Leave",
+  FEES: "Fees",
+  CERTIFICATES: "Certificates",
+  ATTENDANCE: "Attendance",
+  WORKSHOPS: "Workshop",
+  NEWS: "News Feed",
+  CIRCULAR: "Circular",
+  MARKS: "Marks",
+  HOMEWORK: "Homework",
+};
+
+function getLeaveScope(title: string, message: string, parentPortal?: boolean) {
+  const text = `${title} ${message}`.toLowerCase();
+  if (text.includes("teacher leave")) return "Teacher Leave";
+  if (text.includes("student leave")) return "Student Leave";
+  if (parentPortal) return "Student Leave";
+  return "Leave";
+}
+
+function getNotificationCategory(
+  type: string,
+  title: string,
+  message: string,
+  parentPortal?: boolean
+) {
+  const normalizedType = (type || "").toUpperCase();
+  if (normalizedType === "LEAVE") return getLeaveScope(title, message, parentPortal);
+  return TYPE_LABELS[normalizedType] || normalizedType || "General";
+}
+
+export default function NotificationPanel({ onClose, parentPortal, onSnapshot }: NotificationPanelProps) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const fetchAbortRef = useRef<AbortController | null>(null);
 
-  const loadNotifications = async () => {
-    try {
-      setLoading(true);
-      const res = await fetch("/api/notifications?take=50", { credentials: "include" });
-      const data = await res.json();
-      if (res.ok) {
-        setNotifications(data.notifications || []);
-        setUnreadCount(data.unreadCount || 0);
+  const loadNotifications = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      const silent = opts?.silent ?? false;
+      fetchAbortRef.current?.abort();
+      const controller = new AbortController();
+      fetchAbortRef.current = controller;
+      if (!silent) setLoading(true);
+      try {
+        const res = await fetch("/api/notifications?take=100", {
+          credentials: "include",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const data = await res.json();
+        if (res.ok) {
+          const list = data.notifications || [];
+          const unread = typeof data.unreadCount === "number" ? data.unreadCount : 0;
+          setNotifications(list);
+          setUnreadCount(unread);
+          onSnapshot?.({ unreadCount: unread });
+        }
+      } catch (error) {
+        if (isAbortError(error)) return;
+        console.error("Failed to load notifications:", error);
+      } finally {
+        if (!silent) setLoading(false);
       }
-    } catch (error) {
-      console.error("Failed to load notifications:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    },
+    [onSnapshot]
+  );
 
   useEffect(() => {
-    loadNotifications();
-  }, []);
+    void loadNotifications({ silent: false });
+    const interval = setInterval(() => {
+      void loadNotifications({ silent: true });
+    }, PANEL_POLL_MS);
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        void loadNotifications({ silent: true });
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+      fetchAbortRef.current?.abort();
+      fetchAbortRef.current = null;
+    };
+  }, [loadNotifications]);
 
   const markAllRead = async () => {
     try {
       await fetch("/api/notifications/mark-all-read", { method: "PATCH", credentials: "include" });
-      await loadNotifications();
+      await loadNotifications({ silent: true });
     } catch (error) {
       console.error("Failed to mark all as read:", error);
     }
@@ -53,7 +130,7 @@ export default function NotificationPanel({ onClose }: NotificationPanelProps) {
   const markOneRead = async (id: string) => {
     try {
       await fetch(`/api/notifications/${id}/read`, { method: "PATCH", credentials: "include" });
-      await loadNotifications();
+      await loadNotifications({ silent: true });
     } catch (error) {
       console.error("Failed to mark as read:", error);
     }
@@ -121,6 +198,7 @@ export default function NotificationPanel({ onClose }: NotificationPanelProps) {
                 key={n.id}
                 title={n.title}
                 description={n.message}
+                category={getNotificationCategory(n.type, n.title, n.message, parentPortal)}
                 time={formatTime(n.createdAt)}
                 priority={!n.isRead}
                 isRead={n.isRead}
@@ -151,6 +229,7 @@ export default function NotificationPanel({ onClose }: NotificationPanelProps) {
 function NotificationItem({
   title,
   description,
+  category,
   time,
   priority,
   isRead,
@@ -158,6 +237,7 @@ function NotificationItem({
 }: {
   title: string;
   description: string;
+  category: string;
   time: string;
   priority?: boolean;
   isRead?: boolean;
@@ -180,6 +260,8 @@ function NotificationItem({
           </span>
         )}
       </div>
+
+      <p className="text-[11px] text-blue-300 mt-1">{category}</p>
 
       <p className="text-sm text-gray-300 mt-1 line-clamp-2">
         {description}

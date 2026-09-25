@@ -2,10 +2,14 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { assertTeacherCanEnterMarks } from "@/lib/teacherMarksScope";
+import { parseMarkComponents, sumComponents } from "@/lib/markComponents";
+import { loadConfiguredMarkLimits, markLimitError } from "@/lib/examMarkLimits";
+import { randomUUID } from "crypto";
 
 function calculateGrade(marks: number, totalMarks: number): string {
   const percentage = (marks / totalMarks) * 100;
-  
+
   if (percentage >= 90) return "A+";
   if (percentage >= 80) return "A";
   if (percentage >= 70) return "B+";
@@ -28,8 +32,23 @@ export async function PUT(
 
     const { id } = await params;
     const markId = id;
-    const { subject, marks, totalMarks, suggestions, examType } =
-      await req.json();
+    const body = await req.json();
+    const {
+      subject,
+      suggestions,
+      examType,
+      grade: gradeOverride,
+    } = body;
+
+    let components;
+    try {
+      components = parseMarkComponents(body.components);
+    } catch (err) {
+      return NextResponse.json(
+        { message: err instanceof Error ? err.message : "Invalid components" },
+        { status: 400 }
+      );
+    }
 
     const existingMark = await prisma.mark.findUnique({
       where: { id: markId },
@@ -46,12 +65,22 @@ export async function PUT(
       );
     }
 
-    // Verify teacher owns this mark
     if (existingMark.teacherId !== session.user.id) {
       return NextResponse.json(
         { message: "You can only update your own marks" },
         { status: 403 }
       );
+    }
+
+    let marks = body.marks !== undefined ? Number(body.marks) : undefined;
+    let totalMarks =
+      body.totalMarks !== undefined ? Number(body.totalMarks) : undefined;
+
+    const hasComponents = components !== null && components.length > 0;
+    if (hasComponents && components) {
+      const summed = sumComponents(components);
+      marks = summed.marks;
+      totalMarks = summed.totalMarks;
     }
 
     if (marks !== undefined && totalMarks !== undefined) {
@@ -63,8 +92,22 @@ export async function PUT(
       }
     }
 
-    const updateData: any = {};
-    if (subject !== undefined) updateData.subject = subject;
+    const nextSubject =
+      subject !== undefined && typeof subject === "string"
+        ? subject.trim()
+        : existingMark.subject;
+    const scope = await assertTeacherCanEnterMarks({
+      role: session.user.role,
+      userId: session.user.id,
+      classId: existingMark.classId,
+      subject: nextSubject,
+    });
+    if (!scope.ok) {
+      return NextResponse.json({ message: scope.message }, { status: scope.status });
+    }
+
+    const updateData: Record<string, unknown> = {};
+    if (subject !== undefined) updateData.subject = nextSubject;
     if (marks !== undefined) updateData.marks = marks;
     if (totalMarks !== undefined) updateData.totalMarks = totalMarks;
     if (suggestions !== undefined) updateData.suggestions = suggestions;
@@ -75,30 +118,70 @@ export async function PUT(
           : null;
     }
 
-    // Recalculate grade if marks changed
-    if (marks !== undefined || totalMarks !== undefined) {
+    const finalExamType =
+      updateData.examType !== undefined
+        ? updateData.examType
+        : existingMark.examType;
+    const finalTotal =
+      totalMarks !== undefined ? totalMarks : existingMark.totalMarks;
+
+    if (finalExamType && existingMark.class?.schoolId) {
+      const limits = await loadConfiguredMarkLimits({
+        schoolId: existingMark.class.schoolId,
+        examType: String(finalExamType),
+        subject: nextSubject,
+      });
+      const limitMessage = markLimitError({
+        limits,
+        totalMarks: Number(finalTotal),
+        hasComponents,
+        examType: String(finalExamType),
+        subject: nextSubject,
+      });
+      if (limitMessage) {
+        return NextResponse.json({ message: limitMessage }, { status: 400 });
+      }
+    }
+
+    if (gradeOverride === "AB") {
+      updateData.grade = "AB";
+    } else if (marks !== undefined || totalMarks !== undefined) {
       const finalMarks = marks !== undefined ? marks : existingMark.marks;
-      const finalTotal = totalMarks !== undefined ? totalMarks : existingMark.totalMarks;
       updateData.grade = calculateGrade(finalMarks, finalTotal);
     }
 
+    // Nested write — no interactive transaction (avoids 5s remote-DB timeout)
     const updatedMark = await prisma.mark.update({
       where: { id: markId },
-      data: updateData,
+      data: {
+        ...updateData,
+        ...(components !== null
+          ? {
+              components: {
+                deleteMany: {},
+                ...(components.length > 0
+                  ? {
+                      create: components.map((c) => ({
+                        id: randomUUID(),
+                        name: c.name,
+                        marks: c.marks,
+                        totalMarks: c.totalMarks,
+                      })),
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+      },
       include: {
         student: {
           include: {
-            user: {
-              select: { id: true, name: true, email: true },
-            },
+            user: { select: { id: true, name: true, email: true } },
           },
         },
-        class: {
-          select: { id: true, name: true, section: true },
-        },
-        teacher: {
-          select: { id: true, name: true, email: true },
-        },
+        class: { select: { id: true, name: true, section: true } },
+        teacher: { select: { id: true, name: true, email: true } },
+        components: { orderBy: { name: "asc" } },
       },
     });
 
@@ -106,17 +189,20 @@ export async function PUT(
       { message: "Marks updated successfully", mark: updatedMark },
       { status: 200 }
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Update marks error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      {
+        message:
+          error instanceof Error ? error.message : "Internal server error",
+      },
       { status: 500 }
     );
   }
 }
 
 export async function DELETE(
-  req: Request,
+  _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -140,7 +226,6 @@ export async function DELETE(
       );
     }
 
-    // Verify teacher owns this mark
     if (existingMark.teacherId !== session.user.id) {
       return NextResponse.json(
         { message: "You can only delete your own marks" },
@@ -156,10 +241,13 @@ export async function DELETE(
       { message: "Mark deleted successfully" },
       { status: 200 }
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Delete marks error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      {
+        message:
+          error instanceof Error ? error.message : "Internal server error",
+      },
       { status: 500 }
     );
   }

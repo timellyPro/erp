@@ -143,7 +143,7 @@ export function validateUserForm(
 
     const joiningDate = (formData.joiningDate || "").trim();
     if (joiningDate && !isValidJoiningDate(joiningDate)) {
-      errors.joiningDate = "Use dd-mm-yyyy with a valid calendar date, or a valid ISO date";
+      errors.joiningDate = "Use a valid date (calendar pick, yyyy-mm-dd, or dd-mm-yyyy)";
     }
 
     const mobileDigits = (formData.mobile || "").replace(/\D/g, "");

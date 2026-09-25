@@ -65,8 +65,6 @@ export async function PUT(req: Request) {
       admissionPrefix?: string;
       rollNoPrefix?: string;
       emailDomain?: string | null;
-      juspayMerchantId?: string | null;
-      juspayApiKey?: string | null;
       hyperpgMerchantId?: string | null;
       hyperpgApiKey?: string | null;
     } = {};
@@ -89,6 +87,7 @@ export async function PUT(req: Request) {
       create: createData,
       update: data,
     });
+
     return NextResponse.json({ settings }, { status: 200 });
   } catch (e: unknown) {
     console.error("School settings PUT:", e);

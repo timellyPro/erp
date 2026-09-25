@@ -1,7 +1,6 @@
 "use client";
-import { useRouter } from "next/navigation";
 import { useCallback } from "react";
-import Spinner from "../common/Spinner";
+import TimellyLoader from "../common/TimellyLoader";
 import { useEffect, useMemo, useState } from "react";
 import {
   Clock,
@@ -12,36 +11,22 @@ import {
   XCircleIcon
 } from "lucide-react";
 import PageHeader from "../common/PageHeader";
+import {
+  loadTeacherLeavesPage,
+  peekTeacherLeavesPage,
+  setTeacherLeavesPageCache,
+  type LeaveStatus,
+  type SchoolAdminLeave,
+} from "@/lib/loadSchoolAdminFastTabs";
 
 /* ---------------- TYPES ---------------- */
 
-type Status =
-  | "PENDING"
-  | "APPROVED"
-  | "REJECTED"
-  | "CONDITIONALLY_APPROVED";
-
-interface Leave {
-  id: string;
-  teacher: {
-    id: string;
-    name: string;
-    email: string;
-  };
-  leaveType: string;
-  fromDate: string;
-  toDate: string;
-  status: Status;
-  reason?: string | null;
-  remarks?: string | null;
-  approvedAt?: string | null;
-  updatedAt?: string | null;
-}
+type Status = LeaveStatus;
+type Leave = SchoolAdminLeave;
 
 /* ---------------- MAIN ---------------- */
 
 export default function SchoolTeacherLeavesTab() {
-  const router = useRouter();
   const [pendingLeaves, setPendingLeaves] = useState<Leave[]>([]);
   const [allLeaves, setAllLeaves] = useState<Leave[]>([]);
   const [activeTab, setActiveTab] = useState<Status>("PENDING");
@@ -107,45 +92,66 @@ export default function SchoolTeacherLeavesTab() {
 
 
 
-  const loadPendingLeaves = useCallback(async () => {
-    try {
-      const res = await fetch("/api/leaves/pending");
-      const data = await res.json();
-
-      if (res.ok && Array.isArray(data)) {
-        setPendingLeaves(data);
-      } else {
-        setPendingLeaves([]);
-      }
-    } catch {
-      setPendingLeaves([]);
-    }
+  const applyLeavesPayload = useCallback((payload: { pendingLeaves: Leave[]; allLeaves: Leave[] }) => {
+    setPendingLeaves(payload.pendingLeaves);
+    setAllLeaves(payload.allLeaves);
   }, []);
 
-  const loadAllLeaves = useCallback(async () => {
-    try {
-      const res = await fetch("/api/leaves/all");
-      const data = await res.json();
+  const loadLeaves = useCallback(async (revalidate = false) => {
+    if (!revalidate) {
+      const cached = peekTeacherLeavesPage();
+      if (cached) {
+        applyLeavesPayload(cached);
+        setLoading(false);
+        void loadLeaves(true);
+        return;
+      }
+    }
 
-      if (res.ok && Array.isArray(data)) {
-        setAllLeaves(data);
-      } else {
+    setLoading(pendingLeaves.length === 0 && allLeaves.length === 0);
+    try {
+      const payload = await loadTeacherLeavesPage({ revalidate });
+      applyLeavesPayload(payload);
+    } catch {
+      if (pendingLeaves.length === 0 && allLeaves.length === 0) {
+        setPendingLeaves([]);
         setAllLeaves([]);
       }
-    } catch {
-      setAllLeaves([]);
+    } finally {
+      setLoading(false);
     }
-  }, []);
-
-
+  }, [allLeaves.length, applyLeavesPayload, pendingLeaves.length]);
 
   useEffect(() => {
-    setLoading(true);
+    void loadLeaves();
+  }, [loadLeaves]);
 
-    Promise.all([loadPendingLeaves(), loadAllLeaves()])
-      .finally(() => setLoading(false));
+  const applyLeaveStatus = useCallback(
+    (id: string, status: Status, remarks?: string) => {
+      const source =
+        pendingLeaves.find((leave) => leave.id === id) ||
+        allLeaves.find((leave) => leave.id === id);
+      if (!source) return;
 
-  }, [loadPendingLeaves, loadAllLeaves]);
+      const stamp = new Date().toISOString();
+      const patched: Leave = {
+        ...source,
+        status,
+        remarks: remarks ?? source.remarks,
+        approvedAt: status === "REJECTED" ? source.approvedAt : stamp,
+        updatedAt: stamp,
+      };
+      const nextPending = pendingLeaves.filter((leave) => leave.id !== id);
+      const nextAll = allLeaves.some((leave) => leave.id === id)
+        ? allLeaves.map((leave) => (leave.id === id ? patched : leave))
+        : [patched, ...allLeaves];
+
+      setPendingLeaves(nextPending);
+      setAllLeaves(nextAll);
+      setTeacherLeavesPageCache({ pendingLeaves: nextPending, allLeaves: nextAll });
+    },
+    [allLeaves, pendingLeaves]
+  );
 
   /* ---------------- ACTIONS ---------------- */
 
@@ -160,14 +166,10 @@ export default function SchoolTeacherLeavesTab() {
       });
 
       if (res.ok) {
-        await Promise.all([loadPendingLeaves(), loadAllLeaves()]);
-        try {
-          router.refresh();
-        } catch {
-          /* noop */
-        }
+        applyLeaveStatus(id, "APPROVED");
+        void loadLeaves(true);
       } else {
-        await Promise.all([loadPendingLeaves(), loadAllLeaves()]);
+        void loadLeaves(true);
       }
     } finally {
       setActionId(null);
@@ -190,14 +192,10 @@ export default function SchoolTeacherLeavesTab() {
       });
 
       if (res.ok) {
-        await Promise.all([loadPendingLeaves(), loadAllLeaves()]);
-        try {
-          router.refresh();
-        } catch {
-          /* noop */
-        }
+        applyLeaveStatus(selectedLeaveId, "CONDITIONALLY_APPROVED", conditionalMessage);
+        void loadLeaves(true);
       } else {
-        await Promise.all([loadPendingLeaves(), loadAllLeaves()]);
+        void loadLeaves(true);
       }
 
       setShowConditionalModal(false);
@@ -219,14 +217,10 @@ export default function SchoolTeacherLeavesTab() {
       });
 
       if (res.ok) {
-        await Promise.all([loadPendingLeaves(), loadAllLeaves()]);
-        try {
-          router.refresh();
-        } catch {
-          /* noop */
-        }
+        applyLeaveStatus(id, "REJECTED", "Rejected by admin");
+        void loadLeaves(true);
       } else {
-        await Promise.all([loadPendingLeaves(), loadAllLeaves()]);
+        void loadLeaves(true);
       }
     } finally {
       setActionId(null);
@@ -275,11 +269,12 @@ export default function SchoolTeacherLeavesTab() {
     [allLeaves]
   );
 
-  if (loading) {
+  if (loading && pendingLeaves.length === 0 && allLeaves.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Spinner />
-      </div>
+      <TimellyLoader
+        title="Loading teacher leaves"
+        steps={["Pending requests", "Leave history", "Approvals"]}
+      />
     );
   }
 
@@ -287,7 +282,7 @@ export default function SchoolTeacherLeavesTab() {
     <div className="space-y-4 sm:space-y-6 px-3 md:px-0 overflow-x-hidden">
       <PageHeader
         title="Teacher Leave Management"
-        subtitle="Review and manage teacher leave requests"
+        subtitle={loading ? "Refreshing leave requests..." : "Review and manage teacher leave requests"}
       />
 
       {/* ---------------- STATS ---------------- */}
@@ -401,7 +396,7 @@ export default function SchoolTeacherLeavesTab() {
       {showConditionalModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
 
-          <div className="bg-gradient-to-br from-[#0b1222] to-[#101b35] rounded-2xl p-6 w-full sm:w-[420px] space-y-4">
+          <div className="bg-linear-to-br from-[#0b1222] to-[#101b35] rounded-2xl p-6 w-full sm:w-[420px] space-y-4">
             <h3 className="text-white text-lg font-semibold flex items-center gap-2">
               <AlertTriangle className="text-yellow-400" /> Conditional Approval
             </h3>
@@ -595,7 +590,7 @@ function LeaveTable({ leaves, status, actionId, onApprove, onReject, onCondition
               </td>
               <td className="text-center">{days}</td>
 
-              <td className="px-3 py-4 text-gray-300 whitespace-normal break-words text-left">
+              <td className="px-3 py-4 text-gray-300 whitespace-normal wrap-break-word text-left">
                 {l.reason ?? "—"}
 
                 {l.status === "CONDITIONALLY_APPROVED" && l.remarks && (

@@ -16,8 +16,8 @@ export const Certificates = ({ certificates = [] }: Props) => {
   const displayData = certificates.length > 0 ? certificates : [];
 
   return (
-    <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-[2rem] p-4 sm:p-8 shadow-2xl overflow-hidden min-w-0">
-      <h3 className="text-xl font-semibold flex items-center gap-3 mb-6 sm:mb-10 text-white">
+    <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl sm:rounded-[2rem] p-4 sm:p-8 shadow-2xl overflow-hidden min-w-0">
+      <h3 className="text-lg sm:text-xl font-semibold flex items-center gap-2 sm:gap-3 mb-6 sm:mb-10 text-white">
         <Award className="w-6 h-6 text-[#b4f44d] flex-shrink-0" />
         Certificates
       </h3>
@@ -29,14 +29,14 @@ export const Certificates = ({ certificates = [] }: Props) => {
         {displayData.map((c) => (
           <div
             key={c.id}
-            className="bg-white/5 border border-white/10 rounded-2xl p-5 flex justify-between items-center transition-all hover:bg-white/10"
+            className="bg-white/5 border border-white/10 rounded-2xl p-4 sm:p-5 flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-center transition-all hover:bg-white/10 min-w-0"
           >
-            <div className="flex gap-4 items-center">
-              <div className="w-12 h-12 bg-[#b4f44d]/10 rounded-xl flex items-center justify-center text-[#b4f44d]">
+            <div className="flex gap-3 sm:gap-4 items-start sm:items-center min-w-0 flex-1">
+              <div className="w-11 h-11 sm:w-12 sm:h-12 bg-[#b4f44d]/10 rounded-xl flex items-center justify-center text-[#b4f44d] flex-shrink-0">
                 <Award size={24} />
               </div>
-              <div>
-                <p className="text-base font-bold text-white leading-tight">{c.title}</p>
+              <div className="min-w-0">
+                <p className="text-sm sm:text-base font-bold text-white leading-tight break-words">{c.title}</p>
                 <p className="text-xs text-gray-400 mt-1">
                   Issued on {new Date(c.issuedDate).toLocaleDateString()}
                 </p>
@@ -47,7 +47,7 @@ export const Certificates = ({ certificates = [] }: Props) => {
               download
               target="_blank"
               rel="noopener noreferrer"
-              className="text-gray-400 hover:text-[#b4f44d] p-2 transition-colors touch-manipulation min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
+              className="text-gray-400 hover:text-[#b4f44d] p-2 transition-colors touch-manipulation min-h-[44px] min-w-[44px] inline-flex items-center justify-center self-end sm:self-center flex-shrink-0"
               aria-label="Download"
             >
               <Download size={20} />

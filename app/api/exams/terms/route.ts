@@ -38,22 +38,6 @@ async function resolveSchoolId(session: {
   return schoolId;
 }
 
-function formatExamDate(d: Date): string {
-  const date = new Date(d);
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function formatDuration(minutes: number): string {
-  if (minutes >= 60) {
-    const h = Math.floor(minutes / 60);
-    return h === 1 ? "1 Hour" : `${h} Hours`;
-  }
-  return `${minutes} Mins`;
-}
-
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -74,9 +58,16 @@ export async function GET(req: Request) {
     const status = searchParams.get("status");
 
     /* ======================================================
-       TEACHER – OLD LOGIC (UNCHANGED)
+       SCHOOL ADMIN / TEACHER – full school terms + classes
+       (Teacher portal uses the same Exams UI as school admin.)
     ====================================================== */
-    if (role === "TEACHER") {
+    if (role === "SCHOOLADMIN" || role === "TEACHER") {
+      const classes = await prisma.class.findMany({
+        where: { schoolId },
+        select: { id: true, name: true, section: true },
+        orderBy: { name: "asc" },
+      });
+
       const terms = await prisma.examTerm.findMany({
         where: {
           schoolId,
@@ -84,44 +75,15 @@ export async function GET(req: Request) {
           ...(status ? { status: status as ExamTermStatus } : {}),
         },
         include: {
-          class: { select: { id: true, name: true, section: true } },
+          class: { include: { teacher: { select: { name: true } } } },
           schedules: { orderBy: { examDate: "asc" } },
           syllabus: { orderBy: { subject: "asc" }, include: { units: { orderBy: { order: "asc" } } } },
+          sections: { orderBy: { order: "asc" } },
         },
         orderBy: { createdAt: "desc" },
       });
 
-      const exams: any[] = [];
-
-      for (const term of terms) {
-        const classInfo = term.class
-          ? { id: term.class.id, name: term.class.name, section: term.class.section ?? "" }
-          : { id: "", name: "", section: "" };
-
-        for (const s of term.schedules) {
-          const tracking = term.syllabus.find((sy: { subject: any; }) => sy.subject === s.subject);
-          const syllabus = tracking
-            ? tracking.units.length > 0
-              ? tracking.units.map((u: { completedPercent: any; }) => ({ completedPercent: u.completedPercent }))
-              : [{ completedPercent: tracking.completedPercent }]
-            : [];
-
-          exams.push({
-            id: s.id,
-            termId: term.id,
-            name: term.name,
-            status: term.status,
-            subject: s.subject,
-            class: classInfo,
-            date: formatExamDate(s.examDate),
-            time: s.startTime,
-            duration: formatDuration(s.durationMin),
-            syllabus,
-          });
-        }
-      }
-
-      return NextResponse.json({ exams }, { status: 200 });
+      return NextResponse.json({ terms, classes }, { status: 200 });
     }
 
     /* ======================================================
@@ -147,38 +109,12 @@ export async function GET(req: Request) {
           class: { include: { teacher: { select: { name: true } } } },
           schedules: { orderBy: { examDate: "asc" } },
           syllabus: { orderBy: { subject: "asc" }, include: { units: { orderBy: { order: "asc" } } } },
+          sections: { orderBy: { order: "asc" } },
         },
         orderBy: { createdAt: "desc" },
       });
 
       return NextResponse.json({ terms }, { status: 200 });
-    }
-
-    /* ======================================================
-       SCHOOL ADMIN – UPDATED
-    ====================================================== */
-    if (role === "SCHOOLADMIN") {
-      const classes = await prisma.class.findMany({
-        where: { schoolId },
-        select: { id: true, name: true, section: true },
-        orderBy: { name: "asc" },
-      });
-
-      const terms = await prisma.examTerm.findMany({
-        where: {
-          schoolId,
-          ...(classIdParam ? { classId: classIdParam } : {}),
-          ...(status ? { status: status as ExamTermStatus } : {}),
-        },
-        include: {
-          class: { include: { teacher: { select: { name: true } } } },
-          schedules: { orderBy: { examDate: "asc" } },
-          syllabus: { orderBy: { subject: "asc" }, include: { units: { orderBy: { order: "asc" } } } },
-        },
-        orderBy: { createdAt: "desc" },
-      });
-
-      return NextResponse.json({ terms, classes }, { status: 200 });
     }
 
   } catch (e: unknown) {

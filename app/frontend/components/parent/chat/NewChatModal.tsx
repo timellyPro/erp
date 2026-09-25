@@ -3,6 +3,7 @@
 import { X } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import SelectInput from "../../common/SelectInput";
+import ParentTimellyLoader from "../ParentTimellyLoader";
 
 type Teacher = {
   id: string;
@@ -105,7 +106,7 @@ export default function NewChatModal({ onClose, onSuccess }: Props) {
               SELECT RECIPIENT
             </label>
             {loadingTeachers ? (
-              <p className="text-white/60 text-sm py-2">Loading teachers…</p>
+              <ParentTimellyLoader preset="chat" compact bare className="py-4" />
             ) : teacherError ? (
               <p className="text-red-400 text-sm py-2">{teacherError}</p>
             ) : (

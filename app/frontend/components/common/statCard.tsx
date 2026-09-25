@@ -37,7 +37,7 @@ export default function StatCard({
       className={`
         relative overflow-hidden
         rounded-2xl
-        p-5
+        p-4 sm:p-5
         transition-all duration-300
         border
         group

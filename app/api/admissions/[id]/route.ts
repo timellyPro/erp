@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { getApplicationGateRow } from "@/lib/admissionsListQuery";
+import { studentApplicationDetailSelect } from "@/lib/studentApplicationSafeSelect";
 import { assertCanManageAdmissions, getSessionSchoolId } from "../_utils";
 
 function optionalString(value: unknown) {
@@ -20,6 +22,25 @@ function requiredString(value: unknown, field: string) {
   return value.trim();
 }
 
+function normalizeResidencyType(value: unknown) {
+  if (typeof value !== "string") return "Day Scholar";
+  const raw = value.trim();
+  if (!raw) return "Day Scholar";
+  const normalized = raw.toLowerCase().replace(/\s+/g, "");
+  if (normalized === "dayscholar" || normalized === "dayscholer") return "Day Scholar";
+  if (
+    normalized === "hostel" ||
+    normalized === "hostler" ||
+    normalized === "hosteler" ||
+    normalized === "hosteller" ||
+    normalized === "hoster"
+  ) {
+    return "Hosteller";
+  }
+  if (normalized === "rte") return "RTE";
+  return raw;
+}
+
 export async function GET(_: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const session = await getServerSession(authOptions);
@@ -32,10 +53,22 @@ export async function GET(_: Request, ctx: { params: Promise<{ id: string }> }) 
     const { id } = await ctx.params;
     const application = await prisma.studentApplication.findFirst({
       where: { id, schoolId },
-      include: { class: { select: { id: true, name: true, section: true } } },
+      select: {
+        ...studentApplicationDetailSelect,
+        class: { select: { id: true, name: true, section: true } },
+      },
     });
     if (!application) return NextResponse.json({ message: "Not found" }, { status: 404 });
-    return NextResponse.json({ application }, { status: 200 });
+    const gate = await getApplicationGateRow(prisma, id, schoolId);
+    return NextResponse.json(
+      {
+        application: {
+          ...application,
+          workflowStatus: gate?.workflowStatus ?? "PENDING",
+        },
+      },
+      { status: 200 }
+    );
   } catch (e: unknown) {
     const err = e as { message?: string; statusCode?: number };
     return NextResponse.json({ message: err?.message ?? "Internal server error" }, { status: err?.statusCode ?? 500 });
@@ -86,9 +119,18 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
       return NextResponse.json({ message: "applicationNo is required" }, { status: 400 });
     }
 
-    const aadharForParent = requiredString(body.aadharNo, "aadharNo").replace(/\D/g, "");
+    const aadharValue = optionalString(body.aadharNo) ?? `TMP-${id.slice(0, 8).toUpperCase()}-${Date.now()}`;
+    const aadharForParent = aadharValue.replace(/\D/g, "");
     const parentAadharDefault =
       aadharForParent.length >= 8 ? `${aadharForParent.slice(0, 8)}0000` : `${aadharForParent.padEnd(8, "0")}0000`;
+
+    const linkedStudent = await prisma.studentApplication.findFirst({
+      where: { id, schoolId },
+      select: { studentId: true },
+    });
+    if (!linkedStudent) {
+      return NextResponse.json({ message: "Not found" }, { status: 404 });
+    }
 
     const updated = await prisma.studentApplication.update({
       where: { id },
@@ -98,21 +140,14 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
         section: classMeta?.section ?? null,
         applicationNo: applicationNoForUpdate,
         fedenaNo: optionalString(body.fedenaNo),
+        penNumber: optionalString(body.penNumber),
+        apaarId: optionalString(body.apaarId),
         admissionNo: optionalString(body.admissionNo),
         gradeSought: body.gradeSought,
         boardingType: body.boardingType,
-        totalFee:
-          typeof body.totalFee === "number"
-            ? body.totalFee
-            : typeof body.totalFee === "string" && body.totalFee.trim()
-            ? Number(body.totalFee)
-            : null,
-        discountPercent:
-          typeof body.discountPercent === "number"
-            ? body.discountPercent
-            : typeof body.discountPercent === "string" && body.discountPercent.trim()
-            ? Number(body.discountPercent)
-            : null,
+        residencyType: normalizeResidencyType(body.residencyType),
+        totalFee: null,
+        discountPercent: null,
         applicationFee:
           typeof body.applicationFee === "number"
             ? body.applicationFee
@@ -130,7 +165,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
         lastName: requiredString(body.lastName, "lastName"),
         gender: body.gender,
         dateOfBirth: dob,
-        aadharNo: requiredString(body.aadharNo, "aadharNo"),
+        aadharNo: aadharValue,
         firstLanguage: optionalString(body.firstLanguage) ?? "English",
         nationality: requiredString(body.nationality, "nationality"),
         languagesAtHome: requiredString(body.languagesAtHome, "languagesAtHome"),
@@ -143,18 +178,24 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
         state: requiredString(body.state, "state"),
         pinCode: requiredString(body.pinCode, "pinCode"),
         parentName: requiredString(body.parentName, "parentName"),
+        motherName: optionalString(body.motherName),
+        motherAadharNo: optionalString(body.motherAadharNo),
+        motherEmail: optionalString(body.motherEmail),
         parentOccupation: requiredString(body.parentOccupation, "parentOccupation"),
         officeAddress: requiredString(body.officeAddress, "officeAddress"),
         parentPhone: requiredString(body.parentPhone, "parentPhone"),
-        parentEmail: requiredString(body.parentEmail, "parentEmail"),
+        parentEmail: optionalString(body.parentEmail) ?? "-",
         parentAadharNo: optionalString(body.parentAadharNo) ?? parentAadharDefault,
         parentWhatsapp: requiredString(body.parentWhatsapp, "parentWhatsapp"),
-        bankAccountNo: requiredString(body.bankAccountNo, "bankAccountNo"),
+        bankAccountNo: optionalString(body.bankAccountNo) ?? "-",
         previousSchoolName: optionalString(body.previousSchoolName) ?? "-",
         previousSchoolAddress: optionalString(body.previousSchoolAddress) ?? "-",
-        emergencyFatherNo: requiredString(body.emergencyFatherNo, "emergencyFatherNo"),
-        emergencyMotherNo: requiredString(body.emergencyMotherNo, "emergencyMotherNo"),
-        emergencyGuardianNo: requiredString(body.emergencyGuardianNo, "emergencyGuardianNo"),
+        emergencyFatherNo: optionalString(body.emergencyFatherNo) ?? "-",
+        emergencyMotherNo:
+          optionalString(body.emergencyMotherNo) ??
+          optionalString((body as Record<string, unknown>).motherPhone) ??
+          "-",
+        emergencyGuardianNo: optionalString(body.emergencyGuardianNo) ?? "-",
       },
       select: { id: true },
     });
@@ -162,6 +203,23 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
     // safety: tenant check (avoid leaking existence across tenants)
     const tenantRow = await prisma.studentApplication.findFirst({ where: { id: updated.id, schoolId }, select: { id: true } });
     if (!tenantRow) return NextResponse.json({ message: "Not found" }, { status: 404 });
+
+    // Student profile reads `Student.motherName` / `Student.fatherName`, not the application row.
+    if (linkedStudent.studentId) {
+      const studentInSchool = await prisma.student.findFirst({
+        where: { id: linkedStudent.studentId, schoolId },
+        select: { id: true },
+      });
+      if (studentInSchool) {
+        await prisma.student.update({
+          where: { id: studentInSchool.id },
+          data: {
+            fatherName: requiredString(body.parentName, "parentName"),
+            motherName: optionalString(body.motherName),
+          },
+        });
+      }
+    }
 
     return NextResponse.json({ message: "Updated", id: updated.id }, { status: 200 });
   } catch (e: unknown) {
@@ -184,8 +242,17 @@ export async function DELETE(_: Request, ctx: { params: Promise<{ id: string }> 
     if (!schoolId) return NextResponse.json({ message: "School not found in session" }, { status: 400 });
 
     const { id } = await ctx.params;
-    const exists = await prisma.studentApplication.findFirst({ where: { id, schoolId }, select: { id: true } });
+    const exists = await prisma.studentApplication.findFirst({
+      where: { id, schoolId },
+      select: { id: true, studentId: true },
+    });
     if (!exists) return NextResponse.json({ message: "Not found" }, { status: 404 });
+    if (exists.studentId) {
+      return NextResponse.json(
+        { message: "Cannot delete an application that has been converted to a student" },
+        { status: 400 }
+      );
+    }
 
     await prisma.studentApplication.delete({ where: { id } });
     return NextResponse.json({ message: "Deleted" }, { status: 200 });

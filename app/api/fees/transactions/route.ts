@@ -2,22 +2,18 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
-
-async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
-  let schoolId = session.user.schoolId;
-  if (!schoolId) {
-    const adminSchool = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = adminSchool?.id ?? null;
-  }
-  return schoolId;
-}
+import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import {
+  getSchoolDashboardServerCached,
+  setSchoolDashboardServerCached,
+} from "@/lib/schoolDashboardServerCache";
+import { loadFeeReportTransactions } from "@/lib/loadDayFeeCollectionTransactions";
+import { buildFeeHeadAmountsByPaymentId, dominantFeeHead, feeHeadLinesFromMap } from "@/lib/paymentFeeHeadLines";
 
 /**
  * GET /api/fees/transactions
  * List successful payments for school admin. Optional: ?studentId=xxx
+ * Fee reports: ?forFeeReport=1&from=YYYY-MM-DD&to=YYYY-MM-DD
  */
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -25,31 +21,69 @@ export async function GET(req: Request) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
   const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
-  if (!isAdmin) {
+  const isTeacher = session.user.role === "TEACHER";
+  if (!isAdmin && !isTeacher) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
 
   try {
-    const schoolId = await getSchoolId(session);
+    const schoolId = await resolveFeesSchoolId(session);
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
 
     const { searchParams } = new URL(req.url);
     const studentId = searchParams.get("studentId")?.trim() || undefined;
-    const limit = Math.min(Number(searchParams.get("limit")) || 100, 200);
+    const rawLimit = Number(searchParams.get("limit")) || 100;
+    const forFeeReport = searchParams.get("forFeeReport") === "1";
+    const reportFrom = searchParams.get("from")?.trim() || "";
+    const reportTo = searchParams.get("to")?.trim() || reportFrom;
+    const collectedByUserId = searchParams.get("collectedByUserId")?.trim() || undefined;
+    const refresh = searchParams.get("refresh") === "1";
+    /** Fee-report exports need a high cap; default list views stay small. */
+    const limit = Math.min(Math.max(rawLimit, 1), forFeeReport ? 25000 : 200);
+
+    if (forFeeReport && reportFrom) {
+      const cacheKey = `fees:report:${schoolId}:${reportFrom}:${reportTo}:${collectedByUserId ?? ""}`;
+      const cached = getSchoolDashboardServerCached<{ transactions: unknown[] }>(cacheKey);
+      if (!refresh && cached) {
+        return NextResponse.json(cached, { status: 200 });
+      }
+
+      const transactions = await loadFeeReportTransactions(
+        schoolId,
+        reportFrom,
+        reportTo || reportFrom,
+        collectedByUserId ? { collectedByUserId } : undefined
+      );
+      const payload = { transactions };
+      setSchoolDashboardServerCached(cacheKey, payload, 60_000);
+      return NextResponse.json(payload, { status: 200 });
+    }
+
+    if (!refresh && !forFeeReport && !studentId && !collectedByUserId) {
+      const memKey = `fees:transactions:${schoolId}:${limit}`;
+      const cached = getSchoolDashboardServerCached<{ transactions: unknown[] }>(memKey);
+      if (cached && Array.isArray(cached.transactions) && cached.transactions.length > 0) {
+        return NextResponse.json(cached, { status: 200 });
+      }
+    }
 
     const where: {
       student: { schoolId: string; id?: string };
-      status: string;
-      eventRegistrationId: null;
+      status: { in: string[] };
+      purpose: string;
+      collectedByUserId?: string;
     } = {
       student: { schoolId },
-      status: "SUCCESS",
-      eventRegistrationId: null,
+      status: { in: ["SUCCESS", "COMPLETED"] },
+      purpose: "FEES",
     };
     if (studentId) {
       where.student.id = studentId;
+    }
+    if (collectedByUserId) {
+      where.collectedByUserId = collectedByUserId;
     }
 
     const payments = await prisma.payment.findMany({
@@ -60,7 +94,7 @@ export async function GET(req: Request) {
             id: true,
             admissionNumber: true,
             user: { select: { name: true, email: true } },
-            class: { select: { name: true, section: true } },
+            class: { select: { id: true, name: true, section: true } },
           },
         },
       },
@@ -69,6 +103,52 @@ export async function GET(req: Request) {
     });
 
     const paymentIds = payments.map((p) => p.id);
+    const paymentAllocations =
+      paymentIds.length > 0
+        ? await prisma.paymentFeeAllocation.findMany({
+            where: {
+              paymentId: { in: paymentIds },
+              allocationType: "PAYMENT",
+            },
+            select: {
+              paymentId: true,
+              headType: true,
+              componentIndex: true,
+              componentName: true,
+              extraFeeId: true,
+              allocatedAmount: true,
+            },
+          })
+        : [];
+    const extraFeeIds = Array.from(
+      new Set(
+        paymentAllocations
+          .filter((a) => a.headType === "EXTRA_FEE" && !!a.extraFeeId)
+          .map((a) => a.extraFeeId as string)
+      )
+    );
+    const extraFees =
+      extraFeeIds.length > 0
+        ? await prisma.extraFee.findMany({
+            where: { id: { in: extraFeeIds } },
+            select: { id: true, name: true },
+          })
+        : [];
+    const extraFeeNameById = new Map(extraFees.map((ef) => [ef.id, ef.name]));
+
+    const allocationLabelAmountByPayment = buildFeeHeadAmountsByPaymentId(
+      paymentAllocations.map((a) => ({ ...a, paymentId: a.paymentId })),
+      extraFeeNameById
+    );
+
+    const dominantFeeTypeByPayment = new Map<string, { name: string; amount: number }>();
+    for (const [paymentId, labelMap] of allocationLabelAmountByPayment.entries()) {
+      const dominant = dominantFeeHead(labelMap);
+      if (dominant) {
+        dominantFeeTypeByPayment.set(paymentId, dominant);
+      }
+    }
+
     let refundSums: { paymentId: string; total: number }[] = [];
     if (paymentIds.length > 0) {
       const placeholders = paymentIds.map((_, i) => `$${i + 1}`).join(", ");
@@ -83,6 +163,8 @@ export async function GET(req: Request) {
     const transactions = payments.map((p) => {
       const refunded = refundByPayment.get(p.id) ?? 0;
       const refundable = Math.max(p.amount - refunded, 0);
+      const perHead = allocationLabelAmountByPayment.get(p.id);
+      const feeAllocations = feeHeadLinesFromMap(perHead);
       return {
         id: p.id,
         amount: p.amount,
@@ -95,6 +177,11 @@ export async function GET(req: Request) {
         hyperpgAmountRefunded: typeof p.hyperpgAmountRefunded === "number" ? p.hyperpgAmountRefunded : null,
         transactionId: p.transactionId,
         createdAt: p.createdAt,
+        collectedByName: p.collectedByName ?? null,
+        collectedByUserId: p.collectedByUserId ?? null,
+        feeTypeName: dominantFeeTypeByPayment.get(p.id)?.name ?? "Default",
+        feeTypeAmount: dominantFeeTypeByPayment.get(p.id)?.amount ?? p.amount,
+        feeAllocations,
         student: p.student,
         refunded,
         refundable,
@@ -102,7 +189,11 @@ export async function GET(req: Request) {
       };
     });
 
-    return NextResponse.json({ transactions }, { status: 200 });
+    const payload = { transactions };
+    if (!studentId && !collectedByUserId && transactions.length > 0) {
+      setSchoolDashboardServerCached(`fees:transactions:${schoolId}:${limit}`, payload, 20_000);
+    }
+    return NextResponse.json(payload, { status: 200 });
   } catch (error: unknown) {
     console.error("Transactions error:", error);
     return NextResponse.json(

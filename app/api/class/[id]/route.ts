@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import { activeStudentWhere } from "@/lib/studentStatus";
+import { purgeSchoolDashboardServerCacheMatching } from "@/lib/schoolDashboardServerCache";
 
 export async function GET(
   req: Request,
@@ -15,9 +18,9 @@ export async function GET(
     }
 
     const { id } = await params;
-    const schoolId = session.user.schoolId;
     const classId = id;
 
+    const schoolId = await resolveFeesSchoolId({ user: session.user });
     if (!schoolId) {
       return NextResponse.json(
         { message: "School not found in session" },
@@ -35,6 +38,7 @@ export async function GET(
           select: { id: true, name: true, email: true },
         },
         students: {
+          where: activeStudentWhere,
           include: {
             user: {
               select: {
@@ -141,6 +145,7 @@ export async function PUT(
         },
       },
     });
+    purgeSchoolDashboardServerCacheMatching(`class:list:lite:${schoolId}`);
 
     return NextResponse.json(
       { message: "Class updated successfully", class: updatedClass },
@@ -211,6 +216,7 @@ export async function DELETE(
     await prisma.class.delete({
       where: { id: classId },
     });
+    purgeSchoolDashboardServerCacheMatching(`class:list:lite:${schoolId}`);
 
     return NextResponse.json(
       { message: "Class deleted successfully" },

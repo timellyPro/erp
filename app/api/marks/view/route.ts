@@ -2,6 +2,25 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import {
+  parentPortalSwrRead,
+  parentPortalSwrWrite,
+  PARENT_LIST_TTL,
+} from "@/lib/parentPortalSwr";
+
+async function resolveSchoolId(session: {
+  user: { id: string; schoolId?: string | null; studentId?: string | null };
+}): Promise<string | null> {
+  let schoolId = session.user.schoolId ?? null;
+  if (!schoolId && session.user.studentId) {
+    const st = await prisma.student.findUnique({
+      where: { id: session.user.studentId },
+      select: { schoolId: true },
+    });
+    schoolId = st?.schoolId ?? null;
+  }
+  return schoolId;
+}
 
 export async function GET(req: Request) {
   try {
@@ -16,8 +35,9 @@ export async function GET(req: Request) {
     const studentId = searchParams.get("studentId");
     const subject = searchParams.get("subject");
     const examType = searchParams.get("examType");
+    const bypassCache = searchParams.get("refresh") === "1";
 
-    const schoolId = session.user.schoolId;
+    const schoolId = await resolveSchoolId(session);
 
     if (!schoolId) {
       return NextResponse.json(
@@ -26,57 +46,117 @@ export async function GET(req: Request) {
       );
     }
 
-    const where: any = {
-      class: {
-        schoolId: schoolId,
-      },
+    const where: Record<string, unknown> = {
+      class: { schoolId },
     };
 
-    // For students: only show their own marks
     if (session.user.studentId) {
       where.studentId = session.user.studentId;
     } else {
-      // For teachers/admins: can filter by student or class
-      if (studentId) {
-        where.studentId = studentId;
-      }
-      if (classId) {
-        where.classId = classId;
+      if (studentId) where.studentId = studentId;
+      if (classId) where.classId = classId;
+    }
+
+    // Case-insensitive so "Mathematics" matches "MATHEMATICS" from teacher subject chips
+    if (subject) {
+      where.subject = { equals: subject.trim(), mode: "insensitive" };
+    }
+    if (examType) {
+      where.examType = { equals: examType.trim(), mode: "insensitive" };
+    }
+
+    if (session.user.studentId && !bypassCache) {
+      const sid = session.user.studentId;
+      const cacheParams = { studentId: sid, subject, examType };
+      const serverKey = `parent:${sid}:marks:${subject ?? "all"}:${examType ?? "all"}`;
+      const hit = await parentPortalSwrRead<{ marks: unknown[] }>({
+        schoolId,
+        namespace: "api",
+        resource: "parent:marks:view",
+        params: cacheParams,
+        serverKey,
+        ttl: PARENT_LIST_TTL,
+      });
+      if (hit.value) {
+        return NextResponse.json(hit.value, {
+          status: 200,
+          headers: { "Cache-Control": "private, no-store" },
+        });
       }
     }
 
-    if (subject) {
-      where.subject = subject;
-    }
-    if (examType) {
-      where.examType = examType.toUpperCase();
-    }
     const marks = await prisma.mark.findMany({
       where,
       include: {
-        student: session.user.studentId ? undefined : {
-          include: {
-            user: {
-              select: { id: true, name: true, email: true },
+        student: session.user.studentId
+          ? undefined
+          : {
+              include: {
+                user: { select: { id: true, name: true, email: true } },
+              },
             },
-          },
-        },
-        class: {
-          select: { id: true, name: true, section: true },
-        },
-        teacher: {
-          select: { id: true, name: true, email: true },
-        },
+        class: { select: { id: true, name: true, section: true } },
+        teacher: { select: { id: true, name: true, email: true } },
+        components: { orderBy: { name: "asc" } },
       },
-      orderBy: {
-        createdAt: "desc",
-      },
+      orderBy: { createdAt: "desc" },
+      take: session.user.studentId ? 500 : undefined,
     });
-    return NextResponse.json({ marks }, { status: 200 });
-  } catch (error: any) {
+
+    // Distinct exam types already saved for this class (+ optional subject) so the UI can show prior entries
+    let examTypesInUse: string[] = [];
+    let latestExamType: string | null = null;
+    if (classId && !session.user.studentId) {
+      const examWhere: Record<string, unknown> = {
+        classId,
+        class: { schoolId },
+        examType: { not: null },
+      };
+      if (subject) {
+        examWhere.subject = { equals: subject.trim(), mode: "insensitive" };
+      }
+      const [distinctExams, latest] = await Promise.all([
+        prisma.mark.findMany({
+          where: examWhere,
+          select: { examType: true },
+          distinct: ["examType"],
+          orderBy: { examType: "asc" },
+        }),
+        prisma.mark.findFirst({
+          where: examWhere,
+          select: { examType: true },
+          orderBy: { createdAt: "desc" },
+        }),
+      ]);
+      examTypesInUse = distinctExams
+        .map((r) => (r.examType || "").trim().toUpperCase())
+        .filter(Boolean);
+      latestExamType = latest?.examType?.trim().toUpperCase() || null;
+    }
+
+    const payload = { marks, examTypesInUse, latestExamType };
+
+    if (session.user.studentId && !bypassCache) {
+      const sid = session.user.studentId;
+      await parentPortalSwrWrite({
+        schoolId,
+        namespace: "api",
+        resource: "parent:marks:view",
+        params: { studentId: sid, subject, examType },
+        serverKey: `parent:${sid}:marks:${subject ?? "all"}:${examType ?? "all"}`,
+        ttl: PARENT_LIST_TTL,
+        value: payload,
+      });
+    }
+
+    return NextResponse.json(payload, {
+      status: 200,
+      headers: { "Cache-Control": "private, no-store" },
+    });
+  } catch (error: unknown) {
     console.error("View marks error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: error instanceof Error ? error.message : "Internal server error" },
       { status: 500 }
     );
   }

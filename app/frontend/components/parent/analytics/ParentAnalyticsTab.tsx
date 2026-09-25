@@ -1,6 +1,15 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { useSession } from "next-auth/react";
+import {
+  loadParentAnalytics,
+  fetchParentHomeworkList,
+  fetchParentEventsList,
+  peekParentAnalytics,
+  peekParentPortalAny,
+  type ParentAnalyticsPayload,
+} from "@/lib/loadParentPortal";
 import {
   CheckCircle2,
   BookOpen,
@@ -15,56 +24,10 @@ import ProfileCard from "./ProfileCard";
 import HomeworkTasks from "./HomeworkTasks";
 import RecentUpdates from "./RecentUpdates";
 import UpcomingWorkshops from "./UpcomingWorkshops";
-import Spinner from "../../common/Spinner";
+import ParentTimellyLoader from "../ParentTimellyLoader";
 import { AVATAR_URL } from "@/app/frontend/constants/images";
 
-interface AnalyticsData {
-  student: {
-    name: string;
-    rollNo: string;
-    class: string;
-    photoUrl?: string | null;
-  };
-  stats: {
-    attendance: {
-      percent: number;
-      present: number;
-      total: number;
-      absent: number;
-      late: number;
-      change: string;
-    };
-    homework: {
-      total: number;
-      submitted: number;
-      completion: number;
-    };
-    grade: {
-      letter: string;
-      score: number;
-      rank: number | null;
-    };
-    fee: {
-      pending: number;
-      total: number;
-      dueDate: string | null;
-    };
-  };
-  performance: {
-    data: Array<{ m: string; v: number; info: string }>;
-    average: number;
-  };
-  attendanceAnalysis: {
-    percent: number;
-    present: number;
-    absent: number;
-    late: number;
-    change: string;
-  };
-  homeworkTasks: Array<{ subject: string; title: string; time: string }>;
-  recentUpdates: Array<{ title: string; date: string }>;
-  workshops: Array<{ title: string; date: string }>;
-}
+type AnalyticsData = ParentAnalyticsPayload;
 
 interface HomeworkApiItem {
   id: string;
@@ -87,28 +50,39 @@ interface EventApiItem {
 }
 
 export default function ParentAnalyticsTab() {
-  const [data, setData] = useState<AnalyticsData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { data: session } = useSession();
+  const studentId = session?.user?.studentId ?? null;
+  const [data, setData] = useState<AnalyticsData | null>(() => peekParentAnalytics(null));
+  const [loading, setLoading] = useState(!peekParentAnalytics(null));
   const [error, setError] = useState<string | null>(null);
   const [homeworkApiData, setHomeworkApiData] = useState<HomeworkApiItem[]>([]);
   const [eventsApiData, setEventsApiData] = useState<EventApiItem[]>([]);
 
   useEffect(() => {
+    if (!studentId) {
+      setLoading(false);
+      return;
+    }
+
+    const peeked = peekParentAnalytics(studentId);
+    if (peeked) {
+      setData(peeked);
+      setLoading(false);
+    }
+
     let active = true;
 
     (async () => {
       try {
-        const res = await fetch("/api/analytics/student", {
-          credentials: "include",
+        const analyticsData = await loadParentAnalytics(studentId, {
+          onLoaded: (payload) => {
+            if (active) {
+              setData(payload);
+              setLoading(false);
+            }
+          },
         });
         if (!active) return;
-
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.message || "Failed to load analytics");
-        }
-
-        const analyticsData = await res.json();
         setData(analyticsData);
         setError(null);
       } catch (e) {
@@ -122,31 +96,25 @@ export default function ParentAnalyticsTab() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [studentId]);
 
   useEffect(() => {
+    if (!studentId) return;
     let active = true;
 
     (async () => {
       try {
-        const [homeworkRes, eventsRes] = await Promise.all([
-          fetch("/api/homework/list", { credentials: "include" }),
-          fetch("/api/events/list", { credentials: "include" }),
-        ]);
-
-        if (!active) return;
-
         const [homeworkJson, eventsJson] = await Promise.all([
-          homeworkRes.json().catch(() => ({})),
-          eventsRes.json().catch(() => ({})),
+          fetchParentHomeworkList(studentId),
+          fetchParentEventsList(studentId),
         ]);
-
-        if (homeworkRes.ok) {
-          setHomeworkApiData(Array.isArray(homeworkJson?.homeworks) ? homeworkJson.homeworks : []);
-        }
-        if (eventsRes.ok) {
-          setEventsApiData(Array.isArray(eventsJson?.events) ? eventsJson.events : []);
-        }
+        if (!active) return;
+        setHomeworkApiData(
+          Array.isArray(homeworkJson?.homeworks) ? (homeworkJson.homeworks as HomeworkApiItem[]) : []
+        );
+        setEventsApiData(
+          Array.isArray(eventsJson?.events) ? (eventsJson.events as EventApiItem[]) : []
+        );
       } catch {
         if (!active) return;
       }
@@ -155,14 +123,12 @@ export default function ParentAnalyticsTab() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [studentId]);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[400px] text-white">
-        <div className="text-center">
-          <Spinner />
-        </div>
+      <div className="flex items-center justify-center min-h-[400px]">
+        <ParentTimellyLoader preset="analytics" className="w-full max-w-2xl" />
       </div>
     );
   }

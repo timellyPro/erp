@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { AlertCircle, CheckCircle, Loader, User, Mail, Briefcase, Lock, Shield, User2, Phone, MapPin, Calendar, BookOpen } from "lucide-react";
@@ -10,6 +10,12 @@ import RoleSelector from "./RoleSelector";
 import { Permission } from "@/app/frontend/enums/permissions";
 import Spinner from "../../common/Spinner";
 import { validateUserForm, type UserFormErrors } from "./userFormValidation";
+import type { IUser } from "@/app/frontend/constants/addUserTable";
+import {
+  fetchUserFormMeta,
+  invalidateAddUserPageCache,
+  peekUserFormMeta,
+} from "@/lib/fetchAddUserPage";
 
 interface UserFormData {
   name: string;
@@ -33,31 +39,169 @@ interface UserFormData {
 
 interface UserFormProps {
   mode?: "create" | "edit";
+  schoolId?: string | null;
+  /** Row from list — instant shell while full user loads */
+  listShellUser?: IUser | null;
   initialData?: UserFormData & { id?: string };
+  onSuccess?: () => void;
 }
 
-const AVAILABLE_FEATURES_FOR_TEACHERS = [
+function toDateInputValue(value: unknown): string {
+  if (!value) return "";
+  const raw = String(value).trim();
+  if (!raw) return "";
+
+  const ddmmyyyy = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (ddmmyyyy) {
+    const [, d, m, y] = ddmmyyyy;
+    return `${y}-${String(parseInt(m, 10)).padStart(2, "0")}-${String(parseInt(d, 10)).padStart(2, "0")}`;
+  }
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
+/** Aliases stored historically → canonical Permission keys used by toggles / sidebar */
+const MARKS_FEATURE_ALIASES = new Set([
+  "MARKS",
+  "marks",
+  "marks-view",
+  "marks-entry",
+]);
+const EXAMS_FEATURE_ALIASES = new Set(["EXAMS", "exams"]);
+
+function normalizeAllowedFeatures(features: string[]): string[] {
+  const out = new Set<string>();
+  for (const raw of features) {
+    const f = String(raw || "").trim();
+    if (!f) continue;
+    if (MARKS_FEATURE_ALIASES.has(f) || MARKS_FEATURE_ALIASES.has(f.toLowerCase())) {
+      out.add(Permission.MARKS);
+      continue;
+    }
+    if (EXAMS_FEATURE_ALIASES.has(f) || EXAMS_FEATURE_ALIASES.has(f.toLowerCase())) {
+      out.add(Permission.EXAMS);
+      continue;
+    }
+    out.add(f);
+  }
+  return [...out];
+}
+
+const AVAILABLE_FEATURES_FOR_TEACHERS: Array<{
+  key: Permission;
+  label: string;
+  description?: string;
+}> = [
   { key: Permission.DASHBOARD, label: "Dashboard" },
+  // School Admin modules — same as ?tab=exams / ?tab=marks
+  {
+    key: Permission.EXAMS,
+    label: "Exams",
+    description: "School Admin → Exams",
+  },
+  {
+    key: Permission.MARKS,
+    label: "Marks",
+    description: "School Admin → Marks",
+  },
   { key: Permission.ADMISSION, label: "Admission" },
   { key: Permission.CLASSES, label: "Classes" },
   { key: Permission.HOMEWORK, label: "Homework" },
-  { key: Permission.MARKS, label: "Marks" },
   { key: Permission.ATTENDANCE, label: "Attendance" },
-  { key: Permission.EXAMS, label: "Exams & Syllabus" },
   { key: Permission.WORKSHOPS, label: "Workshops & Events" },
   { key: Permission.NEWSFEED, label: "Newsfeed" },
   { key: Permission.CHAT, label: "Parent Chat" },
   { key: Permission.LEAVES, label: "Leave" },
   { key: Permission.PROFILE, label: "Profile" },
   { key: Permission.SETTINGS, label: "Settings" },
+  { key: Permission.STUDENTS, label: "Students" },
+  { key: Permission.FEES, label: "Fees" },
+  { key: Permission.CERTIFICATES, label: "Certificates" },
+  { key: Permission.STUDENT_DETAILS, label: "Student Details" },
+  { key: Permission.TEACHERS, label: "Teachers" },
+  { key: Permission.TEACHER_LEAVES, label: "Teacher Leaves" },
+  { key: Permission.TEACHER_AUDIT, label: "Teacher Audit" },
 ];
 
-export default function UserForm({ mode = "create", initialData }: UserFormProps) {
+function formDataFromApi(userData: Record<string, unknown>): UserFormData {
+  const joinDate = toDateInputValue(userData.joiningDate);
+  const subjects = userData.subjects;
+  return {
+    name: String(userData.name || ""),
+    email: String(userData.email || ""),
+    role: (userData.role as UserFormData["role"]) || "TEACHER",
+    designation: String(userData.designation || userData.subject || ""),
+    password: "",
+    confirmPassword: "",
+    allowedFeatures: Array.isArray(userData.allowedFeatures)
+      ? normalizeAllowedFeatures(userData.allowedFeatures as string[])
+      : [],
+    teacherId: String(userData.teacherId || ""),
+    subjects: Array.isArray(subjects)
+      ? subjects.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      : [],
+    assignedClassIds: Array.isArray(userData.assignedClassIds)
+      ? (userData.assignedClassIds as string[])
+      : [],
+    qualification: String(userData.qualification || ""),
+    experience: String(userData.experience || ""),
+    joiningDate: joinDate,
+    teacherStatus: String(userData.teacherStatus || "Active"),
+    mobile: String(userData.mobile || ""),
+    address: String(userData.address || ""),
+  };
+}
+
+const EMPTY_FORM: UserFormData = {
+  name: "",
+  email: "",
+  role: "TEACHER",
+  designation: "",
+  password: "",
+  confirmPassword: "",
+  allowedFeatures: [],
+  teacherId: "",
+  subjects: [],
+  assignedClassIds: [],
+  qualification: "",
+  experience: "",
+  joiningDate: "",
+  teacherStatus: "Active",
+  mobile: "",
+  address: "",
+};
+
+/** Only fields available on the list row — never wipe teacher-specific state. */
+function listShellFields(user: IUser): Pick<
+  UserFormData,
+  "name" | "email" | "role" | "designation" | "allowedFeatures"
+> {
+  return {
+    name: user.name || "",
+    email: user.email || "",
+    role: (user.role as UserFormData["role"]) || "TEACHER",
+    designation: user.designation || "",
+    allowedFeatures: normalizeAllowedFeatures(user.allowedFeatures || []),
+  };
+}
+
+export default function UserForm({
+  mode = "create",
+  schoolId = null,
+  listShellUser = null,
+  initialData,
+  onSuccess,
+}: UserFormProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const userId = searchParams.get("userId");
 
-  const [loading, setLoading] = useState(!!userId && !initialData);
+  const [loading, setLoading] = useState(
+    !!userId && !initialData && !listShellUser
+  );
+  const [detailLoading, setDetailLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<UserFormErrors>({});
@@ -66,28 +210,16 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
   const [emailSettingsLoading, setEmailSettingsLoading] = useState(false);
 
   const [formData, setFormData] = useState<UserFormData>(
-    initialData || {
-      name: "",
-      email: "",
-      role: "TEACHER",
-      designation: "",
-      password: "",
-      confirmPassword: "",
-      allowedFeatures: [],
-      teacherId: "",
-      subjects: [],
-      assignedClassIds: [],
-      qualification: "",
-      experience: "",
-      joiningDate: "",
-      teacherStatus: "Active",
-      mobile: "",
-      address: "",
-    }
+    initialData ||
+      (listShellUser
+        ? { ...EMPTY_FORM, ...listShellFields(listShellUser) }
+        : EMPTY_FORM)
   );
 
   const [classesList, setClassesList] = useState<{ id: string; name: string; section: string | null }[]>([]);
   const [subjectInput, setSubjectInput] = useState("");
+  const [availableSubjects, setAvailableSubjects] = useState<string[]>([]);
+  const [subjectsDropdownOpen, setSubjectsDropdownOpen] = useState(false);
 
   // Keep local form state in sync when parent passes initialData (edit from list)
   useEffect(() => {
@@ -97,87 +229,119 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
     }
   }, [initialData]);
 
-  // Fetch user data if in edit mode and no initialData was provided (deep link)
-  useEffect(() => {
-    if (userId && !initialData) {
-      const fetchUser = async () => {
-        try {
-          const res = await fetch(`/api/user/${userId}`, {
-            credentials: "include",
-            cache: "no-store",
-          });
-          if (!res.ok) throw new Error("Failed to fetch user");
-          const userData = await res.json();
-          const joinDate = userData.joiningDate
-            ? new Date(userData.joiningDate).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" }).replace(/\//g, "-")
-            : "";
-          setFormData({
-            name: userData.name || "",
-            email: userData.email || "",
-            role: userData.role || "TEACHER",
-            designation: userData.designation || "",
-            password: "",
-            confirmPassword: "",
-            allowedFeatures: userData.allowedFeatures || [],
-            teacherId: userData.teacherId || "",
-            subjects: userData.subjects?.length ? userData.subjects : [],
-            assignedClassIds: userData.assignedClassIds || [],
-            qualification: userData.qualification || "",
-            experience: userData.experience || "",
-            joiningDate: joinDate,
-            teacherStatus: userData.teacherStatus || "Active",
-            mobile: userData.mobile || "",
-            address: userData.address || "",
-          });
-        } catch (err) {
-          setError(err instanceof Error ? err.message : "Failed to load user data");
-        } finally {
-          setLoading(false);
-        }
-      };
-      fetchUser();
-    }
-  }, [userId, initialData]);
-
-  // Fetch classes for teacher assigned classes
-  useEffect(() => {
-    if (formData.role !== "TEACHER") return;
-    const fetchClasses = async () => {
-      try {
-        const res = await fetch("/api/class/list");
-        if (!res.ok) return;
-        const data = await res.json();
-        setClassesList(Array.isArray(data.classes) ? data.classes : []);
-      } catch (_) {}
-    };
-    fetchClasses();
-  }, [formData.role]);
+  const shellAppliedForUserRef = React.useRef<string | null>(null);
+  const formDirtyRef = React.useRef(false);
+  /** Fields the user edited — only these override API data when detail load finishes. */
+  const touchedFieldsRef = React.useRef<Set<keyof UserFormData>>(new Set());
 
   useEffect(() => {
-    let active = true;
-    setEmailSettingsLoading(true);
-    (async () => {
-      try {
-        const res = await fetch("/api/school/settings", {
-          credentials: "include",
-          cache: "no-store",
-        });
-        const data = await res.json();
-        if (!active) return;
-        const domain = typeof data?.settings?.emailDomain === "string" ? data.settings.emailDomain.trim() : "";
-        setSchoolEmailDomain(domain || null);
-      } catch (_) {
-        // ignore: domain preview is optional
-      } finally {
-        if (active) setEmailSettingsLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
+    if (!listShellUser || initialData || !userId) return;
+    if (shellAppliedForUserRef.current === userId) return;
+    shellAppliedForUserRef.current = userId;
+
+    setFormData((prev) => ({
+      ...prev,
+      ...listShellFields(listShellUser),
+    }));
+    setLoading(false);
+  }, [listShellUser, initialData, userId]);
+
+  // Fetch available subjects from exam-subjects API
+  useEffect(() => {
+    fetch("/api/exam-subjects", { credentials: "include" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data.subjects)) setAvailableSubjects(data.subjects);
+      })
+      .catch(() => {});
   }, []);
 
+  // Form metadata (classes + email domain) — cache-first
+  useEffect(() => {
+    if (!schoolId) return;
+    const cached = peekUserFormMeta(schoolId);
+    if (cached) {
+      setClassesList(cached.classes);
+      setSchoolEmailDomain(cached.emailDomain);
+      setEmailSettingsLoading(false);
+    }
+
+    const controller = new AbortController();
+    void fetchUserFormMeta(schoolId, {
+      revalidate: !cached,
+      signal: controller.signal,
+    })
+      .then((meta) => {
+        setClassesList(meta.classes);
+        setSchoolEmailDomain(meta.emailDomain);
+      })
+      .catch(() => {
+        /* optional */
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setEmailSettingsLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [schoolId]);
+
+  // Reset edit state when switching users
+  useEffect(() => {
+    formDirtyRef.current = false;
+    touchedFieldsRef.current = new Set();
+    shellAppliedForUserRef.current = null;
+  }, [userId]);
+
+  // Full user for edit — fetch directly, bypassing all caches
+  useEffect(() => {
+    if (!userId || initialData) return;
+
+    setDetailLoading(true);
+    setLoading(false);
+    const controller = new AbortController();
+
+    fetch(`/api/user/${encodeURIComponent(userId)}`, {
+      credentials: "include",
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then((res) => res.json())
+      .then((userData: Record<string, unknown>) => {
+        const fromApi = formDataFromApi(userData);
+        setFormData((prev) => {
+          if (!formDirtyRef.current || touchedFieldsRef.current.size === 0) {
+            return fromApi;
+          }
+          // Keep only fields the user actually edited; never wipe API
+          // subjects / classes with empty shell defaults from a dirty name/role edit.
+          const merged: UserFormData = { ...fromApi };
+          for (const field of touchedFieldsRef.current) {
+            const value = prev[field];
+            (merged as unknown as Record<string, unknown>)[field] = value;
+          }
+          return merged;
+        });
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError(err instanceof Error ? err.message : "Failed to load user data");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setDetailLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [userId, initialData]);
+
+  const markFieldTouched = (field: keyof UserFormData) => {
+    formDirtyRef.current = true;
+    touchedFieldsRef.current.add(field);
+  };
+
   const handleChange = (field: keyof UserFormData, value: unknown) => {
+    markFieldTouched(field);
     setFormData((prev) => ({ ...prev, [field]: value }));
     setError(null);
     setFieldErrors((prev) => {
@@ -190,6 +354,7 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
   };
 
   const handleFeatureToggle = (feature: string) => {
+    markFieldTouched("allowedFeatures");
     setFormData((prev) => ({
       ...prev,
       allowedFeatures: prev.allowedFeatures.includes(feature)
@@ -218,6 +383,11 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (detailLoading) {
+      setError("Still loading teacher profile — wait a moment, then save.");
+      return;
+    }
 
     if (!validateForm()) return;
 
@@ -260,14 +430,20 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
         throw new Error(data.message || `Failed to ${userId ? "update" : "create"} user`);
       }
 
+      if (schoolId) invalidateAddUserPageCache(schoolId);
       setSuccess(true);
-      setTimeout(() => {
-        const params = new URLSearchParams(searchParams.toString());
-        params.set("tab", "add-user");
-        params.set("view", "all");
-        params.delete("userId");
-        router.push(`?${params.toString()}`);
-      }, 1500);
+
+      if (onSuccess) {
+        window.setTimeout(() => onSuccess(), 500);
+      } else {
+        window.setTimeout(() => {
+          const params = new URLSearchParams(searchParams.toString());
+          params.set("tab", "add-user");
+          params.set("view", "all");
+          params.delete("userId");
+          router.push(`?${params.toString()}`);
+        }, 500);
+      }
     } catch (err) {
       setFieldErrors({});
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -287,6 +463,9 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
+      {detailLoading ? (
+        <p className="text-xs text-cyan-200/70">Loading full teacher profile…</p>
+      ) : null}
       {/* Top Section: Form Fields + Access Control */}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -430,37 +609,82 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
                       </span>
                     ))}
                   </div>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={subjectInput}
-                      onChange={(e) => setSubjectInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          const v = subjectInput.trim();
-                          if (v && !(formData.subjects || []).includes(v)) {
+                  <div className="relative">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={subjectInput}
+                        onChange={(e) => {
+                          setSubjectInput(e.target.value);
+                          setSubjectsDropdownOpen(true);
+                        }}
+                        onFocus={() => setSubjectsDropdownOpen(true)}
+                        onBlur={() => setTimeout(() => setSubjectsDropdownOpen(false), 200)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            const v = subjectInput.trim().toUpperCase();
+                            if (v && !(formData.subjects || []).map((s) => s.toUpperCase()).includes(v)) {
+                              handleChange("subjects", [...(formData.subjects || []), v]);
+                              setSubjectInput("");
+                              setSubjectsDropdownOpen(false);
+                            }
+                          }
+                        }}
+                        placeholder="Search or type a subject"
+                        className="flex-1 pl-4 pr-4 py-3 bg-black/20 border border-white/10 rounded-xl focus:outline-none focus:ring-1 focus:ring-lime-400/50 text-gray-400 text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const v = subjectInput.trim().toUpperCase();
+                          if (v && !(formData.subjects || []).map((s) => s.toUpperCase()).includes(v)) {
                             handleChange("subjects", [...(formData.subjects || []), v]);
                             setSubjectInput("");
+                            setSubjectsDropdownOpen(false);
                           }
-                        }
-                      }}
-                      placeholder="e.g. Mathematics (press Enter to add)"
-                      className="flex-1 pl-4 pr-4 py-3 bg-black/20 border border-white/10 rounded-xl focus:outline-none focus:ring-1 focus:ring-lime-400/50 text-gray-400 text-sm"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const v = subjectInput.trim();
-                        if (v && !(formData.subjects || []).includes(v)) {
-                          handleChange("subjects", [...(formData.subjects || []), v]);
-                          setSubjectInput("");
-                        }
-                      }}
-                      className="px-4 py-2 rounded-xl bg-lime-400/20 border border-lime-400/30 text-lime-300 text-sm font-medium hover:bg-lime-400/30"
-                    >
-                      Add
-                    </button>
+                        }}
+                        className="px-4 py-2 rounded-xl bg-lime-400/20 border border-lime-400/30 text-lime-300 text-sm font-medium hover:bg-lime-400/30"
+                      >
+                        Add
+                      </button>
+                    </div>
+                    {subjectsDropdownOpen && (() => {
+                      const selected = new Set((formData.subjects || []).map((s) => s.toUpperCase()));
+                      const filtered = availableSubjects.filter(
+                        (s) => !selected.has(s.toUpperCase()) && s.toUpperCase().includes(subjectInput.trim().toUpperCase())
+                      );
+                      if (!filtered.length) return null;
+                      return (
+                        <div className="absolute z-50 mt-1 w-full max-h-48 overflow-y-auto rounded-xl bg-[#1a1a2e] border border-white/10 shadow-xl no-scrollbar">
+                          {filtered.map((s) => (
+                            <button
+                              key={s}
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => {
+                                const normalized = s.trim().toUpperCase();
+                                if (
+                                  !(formData.subjects || [])
+                                    .map((x) => x.toUpperCase())
+                                    .includes(normalized)
+                                ) {
+                                  handleChange("subjects", [
+                                    ...(formData.subjects || []),
+                                    normalized,
+                                  ]);
+                                }
+                                setSubjectInput("");
+                                setSubjectsDropdownOpen(false);
+                              }}
+                              className="w-full text-left px-4 py-2.5 text-sm text-white/80 hover:bg-lime-400/10 hover:text-lime-300 transition-colors"
+                            >
+                              {s}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </div>
                   {fieldErrors.subjects ? (
                     <p className="text-xs text-red-400 mt-1.5" role="alert">
@@ -500,7 +724,9 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
                       <span className="text-white/40 text-sm">No classes found. Create classes first.</span>
                     )}
                   </div>
-                  <p className="text-[11px] text-white/50 mt-1">e.g. 10-A, 10-B — click to toggle</p>
+                  <p className="text-[11px] text-white/50 mt-1">
+                    Classes this teacher can enter marks for. Class teacher (homeroom) is set under Teachers → Appoint Teacher.
+                  </p>
                 </div>
                 <InputField
                   label="Qualification"
@@ -522,7 +748,7 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
                   label="Joining Date"
                   value={formData.joiningDate || ""}
                   onChange={(v) => handleChange("joiningDate", v)}
-                  placeholder="dd-mm-yyyy"
+                  type="date"
                   icon={<Calendar className="w-4 h-4" />}
                   error={fieldErrors.joiningDate}
                 />
@@ -613,6 +839,7 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
             checked={formData.allowedFeatures.length === AVAILABLE_FEATURES_FOR_TEACHERS.length}
             onChange={() => {
               const allSelected = formData.allowedFeatures.length === AVAILABLE_FEATURES_FOR_TEACHERS.length;
+              markFieldTouched("allowedFeatures");
               setFormData((prev) => ({
                 ...prev,
                 allowedFeatures: allSelected
@@ -636,6 +863,7 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
               <AllowedFeatureToggle
                 key={feature.key}
                 label={feature.label}
+                description={feature.description}
                 checked={formData.allowedFeatures.includes(feature.key)}
                 onChange={() => handleFeatureToggle(feature.key)}
               />
@@ -674,10 +902,10 @@ export default function UserForm({ mode = "create", initialData }: UserFormProps
       <div className="flex justify-end pt-4 gap-3">
         <motion.button
           type="submit"
-          disabled={submitting}
+          disabled={submitting || detailLoading}
           whileHover={{ x: 4 }}
           className="px-6 py-3 bg-lime-400 hover:bg-lime-500 text-black font-bold rounded-xl 
-          shadow-lg shadow-lime-400/20 transition-all flex items-center gap-2"
+          shadow-lg shadow-lime-400/20 transition-all flex items-center gap-2 disabled:opacity-60 disabled:pointer-events-none"
         >
           {submitting ? (
             <>

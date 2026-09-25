@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import AuthLoadingFallback from "../components/common/AuthLoadingFallback";
 import { useAllowedFeatures } from "@/lib/usePermissions";
-import type { FeatureId } from "@/lib/features";
 
 interface RequireFeatureProps {
   requiredFeature: string;
@@ -16,16 +15,17 @@ interface RequireFeatureProps {
  * Maps tab names (from URL params) to feature IDs used in the permission system.
  * This ensures that when a teacher accesses a tab, we check the correct feature permission.
  */
-const TAB_TO_FEATURE_MAP: Record<string, FeatureId> = {
+const TAB_TO_FEATURE_MAP: Record<string, string> = {
   dashboard: "dashboard",
   admission: "admission",
   attendance: "attendance-view",
   "attendance-view": "attendance-view",
   "attendance-mark": "attendance-mark",
-  marks: "marks-view",
-  "marks-view": "marks-view",
-  "marks-entry": "marks-entry",
+  marks: "MARKS",
+  "marks-view": "MARKS",
+  "marks-entry": "MARKS",
   homework: "homework",
+  timetable: "timetable",
   classes: "classes",
   students: "students",
   teachers: "teachers",
@@ -36,7 +36,7 @@ const TAB_TO_FEATURE_MAP: Record<string, FeatureId> = {
   certificates: "certificates",
   events: "events",
   workshops: "events", // Workshops & Events tab -> events feature
-  exams: "exams",
+  exams: "EXAMS",
   newsfeed: "newsfeed",
   communication: "communication",
   chat: "communication", // Parent Chat tab -> communication feature
@@ -44,9 +44,52 @@ const TAB_TO_FEATURE_MAP: Record<string, FeatureId> = {
   tc: "tc",
   school: "school",
   profile: "profile",
+  "student-details": "STUDENT_DETAILS",
+  "teacher-leaves": "TEACHER_LEAVES",
+  "teacher-audit": "TEACHER_AUDIT",
+  fees: "FEES",
 } as const;
 
-const ROLES_WITH_ALL_ACCESS = ["SUPERADMIN", "SCHOOLADMIN"] as const;
+/** Extra aliases accepted for a given tab (legacy FeatureIds + Permission enums). */
+const TAB_FEATURE_ALIASES: Record<string, string[]> = {
+  marks: ["MARKS", "marks", "marks-view", "marks-entry"],
+  exams: ["EXAMS", "exams"],
+  attendance: ["ATTENDANCE", "attendance", "attendance-view", "attendance-mark"],
+  workshops: ["WORKSHOPS", "workshops", "events"],
+  chat: ["CHAT", "chat", "communication"],
+  circulars: ["CIRCULARS", "circulars", "communication"],
+  settings: ["SETTINGS", "settings", "school"],
+  homework: ["HOMEWORK", "homework"],
+  timetable: ["TIMETABLE", "timetable"],
+  classes: ["CLASSES", "classes"],
+  students: ["STUDENTS", "students"],
+  teachers: ["TEACHERS", "teachers"],
+  leaves: ["LEAVES", "leaves"],
+  admission: ["ADMISSION", "admission"],
+  newsfeed: ["NEWSFEED", "newsfeed"],
+  profile: ["PROFILE", "profile"],
+  certificates: ["CERTIFICATES", "certificates"],
+  fees: ["FEES", "fees"],
+  "student-details": ["STUDENT_DETAILS", "student-details"],
+  "teacher-leaves": ["TEACHER_LEAVES", "teacher-leaves"],
+  "teacher-audit": ["TEACHER_AUDIT", "teacher-audit"],
+};
+
+function teacherHasFeatureAccess(allowedFeatures: string[], requiredFeature: string): boolean {
+  const normalizedTab = requiredFeature.toLowerCase().trim();
+  if (!normalizedTab) return true;
+  if (normalizedTab === "dashboard") return true;
+
+  const featureId = TAB_TO_FEATURE_MAP[normalizedTab] || normalizedTab;
+  const aliases = TAB_FEATURE_ALIASES[normalizedTab] ?? [];
+  const accepted = new Set(
+    [featureId, normalizedTab, ...aliases].map((k) => k.toLowerCase())
+  );
+
+  return allowedFeatures.some((f) => accepted.has(String(f).toLowerCase()));
+}
+
+const ROLES_WITH_ALL_ACCESS = ["SUPERADMIN", "SCHOOLADMIN",] as const;
 
 /**
  * Component that protects routes/features by checking if the current user
@@ -92,30 +135,14 @@ export default function RequireFeature({ requiredFeature, children }: RequireFea
 
     // For TEACHER role, check permissions
     if (userRole === "TEACHER") {
-      // Map tab name to feature ID
-      const normalizedTab = requiredFeature.toLowerCase().trim();
-      // Always allow dashboard for teachers (common default feature)
-      if (normalizedTab === "dashboard") {
+      if (teacherHasFeatureAccess(allowedFeatures as string[], requiredFeature)) {
         setIsAuthorized(true);
         return;
       }
-      const featureId: FeatureId | undefined = TAB_TO_FEATURE_MAP[normalizedTab] || (normalizedTab as FeatureId);
 
-      // Check if the feature is in the allowed list
-      // Also check the raw tab name as fallback for exact matches
-      const hasAccess = 
-        allowedFeatures.includes(featureId) || 
-        allowedFeatures.includes(normalizedTab as FeatureId) ||
-        allowedFeatures.some(f => f.toLowerCase() === normalizedTab);
-
-      if (!hasAccess) {
-        // Set unauthorized state first to prevent rendering children
-        setIsAuthorized(false);
-        // Do not navigate away — stay in the same portal and show an inline message
-        return;
-      }
-
-      setIsAuthorized(true);
+      // Set unauthorized state first to prevent rendering children
+      setIsAuthorized(false);
+      // Do not navigate away — stay in the same portal and show an inline message
       return;
     }
 

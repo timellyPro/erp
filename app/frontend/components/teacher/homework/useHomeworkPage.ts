@@ -1,49 +1,62 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import type { HomeworkItem, ClassOption, HomeworkFilter } from "./types";
+import {
+  invalidateTeacherHomework,
+  loadTeacherHomework,
+  peekTeacherHomework,
+  setTeacherHomeworkCache,
+} from "@/lib/loadTeacherFastTabs";
 
 export default function useHomeworkPage() {
-  const router = useRouter();
   const { data: session, status } = useSession();
-  const [homeworks, setHomeworks] = useState<HomeworkItem[]>([]);
-  const [classes, setClasses] = useState<ClassOption[]>([]);
-  const [loading, setLoading] = useState(true);
+  const initial = peekTeacherHomework();
+  const [homeworks, setHomeworks] = useState<HomeworkItem[]>(() => initial?.homeworks ?? []);
+  const [classes, setClasses] = useState<ClassOption[]>(() => initial?.classes ?? []);
+  const [loading, setLoading] = useState(() => !initial);
   const [showForm, setShowForm] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<HomeworkFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [editingHomework, setEditingHomework] = useState<HomeworkItem | null>(null);
 
-  const fetchData = async () => {
-    if (!session) return;
-    setLoading(true);
-    try {
-      const [hwRes, classRes] = await Promise.all([
-        fetch("/api/homework/list", { credentials: "include" }),
-        fetch("/api/class/list", { credentials: "include" }),
-      ]);
-      if (hwRes.ok) {
-        const d = await hwRes.json();
-        setHomeworks(d.homeworks ?? []);
+  const applyPayload = useCallback((payload: { homeworks: HomeworkItem[]; classes: ClassOption[] }) => {
+    setHomeworks(payload.homeworks);
+    setClasses(payload.classes);
+  }, []);
+
+  const fetchData = useCallback(
+    async (revalidate = false) => {
+      if (!session) return;
+
+      if (!revalidate) {
+        const cached = peekTeacherHomework();
+        if (cached) {
+          applyPayload(cached);
+          setLoading(false);
+          void fetchData(true);
+          return;
+        }
       }
-      
-      if (classRes.ok) {
-        const c = await classRes.json();
-        setClasses(c.classes ?? []);
+
+      setLoading((prev) => (homeworks.length === 0 ? true : prev));
+      try {
+        const payload = await loadTeacherHomework({ revalidate: true });
+        applyPayload(payload);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
       }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
+    },
+    [session, applyPayload, homeworks.length]
+  );
 
   useEffect(() => {
-    if (session) void fetchData();
-  }, [session]);
+    if (session) void fetchData(false);
+  }, [session, fetchData]);
 
   const filteredHomeworks = useMemo(() => {
     let list = [...homeworks];
@@ -70,8 +83,20 @@ export default function useHomeworkPage() {
     [homeworks]
   );
 
+  const syncCache = useCallback(
+    (nextHomeworks: HomeworkItem[], nextClasses = classes) => {
+      setTeacherHomeworkCache({ homeworks: nextHomeworks, classes: nextClasses });
+    },
+    [classes]
+  );
+
   const handleDelete = async (id: string) => {
     if (!confirm("Do you really want to delete this assignment? This action cannot be undone.")) return;
+    const prev = homeworks;
+    const next = prev.filter((h) => h.id !== id);
+    setHomeworks(next);
+    syncCache(next);
+    if (expandedId === id) setExpandedId(null);
     try {
       const res = await fetch(`/api/homework/${id}`, {
         method: "DELETE",
@@ -79,20 +104,18 @@ export default function useHomeworkPage() {
         headers: { "Content-Type": "application/json" },
       });
       const d = await res.json().catch(() => ({}));
-      if (res.ok) {
-        setHomeworks((prev) => prev.filter((h) => h.id !== id));
-        if (expandedId === id) setExpandedId(null);
-        await fetchData();
-        try {
-          router.refresh();
-        } catch {
-          /* noop */
-        }
-      } else {
-        alert(d.message || "Delete failed");
+      if (!res.ok) {
+        setHomeworks(prev);
+        syncCache(prev);
+        alert((d as { message?: string }).message || "Delete failed");
+        return;
       }
+      invalidateTeacherHomework();
+      void fetchData(true);
     } catch (e) {
       console.error(e);
+      setHomeworks(prev);
+      syncCache(prev);
       alert("Delete failed. Check your connection.");
     }
   };
@@ -109,19 +132,14 @@ export default function useHomeworkPage() {
   };
 
   const handleSubmitSuccess = async (createdOrUpdated: HomeworkItem) => {
-    if (editingHomework) {
-      setHomeworks((prev) => prev.map((h) => (h.id === createdOrUpdated.id ? createdOrUpdated : h)));
-    } else {
-      setHomeworks((prev) => [createdOrUpdated, ...prev]);
-    }
+    const next = editingHomework
+      ? homeworks.map((h) => (h.id === createdOrUpdated.id ? createdOrUpdated : h))
+      : [createdOrUpdated, ...homeworks];
+    setHomeworks(next);
+    syncCache(next);
     setShowForm(false);
     setEditingHomework(null);
-    await fetchData();
-    try {
-      router.refresh();
-    } catch {
-      /* noop */
-    }
+    void fetchData(true);
   };
 
   const toggleExpanded = (id: string) => {

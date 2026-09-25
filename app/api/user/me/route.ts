@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { getTeacherAccessibleClassIds } from "@/lib/teacherClassAccess";
 
 export async function GET() {
   try {
@@ -18,10 +19,14 @@ export async function GET() {
         email: true,
         mobile: true,
         address: true,
+        qualification: true,
+        experience: true,
         language: true,
         photoUrl: true,
         teacherId: true,
         subject: true,
+        subjects: true,
+        teachingClassIds: true,
         createdAt: true,
         assignedClasses: {
           select: {
@@ -39,7 +44,41 @@ export async function GET() {
       },
     });
 
-    return NextResponse.json({ user }, { status: 200 });
+    if (!user) {
+      return NextResponse.json({ message: "User not found" }, { status: 404 });
+    }
+
+    let assignedClasses = user.assignedClasses;
+    if (user.role === "TEACHER") {
+      const accessibleIds = await getTeacherAccessibleClassIds(user.id, session.user.schoolId);
+      if (accessibleIds.length > 0) {
+        assignedClasses = await prisma.class.findMany({
+          where: { id: { in: accessibleIds } },
+          select: {
+            id: true,
+            name: true,
+            section: true,
+            _count: { select: { students: true } },
+          },
+          orderBy: [{ name: "asc" }, { section: "asc" }],
+        });
+      } else {
+        assignedClasses = [];
+      }
+    }
+
+    const { teachingClassIds, ...rest } = user;
+    return NextResponse.json(
+      {
+        user: {
+          ...rest,
+          teachingClassIds,
+          assignedClasses,
+          assignedClassIds: teachingClassIds ?? [],
+        },
+      },
+      { status: 200 }
+    );
   } catch (e: unknown) {
     console.error("User me GET:", e);
     return NextResponse.json(
@@ -61,6 +100,8 @@ export async function PUT(req: Request) {
     const data: {
       mobile?: string | null;
       address?: string | null;
+      qualification?: string | null;
+      experience?: string | null;
       language?: string | null;
       photoUrl?: string | null;
       name?: string | null;
@@ -74,6 +115,14 @@ export async function PUT(req: Request) {
     }
     if (typeof body.address === "string" || body.address === null) {
       data.address = body.address && body.address.trim() ? body.address.trim() : null;
+    }
+    if (typeof body.qualification === "string" || body.qualification === null) {
+      data.qualification =
+        body.qualification && body.qualification.trim() ? body.qualification.trim() : null;
+    }
+    if (typeof body.experience === "string" || body.experience === null) {
+      data.experience =
+        body.experience && body.experience.trim() ? body.experience.trim() : null;
     }
     if (typeof body.language === "string" || body.language === null) {
       data.language = body.language;
@@ -100,10 +149,13 @@ export async function PUT(req: Request) {
           email: true,
           mobile: true,
           address: true,
+          qualification: true,
+          experience: true,
           language: true,
           photoUrl: true,
           teacherId: true,
           subject: true,
+          subjects: true,
           createdAt: true,
           assignedClasses: {
             select: {

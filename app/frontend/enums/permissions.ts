@@ -2,6 +2,7 @@
 export enum Permission {
   DASHBOARD = "DASHBOARD",
   HOMEWORK = "HOMEWORK",
+  TIMETABLE = "TIMETABLE",
   ATTENDANCE = "ATTENDANCE",
   MARKS = "MARKS",
   CHAT = "CHAT",
