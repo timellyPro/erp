@@ -22,6 +22,12 @@ import {
 } from "@/lib/feeDayReportExcel";
 import { formatRupee, roundRupee } from "@/lib/formatRupee";
 import { todayYmdLocal } from "@/lib/schoolDashboardCollection";
+import {
+  filterDayReportTransactions,
+  isCreatedAtInDateRange,
+  narrowDayReportTransactionToHead,
+  orderedYmdRange,
+} from "@/lib/feeReportFilters";
 
 const PAGE_SIZE = 20;
 
@@ -39,6 +45,8 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
   const [searchName, setSearchName] = useState("");
   const [selectedClass, setSelectedClass] = useState("");
   const [studentStatusFilter, setStudentStatusFilter] = useState<StudentStatusFilter>("Active");
+  const [selectedHead, setSelectedHead] = useState("");
+  const [feeHeadOptions, setFeeHeadOptions] = useState<string[]>([]);
   const [reportPeriod, setReportPeriod] = useState<ReportPeriod>("DAY_WISE");
   const [reportDateFrom, setReportDateFrom] = useState(() => todayYmdLocal());
   const [reportDateTo, setReportDateTo] = useState(() => todayYmdLocal());
@@ -71,6 +79,39 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
   useEffect(() => {
     setPage(1);
   }, [searchName, selectedClass, studentStatusFilter]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [structureRes, extraRes] = await Promise.all([
+        fetch("/api/fees/structure", { credentials: "include" }),
+        fetch("/api/fees/extra", { credentials: "include" }),
+      ]);
+      const structureData = (await structureRes.json().catch(() => ({}))) as {
+        structures?: Array<{ components?: Array<{ name?: string }> }>;
+      };
+      const extraData = (await extraRes.json().catch(() => ({}))) as {
+        extraFees?: Array<{ name?: string }>;
+      };
+      const names = new Set<string>();
+      for (const structure of structureData.structures ?? []) {
+        for (const component of structure.components ?? []) {
+          const name = String(component?.name ?? "").trim();
+          if (name) names.add(name);
+        }
+      }
+      for (const extra of extraData.extraFees ?? []) {
+        const name = String(extra?.name ?? "").trim();
+        if (name) names.add(name);
+      }
+      if (!cancelled) {
+        setFeeHeadOptions([...names].sort((a, b) => a.localeCompare(b)));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const totalPages = Math.max(1, Math.ceil(filteredFees.length / PAGE_SIZE));
   const paginatedFees = useMemo(
@@ -452,29 +493,11 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     return academicYear || "-";
   };
 
-  const toDateOnly = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-
-  /** Parse `YYYY-MM-DD` as a local calendar date (avoids UTC off-by-one with `new Date("yyyy-mm-dd")`). */
-  const parseYmdLocal = (ymd: string) => {
-    const parts = ymd.split("-").map((v) => Number(v));
-    const y = parts[0];
-    const m = parts[1];
-    const day = parts[2];
-    if (!y || !m || !day) return new Date(NaN);
-    return new Date(y, m - 1, day);
-  };
-
   const inSelectedPeriod = (createdAt: string) => {
     const d = new Date(createdAt);
     if (Number.isNaN(d.getTime())) return false;
     if (reportPeriod === "DAY_WISE") {
-      const from = parseYmdLocal(reportDateFrom);
-      const to = parseYmdLocal(reportDateTo || reportDateFrom);
-      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return false;
-      const day = toDateOnly(d).getTime();
-      const start = toDateOnly(from).getTime();
-      const end = toDateOnly(to).getTime();
-      return day >= Math.min(start, end) && day <= Math.max(start, end);
+      return isCreatedAtInDateRange(createdAt, reportDateFrom, reportDateTo);
     }
     if (reportPeriod === "MONTH_WISE") {
       const [y, m] = reportMonth.split("-").map((v) => Number(v));
@@ -493,10 +516,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
 
   const getReportDateRange = (): { from: string; to: string } => {
     if (reportPeriod === "DAY_WISE") {
-      const from = reportDateFrom;
-      const to = reportDateTo || reportDateFrom;
-      if (from && to && from > to) return { from: to, to: from };
-      return { from, to };
+      return orderedYmdRange(reportDateFrom, reportDateTo);
     }
     if (reportPeriod === "MONTH_WISE") {
       const [y, m] = reportMonth.split("-").map((v) => Number(v));
@@ -523,12 +543,23 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     });
   };
 
-  const filterReportTransactions = (transactions: DayReportTx[]): DayReportTx[] =>
-    transactions.filter((t) => {
-      const classId = t.student?.class?.id || "";
-      if (selectedClass && classId !== selectedClass) return false;
-      return inSelectedPeriod(t.createdAt);
+  const filterReportTransactions = (transactions: DayReportTx[]): DayReportTx[] => {
+    if (reportPeriod === "DAY_WISE") {
+      return filterDayReportTransactions(transactions, {
+        fromYmd: reportDateFrom,
+        toYmd: reportDateTo,
+        classId: selectedClass || undefined,
+        headName: selectedHead,
+      });
+    }
+    return transactions.flatMap((transaction) => {
+      const classId = transaction.student?.class?.id || "";
+      if (selectedClass && classId !== selectedClass) return [];
+      if (!inSelectedPeriod(transaction.createdAt)) return [];
+      const narrowed = narrowDayReportTransactionToHead(transaction, selectedHead);
+      return narrowed ? [narrowed] : [];
     });
+  };
 
   const exportFinalTemplate = async () => {
     if (reportPeriod === "DAY_WISE") {
@@ -667,6 +698,7 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     try {
       const params = new URLSearchParams();
       if (selectedClass) params.set("classId", selectedClass);
+      if (selectedHead) params.set("head", selectedHead);
       if (studentStatusFilter !== "All") params.set("status", studentStatusFilter);
       const q = params.toString() ? `?${params.toString()}` : "";
       const res = await fetch(`/api/fees/export/fee-due-report${q}`, {
@@ -682,7 +714,10 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `fee-due-report-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      const headSlug = selectedHead
+        ? `-${selectedHead.replace(/[^\w]+/g, "_").replace(/^_|_$/g, "").slice(0, 40)}`
+        : "";
+      a.download = `fee-due-report${headSlug}-${new Date().toISOString().slice(0, 10)}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -744,9 +779,9 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
       <div className="mb-4 rounded-xl border border-white/10 bg-black/10 p-3 sm:p-4">
         <div className="mb-4 flex flex-col gap-1 border-b border-white/10 pb-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm font-semibold text-white">Fee collection report</p>
+            <p className="text-sm font-semibold text-white">Day report</p>
             <p className="mt-0.5 text-xs text-gray-400">
-              Pick a from–to date range (or month/year), then export collections.
+              Choose a from date and a to date, then download the collections for that range.
             </p>
           </div>
         </div>
@@ -887,6 +922,16 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
               { label: "Active Students", value: "Active" },
               { label: "Inactive Students", value: "Inactive" },
               { label: "All Students", value: "All" },
+            ]}
+          />
+        </div>
+        <div className="w-full sm:w-auto sm:min-w-[220px]">
+          <SelectInput
+            value={selectedHead}
+            onChange={setSelectedHead}
+            options={[
+              { label: "All Fee Heads", value: "" },
+              ...feeHeadOptions.map((name) => ({ label: name, value: name })),
             ]}
           />
         </div>

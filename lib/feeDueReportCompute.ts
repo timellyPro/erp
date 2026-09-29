@@ -11,6 +11,7 @@ import {
 } from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 import { previousYearFeeHeadLabel } from "@/lib/feeYearClassification";
+import { feeHeadNameMatches } from "@/lib/feeReportFilters";
 
 export type FeeDueColumnGroup = {
   /** Stable id: `BASE@classId@index`, `EXTRA_NAME@slug` (merged extras with same name), or legacy `EXTRA:id` */
@@ -573,6 +574,41 @@ export function buildFeeDueReportPayload(args: {
     groups,
     rows,
   };
+}
+
+/** Keep one fee head (and installment labels that start with that name) and retotal each row. */
+export function filterFeeDueReportToHead(payload: FeeDueReportPayload, headName: string): FeeDueReportPayload {
+  const needle = headName.trim();
+  if (!needle) return payload;
+  const groups = payload.groups.filter((group) => feeHeadNameMatches(group.label, needle));
+  const ids = new Set(groups.map((group) => group.id));
+  const rows: FeeDueReportRow[] = [];
+  let no = 1;
+  for (const row of payload.rows) {
+    const cellsByGroupId = Object.fromEntries(
+      Object.entries(row.cellsByGroupId).filter(([id]) => ids.has(id))
+    );
+    const packs = Object.values(cellsByGroupId);
+    if (packs.length === 0) continue;
+    const fee = packs.reduce((sum, cell) => sum + cell.fee, 0);
+    const concession = packs.reduce((sum, cell) => sum + cell.concession, 0);
+    const paid = packs.reduce((sum, cell) => sum + cell.paid, 0);
+    const due = packs.reduce((sum, cell) => sum + cell.due, 0);
+    if (fee === 0 && concession === 0 && paid === 0 && due === 0) continue;
+    rows.push({
+      ...row,
+      no: no++,
+      totalFee: roundMoney(fee),
+      totalDiscount: roundMoney(concession),
+      feesPaid: roundMoney(paid),
+      feesDue: roundMoney(due),
+      previousYearTotalFee: 0,
+      previousYearFeesPaid: 0,
+      previousYearFeesDue: 0,
+      cellsByGroupId,
+    });
+  }
+  return { ...payload, groups, rows };
 }
 
 /** Row 2 headers: `${base} Fee`, `${base} Concession`, … matching common fee-due report layout */

@@ -76,6 +76,7 @@ export default function ExamsTab() {
     const [subjectConfigMessage, setSubjectConfigMessage] = useState("");
     const [openExamType, setOpenExamType] = useState<string | null>(null);
     const [subjects, setSubjects] = useState<string[]>([]);
+    const [removedByExam, setRemovedByExam] = useState<Record<string, string[]>>({});
     const [subjectsLoading, setSubjectsLoading] = useState(true);
     const [newSubject, setNewSubject] = useState("");
     const [subjectError, setSubjectError] = useState("");
@@ -94,6 +95,7 @@ export default function ExamsTab() {
     const updateExamsCache = (partial: Partial<{
         examTypes: ExamTypeOption[];
         subjects: string[];
+        removedByExam: Record<string, string[]>;
         terms: TermData[];
         classes: ClassData[];
     }>) => {
@@ -102,6 +104,7 @@ export default function ExamsTab() {
             classes: partial.classes ?? classes,
             examTypes: partial.examTypes ?? examTypes,
             subjects: partial.subjects ?? subjects,
+            removedByExam: partial.removedByExam ?? removedByExam,
         });
     };
 
@@ -266,12 +269,101 @@ export default function ExamsTab() {
         }
     };
 
+    const deleteSubjectFromExam = async (examType: string, name: string) => {
+        const examName = examType.trim().toUpperCase();
+        const upperName = name.trim().toUpperCase();
+        if (!examName || !upperName) return;
+
+        const confirmed = window.confirm(
+            `Remove "${upperName}" from ${examName} only?\n\nIt stays in the subjects list and in other exam types. Existing marks are not deleted.`
+        );
+        if (!confirmed) return;
+
+        setSubjectError("");
+        setSubjectSaving(true);
+        try {
+            const res = await fetch(
+                `/api/exam-subjects?name=${encodeURIComponent(upperName)}&examType=${encodeURIComponent(examName)}`,
+                { method: "DELETE", credentials: "include" }
+            );
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setSubjectError(data?.message || "Failed to remove subject from this exam type.");
+                return;
+            }
+
+            const nextRemoved: Record<string, string[]> = { ...removedByExam };
+            const current = new Set(nextRemoved[examName] ?? []);
+            current.add(upperName);
+            nextRemoved[examName] = Array.from(current).sort();
+            const rowKey = `${examName}::${upperName}`;
+            const nextTypes = examTypes.map((exam) =>
+                exam.name.trim().toUpperCase() === examName
+                    ? {
+                          ...exam,
+                          subjectConfigs: (exam.subjectConfigs ?? []).filter(
+                              (config) => config.subject.trim().toUpperCase() !== upperName
+                          ),
+                      }
+                    : exam
+            );
+            setRemovedByExam(nextRemoved);
+            setExamTypes(nextTypes);
+            setSubjectMaxByExam((prev) => {
+                const nextDrafts = { ...prev };
+                delete nextDrafts[rowKey];
+                return nextDrafts;
+            });
+            setSubjectPartsByKey((prev) => {
+                const nextParts = { ...prev };
+                delete nextParts[rowKey];
+                return nextParts;
+            });
+            updateExamsCache({ removedByExam: nextRemoved, examTypes: nextTypes });
+        } catch (e) {
+            console.error("Failed to remove subject from exam type", e);
+            setSubjectError("Failed to remove subject from this exam type");
+        } finally {
+            setSubjectSaving(false);
+        }
+    };
+
+    const restoreSubjectOnExam = async (examType: string, name: string) => {
+        const examName = examType.trim().toUpperCase();
+        const upperName = name.trim().toUpperCase();
+        if (!examName || !upperName) return;
+        setSubjectError("");
+        setSubjectSaving(true);
+        try {
+            const res = await fetch("/api/exam-subjects", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ name: upperName, restoreExamType: examName }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setSubjectError(data?.message || "Failed to add the subject back.");
+                return;
+            }
+            const nextRemoved: Record<string, string[]> = { ...removedByExam };
+            nextRemoved[examName] = (nextRemoved[examName] ?? []).filter((s) => s !== upperName);
+            setRemovedByExam(nextRemoved);
+            updateExamsCache({ removedByExam: nextRemoved });
+        } catch (e) {
+            console.error("Failed to restore subject on exam type", e);
+            setSubjectError("Failed to add the subject back");
+        } finally {
+            setSubjectSaving(false);
+        }
+    };
+
     const deleteSubject = async (name: string) => {
         const upperName = name.trim().toUpperCase();
         if (!upperName) return;
 
         const confirmed = window.confirm(
-            `Remove \"${upperName}\" from the subjects list?\n\nExisting marks are not deleted.`
+            `Remove "${upperName}" from the subjects list and every exam type?\n\nExisting marks are not deleted.`
         );
         if (!confirmed) return;
 
@@ -292,8 +384,35 @@ export default function ExamsTab() {
             }
 
             const next = subjects.filter((subject) => subject.toUpperCase() !== upperName);
+            const nextTypes = examTypes.map((exam) => ({
+                ...exam,
+                subjectConfigs: (exam.subjectConfigs ?? []).filter(
+                    (config) => config.subject.trim().toUpperCase() !== upperName
+                ),
+            }));
+            const nextRemoved: Record<string, string[]> = {};
+            for (const [examName, list] of Object.entries(removedByExam)) {
+                const kept = list.filter((s) => s !== upperName);
+                if (kept.length > 0) nextRemoved[examName] = kept;
+            }
+            setRemovedByExam(nextRemoved);
             setSubjects(next);
-            updateExamsCache({ subjects: next });
+            setExamTypes(nextTypes);
+            setSubjectMaxByExam((prev) => {
+                const nextDrafts = { ...prev };
+                for (const key of Object.keys(nextDrafts)) {
+                    if (key.endsWith(`::${upperName}`)) delete nextDrafts[key];
+                }
+                return nextDrafts;
+            });
+            setSubjectPartsByKey((prev) => {
+                const nextParts = { ...prev };
+                for (const key of Object.keys(nextParts)) {
+                    if (key.endsWith(`::${upperName}`)) delete nextParts[key];
+                }
+                return nextParts;
+            });
+            updateExamsCache({ subjects: next, examTypes: nextTypes, removedByExam: nextRemoved });
             if (editingSubject === upperName) {
                 setEditingSubject(null);
                 setEditingSubjectValue("");
@@ -340,8 +459,36 @@ export default function ExamsTab() {
             const next = Array.from(
                 new Set(subjects.map((s) => (s.toUpperCase() === fromName ? toName : s)))
             ).sort();
+            const nextTypes = examTypes.map((exam) => ({
+                ...exam,
+                subjectConfigs: (exam.subjectConfigs ?? []).map((config) =>
+                    config.subject.trim().toUpperCase() === fromName
+                        ? { ...config, subject: toName }
+                        : config
+                ),
+            }));
+            const nextRemoved: Record<string, string[]> = {};
+            for (const [examName, list] of Object.entries(removedByExam)) {
+                nextRemoved[examName] = Array.from(
+                    new Set(list.map((s) => (s === fromName ? toName : s)))
+                ).sort();
+            }
+            setRemovedByExam(nextRemoved);
             setSubjects(next);
-            updateExamsCache({ subjects: next });
+            setExamTypes(nextTypes);
+            const remapKey = (key: string) =>
+                key.endsWith(`::${fromName}`) ? `${key.slice(0, -fromName.length)}${toName}` : key;
+            setSubjectMaxByExam((prev) => {
+                const nextDrafts: Record<string, string> = {};
+                for (const [key, value] of Object.entries(prev)) nextDrafts[remapKey(key)] = value;
+                return nextDrafts;
+            });
+            setSubjectPartsByKey((prev) => {
+                const nextParts: Record<string, Array<{ name: string; maxMarks: string }>> = {};
+                for (const [key, value] of Object.entries(prev)) nextParts[remapKey(key)] = value;
+                return nextParts;
+            });
+            updateExamsCache({ subjects: next, examTypes: nextTypes, removedByExam: nextRemoved });
             setEditingSubject(null);
             setEditingSubjectValue("");
         } catch (e) {
@@ -399,6 +546,7 @@ export default function ExamsTab() {
             classes: unknown[];
             examTypes: ExamTypeOption[];
             subjects: string[];
+            removedByExam?: Record<string, string[]>;
         }) => {
             const data = payload.terms as TermData[];
             const classData = payload.classes as ClassData[];
@@ -407,6 +555,7 @@ export default function ExamsTab() {
             setExamTypes(payload.examTypes);
             syncMaxDrafts(payload.examTypes);
             setSubjects(payload.subjects);
+            setRemovedByExam(payload.removedByExam ?? {});
             setExamTypesLoading(false);
             setSubjectsLoading(false);
 
@@ -969,10 +1118,16 @@ export default function ExamsTab() {
                                         <p className="text-[10px] font-bold uppercase tracking-wide text-white/40">
                                             Subjects for {t.name}
                                         </p>
+                                        <p className="text-[10px] text-white/35">
+                                            Delete removes the subject from {t.name} only. It stays in the subjects list and in other exam types.
+                                        </p>
                                         {subjects.length === 0 ? (
                                             <p className="text-[10px] text-white/40">Add subjects first, then set max marks for each one.</p>
                                         ) : (
-                                            subjects.map((subjectName) => {
+                                            subjects.filter((subjectName) => {
+                                                const subjectKey = subjectName.trim().toUpperCase();
+                                                return !(removedByExam[t.name] ?? []).includes(subjectKey);
+                                            }).map((subjectName) => {
                                                 const subjectKey = subjectName.trim().toUpperCase();
                                                 const rowKey = subjectMaxKey(t.name, subjectKey);
                                                 const parts = subjectPartsByKey[rowKey] ?? [];
@@ -984,7 +1139,51 @@ export default function ExamsTab() {
                                                 return (
                                                     <div key={subjectKey} className="rounded-xl bg-black/25 px-3 py-2.5 space-y-2">
                                                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                                                            <span className="min-w-0 break-words text-xs font-bold text-white sm:min-w-32">{subjectKey}</span>
+                                                            {editingSubject === subjectKey ? (
+                                                                <div className="flex min-w-0 flex-1 items-center gap-1">
+                                                                    <input
+                                                                        autoFocus
+                                                                        value={editingSubjectValue}
+                                                                        onChange={(e) =>
+                                                                            setEditingSubjectValue(e.target.value.toUpperCase())
+                                                                        }
+                                                                        onKeyDown={(e) => {
+                                                                            if (e.key === "Enter") {
+                                                                                e.preventDefault();
+                                                                                void renameSubject(subjectKey);
+                                                                            }
+                                                                            if (e.key === "Escape") {
+                                                                                setEditingSubject(null);
+                                                                                setEditingSubjectValue("");
+                                                                            }
+                                                                        }}
+                                                                        className="min-w-0 flex-1 px-2 py-1.5 rounded-lg bg-black/40 border border-[#B4F42A]/40 text-white text-xs outline-none uppercase"
+                                                                    />
+                                                                    <button
+                                                                        type="button"
+                                                                        disabled={subjectSaving}
+                                                                        onClick={() => renameSubject(subjectKey)}
+                                                                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full hover:bg-[#B4F42A]/20 disabled:opacity-50"
+                                                                        title="Save name"
+                                                                    >
+                                                                        <Check className="w-3.5 h-3.5 text-[#B4F42A]" />
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        disabled={subjectSaving}
+                                                                        onClick={() => {
+                                                                            setEditingSubject(null);
+                                                                            setEditingSubjectValue("");
+                                                                        }}
+                                                                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full hover:bg-white/10 disabled:opacity-50"
+                                                                        title="Cancel"
+                                                                    >
+                                                                        <X className="w-3.5 h-3.5 text-white/60" />
+                                                                    </button>
+                                                                </div>
+                                                            ) : (
+                                                                <span className="min-w-0 break-words text-xs font-bold text-white sm:min-w-32">{subjectKey}</span>
+                                                            )}
                                                             <div className="flex items-center gap-2">
                                                                 <span className="text-[10px] text-white/40">Max</span>
                                                                 {parts.length > 0 ? (
@@ -1005,6 +1204,34 @@ export default function ExamsTab() {
                                                                     />
                                                                 )}
                                                             </div>
+                                                            {editingSubject === subjectKey ? null : (
+                                                                <div className="ml-auto flex items-center gap-1">
+                                                                    <button
+                                                                        type="button"
+                                                                        disabled={subjectSaving}
+                                                                        onClick={() => {
+                                                                            setSubjectError("");
+                                                                            setEditingSubject(subjectKey);
+                                                                            setEditingSubjectValue(subjectKey);
+                                                                        }}
+                                                                        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full hover:bg-white/10 disabled:opacity-50"
+                                                                        title="Edit subject"
+                                                                        aria-label={`Edit ${subjectKey}`}
+                                                                    >
+                                                                        <Pencil className="w-3.5 h-3.5 text-white/70" />
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        disabled={subjectSaving}
+                                                                        onClick={() => deleteSubjectFromExam(t.name, subjectKey)}
+                                                                        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full hover:bg-red-500/20 disabled:opacity-50"
+                                                                        title="Remove from this exam type only"
+                                                                        aria-label={`Remove ${subjectKey} from ${t.name}`}
+                                                                    >
+                                                                        <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                                                                    </button>
+                                                                </div>
+                                                            )}
                                                         </div>
                                                         {parts.map((row, idx) => (
                                                             <div key={idx} className="flex gap-2 items-center">
@@ -1077,6 +1304,21 @@ export default function ExamsTab() {
                                                     </div>
                                                 );
                                             })
+                                        )}
+                                        {(removedByExam[t.name] ?? []).length > 0 && (
+                                            <div className="flex flex-wrap gap-2 pt-1">
+                                                {(removedByExam[t.name] ?? []).map((removedName) => (
+                                                    <button
+                                                        key={removedName}
+                                                        type="button"
+                                                        disabled={subjectSaving}
+                                                        onClick={() => restoreSubjectOnExam(t.name, removedName)}
+                                                        className="px-2.5 py-1 rounded-full text-[10px] font-bold border border-white/10 bg-white/5 text-white/50 hover:text-white disabled:opacity-50"
+                                                    >
+                                                        {removedName} · add back
+                                                    </button>
+                                                ))}
+                                            </div>
                                         )}
                                     </div>
                                 </div>
@@ -1201,7 +1443,7 @@ export default function ExamsTab() {
                                             disabled={subjectSaving}
                                             onClick={() => deleteSubject(t)}
                                             className="inline-flex items-center justify-center rounded-full p-0.5 hover:bg-red-500/20 disabled:opacity-50"
-                                            title="Delete subject"
+                                            title="Remove from every exam type"
                                         >
                                             <Trash2 className="w-3 h-3 text-red-400" />
                                         </button>

@@ -3,6 +3,14 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
 import { randomUUID } from "crypto";
+import {
+  globalHiddenSubjectNames,
+  hideSubjectEverywhere,
+  hideSubjectOnExamType,
+  removedSubjectsByExam,
+  restoreSubjectOnExamType,
+  rewriteHiddenOnRename,
+} from "@/lib/examSubjectHide";
 
 const DEFAULT_EXAM_SUBJECTS = [
   "MATHEMATICS",
@@ -174,12 +182,20 @@ export async function GET() {
       });
     });
 
-    // Admin-deleted subjects stay hidden even if defaults/teachers still have them
+    // Admin-deleted subjects stay hidden even if defaults/teachers still have them.
+    // Entries scoped to one exam type are not catalog deletions.
+    const globallyHidden = globalHiddenSubjectNames(Array.from(hidden));
     const subjects = Array.from(names)
-      .filter((n) => !hidden.has(n))
+      .filter((n) => !globallyHidden.has(n))
       .sort();
 
-    return NextResponse.json({ subjects }, { status: 200 });
+    return NextResponse.json(
+      {
+        subjects,
+        removedByExam: removedSubjectsByExam(Array.from(hidden)),
+      },
+      { status: 200 }
+    );
   } catch (e: unknown) {
     console.error("Exam subjects GET:", e);
     return NextResponse.json(
@@ -213,6 +229,24 @@ export async function POST(req: Request) {
       return NextResponse.json(
         { message: "Subject name is required" },
         { status: 400 }
+      );
+    }
+
+    const restoreExamType =
+      typeof body.restoreExamType === "string"
+        ? body.restoreExamType.trim().toUpperCase()
+        : "";
+    if (restoreExamType) {
+      const settings = await ensureSettings(schoolId);
+      const nextHidden = restoreSubjectOnExamType(
+        settings.hiddenExamSubjects ?? [],
+        restoreExamType,
+        name
+      );
+      await setHiddenSubjects(schoolId, nextHidden);
+      return NextResponse.json(
+        { subject: { name }, restored: true, examType: restoreExamType },
+        { status: 200 }
       );
     }
 
@@ -323,14 +357,49 @@ export async function PATCH(req: Request) {
     }
 
     const settings = await ensureSettings(schoolId);
-    const nextHidden = (settings.hiddenExamSubjects ?? [])
-      .map((n) => n.trim().toUpperCase())
-      .filter((n) => n && n !== from && n !== to);
+    await setHiddenSubjects(
+      schoolId,
+      rewriteHiddenOnRename(settings.hiddenExamSubjects ?? [], from, to)
+    );
 
-    // Hide old name so it doesn't reappear from defaults/teachers
-    nextHidden.push(from);
-
-    await setHiddenSubjects(schoolId, Array.from(new Set(nextHidden)));
+    await prisma.$executeRaw`
+      UPDATE "ExamTypeSubject" AS ets
+      SET subject = ${to}, "updatedAt" = NOW()
+      FROM "ExamType" AS et
+      WHERE ets."examTypeId" = et.id
+        AND et."schoolId" = ${schoolId}
+        AND ets.subject = ${from}
+        AND NOT EXISTS (
+          SELECT 1 FROM "ExamTypeSubject" AS other
+          WHERE other."examTypeId" = ets."examTypeId"
+            AND other.subject = ${to}
+            AND other.id <> ets.id
+        )
+    `;
+    await prisma.$executeRaw`
+      UPDATE "Mark" AS m
+      SET subject = ${to}, "updatedAt" = NOW()
+      FROM "Class" AS c
+      WHERE m."classId" = c.id
+        AND c."schoolId" = ${schoolId}
+        AND UPPER(TRIM(m.subject)) = ${from}
+    `;
+    await prisma.$executeRaw`
+      UPDATE "SyllabusTracking" AS st
+      SET subject = ${to}, "updatedAt" = NOW()
+      FROM "ExamTerm" AS t
+      WHERE st."termId" = t.id
+        AND t."schoolId" = ${schoolId}
+        AND UPPER(TRIM(st.subject)) = ${from}
+    `;
+    await prisma.$executeRaw`
+      UPDATE "ExamSchedule" AS es
+      SET subject = ${to}, "updatedAt" = NOW()
+      FROM "ExamTerm" AS t
+      WHERE es."termId" = t.id
+        AND t."schoolId" = ${schoolId}
+        AND UPPER(TRIM(es.subject)) = ${from}
+    `;
 
     return NextResponse.json({ subject: { name: to } }, { status: 200 });
   } catch (e: unknown) {
@@ -362,11 +431,44 @@ export async function DELETE(req: Request) {
     const nameParam = searchParams.get("name");
     const name =
       typeof nameParam === "string" ? nameParam.trim().toUpperCase() : "";
+    const examType =
+      typeof searchParams.get("examType") === "string"
+        ? searchParams.get("examType")!.trim().toUpperCase()
+        : "";
 
     if (!name) {
       return NextResponse.json(
         { message: "Subject name is required" },
         { status: 400 }
+      );
+    }
+
+    if (examType) {
+      const settings = await ensureSettings(schoolId);
+      await setHiddenSubjects(
+        schoolId,
+        hideSubjectOnExamType(settings.hiddenExamSubjects ?? [], examType, name)
+      );
+      await prisma.$executeRaw`
+        DELETE FROM "ExamTypeSubjectSection" AS sec
+        USING "ExamTypeSubject" AS s, "ExamType" AS et
+        WHERE sec."examTypeSubjectId" = s.id
+          AND s."examTypeId" = et.id
+          AND et."schoolId" = ${schoolId}
+          AND UPPER(TRIM(et.name)) = ${examType}
+          AND UPPER(TRIM(s.subject)) = ${name}
+      `;
+      await prisma.$executeRaw`
+        DELETE FROM "ExamTypeSubject" AS s
+        USING "ExamType" AS et
+        WHERE s."examTypeId" = et.id
+          AND et."schoolId" = ${schoolId}
+          AND UPPER(TRIM(et.name)) = ${examType}
+          AND UPPER(TRIM(s.subject)) = ${name}
+      `;
+      return NextResponse.json(
+        { success: true, scope: "examType", examType, subject: name },
+        { status: 200 }
       );
     }
 
@@ -380,13 +482,10 @@ export async function DELETE(req: Request) {
 
     // Always hide so defaults / teacher-assigned names don't come back
     const settings = await ensureSettings(schoolId);
-    const nextHidden = Array.from(
-      new Set([
-        ...(settings.hiddenExamSubjects ?? []).map((n) => n.trim().toUpperCase()),
-        name,
-      ].filter(Boolean))
+    await setHiddenSubjects(
+      schoolId,
+      hideSubjectEverywhere(settings.hiddenExamSubjects ?? [], name)
     );
-    await setHiddenSubjects(schoolId, nextHidden);
 
     return NextResponse.json({ success: true }, { status: 200 });
   } catch (e: unknown) {

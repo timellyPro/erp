@@ -6,6 +6,7 @@ import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import {
   buildFeeDueReportPayload,
+  filterFeeDueReportToHead,
   fillMissingClassFeeStructuresFromSiblings,
   type ExtraFeeLite,
   type StudentFeeDueInput,
@@ -33,6 +34,7 @@ export async function GET(req: Request) {
 
     const { searchParams } = new URL(req.url);
     const classIdFilter = searchParams.get("classId")?.trim() || undefined;
+    const headFilter = searchParams.get("head")?.trim() || "";
     const statusFilter = studentStatusFilter(searchParams.get("status"));
     const includeSchoolWideExtras =
       searchParams.get("schoolWideExtras") === "1" || searchParams.get("schoolWideExtras") === "true";
@@ -193,7 +195,7 @@ export async function GET(req: Request) {
       };
     });
 
-    const payload = buildFeeDueReportPayload({
+    const built = buildFeeDueReportPayload({
       schoolName: school?.name ?? null,
       extraFees,
       students,
@@ -202,6 +204,13 @@ export async function GET(req: Request) {
       includeSchoolWideExtras,
       extraFeesById,
     });
+    const payload = headFilter ? filterFeeDueReportToHead(built, headFilter) : built;
+    if (headFilter && payload.rows.length === 0) {
+      return NextResponse.json(
+        { message: `No fee records found for “${headFilter}”.` },
+        { status: 404 }
+      );
+    }
 
     const workbook = await buildFeeDueReportWorkbook(payload);
     const buf = await workbook.xlsx.writeBuffer();

@@ -42,6 +42,7 @@ type ConsolidatedSheet = {
   includeSectionCol?: boolean;
   subjects: string[];
   students: ConsolidatedStudent[];
+  examType?: string;
 };
 
 type ConsolidatedPayload = {
@@ -82,7 +83,7 @@ export default function SchoolAdminDownloadReports() {
   const [selectMode, setSelectMode] = useState<"class" | "section">("class");
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [examTypeOptions, setExamTypeOptions] = useState<string[]>(DEFAULT_EXAM_TYPES);
-  const [selectedExamType, setSelectedExamType] = useState("ALL");
+  const [selectedExamTypes, setSelectedExamTypes] = useState<Set<string>>(new Set(["ALL"]));
   const [subjectOptions, setSubjectOptions] = useState<string[]>([]);
   const [selectedSubjects, setSelectedSubjects] = useState<Set<string>>(new Set());
   const [classSearch, setClassSearch] = useState("");
@@ -219,6 +220,29 @@ export default function SchoolAdminDownloadReports() {
     setClassSearch("");
   };
 
+  const chosenExamTypes = (): string[] => {
+    const picked = Array.from(selectedExamTypes).filter((name) => name !== "ALL");
+    if (selectedExamTypes.has("ALL") || picked.length === 0) return ["ALL"];
+    return picked;
+  };
+
+  const toggleExamType = (name: string) => {
+    setSelectedExamTypes((prev) => {
+      if (name === "ALL") return new Set(["ALL"]);
+      const next = new Set(prev);
+      next.delete("ALL");
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next.size === 0 ? new Set(["ALL"]) : next;
+    });
+  };
+
+  const examFileLabel = (types: string[]) => {
+    if (types.length === 0 || types.includes("ALL")) return "ALL_EXAMS";
+    if (types.length === 1) return types[0].replace(/\s+/g, "_");
+    return "MULTI_EXAMS";
+  };
+
   const toggleSubject = (name: string) => {
     setSelectedSubjects((prev) => {
       const next = new Set(prev);
@@ -239,25 +263,41 @@ export default function SchoolAdminDownloadReports() {
     const classIds = resolveSelectedClassIds();
     if (classIds.length === 0) throw new Error("Select at least one class or section");
 
-    const params = new URLSearchParams({
-      classIds: classIds.join(","),
-      groupBy: selectMode,
-    });
-    if (selectedExamType && selectedExamType !== "ALL") {
-      params.set("examType", selectedExamType);
-    }
-    if (selectedSubjects.size > 0) {
-      params.set("subjects", Array.from(selectedSubjects).join(","));
-    }
+    const examTypes = chosenExamTypes();
+    const payloads = await Promise.all(
+      examTypes.map(async (examType) => {
+        const params = new URLSearchParams({
+          classIds: classIds.join(","),
+          groupBy: selectMode,
+        });
+        if (examType !== "ALL") params.set("examType", examType);
+        if (selectedSubjects.size > 0) {
+          params.set("subjects", Array.from(selectedSubjects).join(","));
+        }
+        const res = await fetch(`/api/marks/consolidated?${params.toString()}`, {
+          credentials: "include",
+          cache: "no-store",
+        });
+        const data = (await res.json()) as ConsolidatedPayload & { message?: string };
+        if (!res.ok) throw new Error(data.message || `Failed to load ${examType}`);
+        return data;
+      })
+    );
 
-    const res = await fetch(`/api/marks/consolidated?${params.toString()}`, {
-      credentials: "include",
-      cache: "no-store",
-    });
-    const data = (await res.json()) as ConsolidatedPayload & { message?: string };
-    if (!res.ok) throw new Error(data.message || "Failed to load consolidated marks");
-    if ((data.sheets ?? []).length === 0) throw new Error("No class sheets to export");
-    return data;
+    const first = payloads[0];
+    if (!first) throw new Error("No class sheets to export");
+    const sheets = payloads.flatMap((data) =>
+      (data.sheets ?? []).map((sheet) => ({
+        ...sheet,
+        examType: data.examType,
+      }))
+    );
+    if (sheets.length === 0) throw new Error("No class sheets to export");
+    return {
+      ...first,
+      examType: examTypes.length === 1 ? (first.examType ?? examTypes[0]) : examTypes.join(", "),
+      sheets,
+    };
   };
 
   const handleDownloadExcel = async () => {
@@ -274,12 +314,16 @@ export default function SchoolAdminDownloadReports() {
       workbook.creator = "Timelly";
       const usedNames = new Set<string>();
 
-      const examLabel =
-        data.examType && data.examType !== "ALL" ? data.examType : "ALL EXAMS";
       const schoolName = data.school?.name ?? "School";
 
       for (const sheet of data.sheets ?? []) {
-        const ws = workbook.addWorksheet(sheetNameSafe(sheet.label, usedNames));
+        const examLabel =
+          sheet.examType && sheet.examType !== "ALL" ? sheet.examType : "ALL EXAMS";
+        const sheetTitle =
+          chosenExamTypes().length > 1 && sheet.examType && sheet.examType !== "ALL"
+            ? `${sheet.examType} ${sheet.label}`
+            : sheet.label;
+        const ws = workbook.addWorksheet(sheetNameSafe(sheetTitle, usedNames));
         const subjects = sheet.subjects ?? [];
         const showSection = Boolean(sheet.includeSectionCol);
         const colCount = 2 + (showSection ? 1 : 0) + subjects.length + 4;
@@ -382,8 +426,7 @@ export default function SchoolAdminDownloadReports() {
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      const examFile =
-        selectedExamType === "ALL" ? "ALL_EXAMS" : selectedExamType.replace(/\s+/g, "_");
+      const examFile = examFileLabel(chosenExamTypes());
       const modeFile = selectMode === "class" ? "BY_CLASS" : "BY_SECTION";
       a.href = url;
       a.download = `${examFile}_CONSOLIDATED_${modeFile}_${new Date().toISOString().slice(0, 10)}.xlsx`;
@@ -412,8 +455,7 @@ export default function SchoolAdminDownloadReports() {
       const data = await fetchConsolidated();
       setProgress("Generating PDF…");
 
-      const examFile =
-        selectedExamType === "ALL" ? "ALL_EXAMS" : selectedExamType.replace(/\s+/g, "_");
+      const examFile = examFileLabel(chosenExamTypes());
       const modeFile = selectMode === "class" ? "BY_CLASS" : "BY_SECTION";
 
       await downloadConsolidatedMarksPdf(
@@ -482,18 +524,34 @@ export default function SchoolAdminDownloadReports() {
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-white/60 mb-1.5">EXAM TYPE</label>
-          <select
-            value={selectedExamType}
-            onChange={(e) => setSelectedExamType(e.target.value)}
-            className="w-full sm:w-72 px-4 py-2.5 bg-black/40 border border-white/10 rounded-xl focus:outline-none focus:border-lime-400/50 text-white text-sm"
-          >
-            {examTypeOptions.map((t) => (
-              <option key={t} value={t} className="bg-gray-900">
-                {t}
-              </option>
-            ))}
-          </select>
+          <label className="block text-xs font-medium text-white/60 mb-1.5">
+            EXAM TYPE <span className="text-white/35">(select one or more, then download)</span>
+          </label>
+          <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto no-scrollbar">
+            {examTypeOptions.map((name) => {
+              const on = name === "ALL" ? selectedExamTypes.has("ALL") : selectedExamTypes.has(name);
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => toggleExamType(name)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition ${
+                    on
+                      ? "bg-lime-400/20 border-lime-400/40 text-lime-300"
+                      : "bg-white/5 border-white/10 text-white/70 hover:bg-white/10"
+                  }`}
+                >
+                  {on ? <Check size={12} strokeWidth={3} /> : null}
+                  {name}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-[11px] text-white/40">
+            {chosenExamTypes().includes("ALL")
+              ? "Download includes every exam type."
+              : `Download includes ${chosenExamTypes().join(", ")}. Each exam type is a separate sheet.`}
+          </p>
         </div>
 
         <div>
