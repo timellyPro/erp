@@ -17,6 +17,8 @@ export type ConsolidatedMarksPdfSheet = {
   includeSectionCol?: boolean;
   subjects: string[];
   students: ConsolidatedMarksPdfStudent[];
+  /** When a download includes several exam types, each sheet names its own. */
+  examType?: string;
 };
 
 export type ConsolidatedMarksPdfPayload = {
@@ -90,7 +92,9 @@ function renderSheet(
     startNewDoc: boolean;
   }
 ): void {
-  const { sheet, schoolName, schoolAddress, examLabel, logoPng, watermarkPng, startNewDoc } = args;
+  const { sheet, schoolName, schoolAddress, logoPng, watermarkPng, startNewDoc } = args;
+  const examLabel =
+    sheet.examType && sheet.examType !== "ALL" ? sheet.examType : args.examLabel;
   const subjects = sheet.subjects ?? [];
   const showSection = Boolean(sheet.includeSectionCol);
   const colCount = 2 + (showSection ? 1 : 0) + subjects.length + 4;

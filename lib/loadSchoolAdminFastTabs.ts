@@ -149,6 +149,8 @@ export type ExamsPagePayload = {
   classes: unknown[];
   examTypes: ExamTypeOption[];
   subjects: string[];
+  /** Subjects removed from one exam type. They stay in the catalog. */
+  removedByExam?: Record<string, string[]>;
 };
 
 export type UserMePayload = {
@@ -540,11 +542,14 @@ export async function loadExamsPage(options?: { revalidate?: boolean; signal?: A
           cache: "no-store",
           signal: options?.signal,
         });
-        return jsonOrThrow<{ subjects?: string[] }>(subjectsRes, "Failed to load subjects");
+        return jsonOrThrow<{ subjects?: string[]; removedByExam?: Record<string, string[]> }>(
+          subjectsRes,
+          "Failed to load subjects"
+        );
       };
 
       let typesData: { examTypes?: unknown[] } | null = null;
-      let subjectsData: { subjects?: string[] } | null = null;
+      let subjectsData: { subjects?: string[]; removedByExam?: Record<string, string[]> } | null = null;
       let typesError: unknown = null;
       let subjectsError: unknown = null;
       try {
@@ -583,6 +588,10 @@ export async function loadExamsPage(options?: { revalidate?: boolean; signal?: A
         classes: Array.isArray(termsData.classes) ? termsData.classes : [],
         examTypes: normalizeExamTypes(typesData?.examTypes),
         subjects: Array.isArray(subjectsData?.subjects) ? subjectsData.subjects : [],
+        removedByExam:
+          subjectsData?.removedByExam && typeof subjectsData.removedByExam === "object"
+            ? subjectsData.removedByExam
+            : {},
       };
     },
     options
