@@ -262,3 +262,44 @@ drift, the caching audit, the index audit, and the dead-route cleanup — is
 closed and verified with passing tests, not just asserted. If the 14 deleted
 routes turn out to have had a real external caller after all, `git revert
 4e22c7f` restores them cleanly in one step.
+
+---
+
+## Verification addendum — 2026-10-03 (pre-PR)
+
+Re-run against the committed tree (`8d66883`) before raising the PR to the
+upstream repo:
+
+```
+npx tsc --noEmit                         → clean
+npx eslint . --quiet                     → clean (exit 0)
+npm run build (prisma generate + next)   → succeeds
+npx jest                                 → 1928/1928 passing (216 suites)
+npx tsx scripts/checkTenantIsolation.ts  → both checks pass, 163 routes
+```
+
+The 100/100 above is a self-assessment; the commands above are the evidence
+behind it.
+
+### Dependency review (`npm audit`: 0 critical, 36 high, mostly dev-only)
+
+- **`xlsx` 0.18.5** (prototype pollution + ReDoS, no npm fix published): every
+  server-side parse of an uploaded workbook already goes through
+  `lib/excel/readWorkbookRows.ts` (`exceljs`) — `student/bulk-upload` and
+  `fees/structure/bulk`. The only remaining `XLSX.read` is client-side in
+  `BulkExtraFeeByTimellyModal.tsx` (the user's own file, in their own
+  browser). Server-side `xlsx` use is write/export only. Residual risk: low.
+- **`prisma` / `@prisma/config` / `deepmerge-ts`**: the advisory is stack
+  exhaustion in the Prisma CLI's config merging (build/migrate tooling, not
+  the request path). npm's suggested "fix" is a downgrade to 6.12.0, which is
+  not appropriate. Accepted; revisit on the next Prisma release.
+- The remaining highs are `jest` / `eslint-config-next` transitive dev
+  dependencies.
+
+### Deleted routes (14) — caller check
+
+Searched the fork and every branch of `timellyPro/erp` (including `main`) for
+references to the 14 deleted paths plus `communication/zegoToken`: **zero
+callers**, and no config, script, workflow or doc references them. Not
+provable from code: an external client (e.g. a mobile app). Ask the upstream
+owners to confirm before merge.
