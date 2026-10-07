@@ -9,6 +9,11 @@ import {
   canonicalizeResidencyType,
   formatResidencyTypeForDisplay,
 } from "@/lib/residencyDisplay";
+import { residencyKind } from "@/lib/residencyConversion";
+import ResidencyConversionModal, {
+  type ConversionPeriod,
+  type ConversionPreview,
+} from "./ResidencyConversionModal";
 import {
   ageFromDob,
   formatDobDisplay,
@@ -110,6 +115,12 @@ export const ProfileSidebar = ({
   const [sClassId, setSClassId] = useState(classId ?? "");
   const [sGender, setSGender] = useState(gender);
   const [sResidency, setSResidency] = useState(() => residencySelectValue(residencyType));
+  const [conversionOpen, setConversionOpen] = useState(false);
+  const [conversionPreview, setConversionPreview] = useState<ConversionPreview | null>(null);
+  const [conversionTransportKey, setConversionTransportKey] = useState("");
+  const [conversionSaving, setConversionSaving] = useState(false);
+  const [residencyPeriods, setResidencyPeriods] = useState<ConversionPeriod[]>([]);
+  const [residencyYearLabel, setResidencyYearLabel] = useState("");
 
   const [pFatherName, setPFatherName] = useState(fatherName);
   const [pFatherPhone, setPFatherPhone] = useState(fatherPhone || student.phone || "");
@@ -136,6 +147,27 @@ export const ProfileSidebar = ({
     setPMotherName(motherName);
     setPMotherPhone(motherPhone || "");
   }, [fatherName, fatherPhone, motherName, motherPhone, student.phone, parentModalOpen]);
+
+  useEffect(() => {
+    if (!studentId.trim()) {
+      setResidencyPeriods([]);
+      return;
+    }
+    let cancelled = false;
+    void fetch(`/api/student/${encodeURIComponent(studentId)}/residency-conversion`, {
+      credentials: "include",
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        setResidencyYearLabel(typeof data.academicYearLabel === "string" ? data.academicYearLabel : "");
+        setResidencyPeriods(Array.isArray(data.periods) ? data.periods : []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId, residencyType]);
 
   const canEdit = Boolean(studentId.trim());
 
@@ -164,6 +196,11 @@ export const ProfileSidebar = ({
       alert("Name must be at least 2 characters.");
       return;
     }
+    const savedResidency = residencySelectValue(sResidency);
+    const currentKind = residencyKind(residencyType);
+    const nextKind = residencyKind(savedResidency);
+    const converting = Boolean(currentKind && nextKind && currentKind !== nextKind);
+
     setSaving(true);
     try {
       const res = await fetch(`/api/student/${encodeURIComponent(studentId)}`, {
@@ -178,8 +215,8 @@ export const ProfileSidebar = ({
           rollNo: sRoll.trim() || null,
           classId: sClassId || null,
           gender: sGender.trim() || null,
-          residencyType: residencySelectValue(sResidency),
           dob: sDob.trim() || null,
+          ...(converting ? {} : { residencyType: savedResidency }),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -187,16 +224,14 @@ export const ProfileSidebar = ({
         alert(typeof data.message === "string" ? data.message : "Update failed");
         return;
       }
-      setStudentModalOpen(false);
       const resolvedClass = classes.find((c) => c.id === sClassId);
-      const savedResidency = residencySelectValue(sResidency);
       const savedDob = sDob.trim();
       const nextAge = ageFromDob(savedDob);
       const savedName =
         typeof data.student?.name === "string" && data.student.name.trim()
           ? data.student.name.trim()
           : name;
-      onSaved?.({
+      const savedPatch = {
         name: savedName,
         email: sEmail.trim(),
         phone: sPhone.trim(),
@@ -204,19 +239,110 @@ export const ProfileSidebar = ({
         rollNo: sRoll.trim(),
         classId: sClassId || null,
         gender: sGender.trim(),
-        residencyType: savedResidency,
         dob: savedDob,
         ...(nextAge != null ? { age: String(nextAge) } : {}),
-        ...(resolvedClass
-          ? {
-              classDisplayName: resolvedClass.label,
-            }
-          : {}),
-      });
+        ...(resolvedClass ? { classDisplayName: resolvedClass.label } : {}),
+      };
+
+      if (converting && nextKind) {
+        const previewRes = await fetch(
+          `/api/student/${encodeURIComponent(studentId)}/residency-conversion?to=${encodeURIComponent(nextKind)}`,
+          { credentials: "include" }
+        );
+        const preview = await previewRes.json().catch(() => ({}));
+        if (!previewRes.ok) {
+          alert(typeof preview.message === "string" ? preview.message : "Could not prepare the fee conversion");
+          onSaved?.(savedPatch);
+          return;
+        }
+        setStudentModalOpen(false);
+        onSaved?.(savedPatch);
+        const initialKey = Array.isArray(preview.periods)
+          ? String(
+              preview.periods.find(
+                (period: { transportKey?: string | null }) => period.transportKey
+              )?.transportKey ?? ""
+            )
+          : "";
+        setConversionTransportKey(initialKey);
+        setConversionPreview({
+          academicYearLabel: String(preview.academicYearLabel ?? ""),
+          fromResidency: nextKind === "Hosteller" ? "Day Scholar" : "Hosteller",
+          toResidency: nextKind,
+          periods: Array.isArray(preview.periods) ? preview.periods : [],
+          charges: Array.isArray(preview.charges) ? preview.charges : [],
+          transportOptions: Array.isArray(preview.transportOptions) ? preview.transportOptions : [],
+          requiresTransportChoice: Boolean(preview.requiresTransportChoice),
+        });
+        setConversionOpen(true);
+        return;
+      }
+
+      setStudentModalOpen(false);
+      onSaved?.({ ...savedPatch, residencyType: savedResidency });
     } catch {
       alert("Update failed");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const chooseConversionTransport = async (key: string) => {
+    if (!conversionPreview) return;
+    setConversionTransportKey(key);
+    try {
+      const params = new URLSearchParams({ to: conversionPreview.toResidency, transportKey: key });
+      const res = await fetch(
+        `/api/student/${encodeURIComponent(studentId)}/residency-conversion?${params.toString()}`,
+        { credentials: "include" }
+      );
+      const preview = await res.json().catch(() => ({}));
+      if (!res.ok) return;
+      setConversionPreview({
+        academicYearLabel: String(preview.academicYearLabel ?? conversionPreview.academicYearLabel),
+        fromResidency: conversionPreview.fromResidency,
+        toResidency: conversionPreview.toResidency,
+        periods: Array.isArray(preview.periods) ? preview.periods : conversionPreview.periods,
+        charges: Array.isArray(preview.charges) ? preview.charges : conversionPreview.charges,
+        transportOptions: Array.isArray(preview.transportOptions)
+          ? preview.transportOptions
+          : conversionPreview.transportOptions,
+        requiresTransportChoice: Boolean(preview.requiresTransportChoice),
+      });
+    } catch {
+      // Keep the previous preview if the slab refresh fails. The confirm request still sends the selected slab.
+    }
+  };
+
+  const confirmConversion = async () => {
+    if (!conversionPreview) return;
+    setConversionSaving(true);
+    try {
+      const res = await fetch(`/api/student/${encodeURIComponent(studentId)}/residency-conversion`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          toResidency: conversionPreview.toResidency,
+          transportKey: conversionTransportKey || null,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(typeof data.message === "string" ? data.message : "Conversion failed");
+        return;
+      }
+      setConversionOpen(false);
+      setConversionPreview(null);
+      if (Array.isArray(data.periods)) setResidencyPeriods(data.periods);
+      if (typeof data.academicYearLabel === "string") setResidencyYearLabel(data.academicYearLabel);
+      onSaved?.({
+        residencyType: typeof data.residencyType === "string" ? data.residencyType : conversionPreview.toResidency,
+      });
+    } catch {
+      alert("Conversion failed");
+    } finally {
+      setConversionSaving(false);
     }
   };
 
@@ -307,6 +433,17 @@ export const ProfileSidebar = ({
           <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 min-w-0">
             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Type</p>
             <p className="text-xs font-semibold text-white truncate">{getResidencyLabel(residencyType)}</p>
+            {residencyPeriods.length > 0 ? (
+              <p className="mt-1 text-[10px] leading-snug text-lime-200/80">
+                {residencyYearLabel ? `${residencyYearLabel}: ` : ""}
+                {residencyPeriods
+                  .map(
+                    (period) =>
+                      `${period.months} mo ${period.title}${period.transportLabel ? ` (${period.transportLabel})` : ""}`
+                  )
+                  .join(" · ")}
+              </p>
+            ) : null}
           </div>
           <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 min-w-0">
             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">DOB</p>
@@ -478,6 +615,9 @@ export const ProfileSidebar = ({
                   options={[...RESIDENCY_OPTIONS]}
                   bgColor="black"
                 />
+                <p className="mt-1 text-[11px] leading-snug text-white/45">
+                  Hostel and Day Scholar changes apply to this student only. Fees for the months already spent stay, and a transport kilometre choice opens if they become a day scholar.
+                </p>
               </div>
             </div>
             <div className="mt-5 flex justify-end gap-2">
@@ -582,6 +722,20 @@ export const ProfileSidebar = ({
           </div>
         </div>,
         document.body
+      ) : null}
+      {conversionOpen && conversionPreview ? (
+        <ResidencyConversionModal
+          preview={conversionPreview}
+          transportKey={conversionTransportKey}
+          saving={conversionSaving}
+          onTransportKey={(key) => void chooseConversionTransport(key)}
+          onClose={() => {
+            if (conversionSaving) return;
+            setConversionOpen(false);
+            setConversionPreview(null);
+          }}
+          onConfirm={() => void confirmConversion()}
+        />
       ) : null}
     </div>
   );

@@ -248,7 +248,8 @@ model School {
   certificateTemplates CertificateTemplate[]
   certificates         Certificate[]
   transferCertificates TransferCertificate[]
-  studentHistories     StudentHistory[]
+  studentHistories       StudentHistory[]
+  studentResidencyPeriods StudentResidencyPeriod[]
   appointments         Appointment[]
   leaveRequests        LeaveRequest[]
   studentLeaveRequests StudentLeaveRequest[]
@@ -595,6 +596,7 @@ model Student {
   fee                  StudentFee?
   payments             Payment[]
   feeDiscountApprovals FeeDiscountApproval[]
+  residencyPeriods     StudentResidencyPeriod[]
 
   // Parent SaaS subscription entries for this student/parent
   subscriptions ParentSubscription[]
@@ -1237,6 +1239,27 @@ model ClassFeeStructure {
   @@index([schoolId])
 }
 
+/// One stretch of hostel or day scholar inside an academic year (June–May).
+/// Used to prorate fees for a single student. Payment rows are never rewritten.
+model StudentResidencyPeriod {
+  id                    String    @id @default(cuid())
+  studentId             String
+  student               Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  schoolId              String
+  school                School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicYearStartYear Int
+  residencyType         String
+  startedOn             DateTime  @db.Date
+  endedOn               DateTime? @db.Date
+  months                Int
+  transportKey          String?
+  transportLabel        String?
+  createdAt             DateTime  @default(now())
+
+  @@index([studentId, academicYearStartYear])
+  @@index([schoolId, academicYearStartYear])
+}
+
 // Extra fees: uniform, bus, or any custom - applied to class, section, or student
 model ExtraFee {
   id                       String  @id @default(cuid())
@@ -1252,6 +1275,8 @@ model ExtraFee {
   residencyScope           String  @default("ALL")
   /// When true, student fee UI shows this head as two 50/50 installments (like hostel/mess).
   splitIntoTwoInstallments Boolean @default(false)
+  /// Prorated hostel, mess, or transport created for one student's residency conversion.
+  residencyConversion      Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -22,6 +22,7 @@ import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure
 import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
 import { invalidateStudentListCaches } from "@/lib/invalidateStudentListCaches";
 import { canonicalizeResidencyType } from "@/lib/residencyDisplay";
+import { residencyKind } from "@/lib/residencyConversion";
 import { ageFromDob, formatDobYmd, parseDobToDate } from "@/lib/dobCalendar";
 import { syncStudentDisplayNameRecords } from "@/lib/syncStudentDisplayName";
 import { resolveStudentDisplayName } from "@/lib/resolveStudentDisplayName";
@@ -466,6 +467,20 @@ export async function PUT(req: Request, context: RouteParams) {
     const address = typeof body.address === "string" ? body.address.trim() || null : undefined;
     const gender = typeof body.gender === "string" ? body.gender.trim() || null : undefined;
     const residencyType = normalizeResidencyType(body.residencyType);
+    if (residencyType !== undefined) {
+      const fromKind = residencyKind(student.residencyType);
+      const toKind = residencyKind(residencyType);
+      if (fromKind && toKind && fromKind !== toKind) {
+        return NextResponse.json(
+          {
+            message:
+              "Change Hostel or Day Scholar from the student details page. Fees are converted for this student only, and receipts already recorded stay as they are.",
+            code: "RESIDENCY_CONVERSION_REQUIRED",
+          },
+          { status: 409 }
+        );
+      }
+    }
     const previousSchool = typeof body.previousSchool === "string" ? body.previousSchool.trim() || null : undefined;
     const status = parseStudentStatus(body.status);
     const officeAddress = typeof body.officeAddress === "string" ? body.officeAddress.trim() || null : undefined;

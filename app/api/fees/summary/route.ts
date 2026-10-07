@@ -5,7 +5,10 @@ import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
-import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
+import {
+  includeExtraFeeOnStudentBill,
+  residencyConversionStudentIds,
+} from "@/lib/residencyConversion";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 import { computeCurrentAndPreviousFeeStats } from "@/lib/computeFeeSummaryStats";
 import { withRequestTiming } from "@/lib/requestTiming";
@@ -132,6 +135,7 @@ export async function GET(req: Request) {
           targetSection: true,
           targetStudentId: true,
           residencyScope: true,
+          residencyConversion: true,
         },
       }),
       // Pick the fee-head that was allocated in the latest SUCCESS payment for each student.
@@ -312,8 +316,9 @@ export async function GET(req: Request) {
       const baseComponents = classId ? componentsByClassId.get(classId) ?? [] : [];
 
       const residency = fee.student.residencyType ?? "Day Scholar";
+      const convertedStudentIds = residencyConversionStudentIds(extraFees);
       const applicableExtraFees = extraFees.filter((ef) => {
-        if (!extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, residency))
+        if (!includeExtraFeeOnStudentBill(ef, residency, studentId, convertedStudentIds))
           return false;
         if (isStudentRte(residency) && isTuitionNamedExtraFee(ef.name)) return false;
         if (ef.targetType === "SCHOOL") return true;

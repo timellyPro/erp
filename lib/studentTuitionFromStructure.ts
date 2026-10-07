@@ -1,5 +1,9 @@
 import prisma from "@/lib/db";
-import { extraFeeAppliesToStudent, normalizeExtraFeeResidencyScope } from "@/lib/extraFeeResidencyScope";
+import { normalizeExtraFeeResidencyScope } from "@/lib/extraFeeResidencyScope";
+import {
+  includeExtraFeeOnStudentBill,
+  residencyConversionStudentIds,
+} from "@/lib/residencyConversion";
 import {
   baseNameFromInstallmentFee,
   installmentIndexFromName,
@@ -15,6 +19,7 @@ export type ExtraFeeRow = {
   targetSection: string | null;
   targetStudentId: string | null;
   residencyScope: string | null;
+  residencyConversion?: boolean | null;
 };
 
 function normName(raw: string | null | undefined): string {
@@ -107,6 +112,7 @@ export function sumExtraFeesForStudent(
     residencyType: string | null;
   }
 ): number {
+  const convertedStudentIds = residencyConversionStudentIds(extraFees);
   let extraTotal = 0;
   for (const ef of extraFees) {
     const applies =
@@ -119,7 +125,7 @@ export function sumExtraFeesForStudent(
         opts.studentId &&
         ef.targetStudentId === opts.studentId);
     if (!applies) continue;
-    if (!extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, opts.residencyType))
+    if (!includeExtraFeeOnStudentBill(ef, opts.residencyType, opts.studentId, convertedStudentIds))
       continue;
     if (shouldOmitLegacySplitDuplicate(ef, extraFees)) continue;
     if (isStudentRte(opts.residencyType) && isTuitionNamedExtraFee(ef.name)) continue;
@@ -197,6 +203,7 @@ export async function buildTuitionBulkCache(
       targetSection: true,
       targetStudentId: true,
       residencyScope: true,
+      residencyConversion: true,
     },
   });
 
@@ -268,6 +275,7 @@ export async function computeStudentTuitionParts(
         targetSection: true,
         targetStudentId: true,
         residencyScope: true,
+        residencyConversion: true,
       },
     }));
 

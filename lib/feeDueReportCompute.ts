@@ -5,10 +5,13 @@ import {
   studentFeeDiscountFromRecord,
 } from "@/lib/studentFeeHeadDiscount";
 import {
-  extraFeeAppliesToStudent,
   isHostelCategoryExtraFeeName,
   isMessCategoryExtraFeeName,
 } from "@/lib/extraFeeResidencyScope";
+import {
+  includeExtraFeeOnStudentBill,
+  residencyConversionStudentIds,
+} from "@/lib/residencyConversion";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 import { previousYearFeeHeadLabel } from "@/lib/feeYearClassification";
 import { feeHeadNameMatches } from "@/lib/feeReportFilters";
@@ -58,6 +61,7 @@ export type ExtraFeeLite = {
   targetSection: string | null;
   targetStudentId: string | null;
   residencyScope?: string | null;
+  residencyConversion?: boolean | null;
 };
 
 export type StudentFeeDueInput = {
@@ -147,8 +151,9 @@ function applicableExtrasForDueReport(
   },
   includeSchoolWideExtras: boolean
 ): ExtraFeeLite[] {
+  const convertedStudentIds = residencyConversionStudentIds(extraFees);
   return extraFees.filter((ef) => {
-    if (!extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, opts.studentResidency))
+    if (!includeExtraFeeOnStudentBill(ef, opts.studentResidency, opts.studentId, convertedStudentIds))
       return false;
     if (isStudentRte(opts.studentResidency) && isTuitionNamedExtraFee(ef.name)) return false;
     if (ef.targetType === "SCHOOL") return includeSchoolWideExtraInDueReport(ef, includeSchoolWideExtras);
@@ -159,9 +164,10 @@ function applicableExtrasForDueReport(
 function extraFeeAppliesToStudentForRoster(
   ef: ExtraFeeLite,
   st: StudentFeeDueInput,
-  includeSchoolWideExtras: boolean
+  includeSchoolWideExtras: boolean,
+  convertedStudentIds: ReadonlySet<string>
 ): boolean {
-  if (!extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, st.category)) return false;
+  if (!includeExtraFeeOnStudentBill(ef, st.category, st.studentId, convertedStudentIds)) return false;
   if (isStudentRte(st.category) && isTuitionNamedExtraFee(ef.name)) return false;
   if (ef.targetType === "SCHOOL") return includeSchoolWideExtraInDueReport(ef, includeSchoolWideExtras);
   return extraFeeApplies(ef, { classId: st.classId, section: st.section, studentId: st.studentId });
@@ -173,8 +179,9 @@ export function extraFeesForExportRoster(
   students: StudentFeeDueInput[],
   includeSchoolWideExtras: boolean
 ): ExtraFeeLite[] {
+  const convertedStudentIds = residencyConversionStudentIds(extraFees);
   return extraFees.filter((ef) =>
-    students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, includeSchoolWideExtras))
+    students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, includeSchoolWideExtras, convertedStudentIds))
   );
 }
 
@@ -187,12 +194,13 @@ export function extraFeesForDueReportRoster(
   if (includeSchoolWideExtras) {
     return extraFeesForExportRoster(extraFees, students, true);
   }
+  const convertedStudentIds = residencyConversionStudentIds(extraFees);
   return extraFees.filter((ef) => {
     if (ef.targetType === "SCHOOL") {
       if (!includeSchoolWideExtraInDueReport(ef, false)) return false;
-      return students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, false));
+      return students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, false, convertedStudentIds));
     }
-    return students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, false));
+    return students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, false, convertedStudentIds));
   });
 }
 
