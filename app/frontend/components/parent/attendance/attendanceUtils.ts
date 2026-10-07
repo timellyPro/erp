@@ -11,6 +11,7 @@ export type AttendanceRecord = {
 export type StudentDetailResponse = {
   student?: {
     name?: string;
+    schoolName?: string;
     class?: { name?: string; section?: string | null; displayName?: string } | null;
   };
 };

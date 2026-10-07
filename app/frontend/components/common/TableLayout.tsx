@@ -3,16 +3,20 @@
 import { ReactNode, memo } from "react";
 import { Column } from "../../types/superadmin";
 import Spinner from "./Spinner";
+import ParentTimellyLoader from "../parent/ParentTimellyLoader";
 
 type DataTableProps<T> = {
   columns: Column<T>[];
   data: T[];
   loading?: boolean;
+  /** Use Timelly branded loader inside the table body instead of spinner. */
+  timellyLoader?: boolean;
   emptyText?: string;
   rowKey?: (row: T, index: number) => string | number;
   caption?: string;
   tableTitle?: string;
   tableSubtitle?: string;
+  headerRight?: ReactNode;
   showMobile?: boolean;
   container?: boolean;
   rounded?: boolean;
@@ -28,7 +32,46 @@ type DataTableProps<T> = {
     totalPages: number;
     onChange: (page: number) => void;
   };
+  /** Columns size to content; outer area scrolls horizontally (avoids cramped fixed columns). */
+  scrollableWide?: boolean;
+  /** Pin the first column while scrolling horizontally (pair with scrollableWide). */
+  stickyFirstColumn?: boolean;
+  /** How many leading columns stay pinned. Defaults to 1 when stickyFirstColumn is set. */
+  stickyLeadingCount?: number;
+  /** Pin the last column while scrolling horizontally (e.g. actions on the right). */
+  stickyLastColumn?: boolean;
+  /** Extra classes on the scroll viewport (e.g. max-h + overflow-auto for in-table vertical scroll). */
+  scrollAreaClassName?: string;
+  /** Tighter footer row inside the same card (no extra bordered box). */
+  paginationInline?: boolean;
 };
+
+function stickyColumnClass(
+  index: number,
+  lastIndex: number,
+  opts: {
+    scrollableWide: boolean;
+    stickyFirstColumn: boolean;
+    stickyLeadingCount: number;
+    stickyLastColumn: boolean;
+    header?: boolean;
+  }
+): string {
+  const { scrollableWide, stickyFirstColumn, stickyLeadingCount, stickyLastColumn, header } = opts;
+  if (!scrollableWide) return "";
+  const z = header ? "z-20" : "z-10";
+  const bg = header
+    ? "bg-[#12101c] backdrop-blur-xl"
+    : "bg-[#16141f] group-hover:bg-[#1c1a28]";
+  if (stickyFirstColumn && index < stickyLeadingCount) {
+    const left = index === 0 ? "left-0 min-w-[7.5rem]" : "left-[7.5rem]";
+    return `sticky ${left} ${z} border-r border-white/10 ${bg}`;
+  }
+  if (stickyLastColumn && index === lastIndex) {
+    return `sticky right-0 ${z} border-l border-white/10 ${bg}`;
+  }
+  return "";
+}
 
 const ALIGN_CLASS = {
   left: "text-left",
@@ -40,11 +83,13 @@ function DataTable<T>({
   columns,
   data,
   loading = false,
+  timellyLoader = false,
   emptyText = "No data found",
   rowKey,
   caption,
   tableTitle,
   tableSubtitle,
+  headerRight,
   showMobile = true,
   container = true,
   rounded = true,
@@ -56,7 +101,20 @@ function DataTable<T>({
   rowClassName = "",
   tdClassName = "",
   pagination,
+  scrollableWide = false,
+  stickyFirstColumn = false,
+  stickyLeadingCount = 1,
+  stickyLastColumn = false,
+  scrollAreaClassName = "",
+  paginationInline = false,
 }: DataTableProps<T>) {
+  const lastColIndex = columns.length - 1;
+  const scrollViewportClass = scrollAreaClassName.trim()
+    ? scrollAreaClassName
+    : scrollableWide
+      ? "relative z-0 scroll-smooth overflow-x-scroll overflow-y-hidden overscroll-x-contain pb-3 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.35)_rgba(255,255,255,0.08)] [&::-webkit-scrollbar]:h-2.5 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-white/[0.08] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/30 hover:[&::-webkit-scrollbar-thumb]:bg-white/45"
+      : "overflow-x-auto overflow-y-hidden overscroll-x-contain";
+  const stickyHeader = Boolean(scrollAreaClassName.trim());
   const canPaginate =
     Boolean(pagination) &&
     (pagination?.totalPages ?? 1) > 1 &&
@@ -86,9 +144,9 @@ function DataTable<T>({
   };
 
   return (
-    <div className="w-full space-y-4">
+    <div className="w-full min-w-0 max-w-full space-y-4">
       <div
-        className={`block ${
+        className={`block min-w-0 max-w-full ${
           container
             ? `
               ${rounded ? "rounded-3xl" : "rounded-none"}
@@ -101,27 +159,39 @@ function DataTable<T>({
       >
         {tableTitle && (
           <div className="p-4 lg:p-5 border-b border-white/10">
-            <div className="text-base lg:text-lg font-semibold text-white">
-              {tableTitle}
-            </div>
-            {tableSubtitle && (
-              <div className="text-xs text-white/60 mt-1">
-                {tableSubtitle}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="text-base lg:text-lg font-semibold text-white">
+                  {tableTitle}
+                </div>
+                {tableSubtitle && (
+                  <div className="text-xs text-white/60 mt-1">
+                    {tableSubtitle}
+                  </div>
+                )}
               </div>
-            )}
+              {headerRight && (
+                <div className="w-full sm:w-auto sm:min-w-[240px] md:min-w-[280px]">
+                  {headerRight}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
-        {/* 🔥 FIXED TABLE WRAPPER */}
-        <div className="w-full overflow-x-auto">
+        <div className={`w-full min-w-0 max-w-full ${scrollViewportClass}`}>
           <table
-            className={`w-full table-fixed text-sm border-collapse ${tableClassName}`}
+            className={`${
+              scrollableWide ? "w-max min-w-full table-auto" : "w-full table-fixed"
+            } text-sm border-collapse ${tableClassName}`}
             aria-busy={loading}
           >
             {caption && <caption className="sr-only">{caption}</caption>}
 
             <thead
-              className={`bg-white/5 border-b border-white/10 ${theadClassName}`}
+              className={`bg-white/5 border-b border-white/10 ${
+                stickyHeader ? "sticky top-0 z-30 backdrop-blur-md" : ""
+              } ${theadClassName}`}
             >
               <tr>
                 {columns.map((col, i) => (
@@ -130,7 +200,13 @@ function DataTable<T>({
                     scope="col"
                     className={`px-3 md:px-4 lg:px-6 py-3 md:py-4 text-[11px] md:text-xs font-semibold text-gray-400 uppercase tracking-wider ${
                       ALIGN_CLASS[col.align ?? "left"]
-                    } ${thClassName}`}
+                    } ${stickyColumnClass(i, lastColIndex, {
+                      scrollableWide,
+                      stickyFirstColumn,
+                      stickyLeadingCount,
+                      stickyLastColumn,
+                      header: true,
+                    })} ${thClassName}`}
                   >
                     {col.header}
                   </th>
@@ -145,9 +221,13 @@ function DataTable<T>({
                 <tr>
                   <td
                     colSpan={columns.length}
-                    className="p-8 text-center text-white/60"
+                    className="p-6 sm:p-10 text-center text-white/60"
                   >
-                    <Spinner size={26} label="Loading..." />
+                    {timellyLoader ? (
+                      <ParentTimellyLoader preset="students" compact bare className="mx-auto w-full max-w-sm" />
+                    ) : (
+                      <Spinner size={26} label="Loading..." />
+                    )}
                   </td>
                 </tr>
               )}
@@ -167,14 +247,19 @@ function DataTable<T>({
                 data.map((row, rowIndex) => (
                   <tr
                     key={getKey(row, rowIndex)}
-                    className={`hover:bg-white/5 transition-colors duration-200 ${rowClassName}`}
+                    className={`group hover:bg-white/5 transition-colors duration-200 ${rowClassName}`}
                   >
                     {columns.map((col, colIndex) => (
                       <td
                         key={colIndex}
-                        className={`px-3 md:px-4 lg:px-6 py-3 md:py-4 text-sm text-white truncate ${
-                          ALIGN_CLASS[col.align ?? "left"]
-                        } ${tdClassName}`}
+                        className={`px-3 md:px-4 lg:px-6 py-3 md:py-4 text-sm text-white ${
+                          scrollableWide ? "align-top whitespace-normal" : "truncate"
+                        } ${ALIGN_CLASS[col.align ?? "left"]} ${stickyColumnClass(colIndex, lastColIndex, {
+                          scrollableWide,
+                          stickyFirstColumn,
+                          stickyLeadingCount,
+                          stickyLastColumn,
+                        })} ${tdClassName}`}
                       >
                         {renderCell(col, row, rowIndex)}
                       </td>
@@ -188,7 +273,13 @@ function DataTable<T>({
 
       {/* PAGINATION */}
       {canPaginate && pagination && (
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+        <div
+          className={
+            paginationInline
+              ? "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-t border-white/10 bg-white/[0.03] px-4 py-3"
+              : "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3"
+          }
+        >
           <span className="text-xs text-white/60">
             Page {pagination.page} of {pagination.totalPages}
           </span>

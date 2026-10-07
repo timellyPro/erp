@@ -1,11 +1,13 @@
 import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
+import type { PrismaClient } from "@prisma/client";
 import prisma from "@/lib/db";
+import { isActiveStudent } from "@/lib/studentStatus";
 import bcrypt from "bcryptjs";
 
 export const authOptions: NextAuthOptions = {
-  adapter: PrismaAdapter(prisma),
+  adapter: PrismaAdapter(prisma as unknown as PrismaClient),
 
   providers: [
     CredentialsProvider({
@@ -22,8 +24,14 @@ export const authOptions: NextAuthOptions = {
         }
 
         try {
-          const user = await prisma.user.findUnique({
+          // NOTE: email is no longer globally unique (tenant-scoped unique),
+          // so we cannot use `findUnique({ where: { email } })`.
+          // Until the login UI becomes school-aware, we accept the first match and
+          // hard-fail if there are duplicates across tenants.
+          // Single query (take: 2) — avoids a second round-trip when the pool is slow.
+          const matches = await prisma.user.findMany({
             where: { email: credentials.email },
+            take: 2,
             select: {
               id: true,
               name: true,
@@ -34,16 +42,20 @@ export const authOptions: NextAuthOptions = {
               mobile: true,
               photoUrl: true,
               allowedFeatures: true,
-              student: { select: { id: true, schoolId: true } },
+              student: { select: { id: true, schoolId: true, status: true } },
               assignedClasses: true,
               school: true,
             },
           });
-
-          if (!user) {
+          if (matches.length === 0) {
             console.log("Auth: User not found for email:", credentials.email);
             return null;
           }
+          if (matches.length > 1) {
+            throw new Error("Multiple accounts exist for this email. Please contact your administrator.");
+          }
+
+          const user = matches[0];
 
           // Check if password is explicitly null (deactivated account)
           // Only block login if password is null - allow password verification for all other cases
@@ -73,6 +85,11 @@ export const authOptions: NextAuthOptions = {
             // If bcrypt.compare fails (e.g., invalid hash format), treat as invalid password
             console.log("Auth: Password verification failed for user:", credentials.email, bcryptError);
             return null;
+          }
+
+          if (user.student && !isActiveStudent(user.student.status)) {
+            console.log("Auth: Student account is inactive for email:", credentials.email);
+            throw new Error("Account is deactivated or password not set. Please contact your administrator.");
           }
 
           console.log("Auth: Successfully authenticated user:", user.email, "Role:", user.role);
@@ -119,7 +136,10 @@ export const authOptions: NextAuthOptions = {
       token.studentId = user.studentId;
       token.allowedFeatures = user.allowedFeatures ?? [];
       token.image = (user as { image?: string | null }).image ?? null;
-      (token as any)._dbSyncAt = Date.now();
+      if (user.role === "SUPERADMIN") {
+        token.sessionOnly = true;
+      }
+      token._dbSyncAt = Date.now();
     }
 
     // Keep schoolId/allowedFeatures/image in sync, but NOT on every request.
@@ -130,7 +150,7 @@ export const authOptions: NextAuthOptions = {
     const shouldSyncFromDb = (() => {
       if (!token.id) return false;
       const now = Date.now();
-      const last = typeof (token as any)._dbSyncAt === "number" ? (token as any)._dbSyncAt : 0;
+      const last = typeof token._dbSyncAt === "number" ? token._dbSyncAt : 0;
       const stale = now - last > 5 * 60 * 1000; // 5 minutes
       const missingCritical =
         token.schoolId == null ||
@@ -164,7 +184,7 @@ export const authOptions: NextAuthOptions = {
         }
         token.image = dbUser.photoUrl ?? token.image ?? null;
         token.schoolIsActive = true;
-        (token as any)._dbSyncAt = Date.now();
+        token._dbSyncAt = Date.now();
       }
     }
 
@@ -175,7 +195,7 @@ export const authOptions: NextAuthOptions = {
     session.user = {
       ...session.user,
       id: token.id as string,
-      role: token.role as "SUPERADMIN" | "SCHOOLADMIN" | "TEACHER" | "STUDENT",
+      role: token.role as "SUPERADMIN" | "SCHOOLADMIN" | "CHAIRMAN" | "TEACHER" | "STUDENT",
       schoolId: token.schoolId as string | null,
       mobile: token.mobile as string | null,
       studentId: token.studentId as string | null,

@@ -1,7 +1,8 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 import AppLayout from "../../AppLayout";
 import { SCHOOLADMIN_MENU_ITEMS, SCHOOLADMIN_TAB_TITLES } from "../../constants/sidebar";
 import RequiredRoles from "../../auth/RequiredRoles";
@@ -12,18 +13,30 @@ import NewsFeed from "../../components/schooladmin/Newsfeed";
 import WorkshopsAndEventsTab from "../../components/schooladmin/workshopsandevents";
 import TeacherAuditTab from "../../components/schooladmin/TeacherAudit";
 import AddUser from "../../components/schooladmin/AddUser";
-import SchoolAdminFeesTab from "../../components/schooladmin/Fees";
 import SchoolAdminDashboard from "../../components/schooladmin/dashboard/page";
 import StudentDetails from "../../components/schooladmin/StudentDetails";
 import Certificates from "../../components/schooladmin/Certificates";
 //import { ExamsPageInner } from "../../components/schooladmin/Exams";
 import ExamsPage from "../../components/schooladmin/exams/exams";
-import SchoolAdminAnalysisTab from "../../components/schooladmin/Analysis";
+import SchoolAdminMarksTab from "../../components/schooladmin/marks/Marks";
 import SchoolAdminSettingsTab from "../../components/schooladmin/Settings";
 import SchoolAdminTeacherTab from "../../components/schooladmin/TeachersTab";
 import SchoolAdminCircularsTab from "../../components/schooladmin/circularTab";
+import SchoolAdminTimetableTab from "../../components/schooladmin/Timetable";
+import AdmissionTab from "../../components/teacher/admission/Admission";
+import { fetchSchoolDashboardFast } from "@/lib/loadSchoolDashboard";
+import { warmSchoolDashboardCollectionHeads } from "@/lib/loadSchoolDashboardCollection";
+import { warmSchoolAnalysisPage } from "@/lib/loadSchoolAnalysis";
+import { warmSchoolFeesPage } from "@/lib/loadSchoolFeesPage";
+import { warmAddUserPage } from "@/lib/fetchAddUserPage";
+import { warmTeachersPage } from "@/lib/fetchTeachersPage";
+import { warmSchoolAdminFastTabs, warmSchoolAdminTab } from "@/lib/loadSchoolAdminFastTabs";
+import { todayYmdLocal } from "@/lib/schoolDashboardCollection";
+import TimellyLoader from "../../components/common/TimellyLoader";
 
 function SchoolAdminContent() {
+  const { data: session } = useSession();
+  const router = useRouter();
   const tab = useSearchParams().get("tab") ?? "dashboard";
   const title = SCHOOLADMIN_TAB_TITLES[tab] ?? tab.toUpperCase();
   const [profile, setProfile] = useState<{
@@ -35,7 +48,7 @@ function SchoolAdminContent() {
     address?: string;
     userId?: string;
   }>({
-    name: "School Admin",
+    name: session?.user?.name ?? "School Admin",
     subtitle: "School Admin",
   });
 
@@ -49,7 +62,7 @@ function SchoolAdminContent() {
         const u = data.user;
         if (u) {
           setProfile({
-            name: u.name ?? "School Admin",
+            name: u.name ?? session?.user?.name ?? "School Admin",
             subtitle: "School Admin",
             image: u.photoUrl ?? null,
             email: u.email ?? undefined,
@@ -65,7 +78,55 @@ function SchoolAdminContent() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [session?.user?.name]);
+
+  useEffect(() => {
+    const sid = session?.user?.schoolId;
+    if (!sid) return;
+    const today = todayYmdLocal();
+    void fetchSchoolDashboardFast(today, { schoolId: sid }).catch(() => {});
+    warmSchoolDashboardCollectionHeads(today);
+    warmSchoolAnalysisPage(sid);
+    warmSchoolFeesPage(sid);
+    warmAddUserPage(sid);
+    warmTeachersPage(sid);
+    warmSchoolAdminFastTabs();
+  }, [session?.user?.schoolId]);
+
+  useEffect(() => {
+    if (tab === "add-user" && session?.user?.schoolId) {
+      warmAddUserPage(session.user.schoolId);
+    }
+    if (tab === "teachers" && session?.user?.schoolId) {
+      warmTeachersPage(session.user.schoolId);
+    }
+    warmSchoolAdminTab(tab);
+  }, [tab, session?.user?.schoolId]);
+
+  useEffect(() => {
+    if (tab === "fees") {
+      router.replace("/frontend/pages/schooladmin/fees");
+    }
+    if (tab === "analysis") {
+      router.replace("/frontend/pages/schooladmin/analysis");
+    }
+  }, [router, tab]);
+
+  if (tab === "fees") {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center text-white/70">
+        Redirecting to Fees...
+      </div>
+    );
+  }
+
+  if (tab === "analysis") {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center text-white/70">
+        Redirecting to Analysis...
+      </div>
+    );
+  }
 
   const renderComponent = () => {
     switch (tab) {
@@ -73,6 +134,8 @@ function SchoolAdminContent() {
         return <SchoolAdminDashboard />;
       case "students":
         return <SchoolAdminStudentsTab />;
+      case "admission":
+        return <AdmissionTab />;
       case "add-user":
         return <AddUser />
       case "classes":
@@ -81,6 +144,8 @@ function SchoolAdminContent() {
         return <StudentDetails />;
       case "teachers":
         return <SchoolAdminTeacherTab />
+      case "timetable":
+        return <SchoolAdminTimetableTab />;
       case "teacher-leaves":
         return <SchoolTeacherLeavesTab />;
       case "teacher-audit":
@@ -95,11 +160,8 @@ function SchoolAdminContent() {
         return <Certificates />;
       case "exams":
         return <ExamsPage />;
-        
-      case "analysis":
-        return <SchoolAdminAnalysisTab />;
-      case "fees":
-        return <SchoolAdminFeesTab />;
+      case "marks":
+        return <SchoolAdminMarksTab />;
       case "settings":
         return <SchoolAdminSettingsTab />;
       default:
@@ -122,7 +184,7 @@ function SchoolAdminContent() {
 
 export default function SchoolAdmin() {
   return (
-    <Suspense fallback={<div className="flex min-h-[40vh] items-center justify-center text-white/70">Loading...</div>}>
+    <Suspense fallback={<TimellyLoader title="Loading school admin" steps={["Navigation", "Profile", "Workspace"]} />}>
       <SchoolAdminContent />
     </Suspense>
   );

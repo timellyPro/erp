@@ -5,6 +5,12 @@ import PageHeader from "../common/PageHeader";
 import { CircleAlert, Clock, FileText, SquareCheck } from "lucide-react";
 import StatCard from "../common/statCard";
 import CertificatesTab from "./certificatesTab/CertificatesTab";
+import {
+  loadCertificatesPage,
+  patchCertificateRequest,
+  peekCertificatesPage,
+  setCertificatesPageCache,
+} from "@/lib/loadSchoolAdminFastTabs";
 
 export type CertificateRequestStatus = "PENDING" | "APPROVED" | "REJECTED";
 
@@ -26,28 +32,36 @@ export interface CertificateRequestListItem {
 }
 
 export default function SchoolAdminCertificatesTab() {
-  const [certificateRequests, setCertificateRequests] = useState<CertificateRequestListItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const initial = peekCertificatesPage();
+  const [certificateRequests, setCertificateRequests] = useState<CertificateRequestListItem[]>(
+    () => initial ?? []
+  );
+  const [loading, setLoading] = useState(() => !initial);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchCertificateRequests = useCallback(async () => {
-    setLoading(true);
+  const fetchCertificateRequests = useCallback(async (revalidate = false) => {
+    if (!revalidate) {
+      const cached = peekCertificatesPage();
+      if (cached) {
+        setCertificateRequests(cached);
+        setLoading(false);
+        void fetchCertificateRequests(true);
+        return;
+      }
+    }
+
+    setLoading(certificateRequests.length === 0);
     setError(null);
     try {
-      const res = await fetch("/api/certificates/requests/list", { credentials: "include" });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data?.message || "Failed to load certificate requests");
-      }
-      const data = await res.json();
-      setCertificateRequests(data.certificateRequests ?? []);
+      const rows = await loadCertificatesPage({ revalidate });
+      setCertificateRequests(rows);
     } catch (e: any) {
       setError(e?.message || "Something went wrong");
-      setCertificateRequests([]);
+      if (certificateRequests.length === 0) setCertificateRequests([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [certificateRequests.length]);
 
   useEffect(() => {
     fetchCertificateRequests();
@@ -105,7 +119,15 @@ export default function SchoolAdminCertificatesTab() {
           certificateRequests={certificateRequests}
           loading={loading}
           error={error}
-          onRefresh={fetchCertificateRequests}
+          onRefresh={() => fetchCertificateRequests(true)}
+          onRequestPatch={(id, patch) => {
+            const next = certificateRequests.map((request) =>
+              request.id === id ? { ...request, ...patch } : request
+            );
+            setCertificateRequests(next);
+            setCertificatesPageCache(next);
+            patchCertificateRequest(id, patch);
+          }}
         />
       </div>
     </div>

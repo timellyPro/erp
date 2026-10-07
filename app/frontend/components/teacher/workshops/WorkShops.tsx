@@ -3,36 +3,25 @@
 import HeaderActionButton from "../../common/HeaderActionButton";
 import PageHeader from "../../common/PageHeader";
 import SearchInput from "../../common/SearchInput";
+import TimellyLoader from "../../common/TimellyLoader";
 import CreateEventForm from "../../schooladmin/workshops/CreateEventForm";
 import EventCard from "../../schooladmin/workshops/EventCard";
 import EventDetailsModal from "../../schooladmin/workshops/EventDetailsModal";
 import DeleteEventModal from "../../schooladmin/workshops/DeleteEventModal";
+import {
+  loadEventsPage,
+  peekEventsPage,
+  setEventsPageCache,
+  type EventItem,
+} from "@/lib/loadSchoolAdminFastTabs";
 import { CalendarDays, CheckCircle, List, LucideIcon, Plus, Search, Users, X } from "lucide-react";
-import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
-
-interface EventItem {
-  id: string;
-  title: string;
-  description?: string | null;
-  eventDate?: string | null;
-  location?: string | null;
-  mode?: string | null;
-  additionalInfo?: string | null;
-  teacher?: { name?: string | null } | null;
-  photo?: string | null;
-  maxSeats?: number | null;
-  _count?: { registrations: number };
-  type?: string | null;
-  level?: string | null;
-  class?: { id: string; name: string; section?: string | null } | null;
-  teacherId?: string | null;
-  schoolId?: string | null;
-}
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export default function TeacherWorkshopsTab() {
+  const initial = peekEventsPage();
   const [activeAction, setActiveAction] = useState<"workshop" | "none">("none");
-  const [events, setEvents] = useState<EventItem[]>([]);
-  const [loadingEvents, setLoadingEvents] = useState(false);
+  const [events, setEvents] = useState<EventItem[]>(() => initial ?? []);
+  const [loadingEvents, setLoadingEvents] = useState(() => !initial);
   const [eventsError, setEventsError] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
@@ -47,26 +36,40 @@ export default function TeacherWorkshopsTab() {
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 3;
 
-  const fetchEvents = async () => {
-    try {
-      setLoadingEvents(true);
-      setEventsError(null);
-      const res = await fetch("/api/events/list");
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.message || "Failed to load events");
+  const applyEvents = useCallback((list: EventItem[]) => {
+    setEvents(list);
+    setEventsPageCache(list);
+  }, []);
+
+  const fetchEvents = useCallback(
+    async (revalidate = false) => {
+      if (!revalidate) {
+        const cached = peekEventsPage();
+        if (cached) {
+          setEvents(cached);
+          setLoadingEvents(false);
+          void fetchEvents(true);
+          return;
+        }
       }
-      setEvents(Array.isArray(data?.events) ? data.events : []);
-    } catch (err: unknown) {
-      setEventsError(err instanceof Error ? err.message : "Failed to load events");
-    } finally {
-      setLoadingEvents(false);
-    }
-  };
+
+      try {
+        setEventsError(null);
+        setLoadingEvents((prev) => (events.length === 0 ? true : prev));
+        const list = await loadEventsPage({ revalidate: true });
+        applyEvents(list);
+      } catch (err: unknown) {
+        setEventsError(err instanceof Error ? err.message : "Failed to load events");
+      } finally {
+        setLoadingEvents(false);
+      }
+    },
+    [applyEvents, events.length]
+  );
 
   useEffect(() => {
-    fetchEvents();
-  }, []);
+    void fetchEvents(false);
+  }, [fetchEvents]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -107,6 +110,26 @@ export default function TeacherWorkshopsTab() {
     fetchDetails();
     return () => controller.abort();
   }, [detailsOpen, selectedEventId]);
+
+  const handleCreated = useCallback(
+    (event?: EventItem | { id: string } | null) => {
+      if (event && "title" in event && event.title) {
+        const full = event as EventItem;
+        setEvents((prev) => {
+          const exists = prev.some((e) => e.id === full.id);
+          const next = exists
+            ? prev.map((e) => (e.id === full.id ? { ...e, ...full } : e))
+            : [full, ...prev];
+          setEventsPageCache(next);
+          return next;
+        });
+      }
+      void loadEventsPage({ revalidate: true })
+        .then((list) => applyEvents(list))
+        .catch(() => {});
+    },
+    [applyEvents]
+  );
 
   const stats = useMemo(() => {
     const now = Date.now();
@@ -289,7 +312,7 @@ export default function TeacherWorkshopsTab() {
                 setActiveAction("none");
                 setEditingEvent(null);
               }}
-              onCreated={fetchEvents}
+              onCreated={handleCreated}
               initialEvent={editingEvent}
             />
           </div>
@@ -315,6 +338,10 @@ export default function TeacherWorkshopsTab() {
           onCancel={() => setDeleteTarget(null)}
           onConfirm={async () => {
             if (!deleteTarget) return;
+            const prev = events;
+            const next = events.filter((e) => e.id !== deleteTarget.id);
+            applyEvents(next);
+            setDeleteTarget(null);
             try {
               setDeleteLoading(true);
               const res = await fetch(`/api/events/${deleteTarget.id}`, {
@@ -322,10 +349,12 @@ export default function TeacherWorkshopsTab() {
               });
               const data = await res.json();
               if (!res.ok) {
+                applyEvents(prev);
                 throw new Error(data?.message || "Failed to delete event");
               }
-              setDeleteTarget(null);
-              fetchEvents();
+              void loadEventsPage({ revalidate: true })
+                .then((list) => applyEvents(list))
+                .catch(() => {});
             } catch (err) {
               console.error(err);
             } finally {
@@ -335,11 +364,13 @@ export default function TeacherWorkshopsTab() {
         />
 
         <section className="space-y-4">
-          <div className="flex items-center justify-between">
-            {loadingEvents && (
-              <span className="text-sm text-white/50">Loading the list of events...</span>
-            )}
-          </div>
+          {loadingEvents && events.length === 0 && (
+            <TimellyLoader
+              compact
+              title="Loading events"
+              steps={["Workshops", "Registrations", "Schedule"]}
+            />
+          )}
 
           {eventsError && (
             <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">

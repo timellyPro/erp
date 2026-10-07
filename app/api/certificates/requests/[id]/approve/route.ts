@@ -103,7 +103,21 @@ export async function POST(
         schoolId: schoolId,
       },
       include: {
-        student: true,
+        student: {
+          select: {
+            id: true,
+            userId: true,
+            schoolId: true,
+            classId: true,
+            fatherName: true,
+            aadhaarNo: true,
+            phoneNo: true,
+            rollNo: true,
+            dob: true,
+            address: true,
+            createdAt: true,
+          },
+        },
       },
     });
 
@@ -156,10 +170,16 @@ export async function POST(
           createdAt: certificateRequest.student.createdAt,
         };
 
-        await tx.studentHistory.create({
-          data: {
+        await tx.studentHistory.upsert({
+          where: { originalStudentId: certificateRequest.student.id },
+          create: {
             originalStudentId: certificateRequest.student.id,
             schoolId: schoolId,
+            studentData: studentData as any,
+            deactivatedBy: session.user.id,
+            reason: `Transfer Certificate approved - ${certificateRequest.reason || "No reason provided"}`,
+          },
+          update: {
             studentData: studentData as any,
             deactivatedBy: session.user.id,
             reason: `Transfer Certificate approved - ${certificateRequest.reason || "No reason provided"}`,

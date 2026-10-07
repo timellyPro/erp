@@ -54,6 +54,7 @@ export async function GET(
           orderBy: { subject: "asc" },
           include: { units: { orderBy: { order: "asc" } } },
         },
+        sections: { orderBy: { order: "asc" } },
       },
     });
     if (!term) return NextResponse.json({ message: "Exam term not found" }, { status: 404 });

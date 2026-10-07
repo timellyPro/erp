@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { ChevronLeft, Calendar, Clock, CheckCircle2, Pencil, LayoutGrid } from "lucide-react";
 import PageHeader from "../../../common/PageHeader";
-import Spinner from "../../../common/Spinner";
+import TimellyLoader from "../../../common/TimellyLoader";
 
 export default function ExamDetailsView({ examId, onBack, onEdit }: any) {
   const [exam, setExam] = useState<any>(null);
@@ -28,9 +28,7 @@ export default function ExamDetailsView({ examId, onBack, onEdit }: any) {
 
   if (loading) {
     return (
-      <div className="min-h-[400px] flex flex-col items-center justify-center text-[#b4ff39] gap-4">
-        <Spinner />
-      </div>
+      <TimellyLoader title="Loading exam" steps={["Schedule", "Subjects", "Details"]} />
     );
   }
 

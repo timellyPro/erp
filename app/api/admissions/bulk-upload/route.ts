@@ -8,6 +8,9 @@ import { Role } from "@prisma/client";
 import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
 import { randomUUID } from "crypto";
 import { assertCanManageAdmissions, getSessionSchoolId } from "../_utils";
+import { setApplicationEnrolled } from "@/lib/admissionsListQuery";
+import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
+import { parseDobToDate } from "@/lib/dobCalendar";
 
 function toStr(value: unknown) {
   if (value === null || value === undefined) return "";
@@ -26,13 +29,45 @@ function parseDob(rawDob: any): Date {
   if (!rawDob) throw new Error("Date of birth (dob) is required");
   if (typeof rawDob === "number") {
     const d = XLSX.SSF.parse_date_code(rawDob);
-    const dt = new Date(d.y, d.m - 1, d.d);
-    if (Number.isNaN(dt.getTime())) throw new Error("Invalid date of birth");
-    return dt;
+    const parsed = parseDobToDate(
+      `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`
+    );
+    if (!parsed) throw new Error("Invalid date of birth");
+    return parsed;
   }
-  const dt = new Date(rawDob);
-  if (Number.isNaN(dt.getTime())) throw new Error("Invalid date of birth");
-  return dt;
+  const parsed = parseDobToDate(String(rawDob));
+  if (!parsed) throw new Error("Invalid date of birth");
+  return parsed;
+}
+
+function buildName(row: Record<string, unknown>) {
+  const compactName = toStr(row.name);
+  if (compactName) return compactName;
+  const firstName = toStr(row["First Name"]);
+  const middleName = toStr(row["Middle Name"]);
+  const lastName = toStr(row["Last Name"]);
+  return [firstName, middleName, lastName].filter(Boolean).join(" ").trim();
+}
+
+function extractTimellyId(row: Record<string, unknown>) {
+  const rawId = toStr(
+    row.rollNo ??
+      row.studentId ??
+      row.admissionNo ??
+      row["Admission No"] ??
+      row["Student ID"] ??
+      row["Roll No"] ??
+      row["Timelly Number"] ??
+      row["Timelly No"] ??
+      row["Timely Number"] ??
+      row["Timely No"]
+  );
+  if (!rawId) return "";
+  if (rawId.includes("/")) {
+    const parts = rawId.split("/").map((part) => part.trim()).filter(Boolean);
+    return parts[parts.length - 1] || "";
+  }
+  return rawId;
 }
 
 export async function POST(req: Request) {
@@ -77,18 +112,22 @@ export async function POST(req: Request) {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       try {
-        const name = toStr(row.name);
-        const fatherName = toStr(row.fatherName);
-        const rollNo = toStr(row.rollNo ?? row.studentId);
-        const phoneNo = normalizePhone(row.phoneNo ?? row.contactNumber);
-        const aadhaarNo = normalizeAadhaar(row.aadhaarNo ?? row.aadhaarNoRaw);
-        const genderRaw = toStr(row.gender);
-        const dobDate = parseDob(row.dob ?? row.dateOfBirth);
-        const previousSchool = toStr(row.previousSchool);
-        const className = toStr(row.class ?? row.className);
-        const section = toStr(row.section);
-        const totalFee = row.totalFee === "" || row.totalFee == null ? null : Number(row.totalFee);
-        const discountPercent = row.discountPercent === "" || row.discountPercent == null ? null : Number(row.discountPercent);
+        const name = buildName(row);
+        const fatherName = toStr(row.fatherName ?? row.parentName ?? row["Parent Name"]);
+        const rollNo = extractTimellyId(row);
+        const phoneNo = normalizePhone(
+          row.phoneNo ?? row.contactNumber ?? row.parentPhone ?? row["Parent Phone"]
+        );
+        const aadhaarNo = normalizeAadhaar(
+          row.aadhaarNo ?? row.aadhaarNoRaw ?? row.aadharNo ?? row["Aadhar No"]
+        );
+        const genderRaw = toStr(row.gender ?? row.Gender);
+        const dobDate = parseDob(row.dob ?? row.dateOfBirth ?? row["Date of Birth"]);
+        const previousSchool = toStr(
+          row.previousSchool ?? row.previousSchoolName ?? row["Previous School Name"]
+        );
+        const className = toStr(row.class ?? row.className ?? row.Class);
+        const section = toStr(row.section ?? row.Section);
         const applicationFee =
           row.applicationFee === "" || row.applicationFee == null || row["Application Fee"] === ""
             ? null
@@ -97,22 +136,35 @@ export async function POST(req: Request) {
           row.admissionFee === "" || row.admissionFee == null || row["Admission Fee"] === ""
             ? null
             : Number(row.admissionFee ?? row["Admission Fee"]);
-        const email = toStr(row.email);
-        const address = toStr(row.address);
+        const email = toStr(row.email ?? row.parentEmail ?? row["Parent Email"]);
+        const address =
+          toStr(row.address) ||
+          [
+            toStr(row["House No"]),
+            toStr(row.Street),
+            toStr(row.Town),
+            toStr(row.City),
+            toStr(row.State),
+            toStr(row["Pin Code"]),
+          ]
+            .filter(Boolean)
+            .join(", ");
 
         if (!name || name.length < 2) throw new Error("Name is required (min 2 characters)");
         if (!fatherName || fatherName.length < 2) throw new Error("Parent name is required (min 2 characters)");
         if (!phoneNo || !/^\d{10}$/.test(phoneNo)) throw new Error("Contact number must be exactly 10 digits");
         if (!aadhaarNo || !/^\d{12}$/.test(aadhaarNo)) throw new Error("Aadhaar number must be exactly 12 digits");
-        if (totalFee != null && (!Number.isFinite(totalFee) || totalFee <= 0)) throw new Error("totalFee must be a positive number");
-        if (discountPercent != null && (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100)) {
-          throw new Error("discountPercent must be between 0 and 100");
-        }
-
         let classId: string | null = null;
         if (className) {
+          const normalizedClass = className.toLowerCase().replace(/\s+/g, "");
+          const numericClass = normalizedClass.replace(/[^0-9]/g, "");
           const match = classes.find((c) => {
-            const sameName = (c.name || "").trim().toLowerCase() === className.toLowerCase();
+            const classLabel = (c.name || "").trim().toLowerCase();
+            const normalizedLabel = classLabel.replace(/\s+/g, "");
+            const numericLabel = normalizedLabel.replace(/[^0-9]/g, "");
+            const sameName =
+              normalizedLabel === normalizedClass ||
+              (numericClass && numericLabel && numericClass === numericLabel);
             const sameSection = !section || (c.section || "").trim().toLowerCase() === section.toLowerCase();
             return sameName && sameSection;
           });
@@ -126,67 +178,79 @@ export async function POST(req: Request) {
         const applicationNo = `APP/${year}/${randomUUID().slice(0, 8).toUpperCase()}`;
         const gender = genderRaw.toLowerCase().startsWith("f") ? "FEMALE" : "MALE";
 
-        const app = await prisma.studentApplication.upsert({
-          where: { aadharNo: aadhaarNo },
-          create: {
-            schoolId,
-            classId,
-            className: className || null,
-            section: section || null,
-            applicationNo,
-            gradeSought: "GRADE_1",
-            boardingType: "SEMI_RESIDENTIAL",
-            totalFee,
-            discountPercent,
-            applicationFee:
-              applicationFee != null && Number.isFinite(applicationFee) ? applicationFee : null,
-            admissionFee: admissionFee != null && Number.isFinite(admissionFee) ? admissionFee : null,
-            rollNo: rollNo || null,
-            firstName,
-            middleName,
-            lastName,
-            gender,
-            dateOfBirth: dobDate,
-            aadharNo: aadhaarNo,
-            firstLanguage: "English",
-            nationality: "Indian",
-            languagesAtHome: "English",
-            houseNo: address || "-",
-            street: "-",
-            city: "-",
-            state: "-",
-            pinCode: "-",
-            parentName: fatherName,
-            parentOccupation: "-",
-            officeAddress: "-",
-            parentPhone: phoneNo,
-            parentEmail: email || `${emailLocalPartFromFullName(name)}@${schoolDomain}`,
-            parentAadharNo: `${aadhaarNo.slice(0, 8)}0000`,
-            parentWhatsapp: phoneNo,
-            bankAccountNo: "-",
-            previousSchoolName: previousSchool || "-",
-            previousSchoolAddress: "-",
-            emergencyFatherNo: phoneNo,
-            emergencyMotherNo: phoneNo,
-            emergencyGuardianNo: phoneNo,
-          },
-          update: {
-            classId,
-            className: className || null,
-            section: section || null,
-            totalFee,
-            discountPercent,
-            applicationFee:
-              applicationFee != null && Number.isFinite(applicationFee) ? applicationFee : null,
-            admissionFee: admissionFee != null && Number.isFinite(admissionFee) ? admissionFee : null,
-            rollNo: rollNo || null,
-            parentName: fatherName,
-            parentPhone: phoneNo,
-            parentEmail: email || undefined,
-            previousSchoolName: previousSchool || undefined,
-          },
+        const existingApp = await prisma.studentApplication.findFirst({
+          where: { schoolId, aadharNo: aadhaarNo },
           select: { id: true, studentId: true },
         });
+
+        const commonUpdate = {
+          classId,
+          className: className || null,
+          section: section || null,
+          totalFee: null,
+          discountPercent: null,
+          applicationFee:
+            applicationFee != null && Number.isFinite(applicationFee) ? applicationFee : null,
+          admissionFee: admissionFee != null && Number.isFinite(admissionFee) ? admissionFee : null,
+          rollNo: rollNo || null,
+          parentName: fatherName,
+          parentPhone: phoneNo,
+          parentEmail: email || undefined,
+          previousSchoolName: previousSchool || undefined,
+        };
+
+        const app = existingApp
+          ? await prisma.studentApplication.update({
+              where: { id: existingApp.id },
+              data: commonUpdate,
+              select: { id: true, studentId: true },
+            })
+          : await prisma.studentApplication.create({
+              data: {
+                schoolId,
+                classId,
+                className: className || null,
+                section: section || null,
+                applicationNo,
+                gradeSought: "GRADE_1",
+                boardingType: "SEMI_RESIDENTIAL",
+                totalFee: null,
+                discountPercent: null,
+                applicationFee:
+                  applicationFee != null && Number.isFinite(applicationFee) ? applicationFee : null,
+                admissionFee:
+                  admissionFee != null && Number.isFinite(admissionFee) ? admissionFee : null,
+                rollNo: rollNo || null,
+                firstName,
+                middleName,
+                lastName,
+                gender,
+                dateOfBirth: dobDate,
+                aadharNo: aadhaarNo,
+                firstLanguage: "English",
+                nationality: "Indian",
+                languagesAtHome: "English",
+                houseNo: address || "-",
+                street: "-",
+                city: "-",
+                state: "-",
+                pinCode: "-",
+                parentName: fatherName,
+                parentOccupation: "-",
+                officeAddress: "-",
+                parentPhone: phoneNo,
+                parentEmail: email || `${emailLocalPartFromFullName(name)}@${schoolDomain}`,
+                parentAadharNo: `${aadhaarNo.slice(0, 8)}0000`,
+                parentWhatsapp: phoneNo,
+                bankAccountNo: "-",
+                previousSchoolName: previousSchool || "-",
+                previousSchoolAddress: "-",
+                emergencyFatherNo: phoneNo,
+                emergencyMotherNo: phoneNo,
+                emergencyGuardianNo: phoneNo,
+              },
+              select: { id: true, studentId: true },
+            });
 
         createdApplications.push({ row: i + 2, applicationId: app.id, aadhaarNo });
 
@@ -194,6 +258,9 @@ export async function POST(req: Request) {
         if (app.studentId) continue; // already converted
 
         // Convert to student + create user access
+        const password = dobDate.toISOString().split("T")[0].replace(/-/g, "");
+        const hashedPassword = await bcrypt.hash(password, 10);
+
         const student = await prisma.$transaction(async (tx) => {
           // admission number counter
           let settings = await tx.schoolSettings.findUnique({ where: { schoolId } });
@@ -203,21 +270,75 @@ export async function POST(req: Request) {
             });
           }
 
-          const updated = await tx.schoolSettings.update({
-            where: { schoolId },
-            data: { admissionCounter: { increment: 1 } },
-            select: { admissionPrefix: true, rollNoPrefix: true, admissionCounter: true },
-          });
-          const nextNum = updated.admissionCounter;
-          const admissionNumber = `${updated.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
+          let nextNum = 0;
+          let updated: any = null;
+          let admissionNumber = "";
+          const timellyId = rollNo || null;
+          if (timellyId) {
+            const current = await tx.schoolSettings.findUnique({
+              where: { schoolId },
+              select: { admissionPrefix: true, rollNoPrefix: true, admissionCounter: true },
+            });
+            if (!current) {
+              throw new Error("School settings not found while generating admission number.");
+            }
+            updated = current;
+            admissionNumber = `${updated.admissionPrefix}/${year}/${timellyId}`;
+            const existingAdmission = await tx.student.findUnique({
+              where: { schoolId_admissionNumber: { schoolId, admissionNumber } },
+              select: { id: true },
+            });
+            if (existingAdmission) {
+              throw new Error("This Timelly ID is already used. Please use a different Timelly ID.");
+            }
+          } else {
+            const candidate = await tx.schoolSettings.update({
+              where: { schoolId },
+              data: { admissionCounter: { increment: 1 } },
+              select: { admissionPrefix: true, rollNoPrefix: true, admissionCounter: true },
+            });
+            nextNum = candidate.admissionCounter;
+            updated = candidate;
+            admissionNumber = `${candidate.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
 
-          const password = dobDate.toISOString().split("T")[0].replace(/-/g, "");
-          const hashedPassword = await bcrypt.hash(password, 10);
-
+            const existingAdmission = await tx.student.findUnique({
+              where: { schoolId_admissionNumber: { schoolId, admissionNumber } },
+              select: { id: true },
+            });
+            if (existingAdmission) {
+              let fallbackReady = false;
+              for (let attempt = 0; attempt < 50; attempt++) {
+                const token = `${Date.now().toString().slice(-6)}${Math.floor(
+                  Math.random() * 900 + 100
+                )}`;
+                const fallbackAdmissionNo = `${candidate.admissionPrefix}/${year}/${token}`;
+                const fallbackExists = await tx.student.findUnique({
+                  where: {
+                    schoolId_admissionNumber: { schoolId, admissionNumber: fallbackAdmissionNo },
+                  },
+                  select: { id: true },
+                });
+                if (!fallbackExists) {
+                  admissionNumber = fallbackAdmissionNo;
+                  fallbackReady = true;
+                  break;
+                }
+              }
+              if (!fallbackReady) {
+                throw new Error("Unable to generate admission number. Please try again.");
+              }
+            }
+          }
           const local = emailLocalPartFromFullName(name);
-          let userEmail = email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : `${local}@${schoolDomain}`;
+          // Student login email is always name@schoolDomain — CSV email is parent contact only.
+          let userEmail = `${local}@${schoolDomain}`;
           let counter = 1;
-          while (await tx.user.findUnique({ where: { email: userEmail }, select: { id: true } })) {
+          while (
+            await tx.user.findUnique({
+              where: { schoolId_email: { schoolId, email: userEmail } },
+              select: { id: true },
+            })
+          ) {
             userEmail = `${local}.${counter}@${schoolDomain}`;
             counter++;
             if (counter > 1000) throw new Error("Unable to generate unique email");
@@ -244,25 +365,27 @@ export async function POST(req: Request) {
             },
           });
 
-          if (totalFee != null) {
-            const disc = discountPercent ?? 0;
-            const finalFee = totalFee * (1 - disc / 100);
-            await tx.studentFee.create({
-              data: {
-                studentId: studentRecord.id,
-                totalFee,
-                discountPercent: disc,
-                finalFee,
-                amountPaid: 0,
-                remainingFee: finalFee,
-                installments: 3,
-              },
-            });
-          }
+          const classSection =
+            classId != null
+              ? (
+                  await tx.class.findUnique({
+                    where: { id: classId },
+                    select: { section: true },
+                  })
+                )?.section ?? null
+              : null;
+          await upsertStudentFeeFromStructure(tx, {
+            schoolId,
+            studentId: studentRecord.id,
+            classId,
+            section: classSection,
+            discountPercent: 0,
+            amountPaid: 0,
+          });
 
-          await tx.studentApplication.update({ where: { id: app.id }, data: { studentId: studentRecord.id } });
+          await setApplicationEnrolled(tx, app.id, studentRecord.id, schoolId);
           return studentRecord;
-        });
+        }, { maxWait: 10000, timeout: 120000 });
 
         convertedStudents.push({ row: i + 2, studentId: student.id });
       } catch (e: any) {

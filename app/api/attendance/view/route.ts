@@ -2,6 +2,25 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import {
+  parentPortalSwrRead,
+  parentPortalSwrWrite,
+  PARENT_LIST_TTL,
+} from "@/lib/parentPortalSwr";
+
+async function resolveSchoolId(session: {
+  user: { id: string; schoolId?: string | null; studentId?: string | null };
+}): Promise<string | null> {
+  let schoolId = session.user.schoolId ?? null;
+  if (!schoolId && session.user.studentId) {
+    const st = await prisma.student.findUnique({
+      where: { id: session.user.studentId },
+      select: { schoolId: true },
+    });
+    schoolId = st?.schoolId ?? null;
+  }
+  return schoolId;
+}
 
 export async function GET(req: Request) {
   try {
@@ -17,8 +36,9 @@ export async function GET(req: Request) {
     const studentId = searchParams.get("studentId");
     const startDate = searchParams.get("startDate");
     const endDate = searchParams.get("endDate");
+    const bypassCache = searchParams.get("refresh") === "1";
 
-    const schoolId = session.user.schoolId;
+    const schoolId = await resolveSchoolId(session);
 
     if (!schoolId) {
       return NextResponse.json(
@@ -26,23 +46,16 @@ export async function GET(req: Request) {
         { status: 400 }
       );
     }
-    const where: any = {
-      class: {
-        schoolId: schoolId,
-      },
+
+    const where: Record<string, unknown> = {
+      class: { schoolId },
     };
 
-    // For students: only show their own attendance
     if (session.user.studentId) {
       where.studentId = session.user.studentId;
     } else {
-      // For teachers/admins: can filter by student or class
-      if (studentId) {
-        where.studentId = studentId;
-      }
-      if (classId) {
-        where.classId = classId;
-      }
+      if (studentId) where.studentId = studentId;
+      if (classId) where.classId = classId;
     }
 
     const toUtcDateOnly = (value: string) => {
@@ -64,34 +77,60 @@ export async function GET(req: Request) {
         lte: toUtcDateOnly(endDate),
       };
     }
+
+    if (session.user.studentId && startDate && endDate && !bypassCache) {
+      const sid = session.user.studentId;
+      const cacheParams = { studentId: sid, startDate, endDate };
+      const serverKey = `parent:${sid}:attendance:${startDate}:${endDate}`;
+      const hit = await parentPortalSwrRead<{ attendances: unknown[] }>({
+        schoolId,
+        namespace: "api",
+        resource: "parent:attendance:view",
+        params: cacheParams,
+        serverKey,
+        ttl: PARENT_LIST_TTL,
+      });
+      if (hit.value) {
+        return NextResponse.json(hit.value, { status: 200 });
+      }
+    }
+
     const attendances = await prisma.attendance.findMany({
       where,
       include: {
-        student: session.user.studentId ? undefined : {
-          include: {
-            user: {
-              select: { id: true, name: true, email: true },
+        student: session.user.studentId
+          ? undefined
+          : {
+              include: {
+                user: { select: { id: true, name: true, email: true } },
+              },
             },
-          },
-        },
-        class: {
-          select: { id: true, name: true, section: true },
-        },
-        teacher: {
-          select: { id: true, name: true, email: true },
-        },
+        class: { select: { id: true, name: true, section: true } },
+        teacher: { select: { id: true, name: true, email: true } },
       },
-      orderBy: [
-        { date: "desc" },
-        { period: "asc" },
-      ],
+      orderBy: [{ date: "desc" }, { period: "asc" }],
     });
 
-    return NextResponse.json({ attendances }, { status: 200 });
-  } catch (error: any) {
+    const payload = { attendances };
+
+    if (session.user.studentId && startDate && endDate && !bypassCache) {
+      const sid = session.user.studentId;
+      await parentPortalSwrWrite({
+        schoolId,
+        namespace: "api",
+        resource: "parent:attendance:view",
+        params: { studentId: sid, startDate, endDate },
+        serverKey: `parent:${sid}:attendance:${startDate}:${endDate}`,
+        ttl: PARENT_LIST_TTL,
+        value: payload,
+      });
+    }
+
+    return NextResponse.json(payload, { status: 200 });
+  } catch (error: unknown) {
     console.error("View attendance error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: error instanceof Error ? error.message : "Internal server error" },
       { status: 500 }
     );
   }

@@ -6,6 +6,20 @@ import bcrypt from "bcryptjs";
 import { Role } from "@prisma/client";
 import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
 import { randomUUID } from "crypto";
+import {
+  computeStudentTuitionTotalFee,
+  upsertStudentFeeFromStructure,
+} from "@/lib/studentTuitionFromStructure";
+import { setApplicationEnrolled } from "@/lib/admissionsListQuery";
+import { studentApplicationForStudentCreateSelect } from "@/lib/studentApplicationSafeSelect";
+import { canonicalizeResidencyType } from "@/lib/residencyDisplay";
+import { invalidateStudentListCaches } from "@/lib/invalidateStudentListCaches";
+import { parseDobToDate } from "@/lib/dobCalendar";
+
+function normalizeResidencyType(value: unknown) {
+  if (typeof value !== "string") return "Day Scholar";
+  return canonicalizeResidencyType(value);
+}
 
 export async function POST(req: Request) {
   try {
@@ -49,11 +63,9 @@ export async function POST(req: Request) {
       fatherName: body.fatherName,
       aadhaarNo: body.aadhaarNo ? "***" : undefined,
       phoneNo: body.phoneNo,
-      email: body.email,
+      parentEmail: body.email,
       dob: body.dob,
       classId: body.classId,
-      totalFee: body.totalFee,
-      discountPercent: body.discountPercent,
     });
 
     const {
@@ -65,12 +77,14 @@ export async function POST(req: Request) {
       aadhaarNo,
       phoneNo,
       email: emailInput,
+      /** Preferred parent/guardian email; falls back to `email` when omitted */
+      parentEmail: parentEmailInput,
       dob,
       classId: classIdInput,
       address: addressInput,
-      totalFee: totalFeeInput,
-      discountPercent: discountPercentInput,
       rollNo,
+      penNumber,
+      apaarId,
       gender: genderInput,
       previousSchool: previousSchoolInput,
       // Optional admission fields to store alongside the student
@@ -96,6 +110,9 @@ export async function POST(req: Request) {
       emergencyGuardianNo,
       applicationFee: applicationFeeInput,
       admissionFee: admissionFeeInput,
+      residencyType: residencyTypeInput,
+      status: statusInput,
+      subjects: subjectsInput,
     } = body;
 
     const parseOptFee = (v: unknown): number | null => {
@@ -108,15 +125,30 @@ export async function POST(req: Request) {
     let effectiveFatherName = fatherName;
     let effectiveAadhaarNo = aadhaarNo;
     let effectivePhoneNo = phoneNo;
-    let effectiveEmailInput = emailInput;
+    let effectiveEmailInput =
+      typeof parentEmailInput === "string" && parentEmailInput.trim()
+        ? parentEmailInput.trim()
+        : emailInput;
     let effectiveDob = dob;
     let effectiveClassIdInput = classIdInput;
     let effectiveAddressInput = addressInput;
-    let effectiveTotalFeeInput = totalFeeInput;
-    let effectiveDiscountPercentInput = discountPercentInput;
     let effectiveRollNo = rollNo;
     let effectiveGenderInput = genderInput;
+    let effectivePenNumber =
+      typeof penNumber === "string" && penNumber.trim() ? penNumber.trim() : null;
+    let effectiveApaarId =
+      typeof apaarId === "string" && apaarId.trim() ? apaarId.trim() : null;
+    let effectiveResidencyType = normalizeResidencyType(residencyTypeInput);
+    let effectiveStatus =
+      typeof statusInput === "string" && statusInput.trim().toLowerCase() === "inactive"
+        ? "Inactive"
+        : "Active";
     let effectivePreviousSchoolInput = previousSchoolInput;
+
+    const studentSubjects =
+      Array.isArray(subjectsInput) && subjectsInput.every((s: unknown) => typeof s === "string")
+        ? (subjectsInput as string[]).map((s) => s.trim()).filter(Boolean)
+        : [];
 
     let effectiveApplicationFee = parseOptFee(applicationFeeInput);
     let effectiveAdmissionFee = parseOptFee(admissionFeeInput);
@@ -125,7 +157,7 @@ export async function POST(req: Request) {
     if (typeof applicationId === "string" && applicationId.trim()) {
       const app = await prisma.studentApplication.findFirst({
         where: { id: applicationId.trim(), schoolId },
-        include: { class: { select: { id: true } } },
+        select: studentApplicationForStudentCreateSelect,
       });
       if (!app) {
         return NextResponse.json({ message: "Admission application not found" }, { status: 400 });
@@ -143,8 +175,6 @@ export async function POST(req: Request) {
       effectiveDob = app.dateOfBirth.toISOString();
       effectiveClassIdInput = app.classId ?? null;
       effectiveAddressInput = `${app.houseNo}, ${app.street}, ${app.town ? `${app.town}, ` : ""}${app.city}, ${app.state} - ${app.pinCode}`;
-      effectiveTotalFeeInput = app.totalFee ?? effectiveTotalFeeInput;
-      effectiveDiscountPercentInput = app.discountPercent ?? effectiveDiscountPercentInput;
       if (effectiveApplicationFee === null && app.applicationFee != null) {
         effectiveApplicationFee = app.applicationFee;
       }
@@ -152,8 +182,16 @@ export async function POST(req: Request) {
         effectiveAdmissionFee = app.admissionFee;
       }
       effectiveGenderInput = app.gender === "MALE" ? "Male" : "Female";
+      effectivePenNumber = (app as { penNumber?: string | null }).penNumber?.trim() || null;
+      effectiveApaarId = (app as { apaarId?: string | null }).apaarId?.trim() || null;
+      effectiveResidencyType = normalizeResidencyType(app.residencyType);
       effectivePreviousSchoolInput = app.previousSchoolName;
       applicationToLink = { id: app.id };
+    }
+
+    if (!applicationToLink) {
+      effectiveApplicationFee = null;
+      effectiveAdmissionFee = null;
     }
 
     // Validate all required fields
@@ -194,52 +232,31 @@ export async function POST(req: Request) {
     }
 
     // Normalize classId - convert empty string to null
-    const classId = effectiveClassIdInput && typeof effectiveClassIdInput === "string" && effectiveClassIdInput.trim() 
+    let classId = effectiveClassIdInput && typeof effectiveClassIdInput === "string" && effectiveClassIdInput.trim() 
       ? effectiveClassIdInput.trim() 
       : null;
 
-    // Validate and parse totalFee
-    let totalFee: number;
-    if (typeof effectiveTotalFeeInput === "number") {
-      totalFee = effectiveTotalFeeInput;
-    } else if (typeof effectiveTotalFeeInput === "string" && effectiveTotalFeeInput.trim()) {
-      totalFee = Number(effectiveTotalFeeInput);
-    } else if (effectiveTotalFeeInput === null || effectiveTotalFeeInput === undefined || effectiveTotalFeeInput === "") {
-      console.error("Validation failed: totalFee is required", { totalFeeInput, type: typeof totalFeeInput });
-      return NextResponse.json(
-        { message: "totalFee is required and must be a number" },
-        { status: 400 }
-      );
-    } else {
-      totalFee = Number(effectiveTotalFeeInput);
+    if (effectiveStatus === "Inactive") {
+      classId = null;
     }
-    if (Number.isNaN(totalFee) || totalFee <= 0) {
-      console.error("Validation failed: totalFee must be a positive number", { totalFee, totalFeeInput });
+
+    if (!applicationToLink && !classId && effectiveStatus !== "Inactive") {
       return NextResponse.json(
-        { message: "totalFee must be a positive number" },
+        {
+          message:
+            "Class is required. Tuition is taken from the global fee structure for that class, not entered here.",
+        },
         { status: 400 }
       );
     }
 
-    // Validate and parse discountPercent
-    let safeDiscount: number;
-    if (typeof effectiveDiscountPercentInput === "number") {
-      safeDiscount = effectiveDiscountPercentInput;
-    } else if (typeof effectiveDiscountPercentInput === "string" && effectiveDiscountPercentInput.trim()) {
-      safeDiscount = Number(effectiveDiscountPercentInput);
-    } else {
-      safeDiscount = 0;
-    }
-    if (Number.isNaN(safeDiscount) || safeDiscount < 0 || safeDiscount > 100) {
-      return NextResponse.json(
-        { message: "discountPercent must be a number between 0 and 100" },
-        { status: 400 }
-      );
-    }
-
-    // Validate DOB is a valid date
-    const dobDate = new Date(effectiveDob);
-    if (isNaN(dobDate.getTime())) {
+    // Validate DOB is a valid date (calendar-safe — no timezone day shift)
+    const dobDate = parseDobToDate(
+      typeof effectiveDob === "string" || effectiveDob instanceof Date
+        ? effectiveDob
+        : String(effectiveDob ?? "")
+    );
+    if (!dobDate) {
       console.error("Validation failed: Invalid date of birth format");
       return NextResponse.json(
         { message: "Invalid date of birth format" },
@@ -269,8 +286,44 @@ export async function POST(req: Request) {
       }
     }
 
+    const normalizedStudentName = String(effectiveName).trim();
+    const normalizedTimellyId =
+      typeof effectiveRollNo === "string" ? effectiveRollNo.trim() : "";
+
+    if (normalizedTimellyId) {
+      const duplicateTimellyId = await prisma.student.findFirst({
+        where: {
+          schoolId,
+          rollNo: normalizedTimellyId,
+        },
+        include: {
+          user: {
+            select: { name: true },
+          },
+        },
+      });
+
+      if (duplicateTimellyId) {
+        const existingName = duplicateTimellyId.user?.name?.trim() || "";
+        if (
+          existingName &&
+          existingName.toLowerCase() === normalizedStudentName.toLowerCase()
+        ) {
+          return NextResponse.json(
+            { message: "Student name and Timelly ID already exist" },
+            { status: 400 }
+          );
+        }
+        return NextResponse.json(
+          { message: "Timelly ID already exists" },
+          { status: 400 }
+        );
+      }
+    }
+
     const password = dobDate.toISOString().split("T")[0].replace(/-/g, "");
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword =
+      effectiveStatus === "Inactive" ? null : await bcrypt.hash(password, 10);
 
     // Check for duplicate aadhaar number before transaction
     const aadhaarTrimmed = String(effectiveAadhaarNo).trim();
@@ -283,8 +336,8 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-    const existingAadhaar = await prisma.student.findUnique({
-      where: { aadhaarNo: aadhaarCleaned },
+    const existingAadhaar = await prisma.student.findFirst({
+      where: { schoolId, aadhaarNo: aadhaarCleaned },
       select: { id: true },
     });
     if (existingAadhaar) {
@@ -311,23 +364,50 @@ export async function POST(req: Request) {
             data: { schoolId, admissionPrefix: "ADM", rollNoPrefix: "", admissionCounter: 0 },
           });
         }
-        const nextNum = settings.admissionCounter + 1;
-        const admissionNumber =
-          `${settings.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
-        
-        // Check if admission number already exists (race condition protection)
-        const existingAdmission = await tx.student.findUnique({
-          where: { admissionNumber },
-          select: { id: true },
-        });
-        if (existingAdmission) {
-          throw new Error("Admission number conflict. Please try again.");
-        }
+        let nextNum = 0;
+        let admissionNumber = "";
+        const timellyId =
+          typeof effectiveRollNo === "string" && effectiveRollNo.trim()
+            ? effectiveRollNo.trim()
+            : null;
 
-        await tx.schoolSettings.update({
-          where: { schoolId },
-          data: { admissionCounter: nextNum },
-        });
+        if (timellyId) {
+          admissionNumber = `${settings.admissionPrefix}/${year}/${timellyId}`;
+          const existingAdmission = await tx.student.findUnique({
+            where: { schoolId_admissionNumber: { schoolId, admissionNumber } },
+            select: { id: true },
+          });
+          if (existingAdmission) {
+            throw new Error("This Timelly ID is already used. Please enter a different Timelly ID.");
+          }
+        } else {
+          let admissionNumberReady = false;
+          // Generate admission number with atomic counter increments + retry.
+          // This heals stale counters and avoids race-condition conflicts.
+          // Keep retrying for a larger window so stale counters don't block creation
+          // when many existing admissions already occupy early numbers.
+          for (let attempt = 0; attempt < 1000; attempt++) {
+            const updatedSettings = await tx.schoolSettings.update({
+              where: { schoolId },
+              data: { admissionCounter: { increment: 1 } },
+              select: { admissionCounter: true, admissionPrefix: true },
+            });
+            nextNum = updatedSettings.admissionCounter;
+            admissionNumber = `${updatedSettings.admissionPrefix}/${year}/${String(nextNum).padStart(3, "0")}`;
+
+            const existingAdmission = await tx.student.findUnique({
+              where: { schoolId_admissionNumber: { schoolId, admissionNumber } },
+              select: { id: true },
+            });
+            if (!existingAdmission) {
+              admissionNumberReady = true;
+              break;
+            }
+          }
+          if (!admissionNumberReady) {
+            throw new Error("Unable to generate admission number. Please try again.");
+          }
+        }
 
         const rollNoPrefix = settings.rollNoPrefix || "";
         const finalRollNo =
@@ -337,19 +417,19 @@ export async function POST(req: Request) {
               ? `${rollNoPrefix}${nextNum}`
               : String(nextNum);
 
-        const emailTrimmed =
+        /** Parent/guardian contact email from the form — never used as the student's login email. */
+        const parentContactEmail =
           typeof effectiveEmailInput === "string" && effectiveEmailInput.trim().length > 0
             ? effectiveEmailInput.trim()
             : null;
+
         const nameLocal = emailLocalPartFromFullName(effectiveName);
-        let userEmail =
-          emailTrimmed && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrimmed)
-            ? emailTrimmed
-            : `${nameLocal}@${schoolDomain}`;
+        // Student User.email is always derived from the student's name + school domain (never parent email).
+        let userEmail = `${nameLocal}@${schoolDomain}`;
 
         // Check if email already exists and generate alternative if needed
         let existingUser = await tx.user.findUnique({
-          where: { email: userEmail },
+          where: { schoolId_email: { schoolId, email: userEmail } },
           select: { id: true },
         });
         if (existingUser) {
@@ -358,7 +438,7 @@ export async function POST(req: Request) {
           do {
             userEmail = `${nameLocal}.${counter}@${schoolDomain}`;
             existingUser = await tx.user.findUnique({
-              where: { email: userEmail },
+              where: { schoolId_email: { schoolId, email: userEmail } },
               select: { id: true },
             });
             counter++;
@@ -414,12 +494,17 @@ export async function POST(req: Request) {
                 : null,
             aadhaarNo: aadhaarCleaned,
             phoneNo: String(effectivePhoneNo).trim(),
+            residencyType: effectiveResidencyType,
+            status: effectiveStatus,
             rollNo:
               typeof effectiveRollNo === "string" && effectiveRollNo.trim()
                 ? effectiveRollNo.trim()
                 : finalRollNo,
+            penNumber: effectivePenNumber,
+            apaarId: effectiveApaarId,
             applicationFee: effectiveApplicationFee,
             admissionFee: effectiveAdmissionFee,
+            subjects: studentSubjects,
           },
           include: {
             user: { select: { id: true, name: true, email: true } },
@@ -428,23 +513,34 @@ export async function POST(req: Request) {
         });
 
         if (applicationToLink) {
-          await tx.studentApplication.update({
-            where: { id: applicationToLink.id },
-            data: { studentId: studentRecord.id },
-          });
+          await setApplicationEnrolled(tx, applicationToLink.id, studentRecord.id, schoolId);
         }
 
-        const finalFee = totalFee * (1 - safeDiscount / 100);
-        await tx.studentFee.create({
-          data: {
-            studentId: studentRecord.id,
-            totalFee,
-            discountPercent: safeDiscount,
-            finalFee,
-            amountPaid: 0,
-            remainingFee: finalFee,
-            installments: 3,
-          },
+        const classSection =
+          classId != null
+            ? (
+                await tx.class.findUnique({
+                  where: { id: classId },
+                  select: { section: true },
+                })
+              )?.section ?? null
+            : null;
+
+        await upsertStudentFeeFromStructure(tx, {
+          schoolId,
+          studentId: studentRecord.id,
+          classId,
+          section: classSection,
+          discountPercent: 0,
+          amountPaid: 0,
+        });
+
+        const tuitionSnapshot = await computeStudentTuitionTotalFee(tx, {
+          schoolId,
+          classId,
+          section: classSection,
+          studentId: studentRecord.id,
+          residencyType: effectiveResidencyType,
         });
 
         // Create (or link) StudentApplication to keep all admission fields for this student.
@@ -455,7 +551,9 @@ export async function POST(req: Request) {
             : null;
 
           const year2 = new Date().getFullYear();
-          const appNo = `APP/${year2}/${randomUUID().slice(0, 8).toUpperCase()}`;
+          // Keep mixed case from UUID slice (no forced uppercase).
+          const appNo = `APP/${year2}/${randomUUID().slice(0, 8)}`;
+          const generatedParentAadharNo = `${aadhaarCleaned}${String(Date.now()).slice(-4)}`;
 
           await tx.studentApplication.create({
             data: {
@@ -469,11 +567,14 @@ export async function POST(req: Request) {
               admissionNo: null,
               gradeSought: "GRADE_1",
               boardingType: "SEMI_RESIDENTIAL",
-              totalFee,
-              discountPercent: safeDiscount,
+              residencyType: effectiveResidencyType,
+              totalFee: tuitionSnapshot,
+              discountPercent: 0,
               applicationFee: effectiveApplicationFee,
               admissionFee: effectiveAdmissionFee,
               rollNo: typeof effectiveRollNo === "string" && effectiveRollNo.trim() ? effectiveRollNo.trim() : null,
+              penNumber: effectivePenNumber,
+              apaarId: effectiveApaarId,
               firstName: String(effectiveName).split(" ")[0] || "Student",
               middleName: null,
               lastName: String(effectiveName).split(" ").slice(1).join(" ") || "Student",
@@ -496,8 +597,13 @@ export async function POST(req: Request) {
               parentOccupation: typeof parentOccupation === "string" && parentOccupation.trim() ? parentOccupation.trim() : "-",
               officeAddress: typeof officeAddress === "string" && officeAddress.trim() ? officeAddress.trim() : "-",
               parentPhone: String(effectivePhoneNo).trim(),
-              parentEmail: typeof effectiveEmailInput === "string" && effectiveEmailInput.trim() ? effectiveEmailInput.trim() : userEmail,
-              parentAadharNo: typeof parentAadharNo === "string" && parentAadharNo.trim() ? parentAadharNo.trim() : `${aadhaarCleaned.slice(0, 8)}0000`,
+              parentEmail:
+                parentContactEmail ??
+                `parent.${nameLocal}.${timellyId ?? nextNum}@${schoolDomain}`,
+              parentAadharNo:
+                typeof parentAadharNo === "string" && parentAadharNo.trim()
+                  ? parentAadharNo.trim()
+                  : generatedParentAadharNo,
               parentWhatsapp: typeof parentWhatsapp === "string" && parentWhatsapp.trim() ? parentWhatsapp.trim() : String(effectivePhoneNo).trim(),
               bankAccountNo: typeof bankAccountNo === "string" && bankAccountNo.trim() ? bankAccountNo.trim() : "-",
               previousSchoolName: typeof effectivePreviousSchoolInput === "string" && effectivePreviousSchoolInput.trim() ? effectivePreviousSchoolInput.trim() : "-",
@@ -525,6 +631,8 @@ export async function POST(req: Request) {
       className: student.class ? `${student.class.name}${student.class.section ? ` • ${student.class.section}` : ""}` : "Not assigned",
     });
 
+    invalidateStudentListCaches(schoolId);
+
     return NextResponse.json(
       { message: "Student created under your school", student },
       { status: 201 }
@@ -545,6 +653,7 @@ export async function POST(req: Request) {
     if (err?.code === "P2002") {
       const target = err?.meta?.target;
       const field = Array.isArray(target) ? target[0] : undefined;
+      const targetFields = Array.isArray(target) ? target : [];
       if (field === "email") {
         return NextResponse.json(
           { message: "Email already exists. Please use a different email or leave it blank to auto-generate." },
@@ -560,6 +669,24 @@ export async function POST(req: Request) {
       if (field === "aadhaarNo") {
         return NextResponse.json(
           { message: "Aadhaar number already exists. Please check the Aadhaar number." },
+          { status: 400 }
+        );
+      }
+      if (field === "parentAadharNo") {
+        return NextResponse.json(
+          { message: "Parent Aadhaar conflict. Please enter a different parent Aadhaar number." },
+          { status: 400 }
+        );
+      }
+      if (
+        targetFields.includes("schoolId") &&
+        targetFields.includes("aadhaarNo")
+      ) {
+        return NextResponse.json(
+          {
+            message:
+              "Aadhaar number already exists in this school. Please check the Aadhaar number.",
+          },
           { status: 400 }
         );
       }

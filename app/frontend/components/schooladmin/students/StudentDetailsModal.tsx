@@ -4,6 +4,8 @@ import { X } from "lucide-react";
 import { StudentRow } from "./types";
 import { getAge } from "./utils";
 import { AVATAR_URL } from "../../../constants/images";
+import { formatStoredAddressForDisplay } from "@/lib/studentAddressFormat";
+import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
 
 type Props = {
   student: StudentRow;
@@ -18,6 +20,10 @@ export default function StudentDetailsModal({ student, onClose, onEdit }: Props)
   const className = student.class?.name || "-";
   const sectionName = student.class?.section || "-";
   const studentId = student.rollNo || student.admissionNumber || student.id.slice(0, 6).toUpperCase();
+  const addressDisplay = (() => {
+    const f = formatStoredAddressForDisplay(student.address || "");
+    return f === "—" ? "-" : f;
+  })();
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] animate-fadeIn p-4">
@@ -66,6 +72,12 @@ export default function StudentDetailsModal({ student, onClose, onEdit }: Props)
                 <p className="text-xs text-gray-500 mb-1">Age</p>
                 <p className="text-sm font-semibold text-gray-200">{getAge(student.dob)}</p>
               </div>
+              <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+                <p className="text-xs text-gray-500 mb-1">Residency</p>
+                <p className="text-sm font-semibold text-gray-200">
+                  {formatResidencyTypeForDisplay(student.residencyType || "Day Scholar")}
+                </p>
+              </div>
             </div>
           </div>
 
@@ -86,7 +98,7 @@ export default function StudentDetailsModal({ student, onClose, onEdit }: Props)
               </div>
               <div>
                 <span className="text-xs text-lime-400 mb-1">Address</span>
-                <div className="text-sm font-semibold text-gray-200">{student.address || "-"}</div>
+                <div className="text-sm font-semibold text-gray-200">{addressDisplay}</div>
               </div>
             </div>
           </div>

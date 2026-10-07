@@ -4,6 +4,7 @@ import { useState, useRef } from "react";
 import { CheckCircle, XCircle, Download, Loader2, Upload, File } from "lucide-react";
 import type { CertificateRequestListItem } from "../Certificates";
 import { uploadImage } from "@/app/frontend/utils/upload";
+import TimellyLoader from "../../common/TimellyLoader";
 
 type TabStatus = "pending" | "approved" | "rejected";
 
@@ -70,6 +71,7 @@ interface CertificatesTabProps {
   loading: boolean;
   error: string | null;
   onRefresh: () => void;
+  onRequestPatch?: (id: string, patch: Partial<CertificateRequestListItem>) => void;
 }
 
 export default function CertificatesTab({
@@ -77,6 +79,7 @@ export default function CertificatesTab({
   loading,
   error,
   onRefresh,
+  onRequestPatch,
 }: CertificatesTabProps) {
   const [activeTab, setActiveTab] = useState<TabStatus>("pending");
   const [actingId, setActingId] = useState<string | null>(null);
@@ -156,6 +159,11 @@ export default function CertificatesTab({
         fileInputRef.current.value = "";
       }
       
+      onRequestPatch?.(id, {
+        status: "APPROVED",
+        issuedDate: new Date().toISOString(),
+        tcDocumentUrl: documentUrl ?? null,
+      });
       onRefresh();
     } catch (e: any) {
       alert(e?.message || "Failed to approve");
@@ -181,6 +189,7 @@ export default function CertificatesTab({
   };
 
   const handleReject = async (id: string) => {
+    setApprovingId(null);
     setActingId(id);
     try {
       const res = await fetch(`/api/certificates/requests/${id}/reject`, {
@@ -189,6 +198,7 @@ export default function CertificatesTab({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || "Reject failed");
+      onRequestPatch?.(id, { status: "REJECTED" });
       onRefresh();
     } catch (e: any) {
       alert(e?.message || "Failed to reject");
@@ -197,11 +207,13 @@ export default function CertificatesTab({
     }
   };
 
-  if (loading) {
+  if (loading && certificateRequests.length === 0) {
     return (
-      <div className="w-full flex items-center justify-center py-16">
-        <Loader2 className="w-8 h-8 animate-spin text-lime-400" />
-      </div>
+      <TimellyLoader
+        compact
+        title="Loading certificates"
+        steps={["Requests", "Students", "Approvals"]}
+      />
     );
   }
 
@@ -317,7 +329,7 @@ export default function CertificatesTab({
                       onClick={() => openApproveModal(row.id)}
                       className="flex items-center justify-center gap-1 px-3 py-2 rounded-full bg-lime-400 text-black text-xs font-semibold disabled:opacity-50"
                     >
-                      {actingId === row.id ? (
+                      {actingId === row.id && approvingId === row.id ? (
                         <Loader2 size={14} className="animate-spin" />
                       ) : (
                         <CheckCircle size={14} />
@@ -442,7 +454,7 @@ export default function CertificatesTab({
                             onClick={() => openApproveModal(row.id)}
                             className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-lime-400 text-black text-xs font-semibold disabled:opacity-50"
                           >
-                            {actingId === row.id ? (
+                            {actingId === row.id && approvingId === row.id ? (
                               <Loader2 size={14} className="animate-spin" />
                             ) : (
                               <CheckCircle size={14} />
@@ -576,7 +588,7 @@ export default function CertificatesTab({
                             onClick={() => openApproveModal(row.id)}
                             className="flex items-center gap-1 px-3 py-2 rounded-full bg-lime-400 text-black text-xs font-semibold disabled:opacity-50"
                           >
-                            {actingId === row.id ? (
+                            {actingId === row.id && approvingId === row.id ? (
                               <Loader2 size={14} className="animate-spin" />
                             ) : (
                               <CheckCircle size={14} />

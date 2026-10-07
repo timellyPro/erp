@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { purgeSchoolDashboardServerCacheMatching } from "@/lib/schoolDashboardServerCache";
+import { requireSchoolId } from "@/lib/tenant";
+
+const STAFF_ROLES = new Set(["SCHOOLADMIN", "SUPERADMIN", "TEACHER"]);
 
 export async function POST(req: Request) {
   try {
@@ -11,14 +15,15 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const schoolId = session.user.schoolId;
-
-    if (!schoolId) {
-      return NextResponse.json(
-        { message: "School not found in session" },
-        { status: 400 }
-      );
+    if (!STAFF_ROLES.has(session.user.role)) {
+      return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
+
+    const ctx = await requireSchoolId(session);
+    if (!ctx.ok) {
+      return NextResponse.json({ message: ctx.message }, { status: ctx.status });
+    }
+    const schoolId = ctx.schoolId;
 
     const { name, section, teacherId } = await req.json();
 
@@ -66,6 +71,7 @@ export async function POST(req: Request) {
         },
       },
     });
+    purgeSchoolDashboardServerCacheMatching(`class:list:lite:${schoolId}`);
 
     return NextResponse.json(
       { message: "Class created successfully", class: classData },

@@ -27,13 +27,14 @@ export default function ScreenPage() {
             const roleRoutes: Record<string, string> = {
                 SUPERADMIN: ROUTES.SUPERADMIN,
                 SCHOOLADMIN: ROUTES.SCHOOLADMIN,
+                CHAIRMAN: ROUTES.CHAIRMAN,
                 STUDENT: ROUTES.PARENT,
                 TEACHER: ROUTES.TEACHER,
             };
 
             router.replace(roleRoutes[session.user.role] || "/unauthorized");
         }
-    }, [status, session]);
+    }, [status, session, router]);
 
     if (status === "loading") {
         return null;

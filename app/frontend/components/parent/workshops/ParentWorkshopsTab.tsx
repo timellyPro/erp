@@ -7,7 +7,9 @@ import { CalendarDays, CheckCircle, List, Search, Users } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
 import EventCard from "../../schooladmin/workshops/EventCard";
 import EventDetailsModal from "../../schooladmin/workshops/EventDetailsModal";
-import Spinner from "../../common/Spinner";
+import ParentTimellyLoader from "../ParentTimellyLoader";
+import { useSession } from "next-auth/react";
+import { fetchParentEventsList, peekParentPortalAny } from "@/lib/loadParentPortal";
 
 /* ================= TYPES ================= */
 
@@ -60,9 +62,14 @@ function StatTile({
 /* ================= MAIN ================= */
 
 export default function ParentWorkshopsTab() {
+  const { data: session } = useSession();
+  const studentId = session?.user?.studentId ?? null;
   const PAGE_SIZE = 3;
   const verifiedRef = useRef(false);
-  const [events, setEvents] = useState<EventItem[]>([]);
+  const [events, setEvents] = useState<EventItem[]>(() => {
+    const peeked = peekParentPortalAny<{ events: EventItem[] }>("events", "all");
+    return peeked?.events ?? [];
+  });
   const [loadingEvents, setLoadingEvents] = useState(false);
   const [eventsError, setEventsError] = useState<string | null>(null);
 
@@ -77,22 +84,23 @@ export default function ParentWorkshopsTab() {
   /* ================= FETCH EVENTS ================= */
 
   const fetchEvents = useCallback(async () => {
+    if (!studentId) {
+      setLoadingEvents(false);
+      return;
+    }
+    const hasCache = events.length > 0;
     try {
-      setLoadingEvents(true);
+      if (!hasCache) setLoadingEvents(true);
       setEventsError(null);
 
-      const res = await fetch("/api/events/list");
-      const data = await res.json();
-
-      if (!res.ok) throw new Error(data?.message || "Failed to load workshops");
-
-      setEvents(Array.isArray(data?.events) ? data.events : []);
-    } catch (err: any) {
-      setEventsError(err?.message || "Failed to load workshops");
+      const data = await fetchParentEventsList(studentId);
+      setEvents(Array.isArray(data?.events) ? (data.events as EventItem[]) : []);
+    } catch (err: unknown) {
+      setEventsError(err instanceof Error ? err.message : "Failed to load workshops");
     } finally {
       setLoadingEvents(false);
     }
-  }, []);
+  }, [studentId]);
 
   useEffect(() => {
     fetchEvents();
@@ -254,9 +262,7 @@ export default function ParentWorkshopsTab() {
 
         {/* STATES */}
         {loadingEvents && (
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
-            <Spinner />
-          </div>
+          <ParentTimellyLoader preset="workshops" compact className="w-full" />
         )}
 
         {eventsError && (

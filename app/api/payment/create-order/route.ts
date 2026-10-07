@@ -2,7 +2,16 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
+import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
 import type { Prisma } from "@prisma/client";
+import { rollupOrphanExtraFeeAllocations } from "@/lib/rollupOrphanExtraFeeAllocations";
+import {
+  conversionDueCredit,
+  includeExtraFeeOnStudentBill,
+  residencyConversionStudentIds,
+} from "@/lib/residencyConversion";
+import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 
 const hyperpgBaseUrl = process.env.HYPERPG_BASE_URL || "https://sandbox.hyperpg.in";
 const globalHyperpgMerchantId = process.env.HYPERPG_MERCHANT_ID;
@@ -71,6 +80,7 @@ export async function POST(req: Request) {
         id: true,
         schoolId: true,
         classId: true,
+        residencyType: true,
         class: { select: { id: true, section: true } },
         phoneNo: true,
         fatherName: true,
@@ -96,7 +106,13 @@ export async function POST(req: Request) {
     if (!eventRegistrationId) {
       const fee = await prisma.studentFee.findUnique({
         where: { studentId: session.user.studentId },
-        select: { amountPaid: true, finalFee: true, totalFee: true, remainingFee: true },
+        select: {
+          amountPaid: true,
+          finalFee: true,
+          totalFee: true,
+          remainingFee: true,
+          discountPercent: true,
+        },
       });
 
       if (!fee) {
@@ -129,7 +145,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Please select at least one fee type before paying." }, { status: 400 });
       }
 
-      const discountRatio = fee.totalFee > 0 ? fee.finalFee / fee.totalFee : 0;
+      const structMult = structureMultiplierAfterDiscount(fee.discountPercent);
 
       const classId = student.classId ?? null;
       const classSection = student.class?.section ?? null;
@@ -149,7 +165,7 @@ export async function POST(req: Request) {
           })
         );
 
-      const extraFees = await prisma.extraFee.findMany({
+      const extraFeesRaw = await prisma.extraFee.findMany({
         where: {
           schoolId: student.schoolId,
           OR: [
@@ -167,39 +183,70 @@ export async function POST(req: Request) {
             { targetType: "STUDENT", targetStudentId: student.id },
           ],
         },
-        select: { id: true, name: true, amount: true, targetType: true },
+        select: {
+          id: true,
+          name: true,
+          amount: true,
+          targetType: true,
+          targetStudentId: true,
+          residencyScope: true,
+          residencyConversion: true,
+        },
       });
+      const residency = student.residencyType ?? "Day Scholar";
+      const rte = isStudentRte(residency);
+      const convertedStudentIds = residencyConversionStudentIds(extraFeesRaw);
+      const extraFees = extraFeesRaw
+        .filter((ef) => includeExtraFeeOnStudentBill(ef, residency, student.id, convertedStudentIds))
+        .filter((ef) => !(rte && isTuitionNamedExtraFee(ef.name)));
 
       const getHeadKey = (h: SelectedHead) => {
         if (h.headType === "BASE_COMPONENT") return `BASE:${h.componentIndex}`;
         return `EXTRA:${h.extraFeeId}`;
       };
 
-      type Head = { key: string; headType: "BASE_COMPONENT" | "EXTRA_FEE"; snapshotDue: number; componentIndex?: number; componentName?: string; extraFeeId?: string };
+      type Head = {
+        key: string;
+        headType: "BASE_COMPONENT" | "EXTRA_FEE";
+        snapshotDue: number;
+        componentIndex?: number;
+        componentName?: string;
+        extraFeeId?: string;
+        residencyConversion?: boolean;
+      };
 
       const allHeads: Head[] = [
         ...baseComponents.map((c, idx): Head => ({
           key: `BASE:${idx}`,
           headType: "BASE_COMPONENT",
-          snapshotDue: c.amount * discountRatio,
+          snapshotDue: rte ? 0 : c.amount * structMult,
           componentIndex: idx,
           componentName: c.name,
         })),
         ...extraFees.map((ef): Head => ({
           key: `EXTRA:${ef.id}`,
           headType: "EXTRA_FEE",
-          snapshotDue: Number(ef.amount) * discountRatio,
+          snapshotDue: Number(ef.amount) || 0,
           extraFeeId: ef.id,
+          residencyConversion: Boolean(ef.residencyConversion),
         })),
       ];
 
       const [paymentAllocations, refundAllocations] = await Promise.all([
         prisma.paymentFeeAllocation.findMany({
-          where: { studentId: student.id, allocationType: "PAYMENT", payment: { status: "SUCCESS" } },
+          where: {
+            studentId: student.id,
+            allocationType: "PAYMENT",
+            payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+          },
           select: { headType: true, componentIndex: true, extraFeeId: true, allocatedAmount: true },
         }),
         prisma.paymentFeeAllocation.findMany({
-          where: { studentId: student.id, allocationType: "REFUND", payment: { status: "SUCCESS" } },
+          where: {
+            studentId: student.id,
+            allocationType: "REFUND",
+            payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+          },
           select: { headType: true, componentIndex: true, extraFeeId: true, allocatedAmount: true },
         }),
       ]);
@@ -216,6 +263,22 @@ export async function POST(req: Request) {
         netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) - a.allocatedAmount);
       }
 
+      rollupOrphanExtraFeeAllocations(
+        netPaidByHead,
+        allHeads.map((h) => ({
+          key: h.key,
+          label: h.componentName ?? "",
+          extraFeeId: h.extraFeeId,
+          snapshotDue: h.snapshotDue,
+        })),
+        new Map(extraFeesRaw.map((ef) => [ef.id, { id: ef.id, name: ef.name }]))
+      );
+      const creditByKey = conversionDueCredit(
+        allHeads,
+        netPaidByHead,
+        new Map(extraFeesRaw.map((ef) => [ef.id, ef.name]))
+      );
+
       const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);
       const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);
       const totalSnapshotDue = Math.max(fee.finalFee, 0);
@@ -223,7 +286,7 @@ export async function POST(req: Request) {
       const headsWithDueBefore = allHeads.map((h) => {
         const paidAlloc = netPaidByHead.get(h.key) ?? 0;
         const paidLegacy = totalSnapshotDue > 0 ? legacyPaidTotal * (h.snapshotDue / totalSnapshotDue) : 0;
-        const dueBefore = Math.max(h.snapshotDue - (paidAlloc + paidLegacy), 0);
+        const dueBefore = Math.max(h.snapshotDue - (paidAlloc + paidLegacy + (creditByKey.get(h.key) ?? 0)), 0);
         return { ...h, dueBefore, paidAlloc, paidLegacy };
       });
 
@@ -300,10 +363,12 @@ export async function POST(req: Request) {
             };
           }
           const extraFeeId = key.slice("EXTRA:".length);
+          const extraFeeName =
+            extraFees.find((ef) => ef.id === extraFeeId)?.name?.trim() || "Extra Fee";
           return {
             headType: "EXTRA_FEE" as const,
             componentIndex: null,
-            componentName: null,
+            componentName: extraFeeName,
             extraFeeId,
             allocatedAmount,
           };

@@ -1,7 +1,13 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Calendar, ChevronDown, Send, Plus, X, CheckCircle, Edit3, XCircle, Clock } from "lucide-react";
+import { Calendar, ChevronDown, Plus, X, CheckCircle, Edit3, XCircle, Clock } from "lucide-react";
 import PageHeader from "../../../common/PageHeader";
-import Spinner from "../../../common/Spinner";
+import TimellyLoader from "../../../common/TimellyLoader";
+import {
+  loadTeacherMyLeaves,
+  peekTeacherMyLeaves,
+  setTeacherMyLeavesCache,
+  type TeacherMyLeave,
+} from "@/lib/loadTeacherFastTabs";
 
 const LEAVE_TYPE_OPTIONS = [
   { label: "Sick Leave", value: "SICK" },
@@ -10,16 +16,7 @@ const LEAVE_TYPE_OPTIONS = [
   { label: "Duty Leave", value: "PAID" },
 ];
 
-type LeaveRecord = {
-  id: string;
-  leaveType: string;
-  reason: string | null;
-  fromDate: string;
-  toDate: string;
-  status: string;
-  remarks: string | null;
-  createdAt: string;
-};
+type LeaveRecord = TeacherMyLeave;
 
 function formatDate(d: string) {
   return new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
@@ -40,6 +37,7 @@ function statusStyle(s: string) {
 
 
 export default function TeacherLeave() {
+  const initial = peekTeacherMyLeaves();
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({
     leaveType: "SICK",
@@ -47,28 +45,44 @@ export default function TeacherLeave() {
     endDate: "",
     reason: "",
   });
-  const [myLeaves, setMyLeaves] = useState<LeaveRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [myLeaves, setMyLeaves] = useState<LeaveRecord[]>(() => initial ?? []);
+  const [loading, setLoading] = useState(() => !initial);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editingLeave, setEditingLeave] = useState<LeaveRecord | null>(null);
 
-  const fetchMyLeaves = useCallback(async () => {
-    try {
-      const res = await fetch("/api/leaves/my", { credentials: "include" });
-      const data = await res.json();
-      //console.log("My Leaves:", data);
-      if (res.ok && Array.isArray(data)) setMyLeaves(data);
-      else setMyLeaves([]);
-    } catch {
-      setMyLeaves([]);
-    } finally {
-      setLoading(false);
-    }
+  const applyLeaves = useCallback((leaves: LeaveRecord[]) => {
+    setMyLeaves(leaves);
+    setTeacherMyLeavesCache(leaves);
   }, []);
 
+  const fetchMyLeaves = useCallback(
+    async (revalidate = false) => {
+      if (!revalidate) {
+        const cached = peekTeacherMyLeaves();
+        if (cached) {
+          setMyLeaves(cached);
+          setLoading(false);
+          void fetchMyLeaves(true);
+          return;
+        }
+      }
+
+      try {
+        setLoading((prev) => (myLeaves.length === 0 ? true : prev));
+        const leaves = await loadTeacherMyLeaves({ revalidate: true });
+        applyLeaves(leaves);
+      } catch {
+        if (myLeaves.length === 0) setMyLeaves([]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [applyLeaves, myLeaves.length]
+  );
+
   useEffect(() => {
-    fetchMyLeaves();
+    void fetchMyLeaves(false);
   }, [fetchMyLeaves]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -97,10 +111,15 @@ export default function TeacherLeave() {
           setError(data?.error || data?.message || "Failed to update leave");
           return;
         }
+        const updated = (data?.id ? data : data?.leave) as LeaveRecord | undefined;
+        if (updated?.id) {
+          const next = myLeaves.map((l) => (l.id === updated.id ? { ...l, ...updated } : l));
+          applyLeaves(next);
+        }
         setEditingLeave(null);
         setFormData({ leaveType: "SICK", startDate: "", endDate: "", reason: "" });
         setShowForm(false);
-        await fetchMyLeaves();
+        void fetchMyLeaves(true);
       } else {
         const res = await fetch("/api/leaves/apply", {
           method: "POST",
@@ -118,9 +137,13 @@ export default function TeacherLeave() {
           setError(data?.error || data?.message || "Failed to submit leave");
           return;
         }
+        const created = (data?.id ? data : data?.leave) as LeaveRecord | undefined;
+        if (created?.id) {
+          applyLeaves([created, ...myLeaves]);
+        }
         setFormData({ leaveType: "SICK", startDate: "", endDate: "", reason: "" });
         setShowForm(false);
-        await fetchMyLeaves();
+        void fetchMyLeaves(true);
       }
     } catch {
       setError("Something went wrong");
@@ -146,6 +169,14 @@ export default function TeacherLeave() {
   const handleCancel = async (id: string) => {
     if (!confirm("Do you really want to withdraw this leave request? This action cannot be undone.")) return;
     setError(null);
+    const prev = myLeaves;
+    const next = myLeaves.filter((l) => l.id !== id);
+    applyLeaves(next);
+    if (editingLeave?.id === id) {
+      setEditingLeave(null);
+      setShowForm(false);
+      setFormData({ leaveType: "SICK", startDate: "", endDate: "", reason: "" });
+    }
     try {
       const res = await fetch(`/api/leaves/${id}`, {
         method: "DELETE",
@@ -153,16 +184,13 @@ export default function TeacherLeave() {
       });
       const data = await res.json();
       if (!res.ok) {
+        applyLeaves(prev);
         setError(data?.error || data?.message || "Failed to delete leave");
         return;
       }
-      if (editingLeave?.id === id) {
-        setEditingLeave(null);
-        setShowForm(false);
-        setFormData({ leaveType: "SICK", startDate: "", endDate: "", reason: "" });
-      }
-      await fetchMyLeaves();
+      void fetchMyLeaves(true);
     } catch {
+      applyLeaves(prev);
       setError("Something went wrong");
     }
   };
@@ -199,10 +227,8 @@ export default function TeacherLeave() {
         }
       />
       {/* GLOBAL PAGE LOADING */}
-      {loading && !showForm && (
-        <div className="flex justify-center items-center min-h-[300px]">
-          <Spinner />
-        </div>
+      {loading && !showForm && myLeaves.length === 0 && (
+        <TimellyLoader title="Loading leaves" steps={["Requests", "History", "Status"]} />
       )}
 
 
@@ -292,7 +318,7 @@ export default function TeacherLeave() {
       )}
 
       {/* 3. Leave History Section */}
-      {!loading && myLeaves.length > 0 && !showForm && (
+      {myLeaves.length > 0 && !showForm && (
         <div className="max-w-6xl mx-auto">
           <h3 className="text-xl font-bold text-white px-4 md:px-0 mb-6">My Leave History</h3>
 

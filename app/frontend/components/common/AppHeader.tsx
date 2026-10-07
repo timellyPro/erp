@@ -84,7 +84,11 @@ export default function AppHeader({ title, profile, hideSearchAndNotifications =
     const controller = new AbortController();
     unreadAbortRef.current = controller;
     try {
-      const res = await fetch("/api/notifications?take=1", { credentials: "include", signal: controller.signal });
+      const res = await fetch("/api/notifications?take=1", {
+        credentials: "include",
+        cache: "no-store",
+        signal: controller.signal,
+      });
       const data = await res.json();
       if (res.ok && typeof data.unreadCount === "number") {
         setUnreadCount(data.unreadCount);
@@ -96,16 +100,38 @@ export default function AppHeader({ title, profile, hideSearchAndNotifications =
     }
   }, [hideSearchAndNotifications]);
 
+  const onNotificationSnapshot = useCallback(({ unreadCount: n }: { unreadCount: number }) => {
+    setUnreadCount(n);
+  }, []);
+
   useEffect(() => {
     fetchUnreadCount();
-    const interval = setInterval(fetchUnreadCount, 60000); // refresh every 60s
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        void fetchUnreadCount();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
+    // Panel open: list poll + onSnapshot refresh the badge — skip duplicate header polling
+    if (showNotifications) {
+      return () => {
+        document.removeEventListener("visibilitychange", onVisible);
+        unreadAbortRef.current?.abort();
+        unreadAbortRef.current = null;
+        unreadInFlightRef.current = false;
+      };
+    }
+
+    const interval = setInterval(fetchUnreadCount, 30000);
     return () => {
       clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
       unreadAbortRef.current?.abort();
       unreadAbortRef.current = null;
       unreadInFlightRef.current = false;
     };
-  }, [fetchUnreadCount]);
+  }, [fetchUnreadCount, showNotifications]);
   const displayName = (liveProfile?.name && liveProfile.name.trim())
     ? liveProfile.name
     : baseProfile.name;
@@ -315,7 +341,7 @@ export default function AppHeader({ title, profile, hideSearchAndNotifications =
             {/* SEARCH - hidden for Super Admin */}
             {!hideSearchAndNotifications && (
               <>
-                <div className="hidden md:block">
+                {/* <div className="hidden md:block">
                   <SearchInput 
                     showSearchIcon 
                     icon={Search}
@@ -327,7 +353,7 @@ export default function AppHeader({ title, profile, hideSearchAndNotifications =
                     placeholder="Search..."
                     className="w-[200px] md:w-[250px]"
                   />
-                </div>
+                </div> */}
                 <button
                   className="md:hidden p-2 rounded-lg hover:bg-white/10"
                   onClick={() => setShowSearch(true)}
@@ -393,6 +419,8 @@ export default function AppHeader({ title, profile, hideSearchAndNotifications =
       {/* PANELS */}
       {showNotifications && (
         <NotificationPanel
+          parentPortal={Boolean(pathname?.includes("/frontend/pages/parent"))}
+          onSnapshot={onNotificationSnapshot}
           onClose={() => {
             setShowNotifications(false);
             fetchUnreadCount();

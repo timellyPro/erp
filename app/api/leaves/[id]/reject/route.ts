@@ -48,8 +48,8 @@ export async function PATCH(req: Request, { params }: { params: Params | Promise
     createNotification(
       leave.teacherId,
       "LEAVE",
-      "Leave rejected",
-      "Your leave request was rejected"
+      "Teacher leave rejected",
+      "Your teacher leave request was rejected"
     ).catch(() => {});
 
     return new Response(JSON.stringify(leave), { status: 200 });

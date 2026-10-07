@@ -1,0 +1,186 @@
+import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/authOptions";
+import prisma from "@/lib/db";
+import {
+  buildStudentDetailsCoreBundle,
+  buildStudentDetailsNonPaymentExtras,
+  buildStudentDetailsPaymentsOnly,
+  buildStudentDetailsShellPayload,
+  buildStudentDetailsTabExtras,
+  buildStudentDetailsTabPayload,
+} from "@/lib/buildStudentDetailsTabPayload";
+import { computeAdminStudentFeeBreakdown } from "@/lib/computeAdminStudentFeeBreakdown";
+import {
+  getShellCached,
+  setShellCached,
+} from "@/lib/studentFeeReadCache";
+
+type RouteParams =
+  | { params: { id: string } }
+  | { params: Promise<{ id: string }> };
+
+async function resolveSchoolId(session: {
+  user: { id: string; schoolId?: string | null; role: string };
+}) {
+  let schoolId = session.user.schoolId;
+  if (!schoolId && (session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN")) {
+    const adminSchool = await prisma.school.findFirst({
+      where: { admins: { some: { id: session.user.id } } },
+      select: { id: true },
+    });
+    schoolId = adminSchool?.id ?? null;
+  }
+  return schoolId;
+}
+
+const BREAKDOWN_TIMEOUT_MS = 12_000;
+
+async function loadFeeBreakdownSafe(schoolId: string, studentId: string) {
+  try {
+    return await Promise.race([
+      computeAdminStudentFeeBreakdown(schoolId, studentId, {
+        migrateLumps: true,
+        cleanupHostelMessDuplicates: false,
+        reconcileTotals: false,
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), BREAKDOWN_TIMEOUT_MS)),
+    ]);
+  } catch {
+    return null;
+  }
+}
+
+/** Student details tab API — shell (fast), extras (deferred), or full bundle. */
+export async function GET(req: Request, context: RouteParams) {
+  const resolved = "then" in context.params ? await context.params : context.params;
+  const id = resolved.id;
+  const url = new URL(req.url);
+  const shellOnly = url.searchParams.get("shell") === "1";
+  const extrasOnly = url.searchParams.get("extras") === "1";
+  const coreOnly = url.searchParams.get("core") === "1";
+  const profileOnly = url.searchParams.get("profileOnly") === "1";
+  const fast = url.searchParams.get("fast") === "1";
+  const bypassCache = url.searchParams.get("refresh") === "1";
+
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  }
+
+  const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
+  const hasFeature =
+    session.user.role === "TEACHER" &&
+    (session.user.allowedFeatures?.includes("STUDENTS") ||
+      session.user.allowedFeatures?.includes("STUDENT_DETAILS"));
+  const isOwnStudent = session.user.studentId === id;
+
+  if (!isAdmin && !isOwnStudent && !hasFeature) {
+    return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+  }
+
+  try {
+    const schoolId = await resolveSchoolId(session);
+    const resolvedSchoolId = schoolId ?? null;
+
+    if (extrasOnly) {
+      if (url.searchParams.get("scope") === "payments") {
+        const includeAdmissionApplicationPayments =
+          url.searchParams.get("includeAdmission") === "1";
+        const { payments } = await buildStudentDetailsPaymentsOnly(id, {
+          includeAdmissionApplicationPayments,
+        });
+        return NextResponse.json(
+          { payments, attendanceTrends: [], academicPerformance: [], certificates: [] },
+          { status: 200 }
+        );
+      }
+      if (url.searchParams.get("scope") === "nonPayments") {
+        const extras = await buildStudentDetailsNonPaymentExtras(id);
+        return NextResponse.json({ payments: [], ...extras }, { status: 200 });
+      }
+      const extras = await buildStudentDetailsTabExtras(id);
+      return NextResponse.json(extras, { status: 200 });
+    }
+
+    if (coreOnly) {
+      const core = await buildStudentDetailsCoreBundle(id, resolvedSchoolId, {
+        bypassCache,
+      });
+      if (!core) {
+        return NextResponse.json({ message: "Student not found" }, { status: 404 });
+      }
+      return NextResponse.json({ ...core.shell, feeBreakdown: core.feeBreakdown }, { status: 200 });
+    }
+
+    const withBreakdown = url.searchParams.get("breakdown") === "1";
+
+    if (shellOnly || (fast && !profileOnly)) {
+      if (shellOnly && !withBreakdown) {
+        const shellKey = `${resolvedSchoolId ?? "own"}:${id}:shell`;
+        if (!bypassCache) {
+          const shellHit = getShellCached(shellKey);
+          if (shellHit) {
+            return NextResponse.json({ ...shellHit, feeBreakdown: null }, { status: 200 });
+          }
+        }
+        const shell = await buildStudentDetailsShellPayload(id, resolvedSchoolId, {
+          skipApplicationFallback: true,
+        });
+        if (!shell) {
+          return NextResponse.json({ message: "Student not found" }, { status: 404 });
+        }
+        if (!bypassCache) {
+          setShellCached(shellKey, shell as unknown as Record<string, unknown>);
+        }
+        return NextResponse.json({ ...shell, feeBreakdown: null }, { status: 200 });
+      }
+
+      if (shellOnly && withBreakdown && resolvedSchoolId) {
+        const [shell, feeBreakdown] = await Promise.all([
+          buildStudentDetailsShellPayload(id, resolvedSchoolId, { skipApplicationFallback: true }),
+          loadFeeBreakdownSafe(resolvedSchoolId, id),
+        ]);
+        if (!shell) {
+          return NextResponse.json({ message: "Student not found" }, { status: 404 });
+        }
+        return NextResponse.json({ ...shell, feeBreakdown }, { status: 200 });
+      }
+
+      const shell = await buildStudentDetailsShellPayload(id, resolvedSchoolId, {
+        skipApplicationFallback: true,
+      });
+      if (!shell) {
+        return NextResponse.json({ message: "Student not found" }, { status: 404 });
+      }
+      if (shellOnly) {
+        return NextResponse.json({ ...shell, feeBreakdown: null }, { status: 200 });
+      }
+      const feeBreakdown = resolvedSchoolId
+        ? await loadFeeBreakdownSafe(resolvedSchoolId, id)
+        : null;
+      return NextResponse.json({ ...shell, feeBreakdown }, { status: 200 });
+    }
+
+    const detail = await buildStudentDetailsTabPayload(id, resolvedSchoolId);
+    if (!detail) {
+      return NextResponse.json({ message: "Student not found" }, { status: 404 });
+    }
+
+    if (profileOnly) {
+      return NextResponse.json({ ...detail, feeBreakdown: null }, { status: 200 });
+    }
+
+    const feeBreakdown = resolvedSchoolId
+      ? await loadFeeBreakdownSafe(resolvedSchoolId, id)
+      : null;
+
+    return NextResponse.json({ ...detail, feeBreakdown }, { status: 200 });
+  } catch (error: unknown) {
+    console.error("Student details bundle error:", error);
+    return NextResponse.json(
+      { message: error instanceof Error ? error.message : "Internal server error" },
+      { status: 500 }
+    );
+  }
+}

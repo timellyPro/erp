@@ -26,6 +26,8 @@ jest.mock("@/lib/db", () => ({
   },
 }));
 
+const request = () => new Request("http://localhost/api/class/list");
+
 describe("GET /api/class/list", () => {
   beforeEach(() => {
     mockGetServerSession.mockReset();
@@ -36,7 +38,7 @@ describe("GET /api/class/list", () => {
 
   it("returns 401 when no session", async () => {
     mockGetServerSession.mockResolvedValue(null);
-    const res = await GET();
+    const res = await GET(request());
     expect(res.status).toBe(401);
     expect(mockFindMany).not.toHaveBeenCalled();
   });
@@ -44,7 +46,7 @@ describe("GET /api/class/list", () => {
   it("returns 400 when no schoolId in session", async () => {
     mockGetServerSession.mockResolvedValue({ user: { id: "u1" } });
     mockFindFirst.mockResolvedValue(null);
-    const res = await GET();
+    const res = await GET(request());
     expect(res.status).toBe(400);
     const json = await res.json();
     expect(json.message).toBe("School not found");
@@ -56,7 +58,7 @@ describe("GET /api/class/list", () => {
     ];
     mockGetServerSession.mockResolvedValue({ user: { id: "u1", schoolId: "s1" } });
     mockFindMany.mockResolvedValue(classes);
-    const res = await GET();
+    const res = await GET(request());
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.classes).toHaveLength(1);

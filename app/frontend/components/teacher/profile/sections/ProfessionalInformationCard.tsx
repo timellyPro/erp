@@ -49,10 +49,12 @@ export default function ProfessionalInformationCard({
 }
 
 function InfoItem({ label, value }: { label: string; value: ReactNode }) {
+  const display =
+    value === null || value === undefined || value === "" ? "—" : value;
   return (
     <div className="space-y-2">
       <p className="text-[10px] sm:text-[11px] uppercase tracking-wider text-white/35">{label}</p>
-      <div className="text-[13px] sm:text-[14px] font-semibold text-white">{value}</div>
+      <div className="text-[13px] sm:text-[14px] font-semibold text-white">{display}</div>
     </div>
   );
 }

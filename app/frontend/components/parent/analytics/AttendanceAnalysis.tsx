@@ -24,7 +24,7 @@ export default function AttendanceAnalysis({
   ];
 
   return (
-    <div className={`${glass} rounded-3xl p-6`}>
+    <div className={`${glass} rounded-3xl p-4 sm:p-6`}>
       <h3 className="text-lg font-semibold mb-1">Attendance Analysis</h3>
       <p className="text-white/50 text-sm mb-8">Monthly attendance breakdown</p>
 

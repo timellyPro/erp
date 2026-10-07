@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { BookOpen, Calendar, CheckCircle2 } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
-import Spinner from "../../common/Spinner";
+import ParentTimellyLoader from "../ParentTimellyLoader";
 
 // Interfaces to match your API structure
 interface SyllabusUnit {
@@ -100,7 +100,13 @@ export default function ParentExamsTab() {
     ? Math.max(0, Math.ceil((nextExamDate.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)))
     : 0;
 
-  if (loading) return <div className="p-10 flex justify-center"><Spinner /></div>;
+  if (loading) {
+    return (
+      <div className="p-10 flex justify-center">
+        <ParentTimellyLoader preset="exams" className="w-full max-w-2xl" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen text-white max-w-7xl mx-auto md:p-0">

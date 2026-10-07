@@ -9,6 +9,7 @@ import HomeworkStats from "./HomeworkStats";
 import HomeworkFilterBar from "./HomeworkFilterBar";
 import HomeworkList from "./HomeworkList";
 import HomeworkSubmissionsView from "./HomeworkSubmissionsView";
+import TimellyLoader from "../../common/TimellyLoader";
 
 export default function TeacherHomeworkTab() {
   const router = useRouter();
@@ -120,11 +121,11 @@ export default function TeacherHomeworkTab() {
     );
   }
 
-  if (status === "loading" || loading) {
+  if ((status === "loading" || loading) && homeworks.length === 0) {
     return (
       <div className="min-h-screen w-full overflow-x-hidden p-4 md:p-6 lg:p-10 text-white">
-        <div className="max-w-7xl mx-auto flex items-center justify-center min-h-[40vh]">
-          <p className="text-white/60">Loading…</p>
+        <div className="max-w-7xl mx-auto">
+          <TimellyLoader title="Loading homework" steps={["Assignments", "Classes", "Submissions"]} />
         </div>
       </div>
     );

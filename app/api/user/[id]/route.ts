@@ -3,6 +3,8 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../lib/authOptions";
 import prisma from "../../../../lib/db";
 import bcrypt from "bcryptjs";
+import { purgeSchoolDashboardServerCacheMatching } from "@/lib/schoolDashboardServerCache";
+import { sanitizeTeachingClassIds } from "@/lib/teacherClassAccess";
 
 type Params = Promise<{ id: string }>;
 
@@ -35,6 +37,7 @@ export async function GET(req: NextRequest, { params }: { params: Params }) {
         teacherStatus: true,
         mobile: true,
         address: true,
+        teachingClassIds: true,
         assignedClasses: { select: { id: true, name: true, section: true } },
       },
     });
@@ -51,14 +54,16 @@ export async function GET(req: NextRequest, { params }: { params: Params }) {
       );
     }
 
-    const assignedClassIds = "assignedClasses" in user
-      ? (user.assignedClasses as { id: string }[]).map((c) => c.id)
+    const assignedClassIds = Array.isArray(user.teachingClassIds)
+      ? user.teachingClassIds.filter((id) => typeof id === "string" && id.trim())
       : [];
-    const { assignedClasses, ...rest } = user;
+    const { assignedClasses, teachingClassIds, ...rest } = user;
     return NextResponse.json({
       ...rest,
+      teachingClassIds,
       designation: user.subject,
       assignedClassIds,
+      assignedClasses,
     });
   } catch (error: any) {
     console.error("User fetch error:", error);
@@ -121,7 +126,7 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
     // Check if new email is unique (if changing email)
     if (email && email !== user.email) {
       const existingUser = await prisma.user.findUnique({
-        where: { email },
+        where: { schoolId_email: { schoolId: user.schoolId!, email } },
       });
       if (existingUser) {
         return NextResponse.json(
@@ -130,6 +135,8 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
         );
       }
     }
+
+    const schoolId = (user.schoolId || session.user.schoolId) as string;
 
     const updateData: Record<string, unknown> = {};
     if (name !== undefined) updateData.name = name;
@@ -148,6 +155,13 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
         const arr = Array.isArray(subjects) && subjects.every((s: unknown) => typeof s === "string") ? (subjects as string[]).filter(Boolean) : [];
         updateData.subjects = arr;
         if (arr[0]) updateData.subject = arr[0];
+      }
+      if (assignedClassIds !== undefined) {
+        // Teaching assignments (marks/homework) — do NOT overwrite Class.teacherId (class teacher).
+        updateData.teachingClassIds = await sanitizeTeachingClassIds(
+          assignedClassIds,
+          schoolId
+        );
       }
       if (qualification !== undefined) updateData.qualification = qualification && String(qualification).trim() ? String(qualification).trim() : null;
       if (experience !== undefined) updateData.experience = experience && String(experience).trim() ? String(experience).trim() : null;
@@ -173,8 +187,6 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
       updateData.photoUrl = photoUrl && String(photoUrl).trim() ? String(photoUrl).trim() : null;
     }
 
-    const schoolId = session.user.schoolId as string;
-
     const updatedUser = await prisma.user.update({
       where: { id },
       data: updateData,
@@ -187,6 +199,7 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
         subjects: true,
         allowedFeatures: true,
         teacherId: true,
+        teachingClassIds: true,
         qualification: true,
         experience: true,
         joiningDate: true,
@@ -196,22 +209,9 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
         photoUrl: true,
       },
     });
-
-    // Update assigned classes for teachers
-    if (user.role === "TEACHER" && schoolId && Array.isArray(assignedClassIds)) {
-      const classIds = assignedClassIds.filter((c: unknown) => typeof c === "string") as string[];
-      // Unassign this teacher from all classes they currently have
-      await prisma.class.updateMany({
-        where: { teacherId: id },
-        data: { teacherId: null },
-      });
-      // Assign to new set of classes (only in same school)
-      if (classIds.length > 0) {
-        await prisma.class.updateMany({
-          where: { id: { in: classIds }, schoolId },
-          data: { teacherId: id },
-        });
-      }
+    if (user.role === "TEACHER") {
+      purgeSchoolDashboardServerCacheMatching(`teacher:list:${schoolId}`);
+      purgeSchoolDashboardServerCacheMatching(`class:list:lite:${schoolId}`);
     }
 
     return NextResponse.json({
@@ -219,6 +219,7 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
       user: {
         ...updatedUser,
         designation: updatedUser.subject,
+        assignedClassIds: updatedUser.teachingClassIds ?? [],
       },
     });
   } catch (error: any) {
@@ -279,6 +280,10 @@ export async function DELETE(
     await prisma.user.delete({
       where: { id },
     });
+    if (user.role === "TEACHER" && user.schoolId) {
+      purgeSchoolDashboardServerCacheMatching(`teacher:list:${user.schoolId}`);
+      purgeSchoolDashboardServerCacheMatching(`class:list:lite:${user.schoolId}`);
+    }
 
     return NextResponse.json({
       message: "User deleted successfully",

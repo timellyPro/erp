@@ -1,28 +1,30 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Search } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
 import SearchInput from "../../common/SearchInput";
+import TimellyLoader from "../../common/TimellyLoader";
 import ChatWindow from "./ChatWindow";
 import { Chat, Status } from "./ChatList";
-import Spinner from "../../common/Spinner";
+import {
+  loadTeacherChats,
+  peekTeacherChats,
+  setTeacherChatsCache,
+  type TeacherChatAppointment,
+} from "@/lib/loadTeacherFastTabs";
 
 const DEFAULT_AVATAR =
   "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100";
 
-type AppointmentRow = {
-  id: string;
-  status: string;
-  note: string | null;
-  student?: {
-    fatherName?: string;
-    user?: { name?: string; photoUrl?: string | null };
-  } | null;
-  messages?: Array<{ content: string }>;
+const STATUS_TO_API: Record<Status, string> = {
+  pending: "PENDING",
+  approved: "APPROVED",
+  rejected: "REJECTED",
+  ended: "ENDED",
 };
 
-function mapAppointmentToChat(a: AppointmentRow): Chat {
+function mapAppointmentToChat(a: TeacherChatAppointment): Chat {
   const statusMap: Record<string, Status> = {
     PENDING: "pending",
     APPROVED: "approved",
@@ -43,34 +45,54 @@ function mapAppointmentToChat(a: AppointmentRow): Chat {
 }
 
 export default function TeacherParentChatTab() {
+  const initial = peekTeacherChats();
   const [activeTab, setActiveTab] = useState<"all" | Status>("all");
-  const [chats, setChats] = useState<Chat[]>([]);
+  const [appointments, setAppointments] = useState<TeacherChatAppointment[]>(
+    () => initial ?? []
+  );
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !initial);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchChats = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const res = await fetch("/api/communication/appointments");
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data?.message ?? "Failed to load chats");
-      }
-      const data = await res.json();
-      const list = Array.isArray(data.appointments) ? data.appointments : [];
-      setChats(list.map(mapAppointmentToChat));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load chats");
-      setChats([]);
-    } finally {
-      setLoading(false);
-    }
+  const chats = useMemo(
+    () => appointments.map(mapAppointmentToChat),
+    [appointments]
+  );
+
+  const applyAppointments = useCallback((list: TeacherChatAppointment[]) => {
+    setAppointments(list);
+    setTeacherChatsCache(list);
   }, []);
 
+  const fetchChats = useCallback(
+    async (revalidate = false) => {
+      if (!revalidate) {
+        const cached = peekTeacherChats();
+        if (cached) {
+          setAppointments(cached);
+          setLoading(false);
+          void fetchChats(true);
+          return;
+        }
+      }
+
+      try {
+        setError(null);
+        setLoading((prev) => (appointments.length === 0 ? true : prev));
+        const list = await loadTeacherChats({ revalidate: true });
+        applyAppointments(list);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to load chats");
+        if (appointments.length === 0) setAppointments([]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [applyAppointments, appointments.length]
+  );
+
   useEffect(() => {
-    fetchChats();
+    void fetchChats(false);
   }, [fetchChats]);
 
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
@@ -78,33 +100,59 @@ export default function TeacherParentChatTab() {
   const filteredChats =
     activeTab === "all" ? chats : chats.filter((c) => c.status === activeTab);
 
-  const updateStatus = async (id: string, status: Status) => {
-    const action = status === "approved" ? "approve" : "reject";
-    const res = await fetch(`/api/communication/appointments/${id}/${action}`, {
-      method: "POST",
+  const patchStatus = (id: string, status: Status) => {
+    setAppointments((prev) => {
+      const next = prev.map((a) =>
+        a.id === id ? { ...a, status: STATUS_TO_API[status] } : a
+      );
+      setTeacherChatsCache(next);
+      return next;
     });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setError(data?.message ?? `Failed to ${action}`);
-      return;
+  };
+
+  const updateStatus = async (id: string, status: Status) => {
+    const prev = appointments;
+    patchStatus(id, status);
+    const action = status === "approved" ? "approve" : "reject";
+    try {
+      const res = await fetch(`/api/communication/appointments/${id}/${action}`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        applyAppointments(prev);
+        setError(data?.message ?? `Failed to ${action}`);
+        return;
+      }
+      void loadTeacherChats({ revalidate: true })
+        .then((list) => applyAppointments(list))
+        .catch(() => {});
+    } catch {
+      applyAppointments(prev);
+      setError(`Failed to ${action}`);
     }
-    setChats((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, status } : c))
-    );
   };
 
   const endChat = async (id: string) => {
-    const res = await fetch(`/api/communication/appointments/${id}/end`, {
-      method: "POST",
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setError(data?.message ?? "Failed to end chat");
-      return;
+    const prev = appointments;
+    patchStatus(id, "ended");
+    try {
+      const res = await fetch(`/api/communication/appointments/${id}/end`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        applyAppointments(prev);
+        setError(data?.message ?? "Failed to end chat");
+        return;
+      }
+      void loadTeacherChats({ revalidate: true })
+        .then((list) => applyAppointments(list))
+        .catch(() => {});
+    } catch {
+      applyAppointments(prev);
+      setError("Failed to end chat");
     }
-    setChats((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, status: "ended" as const } : c))
-    );
   };
 
   return (
@@ -148,11 +196,16 @@ export default function TeacherParentChatTab() {
 
           {/* Chat List */}
           <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 sm:p-3 space-y-1 sm:space-y-2 overscroll-contain">
-            {loading ? (
-              <div className="p-4 text-center text-gray-400 text-sm">
-                <Spinner />
+            {loading && appointments.length === 0 ? (
+              <div className="p-2">
+                <TimellyLoader
+                  compact
+                  bare
+                  title="Loading chats"
+                  steps={["Requests", "Messages"]}
+                />
               </div>
-            ) : error ? (
+            ) : error && appointments.length === 0 ? (
               <div className="p-4 text-center text-red-400 text-sm">
                 {error}
               </div>

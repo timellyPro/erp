@@ -8,6 +8,12 @@ import CircularList from "./circularTab/CircularList";
 import CircularForm from "./circularTab/CircularForm";
 import { CircularRow } from "./circularTab/types";
 import { Plus, Scroll, X } from "lucide-react";
+import TimellyLoader from "../common/TimellyLoader";
+import {
+  invalidateCirculars,
+  loadCirculars,
+  peekCirculars,
+} from "@/lib/loadSchoolAdminFastTabs";
 
 export default function SchoolAdminCircularsTab() {
   const [circulars, setCirculars] = useState<CircularRow[]>([]);
@@ -18,21 +24,27 @@ export default function SchoolAdminCircularsTab() {
   const [classId, setClassId] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const fetchCirculars = useCallback(async () => {
+  const fetchCirculars = useCallback(async (revalidate = false) => {
+    if (!revalidate) {
+      const cached = peekCirculars(recipient, classId);
+      if (cached) {
+        setCirculars(cached as CircularRow[]);
+        setLoading(false);
+        void fetchCirculars(true);
+        return;
+      }
+    }
+
     try {
-      setLoading(true);
-      const params = new URLSearchParams({ status: "all" });
-      if (recipient && recipient !== "all") params.set("recipient", recipient);
-      if (classId) params.set("classId", classId);
-      const res = await fetch(`/api/circular/list?${params}`);
-      const data = await res.json();
-      setCirculars(data.circulars ?? []);
+      setLoading(circulars.length === 0);
+      const rows = await loadCirculars(recipient, classId, { revalidate });
+      setCirculars(rows as CircularRow[]);
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
     }
-  }, [recipient, classId]);
+  }, [circulars.length, recipient, classId]);
 
   useEffect(() => {
     fetchCirculars();
@@ -89,7 +101,8 @@ export default function SchoolAdminCircularsTab() {
               onClose={() => setShowForm(false)}
               onSuccess={async () => {
                 setShowForm(false);
-                await fetchCirculars();
+                invalidateCirculars();
+                await fetchCirculars(true);
               }}
             />
           </div>
@@ -110,12 +123,17 @@ export default function SchoolAdminCircularsTab() {
         </div>
 
         {/* LIST / LOADER */}
-        {loading ? (
-          <div className="flex justify-center items-center py-12 sm:py-16">
-            <div className="h-8 w-8 sm:h-10 sm:w-10 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-          </div>
+        {loading && circulars.length === 0 ? (
+          <TimellyLoader
+            compact
+            title="Loading circulars"
+            steps={["Notices", "Recipients", "Attachments"]}
+          />
         ) : (
-          <CircularList circulars={filteredCirculars} />
+          <>
+            {loading && <div className="text-xs text-white/50 px-2">Refreshing circulars...</div>}
+            <CircularList circulars={filteredCirculars} />
+          </>
         )}
       </div>
     </div>

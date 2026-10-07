@@ -129,13 +129,14 @@ export async function POST(req: Request) {
 
     const hyperpgId = orderStatus.id || null;
 
-    // Find existing Payment by transactionId (our orderId) or hyperpgOrderId
+    // Find existing Payment by transactionId (our orderId), hyperpgOrderId, or gateway txn id
     const existing = await prisma.payment.findFirst({
       where: {
         studentId,
         OR: [
           { transactionId: orderId },
           ...(hyperpgId ? [{ hyperpgOrderId: hyperpgId }] : []),
+          ...(orderStatus.txn_id ? [{ hyperpgTxnId: String(orderStatus.txn_id) }] : []),
         ],
       },
     });
@@ -237,6 +238,7 @@ export async function POST(req: Request) {
         studentId,
         amount: amountNum,
         gateway: "HYPERPG",
+        transactionId: orderId,
         hyperpgOrderId: orderStatus.id || null,
         hyperpgTxnId: orderStatus.txn_id || null,
         hyperpgStatus: typeof orderStatus.status === "string" ? orderStatus.status : null,

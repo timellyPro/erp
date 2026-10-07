@@ -84,7 +84,7 @@ const CertificateCard = ({ data }: any) => {
 
             <div className="text-center">
               <div className="border-t border-gray-400 w-28 mx-auto mb-1"></div>
-              <p className="text-xs tracking-wide">DIRECTOR</p>
+              <p className="text-xs tracking-wide">CHAIRMAN</p>
             </div>
           </div>
         </div>

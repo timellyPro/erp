@@ -7,9 +7,16 @@ import CreateEventForm from "./workshops/CreateEventForm";
 import EventCard from "./workshops/EventCard";
 import EventDetailsModal from "./workshops/EventDetailsModal";
 import DeleteEventModal from "./workshops/DeleteEventModal";
+import TimellyLoader from "../common/TimellyLoader";
 import { CalendarDays, CheckCircle, List, Plus, Users, X } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { ReactNode, useEffect, useMemo, useRef, useState, useCallback } from "react";
+import {
+  loadEventDetails,
+  loadEventsPage,
+  peekEventDetails,
+  peekEventsPage,
+  setEventsPageCache,
+} from "@/lib/loadSchoolAdminFastTabs";
 
 interface EventItem {
   id: string;
@@ -31,7 +38,6 @@ interface EventItem {
 }
 
 export default function WorkshopsAndEventsTab() {
-  const router = useRouter();
   const [activeAction, setActiveAction] = useState<"workshop" | "none">("none");
   const [events, setEvents] = useState<EventItem[]>([]);
   const [loadingEvents, setLoadingEvents] = useState(false);
@@ -48,39 +54,44 @@ export default function WorkshopsAndEventsTab() {
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 3;
 
-  const fetchEvents = useCallback(async () => {
-    try {
-      setLoadingEvents(true);
-      setEventsError(null);
-      const res = await fetch("/api/events/list", { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.message || "Failed to load events");
+  const fetchEvents = useCallback(async (revalidate = false) => {
+    if (!revalidate) {
+      const cached = peekEventsPage();
+      if (cached) {
+        setEvents(cached as EventItem[]);
+        setLoadingEvents(false);
+        void fetchEvents(true);
+        return;
       }
-      setEvents(Array.isArray(data?.events) ? data.events : []);
+    }
+
+    try {
+      setLoadingEvents(events.length === 0);
+      setEventsError(null);
+      const rows = await loadEventsPage({ revalidate });
+      setEvents(rows as EventItem[]);
     } catch (err: any) {
       setEventsError(err?.message || "Failed to load events");
     } finally {
       setLoadingEvents(false);
     }
-  }, []);
+  }, [events.length]);
 
   const refetchEventsAfterMutation = useCallback(() => {
-    void fetchEvents();
-    try {
-      router.refresh();
-    } catch {
-      /* noop */
-    }
-  }, [fetchEvents, router]);
+    void fetchEvents(true);
+  }, [fetchEvents]);
 
   const handleEventUpsert = useCallback(
     (event?: { id: string } | null) => {
       if (event?.id) {
         setEvents((prev) => {
           const index = prev.findIndex((e) => e.id === event.id);
-          if (index === -1) return prev;
-          return prev.map((e) => (e.id === event.id ? { ...e, ...event } : e));
+          const next =
+            index === -1
+              ? [event as EventItem, ...prev]
+              : prev.map((e) => (e.id === event.id ? { ...e, ...event } : e));
+          setEventsPageCache(next as any);
+          return next;
         });
       }
       refetchEventsAfterMutation();
@@ -112,14 +123,16 @@ export default function WorkshopsAndEventsTab() {
       try {
         setDetailsLoading(true);
         setDetailsError(null);
-        const res = await fetch(`/api/events/create/${selectedEventId}`, {
+        const cached = peekEventDetails(selectedEventId);
+        if (cached) {
+          setEventDetails(cached as EventItem);
+          setDetailsLoading(false);
+        }
+        const data = await loadEventDetails(selectedEventId, {
+          revalidate: Boolean(cached),
           signal: controller.signal,
         });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data?.message || "Failed to load event details");
-        }
-        setEventDetails(data?.event ?? null);
+        setEventDetails(data as EventItem);
       } catch (err: any) {
         if (err?.name === "AbortError") return;
         setDetailsError(err?.message || "Failed to load event details");
@@ -316,7 +329,9 @@ export default function WorkshopsAndEventsTab() {
             if (!deleteTarget) return;
             const deletingEventId = deleteTarget.id;
             const snapshot = events;
-            setEvents((prev) => prev.filter((e) => e.id !== deletingEventId));
+            const nextEvents = events.filter((e) => e.id !== deletingEventId);
+            setEvents(nextEvents);
+            setEventsPageCache(nextEvents as any);
             setDeleteTarget(null);
             try {
               setDeleteLoading(true);
@@ -327,9 +342,10 @@ export default function WorkshopsAndEventsTab() {
               if (!res.ok) {
                 throw new Error(data?.message || "Failed to delete event");
               }
-              refetchEventsAfterMutation();
+              void fetchEvents(true);
             } catch (err: any) {
               setEvents(snapshot);
+              setEventsPageCache(snapshot as any);
               console.error(err);
             } finally {
               setDeleteLoading(false);
@@ -339,8 +355,8 @@ export default function WorkshopsAndEventsTab() {
 
         <section className="space-y-4">
           <div className="flex items-center justify-between">
-            {loadingEvents && (
-              <span className="text-sm text-white/50">Loading the list of events...</span>
+            {loadingEvents && events.length > 0 && (
+              <span className="text-sm text-white/50">Refreshing events...</span>
             )}
           </div>
 
@@ -348,6 +364,14 @@ export default function WorkshopsAndEventsTab() {
             <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
               {eventsError}
             </div>
+          )}
+
+          {loadingEvents && events.length === 0 && !eventsError && (
+            <TimellyLoader
+              compact
+              title="Loading workshops"
+              steps={["Events", "Registrations", "Schedules"]}
+            />
           )}
 
           {!loadingEvents && events.length === 0 && !eventsError && (

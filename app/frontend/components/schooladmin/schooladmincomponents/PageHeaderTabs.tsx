@@ -10,16 +10,20 @@ type TabItem = {
 interface PageTabsProps {
   tabs: TabItem[];
   queryKey?: string; // default = "tab"
+  /** When the query param is absent, use this instead of tabs[0].value (e.g. Add User defaults to "add" while first pill is "all"). */
+  defaultWhenMissing?: string;
 }
 
 export default function PageTabs({
   tabs,
   queryKey = "tab",
+  defaultWhenMissing,
 }: PageTabsProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const rawActive = searchParams.get(queryKey) ?? tabs[0].value;
+  const rawActive =
+    searchParams.get(queryKey) ?? defaultWhenMissing ?? tabs[0].value;
   const active =
     rawActive === "add-user"
       ? "add"

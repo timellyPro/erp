@@ -2,14 +2,23 @@
 
 import { Search, Calendar, FileText, Plus, GraduationCap } from "lucide-react";
 
-const DEFAULT_ACADEMIC_YEARS = [
-  { value: "2025-2026", label: "2025-2026" },
-  { value: "2024-2025", label: "2024-2025" },
-  { value: "2023-2024", label: "2023-2024" },
-];
+function getCurrentAcademicYearStart(): number {
+  const now = new Date();
+  return now.getMonth() >= 5 ? now.getFullYear() : now.getFullYear() - 1;
+}
+
+function makeAcademicYears(startYear = getCurrentAcademicYearStart()) {
+  return Array.from({ length: 4 }, (_, index) => {
+    const year = startYear - index;
+    const value = `${year}-${year + 1}`;
+    return { value, label: value };
+  });
+}
+
+const DEFAULT_ACADEMIC_YEARS = makeAcademicYears();
 
 function getNextAcademicYear(currentYears: { value: string }[]): string {
-  let maxStart = 2025;
+  let maxStart = getCurrentAcademicYearStart();
   for (const y of currentYears) {
     const m = y.value.match(/^(\d{4})-(\d{4})$/);
     if (m) maxStart = Math.max(maxStart, parseInt(m[1], 10));

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { getTeacherAccessibleClassIds } from "@/lib/teacherClassAccess";
 
 export async function GET() {
   try {
@@ -19,13 +20,17 @@ export async function GET() {
       );
     }
 
+    const accessibleIds = await getTeacherAccessibleClassIds(userId, schoolId);
+
     const [classes, circulars, notifications, unreadCount, appointments] =
       await Promise.all([
-        prisma.class.findMany({
-          where: { teacherId: userId },
-          include: { _count: { select: { students: true } } },
-          orderBy: { createdAt: "desc" },
-        }),
+        accessibleIds.length
+          ? prisma.class.findMany({
+              where: { id: { in: accessibleIds }, schoolId },
+              include: { _count: { select: { students: true } } },
+              orderBy: { createdAt: "desc" },
+            })
+          : Promise.resolve([]),
         prisma.circular.findMany({
           where: { schoolId },
           include: { issuedBy: { select: { name: true, photoUrl: true } } },
@@ -35,14 +40,21 @@ export async function GET() {
         prisma.notification.findMany({
           where: { userId },
           orderBy: { createdAt: "desc" },
-          take: 4,
+          take: 25,
         }),
         prisma.notification.count({
           where: { userId, isRead: false },
         }),
         prisma.appointment.findMany({
           where: { teacherId: userId },
-          include: { student: { include: { user: true } } },
+          include: {
+            student: {
+              select: {
+                fatherName: true,
+                user: { select: { name: true } },
+              },
+            },
+          },
           orderBy: { createdAt: "desc" },
           take: 4,
         }),

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/db";
+import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
 
 type RouteParams =
   | { params: { id: string } }
@@ -20,6 +21,12 @@ export async function GET(_req: Request, context: RouteParams) {
   try {
     const fee = await prisma.studentFee.findUnique({
       where: { studentId: id },
+      include: {
+        discountApprovals: {
+          orderBy: { createdAt: "desc" },
+          take: 10,
+        },
+      },
     });
 
     if (!fee) {
@@ -49,9 +56,13 @@ export async function PATCH(req: Request, context: RouteParams) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
 
-  if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "SUPERADMIN") {
+  const canManageFees =
+    session.user.role === "SCHOOLADMIN" ||
+    session.user.role === "SUPERADMIN" ||
+    session.user.role === "TEACHER";
+  if (!canManageFees) {
     return NextResponse.json(
-      { message: "Only admins can update student fees" },
+      { message: "Forbidden" },
       { status: 403 }
     );
   }
@@ -59,6 +70,9 @@ export async function PATCH(req: Request, context: RouteParams) {
   try {
     const existing = await prisma.studentFee.findUnique({
       where: { studentId: id },
+      include: {
+        student: { select: { schoolId: true } },
+      },
     });
 
     if (!existing) {
@@ -68,8 +82,27 @@ export async function PATCH(req: Request, context: RouteParams) {
       );
     }
 
+    const schoolId = existing.student.schoolId;
+    const sessionSchoolId =
+      typeof session.user.schoolId === "string" && session.user.schoolId.trim()
+        ? session.user.schoolId
+        : null;
+    if (session.user.role !== "SUPERADMIN" && sessionSchoolId && sessionSchoolId !== schoolId) {
+      return NextResponse.json(
+        { message: "Forbidden" },
+        { status: 403 }
+      );
+    }
+
     const body = await req.json();
-    const { totalFee, discountPercent, installments } = body;
+    const {
+      totalFee,
+      discountPercent,
+      discountFixedAmount: rawDiscountFixedAmount,
+      discountFeeHeadKey,
+      discountFeeHeadLabel,
+      discountRemarks,
+    } = body;
 
     let newTotalFee = typeof totalFee === "number" ? totalFee : existing.totalFee;
     let newDiscount =
@@ -89,8 +122,108 @@ export async function PATCH(req: Request, context: RouteParams) {
       );
     }
 
-    const finalFee = newTotalFee * (1 - newDiscount / 100);
+    const hasDiscount = newDiscount > 0;
+    let headKey: string | null =
+      typeof discountFeeHeadKey === "string" && discountFeeHeadKey.trim()
+        ? discountFeeHeadKey.trim()
+        : null;
+    let headLabel: string | null =
+      typeof discountFeeHeadLabel === "string" && discountFeeHeadLabel.trim()
+        ? discountFeeHeadLabel.trim()
+        : null;
+    let remarksVal: string | null =
+      typeof discountRemarks === "string" && discountRemarks.trim() ? discountRemarks.trim() : null;
+
+    if (hasDiscount) {
+      if (!headKey) {
+        return NextResponse.json(
+          { message: "Select the fee head this discount applies to." },
+          { status: 400 }
+        );
+      }
+      if (!remarksVal || remarksVal.length < 3) {
+        return NextResponse.json(
+          { message: "Enter discount remarks / approval authority (at least 3 characters)." },
+          { status: 400 }
+        );
+      }
+    } else {
+      headKey = null;
+      headLabel = null;
+      remarksVal = null;
+    }
+
+    const discountRupee =
+      hasDiscount && typeof rawDiscountFixedAmount === "number" && rawDiscountFixedAmount > 0
+        ? rawDiscountFixedAmount
+        : hasDiscount
+          ? Math.round(newTotalFee * (newDiscount / 100) * 100) / 100
+          : 0;
+
+    const finalFee = Math.max(0, Math.round((newTotalFee - discountRupee) * 100) / 100);
     const remainingFee = Math.max(finalFee - existing.amountPaid, 0);
+
+    if (hasDiscount) {
+      const approvalData = {
+        schoolId,
+        studentId: id,
+        studentFeeId: existing.id,
+        requestedById: session.user.id,
+        totalFee: newTotalFee,
+        discountPercent: newDiscount,
+        discountFixedAmount: discountRupee,
+        finalFee,
+        discountFeeHeadKey: headKey,
+        discountFeeHeadLabel: headLabel,
+        discountRemarks: remarksVal,
+      } as const;
+
+      const pending = await prisma.feeDiscountApproval.findFirst({
+        where: {
+          studentId: id,
+          schoolId,
+          status: "PENDING",
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true },
+      });
+
+      const approvalRequest = pending
+        ? await prisma.feeDiscountApproval.update({
+            where: { id: pending.id },
+            data: {
+              ...approvalData,
+              reviewedById: null,
+              reviewRemarks: null,
+              reviewedAt: null,
+            },
+          })
+        : await prisma.feeDiscountApproval.create({
+            data: approvalData,
+          });
+
+      const approvalRequests = await prisma.feeDiscountApproval.findMany({
+        where: { studentId: id, schoolId },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        select: {
+          id: true,
+          status: true,
+          discountFixedAmount: true,
+          discountFeeHeadLabel: true,
+          discountRemarks: true,
+          createdAt: true,
+        },
+      });
+
+      return NextResponse.json({
+        fee: existing,
+        approvalRequest,
+        approvalRequests,
+        pendingApproval: true,
+        message: "Discount submitted for chairman approval.",
+      });
+    }
 
     const updated = await prisma.studentFee.update({
       where: { studentId: id },
@@ -99,12 +232,17 @@ export async function PATCH(req: Request, context: RouteParams) {
         discountPercent: newDiscount,
         finalFee,
         remainingFee,
-        installments:
-          typeof installments === "number" && installments > 0
-            ? installments
-            : existing.installments,
-      },
+        discountFeeHeadKey: headKey,
+        discountFeeHeadLabel: headLabel,
+        discountRemarks: remarksVal,
+      } as Parameters<(typeof prisma.studentFee)["update"]>[0]["data"],
     });
+
+    const student = await prisma.student.findUnique({
+      where: { id },
+      select: { schoolId: true },
+    });
+    await invalidateStudentFeeReadCaches({ studentId: id, schoolId: student?.schoolId ?? null });
 
     return NextResponse.json({ fee: updated });
   } catch (error: any) {

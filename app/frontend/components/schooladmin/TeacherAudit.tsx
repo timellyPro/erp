@@ -1,11 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { TeacherRow, AuditRecord } from "./teacheraudit/types";
 import TeacherAuditHeader from "./teacheraudit/TeacherAuditHeader";
 import TeacherAuditCard from "./teacheraudit/TeacherAuditCard";
 
-import Spinner from "../common/Spinner";
+import TimellyLoader from "../common/TimellyLoader";
+import {
+  invalidateTeacherAuditTeachers,
+  loadTeacherAuditRecords,
+  loadTeacherAuditTeachers,
+  peekTeacherAuditRecords,
+  peekTeacherAuditTeachers,
+  setTeacherAuditRecords,
+} from "@/lib/loadSchoolAdminFastTabs";
 
 function getCurrentAcademicYear() {
   const now = new Date();
@@ -17,16 +25,21 @@ function getCurrentAcademicYear() {
   return `${startYear}-${startYear + 1}`;
 }
 
+function getRecentAcademicYears() {
+  const [start] = getCurrentAcademicYear().split("-").map(Number);
+  return Array.from({ length: 4 }, (_, index) => {
+    const year = start - index;
+    const value = `${year}-${year + 1}`;
+    return { value, label: value };
+  });
+}
 
 export default function TeacherAuditTab() {
   const [q, setQ] = useState("");
   const [academicYear, setAcademicYear] = useState(getCurrentAcademicYear());
- const currentYear = getCurrentAcademicYear();
-
-const [academicYears, setAcademicYears] = useState([
-  { value: currentYear, label: currentYear },
-]);
+  const [academicYears, setAcademicYears] = useState(getRecentAcademicYears);
   const [loading, setLoading] = useState(true);
+  const teacherRequestSeq = useRef(0);
   const [teachers, setTeachers] = useState<TeacherRow[]>([]);
   const [expandedTeacherId, setExpandedTeacherId] = useState<string | null>(
     null
@@ -45,40 +58,53 @@ const [academicYears, setAcademicYears] = useState([
 
   const [saving, setSaving] = useState(false);
 
-  const fetchTeachers = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (q.trim()) params.set("q", q.trim());
-      if (academicYear && academicYear !== "all") params.set("academicYear", academicYear);
-      const res = await fetch(`/api/teacher-audit/teachers?${params.toString()}`);
-      const data = await res.json();
-      console.log("Fetched teachers", data);
-      setTeachers(data.teachers ?? []);
-    } catch {
-      setTeachers([]);
-    } finally {
-      setLoading(false);
+  const fetchTeachers = useCallback(async (revalidate = false) => {
+    const requestId = ++teacherRequestSeq.current;
+    if (!revalidate) {
+      const cached = peekTeacherAuditTeachers(q, academicYear);
+      if (cached) {
+        setTeachers(cached as TeacherRow[]);
+        setLoading(false);
+        void fetchTeachers(true);
+        return;
+      }
     }
-  }, [q, academicYear]);
+
+    setLoading(teachers.length === 0);
+    try {
+      const rows = await loadTeacherAuditTeachers(q, academicYear, { revalidate });
+      if (requestId !== teacherRequestSeq.current) return;
+      setTeachers(rows as TeacherRow[]);
+    } catch {
+      if (requestId === teacherRequestSeq.current && teachers.length === 0) setTeachers([]);
+    } finally {
+      if (requestId === teacherRequestSeq.current) setLoading(false);
+    }
+  }, [academicYear, q, teachers.length]);
 
   useEffect(() => {
     const t = setTimeout(() => fetchTeachers(), 300);
     return () => clearTimeout(t);
   }, [q, academicYear, fetchTeachers]);
 
-  const loadRecords = useCallback(async (teacherId: string) => {
+  const loadRecords = useCallback(async (teacherId: string, revalidate = false) => {
+    if (!revalidate) {
+      const cached = peekTeacherAuditRecords(teacherId, academicYear);
+      if (cached) {
+        setRecordsByTeacher((prev) => ({
+          ...prev,
+          [teacherId]: cached as AuditRecord[],
+        }));
+        void loadRecords(teacherId, true);
+        return;
+      }
+    }
+
     try {
-      const params = new URLSearchParams({ take: "50" });
-      if (academicYear && academicYear !== "all") params.set("academicYear", academicYear);
-      const res = await fetch(
-        `/api/teacher-audit/${teacherId}/records?${params.toString()}`
-      );
-      const data = await res.json();
-      //console.log("Loaded records for", teacherId, data);
+      const records = await loadTeacherAuditRecords(teacherId, academicYear, { revalidate });
       setRecordsByTeacher((prev) => ({
         ...prev,
-        [teacherId]: data.records ?? [],
+        [teacherId]: records as AuditRecord[],
       }));
     } catch {
       setRecordsByTeacher((prev) => ({ ...prev, [teacherId]: [] }));
@@ -125,8 +151,25 @@ const [academicYears, setAcademicYears] = useState([
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Failed to save");
 
-      await loadRecords(teacherId);
-      await fetchTeachers();
+      if (data.record) {
+        const nextRecords = [data.record as AuditRecord, ...(recordsByTeacher[teacherId] ?? [])];
+        setRecordsByTeacher((prev) => ({ ...prev, [teacherId]: nextRecords }));
+        setTeacherAuditRecords(teacherId, academicYear, nextRecords);
+      }
+      setTeachers((prev) =>
+        prev.map((teacher) =>
+          teacher.id === teacherId
+            ? {
+                ...teacher,
+                performanceScore: Math.max(0, Math.min(100, teacher.performanceScore + scoreImpact)),
+                recordCount: teacher.recordCount + 1,
+              }
+            : teacher
+        )
+      );
+      invalidateTeacherAuditTeachers();
+      void loadRecords(teacherId, true);
+      void fetchTeachers(true);
 
       setDescription("");
       setCustomCategory("");
@@ -156,7 +199,7 @@ const [academicYears, setAcademicYears] = useState([
             return next.sort((a, b) => parseInt(b.value.slice(0, 4), 10) - parseInt(a.value.slice(0, 4), 10));
           })
         }
-        recordCount={teachers.length}
+        recordCount={teachers.reduce((sum, teacher) => sum + teacher.recordCount, 0)}
         onSearchSubmit={() => { }}
         placeholder="Search teacher..."
       />
@@ -165,10 +208,16 @@ const [academicYears, setAcademicYears] = useState([
         <div className=" mx-auto space-y-4 sm:space-y-6">
 
 
-          {loading ? (
-            <Spinner />
+          {loading && teachers.length === 0 ? (
+            <TimellyLoader
+              title="Loading teacher audit"
+              steps={["Teachers", "Scores", "Audit history"]}
+            />
           ) : (
             <div className="space-y-4">
+              {loading && (
+                <div className="text-xs text-white/50">Refreshing teacher audit data...</div>
+              )}
               {teachers.length === 0 ? (
                 <div className="rounded-2xl border  border-white/10 backdrop-blur-xl p-6 sm:p-8 text-center text-white/60 text-sm sm:text-base">
                   No teachers found. Try a different search.

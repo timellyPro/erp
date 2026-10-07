@@ -7,6 +7,7 @@ export interface Class {
 export interface Student {
   id: string;
   admissionNumber: string;
+  status?: string | null;
   user: { name: string | null; email: string | null };
   class: { id: string; name: string; section: string | null } | null;
 }
@@ -15,8 +16,15 @@ export interface FeeSummary {
   totalStudents: number;
   paid: number;
   pending: number;
+  /** Sum of base tuition (structure + extras) before discount — StudentFee.totalFee */
+  totalFee: number;
+  /** Sum of (totalFee − finalFee) — documented discount amount */
+  totalDiscount: number;
   totalCollected: number;
   totalDue: number;
+  previousYearTotalFee?: number;
+  previousYearCollected?: number;
+  previousYearDue?: number;
 }
 
 export interface FeeRecord {
@@ -25,13 +33,15 @@ export interface FeeRecord {
   finalFee: number;
   amountPaid: number;
   remainingFee: number;
+  /** Documented discount in rupees (totalFee − finalFee). */
+  discountAmount?: number;
   // Comma-separated fee head names (e.g., Tuition, Lab) that still have due.
   feeTypes?: string;
   feeTypeDueAmount?: number;
   discountPercent: number;
-  installments: number;
   student: {
     id: string;
+    status?: string | null;
     user: { name: string | null; email: string | null };
     class: { id: string; name: string; section: string | null } | null;
   };
@@ -45,6 +55,9 @@ export interface ExtraFee {
   targetClassId: string | null;
   targetSection: string | null;
   targetStudentId: string | null;
+  /** ALL | HOSTELLER | DAY_SCHOLAR */
+  residencyScope?: string | null;
+  splitIntoTwoInstallments?: boolean;
 }
 
 export interface FeeStructure {

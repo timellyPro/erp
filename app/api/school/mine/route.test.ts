@@ -21,6 +21,11 @@ jest.mock("@/lib/db", () => ({
   },
 }));
 
+jest.mock("@/lib/tenantCache", () => ({
+  swrGet: jest.fn().mockResolvedValue(null),
+  swrSet: jest.fn().mockResolvedValue(undefined),
+}));
+
 describe("GET /api/school/mine", () => {
   beforeEach(() => {
     mockGetServerSession.mockReset();
@@ -70,6 +75,15 @@ describe("GET /api/school/mine", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.school).toEqual(schoolData);
-    expect(mockFindUnique).toHaveBeenCalledWith({ where: { id: "s1" } });
+    expect(mockFindUnique).toHaveBeenCalledWith({
+      where: { id: "s1" },
+      include: {
+        admins: {
+          where: { role: "SCHOOLADMIN", photoUrl: { not: null } },
+          select: { photoUrl: true },
+          take: 1,
+        },
+      },
+    });
   });
 });

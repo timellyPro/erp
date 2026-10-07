@@ -45,7 +45,9 @@ function ContactItem({
         <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-white/10 text-white/60">
           <Icon size={16} />
         </span>
-        <p className="text-[13px] sm:text-[14px] font-semibold text-white break-words">{value}</p>
+        <p className="text-[13px] sm:text-[14px] font-semibold text-white break-words">
+          {value?.trim() ? value : "—"}
+        </p>
       </div>
     </div>
   );

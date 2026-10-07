@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { flushSync } from "react-dom";
 import { useSession } from "next-auth/react";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -35,8 +36,10 @@ import {
   type StudentDetailResponse,
   WEEK_DAYS,
 } from "./attendanceUtils";
-import Spinner from "../../common/Spinner";
-import { generatePDF } from "@/lib/pdfUtils";
+import ParentTimellyLoader from "../ParentTimellyLoader";
+import { fetchParentAttendance, peekParentPortalAny } from "@/lib/loadParentPortal";
+import { downloadParentPortalPdf } from "@/lib/downloadParentPortalPdf";
+import { currentAcademicYearLabel, resolveSchoolBrand, type SchoolBrand } from "@/lib/resolveSchoolBrand";
 import AttendanceReportTemplate, { type AttendanceReportData } from "../../pdf/AttendanceReportTemplate";
 import { useRef } from "react";
 
@@ -56,17 +59,48 @@ type StatCardConfig = {
 export default function ParentAttendanceTab() {
   const { data: session } = useSession();
   const studentId = session?.user?.studentId ?? null;
+  const sessionSchoolName =
+    typeof (session?.user as any)?.schoolName === "string" ? (session?.user as any).schoolName : "";
+
+  const getAcademicYearRangeStatic = (seedDate = new Date()) => {
+    const year = seedDate.getFullYear();
+    const month = seedDate.getMonth();
+    const startYear = month >= 3 ? year : year - 1;
+    const endYear = startYear + 1;
+    return {
+      startDate: `${startYear}-04-01`,
+      endDate: `${endYear}-03-31`,
+      startYear,
+      endYear,
+    };
+  };
+
+  const initialAy = getAcademicYearRangeStatic();
+  const initialAttendanceKey = `startDate=${initialAy.startDate}&endDate=${initialAy.endDate}`;
+  const initialPeek = peekParentPortalAny<{ attendances: AttendanceRecord[] }>(
+    "attendance",
+    initialAttendanceKey
+  );
 
   const [monthCursor, setMonthCursor] = useState(firstDayOfMonth(new Date()));
   const [selectedDateKey, setSelectedDateKey] = useState("");
-  const [records, setRecords] = useState<AttendanceRecord[]>([]);
-  const [dailyStatus, setDailyStatus] = useState<Record<string, "PRESENT" | "ABSENT" | "LATE" | "HOLIDAY">>({});
+  const [records, setRecords] = useState<AttendanceRecord[]>(() => initialPeek?.attendances ?? []);
+  const [dailyStatus, setDailyStatus] = useState<Record<string, "PRESENT" | "ABSENT" | "LATE" | "HOLIDAY">>(() =>
+    initialPeek?.attendances?.length ? buildDailyStatus(initialPeek.attendances) : {}
+  );
   const [studentName, setStudentName] = useState("your child");
   const [studentClassLabel, setStudentClassLabel] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [schoolName, setSchoolName] = useState(sessionSchoolName || "");
+  const [loading, setLoading] = useState(!initialPeek?.attendances?.length);
   const [error, setError] = useState<string | null>(null);
   const [generatingPdf, setGeneratingPdf] = useState(false);
+  const [schoolBrand, setSchoolBrand] = useState<SchoolBrand | null>(null);
+  const [pdfReportData, setPdfReportData] = useState<AttendanceReportData | null>(null);
   const reportRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    void resolveSchoolBrand().then(setSchoolBrand);
+  }, []);
 
   const getAcademicYearRange = (seedDate = new Date()) => {
     const year = seedDate.getFullYear();
@@ -89,23 +123,20 @@ export default function ParentAttendanceTab() {
     }
 
     const currentAy = getAcademicYearRange();
-    const previousAyStartDate = `${currentAy.startYear - 1}-04-01`;
-    const params = new URLSearchParams({
-      startDate: previousAyStartDate,
-      endDate: currentAy.endDate,
-    });
-
-    setLoading(true);
+    const cacheKey = `startDate=${currentAy.startDate}&endDate=${currentAy.endDate}`;
+    const peeked = peekParentPortalAny<{ attendances: AttendanceRecord[] }>("attendance", cacheKey);
+    if (!peeked?.attendances?.length) setLoading(true);
     setError(null);
 
     try {
-      const res = await fetch(`/api/attendance/view?${params.toString()}`, {
-        credentials: "include",
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.message || "Failed to load attendance records.");
-
-      const list = Array.isArray(data?.attendances) ? (data.attendances as AttendanceRecord[]) : [];
+      const data = await fetchParentAttendance(
+        studentId,
+        currentAy.startDate,
+        currentAy.endDate
+      );
+      const list = Array.isArray(data?.attendances)
+        ? (data.attendances as AttendanceRecord[])
+        : [];
       setRecords(list);
       setDailyStatus(buildDailyStatus(list));
     } catch (e) {
@@ -132,6 +163,8 @@ export default function ParentAttendanceTab() {
         const studentData = (await res.json()) as StudentDetailResponse;
         const name = studentData?.student?.name?.trim();
         if (name) setStudentName(name);
+        const school = studentData?.student?.schoolName?.trim();
+        if (school) setSchoolName(school);
 
         const cls =
           studentData?.student?.class?.displayName?.trim() ||
@@ -288,36 +321,49 @@ export default function ParentAttendanceTab() {
     ? `Track ${studentName}'s attendance record (${studentClassLabel})`
     : `Track ${studentName}'s attendance record`;
 
+  const reportData: AttendanceReportData = useMemo(
+    () => ({
+      schoolName: schoolBrand?.name || schoolName,
+      schoolLogo: schoolBrand?.logo,
+      schoolAddress: schoolBrand?.address,
+      studentName,
+      studentClass: studentClassLabel,
+      academicYear: currentAcademicYearLabel(),
+      dateGenerated: new Date(),
+      summary: {
+        present: academicYearSummary.present,
+        absent: academicYearSummary.absent,
+        late: academicYearSummary.late,
+        total: academicYearSummary.total,
+        presentRate: academicYearSummary.presentRate,
+      },
+    }),
+    [schoolBrand, schoolName, studentName, studentClassLabel, academicYearSummary]
+  );
+
   const handleDownloadReport = async () => {
+    setGeneratingPdf(true);
     try {
-      setGeneratingPdf(true);
-      setTimeout(async () => {
-        try {
-          await generatePDF(reportRef, `Attendance_Report_${studentName.replace(/\s+/g, '_')}.pdf`);
-        } catch (err) {
-          console.error(err);
-        } finally {
-          setGeneratingPdf(false);
-        }
-      }, 500);
+      await downloadParentPortalPdf({
+        ref: reportRef,
+        filename: `Attendance_Report_${studentName.replace(/\s+/g, "_")}.pdf`,
+        beforeCapture: (brand) => {
+          flushSync(() => {
+            setPdfReportData({
+              ...reportData,
+              schoolName: brand.name,
+              schoolLogo: brand.logo,
+              schoolAddress: brand.address,
+            });
+          });
+        },
+      });
     } catch (err) {
-      console.error(err);
+      alert(err instanceof Error ? err.message : "Failed to download report.");
+    } finally {
       setGeneratingPdf(false);
     }
   };
-
-  const reportData: AttendanceReportData = useMemo(() => ({
-    studentName,
-    studentClass: studentClassLabel,
-    dateGenerated: new Date(),
-    summary: {
-      present: academicYearSummary.present,
-      absent: academicYearSummary.absent,
-      late: academicYearSummary.late,
-      total: academicYearSummary.total,
-      presentRate: academicYearSummary.presentRate,
-    }
-  }), [studentName, studentClassLabel, academicYearSummary]);
 
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -326,9 +372,7 @@ export default function ParentAttendanceTab() {
     return (
       <div className="space-y-6">
         <PageHeader title="Attendance" subtitle={headerSubtitle} />
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-8 text-center text-white/70">
-          <Spinner/>
-        </div>
+        <ParentTimellyLoader preset="attendance" className="w-full" />
       </div>
     );
   }
@@ -382,7 +426,7 @@ export default function ParentAttendanceTab() {
            border border-[rgba(255,255,255,0.1)] border-solid rounded-2xl
             shadow-[0px_10px_15px_0px_rgba(0,0,0,0.1),0px_4px_6px_0px_rgba(0,0,0,0.1)] transition-all duration-300 hover:-translate-y-1
              hover:bg-[rgba(255,255,255,0.08)]
-           hover:shadow-[0px_15px_20px_0px_rgba(0,0,0,0.15),0px_6px_8px_0px_rgba(0,0,0,0.15)] p-5 flex flex-col justify-between">
+           hover:shadow-[0px_15px_20px_0px_rgba(0,0,0,0.15),0px_6px_8px_0px_rgba(0,0,0,0.15)] p-4 sm:p-5 flex flex-col justify-between">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className={`p-2 bg-[#A3E635]/10 rounded-lg ${card.iconBoxClass}`}>
@@ -405,7 +449,7 @@ export default function ParentAttendanceTab() {
 
       <section className="rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl overflow-hidden">
         <div className="flex items-center justify-between gap-3 sm:px-8 sm:py-5
-        px-6 py-4 border-b border-white/[0.05] bg-white/[0.02]">
+        px-4 py-3 border-b border-white/[0.05] bg-white/[0.02]">
           <h2 className="text-xl font-bold text-white">{formatMonthLabel(monthCursor)}</h2>
           <div className="flex items-center gap-2 sm:gap-3">
             <button
@@ -429,7 +473,7 @@ export default function ParentAttendanceTab() {
           </div>
         </div>
 
-        <div className="px-4 py-4 sm:px-8 sm:py-5">
+        <div className="px-3 py-3 sm:px-8 sm:py-5">
           <div className="flex flex-wrap gap-3">
             {LEGEND_STATUSES.map((status) => (
               <div key={status} className="flex items-center gap-2">
@@ -485,7 +529,7 @@ export default function ParentAttendanceTab() {
         </div>
       </section>
 
-      <section className="rounded-3xl border border-white/10 bg-white/[0.05] p-4 sm:p-6">
+      <section className="rounded-3xl border border-white/10 bg-white/[0.05] p-3.5 sm:p-6">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <h3 className="text-lg sm:text-xl font-semibold text-white">{selectedDayLabel}</h3>
           <span
@@ -516,10 +560,9 @@ export default function ParentAttendanceTab() {
         </div>
       </section>
 
-      {/* Hidden Attendance Report Template for PDF Generation */}
-      <div className="pointer-events-none opacity-0 fixed -top-[10000px] -left-[10000px]">
-        {mounted && <AttendanceReportTemplate ref={reportRef} data={reportData} />}
-      </div>
+      {mounted ? (
+        <AttendanceReportTemplate ref={reportRef} data={pdfReportData ?? reportData} />
+      ) : null}
     </div>
   );
 }

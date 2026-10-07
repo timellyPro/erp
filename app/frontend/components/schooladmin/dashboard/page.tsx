@@ -1,188 +1,400 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StatCard } from "../dashboard/components/StatCard";
 import { AttendanceCard } from "./components/AttendanceCard";
 import { SidebarList } from "./components/SidebarList";
-import { Users, GraduationCap, UserCheck, CalendarDays, Wallet } from "lucide-react";
-import Spinner from "../../common/Spinner";
+import { CollectionStatCard } from "./components/CollectionStatCard";
+import { DayCollectionByHeadCard } from "./components/DayCollectionByHeadCard";
+import { Users, GraduationCap, UserCheck, Wallet } from "lucide-react";
+import { todayYmdLocal } from "@/lib/schoolDashboardCollection";
+import {
+  loadSchoolDashboardCollectionHeads,
+  loadSchoolDashboardCollectionSummary,
+  peekSchoolDashboardCollectionHeads,
+  setSchoolDashboardCollectionHeadsCached,
+  warmSchoolDashboardCollectionHeads,
+} from "@/lib/loadSchoolDashboardCollection";
+import {
+  fetchSchoolDashboard,
+  fetchSchoolDashboardFast,
+  peekSchoolDashboard,
+  peekSchoolDashboardAny,
+  type SchoolDashboardPayload,
+} from "@/lib/loadSchoolDashboard";
+import {
+  dashboardCacheKey,
+  setSchoolDashboardCached,
+} from "@/lib/schoolDashboardClientCache";
 import { useRouter } from "next/navigation";
+import { SchoolDashboardLoader } from "./components/SchoolDashboardLoader";
 import { ROUTES } from "@/app/frontend/constants/routes";
 import { useSession } from "next-auth/react";
 
-type DashboardData = {
-  stats: {
-    totalClasses: number;
-    totalClassesChange: number;
-    totalStudents: number;
-    totalStudentsChange: number;
-    totalTeachers: number;
-    totalTeachersChange: number;
-    upcomingWorkshops: number;
-    workshopsThisWeek: number;
-    feesCollected: string;
-    feesCollectedPct: number;
-  };
-  attendance: {
-    present: number;
-    absent: number;
-    late: number;
-    total: number;
-    overallRate: number;
-    presentPct: string;
-    absentPct: string;
-    latePct: string;
-  };
-  workshops: Array<{
-    id: string;
-    title: string;
-    date?: string;
-    participants: number;
-    status: string;
-  }>;
-  teachersOnLeave: Array<{
-    id: string;
-    name: string;
-    subject: string;
-    leaveType: string;
-    status: string;
-    days: number;
-  }>;
-  recentActivities: Array<{
-    type: string;
-    title: string;
-    subtitle: string;
-    meta: string;
-  }>;
-  latestNews: Array<{
-    id: string;
-    title: string;
-    description: string;
-    postedBy: string;
-    createdAt: string;
-  }>;
-};
-
 export default function Dashboard() {
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const today = todayYmdLocal();
+  const initialCached = peekSchoolDashboardAny(today);
+  const initialHeads =
+    initialCached?.todayCollectionByHead ?? peekSchoolDashboardCollectionHeads(today);
+  const [data, setData] = useState<SchoolDashboardPayload | null>(() =>
+    initialCached
+      ? {
+          ...initialCached,
+          ...(initialHeads ? { todayCollectionByHead: initialHeads } : {}),
+        }
+      : null
+  );
   const [error, setError] = useState<string | null>(null);
-  const router=useRouter();
-  const { data: session } = useSession();
+  const router = useRouter();
+  const [selectedCollectionFrom, setSelectedCollectionFrom] = useState(() => todayYmdLocal());
+  const [selectedCollectionTo, setSelectedCollectionTo] = useState(() => todayYmdLocal());
+  const selectedCollectionRangeKey = useMemo(
+    () => `${selectedCollectionFrom}:${selectedCollectionTo}`,
+    [selectedCollectionFrom, selectedCollectionTo]
+  );
+  const [collectionLoading, setCollectionLoading] = useState(false);
+  const [headsLoading, setHeadsLoading] = useState(() => !initialHeads);
+  const lastFetchedSummaryDateRef = useRef<string | null>(null);
+  const lastFetchedHeadsDateRef = useRef<string | null>(
+    initialHeads ? `${today}:${today}` : null
+  );
+  const collectionAbortRef = useRef<AbortController | null>(null);
+  const headsAbortRef = useRef<AbortController | null>(null);
+  const { data: session, status: sessionStatus } = useSession();
   const userName = useMemo(() => {
     const n = session?.user?.name?.trim();
     return n ? (n.split(" ")[0] ?? "School") : "School";
   }, [session?.user?.name]);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30000);
-      try {
-        const dashboardRes = await fetch("/api/school/dashboard", { 
-          credentials: "include",
-          cache: "no-store",
-          signal: controller.signal,
-        });
+  const schoolId = session?.user?.schoolId ?? null;
 
-        if (!dashboardRes.ok) {
-          const errorData = await dashboardRes.json().catch(() => ({}));
-          const errorMessage = errorData.message || dashboardRes.statusText || "Failed to load dashboard";
-          console.error("Dashboard API error:", errorMessage, "Status:", dashboardRes.status);
-          if (!cancelled) {
-            setError(errorMessage);
-            setData(null);
-          }
-          return;
-        }
-        const json = await dashboardRes.json();
-        if (!cancelled) {
-          setData(json);
+  const payloadCollectionRangeKey = useCallback((payload: SchoolDashboardPayload) => {
+    const from = payload.collectionFrom ?? payload.collectionDate ?? today;
+    const to = payload.collectionTo ?? payload.collectionDate ?? from;
+    return `${from}:${to}`;
+  }, [today]);
+
+  const mergeDashboardShell = useCallback(
+    (
+      prev: SchoolDashboardPayload | null,
+      incoming: SchoolDashboardPayload,
+      headsDateLoaded?: string | null
+    ): SchoolDashboardPayload => {
+      if (!prev) return incoming;
+
+      const merged: SchoolDashboardPayload = { ...incoming };
+
+      if (incoming.todayCollectionByHead) {
+        merged.todayCollectionByHead = incoming.todayCollectionByHead;
+      } else if (
+        prev.todayCollectionByHead &&
+        headsDateLoaded === selectedCollectionRangeKey
+      ) {
+        merged.todayCollectionByHead = prev.todayCollectionByHead;
+      }
+
+      if (
+        lastFetchedSummaryDateRef.current === selectedCollectionRangeKey &&
+        selectedCollectionRangeKey !== payloadCollectionRangeKey(incoming)
+      ) {
+        merged.todayCollectionByMethod = prev.todayCollectionByMethod;
+        merged.collectionDate = prev.collectionDate;
+        merged.collectionFrom = prev.collectionFrom;
+        merged.collectionTo = prev.collectionTo;
+        merged.stats = {
+          ...incoming.stats,
+          todayCollectionTotal: prev.stats.todayCollectionTotal,
+          todayCollectionTotalRaw: prev.stats.todayCollectionTotalRaw,
+        };
+      }
+
+      return merged;
+    },
+    [payloadCollectionRangeKey, selectedCollectionRangeKey]
+  );
+
+  useEffect(() => {
+    if (sessionStatus !== "authenticated") return;
+
+    const sid = session?.user?.schoolId ?? null;
+    const cached =
+      (sid ? peekSchoolDashboard(sid, today) : null) ?? peekSchoolDashboardAny(today);
+
+    let shellLoaded = Boolean(cached);
+    if (cached) {
+      const cachedHeads =
+        cached.todayCollectionByHead ?? peekSchoolDashboardCollectionHeads(today);
+      setData(
+        cachedHeads
+          ? { ...cached, todayCollectionByHead: cachedHeads }
+          : cached
+      );
+      setError(null);
+      lastFetchedSummaryDateRef.current = `${today}:${today}`;
+      lastFetchedHeadsDateRef.current = cachedHeads ? `${today}:${today}` : null;
+      setHeadsLoading(!cachedHeads);
+    }
+
+    warmSchoolDashboardCollectionHeads(today);
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        if (!shellLoaded) {
+          const fast = await fetchSchoolDashboardFast(today, { schoolId: sid });
+          if (cancelled) return;
+          shellLoaded = true;
+          const headsDate = lastFetchedHeadsDateRef.current;
+          setData((prev) => {
+            const merged = mergeDashboardShell(prev, fast, headsDate);
+            if (fast.todayCollectionByHead) {
+              setSchoolDashboardCollectionHeadsCached(today, fast.todayCollectionByHead);
+              lastFetchedHeadsDateRef.current = `${today}:${today}`;
+              setHeadsLoading(false);
+            }
+            return merged;
+          });
           setError(null);
+          lastFetchedSummaryDateRef.current = `${today}:${today}`;
         }
-      } catch (error) {
-        console.error("Dashboard fetch error:", error);
-        if (!cancelled) {
-          const message =
-            error instanceof DOMException && error.name === "AbortError"
-              ? "Dashboard request timed out. Please try again."
-              : error instanceof Error
-              ? error.message
-              : "Unable to load dashboard data";
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Dashboard fast fetch error:", err);
+        const message =
+          err instanceof Error ? err.message : "Unable to load dashboard data";
+        if (!shellLoaded) {
           setError(message);
           setData(null);
         }
-      } finally {
-        clearTimeout(timeout);
-        if (!cancelled) setLoading(false);
       }
     })();
+
+    void fetchSchoolDashboard(today, { schoolId: sid, revalidate: true })
+      .then((full) => {
+        if (cancelled) return;
+        const headsDate = lastFetchedHeadsDateRef.current;
+        setData((prev) => {
+          const merged = mergeDashboardShell(prev, full, headsDate);
+          if (full.todayCollectionByHead) {
+            setSchoolDashboardCollectionHeadsCached(today, full.todayCollectionByHead);
+            lastFetchedHeadsDateRef.current = `${today}:${today}`;
+            setHeadsLoading(false);
+          }
+          return merged;
+        });
+        setError(null);
+        lastFetchedSummaryDateRef.current = `${today}:${today}`;
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("Dashboard full fetch error:", err);
+      });
+
     return () => {
       cancelled = true;
     };
+    // schoolId is read inside the effect; server resolves school when client id is missing
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- avoid restart when schoolId hydrates
+  }, [sessionStatus, today, mergeDashboardShell]);
+
+  useEffect(() => {
+    if (!schoolId || !data) return;
+    setSchoolDashboardCached(dashboardCacheKey(schoolId, today), data);
+  }, [schoolId, data, today]);
+
+  const fetchCollectionSummaryForDate = useCallback(async (fromYmd: string, toYmd: string) => {
+    const rangeKey = `${fromYmd}:${toYmd}`;
+    if (rangeKey === lastFetchedSummaryDateRef.current) return;
+
+    collectionAbortRef.current?.abort();
+    const controller = new AbortController();
+    collectionAbortRef.current = controller;
+
+    setCollectionLoading(true);
+    try {
+      const summary = await loadSchoolDashboardCollectionSummary(fromYmd, toYmd, controller.signal);
+      if (controller.signal.aborted) return;
+
+      lastFetchedSummaryDateRef.current = rangeKey;
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              todayCollectionByMethod: summary.todayCollectionByMethod,
+              collectionDate: summary.collectionDate,
+              collectionFrom: summary.collectionFrom,
+              collectionTo: summary.collectionTo,
+              stats: {
+                ...prev.stats,
+                todayCollectionTotal: summary.todayCollectionTotal,
+                todayCollectionTotalRaw: summary.todayCollectionTotalRaw,
+              },
+            }
+          : prev
+      );
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      console.error("Collection summary fetch error:", err);
+    } finally {
+      if (!controller.signal.aborted) setCollectionLoading(false);
+    }
   }, []);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen p-6 md:p-10 flex items-center justify-center">
-        <div className="text-white/70"><Spinner/></div>
-      </div>
+  const fetchCollectionHeadsForDate = useCallback(async (fromYmd: string, toYmd: string, force = false) => {
+    const rangeKey = `${fromYmd}:${toYmd}`;
+    if (!force && rangeKey === lastFetchedHeadsDateRef.current) return;
+
+    headsAbortRef.current?.abort();
+    const controller = new AbortController();
+    headsAbortRef.current = controller;
+
+    setHeadsLoading(true);
+    try {
+      const byHead = await loadSchoolDashboardCollectionHeads(fromYmd, toYmd, controller.signal);
+      if (controller.signal.aborted) return;
+
+      lastFetchedHeadsDateRef.current = rangeKey;
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              todayCollectionByHead: byHead,
+            }
+          : prev
+      );
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      console.error("Collection heads fetch error:", err);
+    } finally {
+      if (!controller.signal.aborted) setHeadsLoading(false);
+    }
+  }, []);
+
+  const handleCollectionDateRangeChange = useCallback(
+    (range: { from: string; to: string }) => {
+      const from = range.from || today;
+      let to = range.to || from;
+      if (from > to) to = from;
+      const nextRangeKey = `${from}:${to}`;
+      if (nextRangeKey === selectedCollectionRangeKey) return;
+      setSelectedCollectionFrom(from);
+      setSelectedCollectionTo(to);
+      lastFetchedHeadsDateRef.current = null;
+      void fetchCollectionSummaryForDate(from, to);
+      void fetchCollectionHeadsForDate(from, to);
+    },
+    [selectedCollectionRangeKey, fetchCollectionSummaryForDate, fetchCollectionHeadsForDate, today]
+  );
+
+  useEffect(() => {
+    if (sessionStatus !== "authenticated") return;
+    warmSchoolDashboardCollectionHeads(selectedCollectionFrom, selectedCollectionTo);
+    const headsLoadedForDate = lastFetchedHeadsDateRef.current === selectedCollectionRangeKey;
+    const headsPresent = Boolean(
+      data?.todayCollectionByHead ?? peekSchoolDashboardCollectionHeads(selectedCollectionFrom, selectedCollectionTo)
     );
-  }
+    if (headsLoadedForDate && headsPresent) {
+      const peeked = peekSchoolDashboardCollectionHeads(selectedCollectionFrom, selectedCollectionTo);
+      if (peeked && !data?.todayCollectionByHead) {
+        setData((prev) => (prev ? { ...prev, todayCollectionByHead: peeked } : prev));
+        lastFetchedHeadsDateRef.current = selectedCollectionRangeKey;
+        setHeadsLoading(false);
+      }
+      return;
+    }
+    void fetchCollectionHeadsForDate(selectedCollectionFrom, selectedCollectionTo, !headsPresent);
+  }, [sessionStatus, data, selectedCollectionFrom, selectedCollectionTo, selectedCollectionRangeKey, fetchCollectionHeadsForDate]);
+
+  useEffect(() => {
+    return () => {
+      collectionAbortRef.current?.abort();
+      headsAbortRef.current?.abort();
+    };
+  }, []);
 
   const formatChange = (n: number) =>
     n >= 0 ? `+${n} this month` : `${n} this month`;
 
+  const emptyCollectionRow = {
+    key: "",
+    label: "",
+    amount: 0,
+    formattedAmount: "₹0",
+    count: 0,
+  };
+
+  const collectionCash = data?.todayCollectionByMethod?.find((r) => r.key === "CASH") ?? {
+    ...emptyCollectionRow,
+    key: "CASH",
+    label: "Cash",
+  };
+  const collectionOnline = data?.todayCollectionByMethod?.find((r) => r.key === "ONLINE") ?? {
+    ...emptyCollectionRow,
+    key: "ONLINE",
+    label: "Online",
+  };
+
+  const showLoader = !data && !error;
+  const isInitialLoading = showLoader;
+
   return (
     <div className="min-h-screen space-y-4 md:space-y-8 max-w-[1900px] mx-auto">
-      <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-2xl p-2 sm:p-8 md:p-4 mb-6 md:mb-10 bg-gradient-to-br from-white/5 to-transparent border-none">
-        <h2 className="text-2xl sm:text-4xl md:text-2xl font-black text-white mb-2 md:mb-3">
-          Welcome back, {userName}! 👋
-        </h2>
-        <p className="text-gray-400 text-sm sm:text-base md:text-md font-medium">
-          Here&apos;s what&apos;s happening in your school today.
-        </p>
+      <div className="bg-white/5 backdrop-blur-xl rounded-2xl p-4 sm:p-6 md:p-6 mb-6 md:mb-10 bg-gradient-to-br from-white/5 to-transparent border border-white/10">
+        <div className="min-w-0 mb-4 sm:mb-5">
+          <h2 className="text-2xl sm:text-4xl md:text-2xl font-black text-white mb-2 md:mb-3">
+            Welcome back, {userName}! 👋
+          </h2>
+          <p className="text-gray-400 text-sm sm:text-base md:text-md font-medium">
+            Here&apos;s what&apos;s happening in your school today.
+          </p>
+        </div>
+
+        <div
+          className={`grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-2 sm:gap-3 ${isInitialLoading ? "animate-pulse" : ""}`}
+        >
+          <StatCard
+            label="Total Classes"
+            value={isInitialLoading ? "…" : String(data?.stats.totalClasses ?? "—")}
+            trend={isInitialLoading ? "Loading" : data ? formatChange(data.stats.totalClassesChange) : "—"}
+            Icon={Users}
+          />
+          <StatCard
+            label="Total Students"
+            value={isInitialLoading ? "…" : data ? data.stats.totalStudents.toLocaleString() : "—"}
+            trend={isInitialLoading ? "Loading" : data ? formatChange(data.stats.totalStudentsChange) : "—"}
+            Icon={GraduationCap}
+          />
+          <StatCard
+            label="Total Teachers"
+            value={isInitialLoading ? "…" : String(data?.stats.totalTeachers ?? "—")}
+            trend={isInitialLoading ? "Loading" : data ? formatChange(data.stats.totalTeachersChange) : "—"}
+            Icon={UserCheck}
+          />
+          <StatCard
+            label="Fees Collected"
+            value={isInitialLoading ? "…" : data?.stats.feesCollected ?? "—"}
+            trend={isInitialLoading ? "Loading" : data ? `${data.stats.feesCollectedPct}% collected` : "—"}
+            trendColor="text-lime-400"
+            Icon={Wallet}
+          />
+          <CollectionStatCard
+            selectedDate={selectedCollectionTo}
+            onDateChange={(dateYmd) => handleCollectionDateRangeChange({ from: dateYmd, to: dateYmd })}
+            totalFormatted={isInitialLoading ? "…" : data?.stats.todayCollectionTotal ?? "₹0"}
+            cash={collectionCash}
+            online={collectionOnline}
+            loading={collectionLoading || isInitialLoading}
+          />
+        </div>
       </div>
 
-      {data && (
+      {isInitialLoading ? (
+        <SchoolDashboardLoader />
+      ) : data ? (
         <>
-          <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-4 sm:gap-4 md:gap-3">
-            <StatCard
-              label="Total Classes"
-              value={String(data.stats.totalClasses)}
-              trend={formatChange(data.stats.totalClassesChange)}
-              Icon={Users}
-            />
-            <StatCard
-              label="Total Students"
-              value={data.stats.totalStudents.toLocaleString()}
-              trend={formatChange(data.stats.totalStudentsChange)}
-              Icon={GraduationCap}
-            />
-            <StatCard
-              label="Total Teachers"
-              value={String(data.stats.totalTeachers)}
-              trend={formatChange(data.stats.totalTeachersChange)}
-              Icon={UserCheck}
-            />
-            <StatCard
-              label="Upcoming Workshops"
-              value={String(data.stats.upcomingWorkshops)}
-              trend={`${data.stats.workshopsThisWeek} this week`}
-              Icon={CalendarDays}
-            />
-            <StatCard
-              label="Fees Collected"
-              value={data.stats.feesCollected}
-              trend={`${data.stats.feesCollectedPct}% collected`}
-              trendColor="text-lime-400"
-              Icon={Wallet}
-            />
-          </div>
-
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 lg:gap-8">
-            <div className="lg:col-span-2 space-y-4 sm:space-y-6 lg:space-y-8">
+            <div className="lg:col-span-2">
               <AttendanceCard
                 present={data.attendance.present}
                 absent={data.attendance.absent}
@@ -192,16 +404,6 @@ export default function Dashboard() {
                 presentPct={data.attendance.presentPct}
                 absentPct={data.attendance.absentPct}
                 latePct={data.attendance.latePct}
-              />
-              <SidebarList
-                title="Upcoming Workshops"
-                subtitle="Scheduled events and workshops"
-                items={data.workshops.map((w) => ({
-                  title: w.title,
-                  subtitle: `${w.date ? new Date(w.date).toLocaleDateString("en-IN", { month: "short", day: "numeric", year: "numeric" }) : "-"} • ${w.participants} participants`,
-                  status: w.status as "Confirmed" | "Scheduled",
-                  type: "workshop" as const,
-                }))}
               />
             </div>
 
@@ -216,7 +418,7 @@ export default function Dashboard() {
                   status: t.status === "APPROVED" ? "Approved" : "Pending",
                   type: "teacher" as const,
                 }))}
-                onViewAllClick={()=>router.push(ROUTES.SCHOOLADMIN_TEACHER_LEAVE_TAB)}
+                onViewAllClick={() => router.push(ROUTES.SCHOOLADMIN_TEACHER_LEAVE_TAB)}
               />
               <SidebarList
                 title="Recent Activities"
@@ -226,13 +428,28 @@ export default function Dashboard() {
                   subtitle: a.subtitle,
                   meta: a.meta,
                   type: "activity" as const,
-                  activityType: (a.type?.includes("Leave") ? "leave" : a.type?.includes("Fee") ? "fee" : a.type?.includes("News") ? "news" : "certificate") as "leave" | "fee" | "news" | "certificate",
+                  activityType: (a.type?.includes("Leave")
+                    ? "leave"
+                    : a.type?.includes("Fee")
+                      ? "fee"
+                      : a.type?.includes("News")
+                        ? "news"
+                        : "certificate") as "leave" | "fee" | "news" | "certificate",
                 }))}
               />
             </div>
           </div>
+
+          <DayCollectionByHeadCard
+            fromDate={selectedCollectionFrom}
+            toDate={selectedCollectionTo}
+            onDateRangeChange={handleCollectionDateRangeChange}
+            rows={data.todayCollectionByHead?.rows ?? []}
+            formattedTotal={data.todayCollectionByHead?.formattedTotal ?? "0"}
+            loading={headsLoading}
+          />
         </>
-      )}
+      ) : null}
 
       {data?.latestNews && data.latestNews.length > 0 && (
         <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-2xl p-5 sm:p-6 md:p-8">
@@ -241,7 +458,10 @@ export default function Dashboard() {
               <h3 className="text-xl font-bold text-white">Latest News</h3>
               <p className="text-gray-400 text-sm mt-0.5">Recent announcements and updates</p>
             </div>
-            <button onClick={()=>router.push(ROUTES.SCHOOLADMIN_NEWSFEED_TAB)} className="rounded-xl bg-lime-400 px-4 sm:px-5 py-2.5 text-sm font-bold text-black hover:bg-lime-300 transition-colors inline-flex items-center gap-1 min-h-[44px] touch-manipulation">
+            <button
+              onClick={() => router.push(ROUTES.SCHOOLADMIN_NEWSFEED_TAB)}
+              className="rounded-xl bg-lime-400 px-4 sm:px-5 py-2.5 text-sm font-bold text-black hover:bg-lime-300 transition-colors inline-flex items-center gap-1 min-h-[44px] touch-manipulation"
+            >
               View All <span>→</span>
             </button>
           </div>
@@ -252,9 +472,7 @@ export default function Dashboard() {
                 <p className="text-sm text-gray-400 mt-1">{n.description}</p>
                 <div className="flex justify-between items-center mt-2">
                   <span className="text-xs text-gray-500">Posted by {n.postedBy}</span>
-                  <span className="text-xs text-gray-500">
-                    {formatTimeAgo(n.createdAt)}
-                  </span>
+                  <span className="text-xs text-gray-500">{formatTimeAgo(n.createdAt)}</span>
                 </div>
               </div>
             ))}
@@ -268,20 +486,20 @@ export default function Dashboard() {
           <p className="text-red-300/80 text-sm">{error}</p>
           <button
             onClick={() => {
-              setLoading(true);
               setError(null);
-              window.location.reload();
+              void fetchSchoolDashboard(today, { schoolId, revalidate: true })
+                .then((json) => {
+                  setData(json);
+                  setError(null);
+                })
+                .catch((err) => {
+                  setError(err instanceof Error ? err.message : "Unable to load dashboard");
+                });
             }}
             className="mt-4 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg transition-colors"
           >
             Retry
           </button>
-        </div>
-      )}
-      
-      {!data && !error && !loading && (
-        <div className="bg-white/5 backdrop-blur-xl border-b border-white/10 rounded-2xl p-8 text-center text-gray-400">
-          No dashboard data available.
         </div>
       )}
     </div>
