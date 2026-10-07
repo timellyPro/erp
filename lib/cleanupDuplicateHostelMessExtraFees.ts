@@ -29,6 +29,7 @@ export type HostelMessCleanupRow = {
   targetStudentId: string | null;
   residencyScope: string;
   splitIntoTwoInstallments: boolean;
+  residencyConversion?: boolean;
 };
 
 type CleanupDb = Pick<typeof prisma, "$transaction" | "extraFee" | "paymentFeeAllocation">;
@@ -225,6 +226,7 @@ const hostelMessSelect = {
   targetStudentId: true,
   residencyScope: true,
   splitIntoTwoInstallments: true,
+  residencyConversion: true,
 } as const;
 
 function scopeGroupNeedsCleanup(fees: HostelMessCleanupRow[], canonicalBase: string): boolean {
@@ -440,7 +442,10 @@ export async function removeStudentScopedHostelWhenSchoolWideExists(
   if (!keeper1 || !keeper2) return 0;
 
   const studentHostel = rows.filter(
-    (f) => f.targetType === "STUDENT" && isHostelCategoryExtraFeeName(f.name)
+    (f) =>
+      f.targetType === "STUDENT" &&
+      isHostelCategoryExtraFeeName(f.name) &&
+      !f.residencyConversion
   );
   if (studentHostel.length === 0) return 0;
 
@@ -476,7 +481,9 @@ export async function removeStudentScopedMessWhenClassMessExists(
   }
   if (classIdsWithMess.size === 0) return 0;
 
-  const studentMess = rows.filter((f) => f.targetType === "STUDENT" && f.targetStudentId);
+  const studentMess = rows.filter(
+    (f) => f.targetType === "STUDENT" && f.targetStudentId && !f.residencyConversion
+  );
   if (studentMess.length === 0) return 0;
 
   const students = await db.student.findMany({
@@ -547,7 +554,11 @@ export async function countStudentScopedMessWhenClassMessExists(
   });
   const studentIds = new Set(students.map((s) => s.id));
   return rows.filter(
-    (f) => f.targetType === "STUDENT" && f.targetStudentId && studentIds.has(f.targetStudentId)
+    (f) =>
+      f.targetType === "STUDENT" &&
+      f.targetStudentId &&
+      !f.residencyConversion &&
+      studentIds.has(f.targetStudentId)
   ).length;
 }
 
@@ -564,5 +575,7 @@ export async function countStudentScopedHostelWhenSchoolWideExists(
   const keeper1 = pickBestInstallment(schoolHostel, 1, canonicalBase);
   const keeper2 = pickBestInstallment(schoolHostel, 2, canonicalBase);
   if (!keeper1 || !keeper2) return 0;
-  return rows.filter((f) => f.targetType === "STUDENT" && isHostelCategoryExtraFeeName(f.name)).length;
+  return rows.filter(
+    (f) => f.targetType === "STUDENT" && isHostelCategoryExtraFeeName(f.name) && !f.residencyConversion
+  ).length;
 }

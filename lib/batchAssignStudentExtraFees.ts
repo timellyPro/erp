@@ -4,8 +4,17 @@ import {
   parseExtraFeeResidencyScopeBody,
   suggestedResidencyScopeForExtraFeeName,
 } from "@/lib/extraFeeResidencyScope";
-import { createExtraFeeRows, type ExtraFeeCreatePayload } from "@/lib/extraFeeInstallmentDb";
-import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
+import {
+  buildExtraFeeRowsToCreate,
+  createExtraFeeRows,
+  type ExtraFeeCreatePayload,
+} from "@/lib/extraFeeInstallmentDb";
+import { FEE_MUTATION_TX } from "@/lib/prismaFeeMutationTx";
+import {
+  buildTuitionBulkCache,
+  upsertStudentFeeFromStructure,
+  type ExtraFeeRow,
+} from "@/lib/studentTuitionFromStructure";
 
 export type BatchAssignFeeInput = {
   name: string;
@@ -13,6 +22,19 @@ export type BatchAssignFeeInput = {
   residencyScope?: string | null;
   splitIntoTwoInstallments?: boolean;
 };
+
+function cacheRowFromCreate(data: ReturnType<typeof buildExtraFeeRowsToCreate>[number]): ExtraFeeRow {
+  return {
+    name: typeof data.name === "string" ? data.name : "",
+    amount: Number(data.amount) || 0,
+    targetType: String(data.targetType ?? "STUDENT"),
+    targetClassId: data.targetClassId ?? null,
+    targetSection: data.targetSection ?? null,
+    targetStudentId: data.targetStudentId ?? null,
+    residencyScope: typeof data.residencyScope === "string" ? data.residencyScope : null,
+    residencyConversion: false,
+  };
+}
 
 export async function batchAssignStudentExtraFees(
   schoolId: string,
@@ -71,6 +93,10 @@ export async function batchAssignStudentExtraFees(
   const extraFeeIds: string[] = [];
   let totalAmount = 0;
 
+  // Load the school extra-fee catalog before the write transaction. Scanning it
+  // inside the transaction is what expired the default 5s interactive timeout.
+  const tuitionCache = await buildTuitionBulkCache(prisma, schoolId, [student.classId]);
+
   await prisma.$transaction(async (tx) => {
     for (const row of cleaned) {
       const payload: ExtraFeeCreatePayload = {
@@ -87,22 +113,29 @@ export async function batchAssignStudentExtraFees(
       const created = await createExtraFeeRows(tx, payload);
       extraFeeIds.push(...created.ids);
       totalAmount += created.totalAmount;
+      for (const data of buildExtraFeeRowsToCreate(payload)) {
+        tuitionCache.extraFees.push(cacheRowFromCreate(data));
+      }
     }
 
     const existingFee = await tx.studentFee.findUnique({
       where: { studentId },
       select: { discountPercent: true, amountPaid: true },
     });
-    await upsertStudentFeeFromStructure(tx, {
-      schoolId,
-      studentId,
-      classId: student.classId,
-      section: student.class?.section ?? null,
-      discountPercent: existingFee?.discountPercent ?? 0,
-      amountPaid: existingFee?.amountPaid ?? 0,
-      residencyType: student.residencyType,
-    });
-  });
+    await upsertStudentFeeFromStructure(
+      tx,
+      {
+        schoolId,
+        studentId,
+        classId: student.classId,
+        section: student.class?.section ?? null,
+        discountPercent: existingFee?.discountPercent ?? 0,
+        amountPaid: existingFee?.amountPaid ?? 0,
+        residencyType: student.residencyType,
+      },
+      tuitionCache
+    );
+  }, FEE_MUTATION_TX);
 
   return { createdCount: extraFeeIds.length, totalAmount, extraFeeIds };
 }

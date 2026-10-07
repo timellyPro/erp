@@ -126,4 +126,60 @@ export function rollupOrphanExtraFeeAllocations(
       netPaidByHead.delete(orphanKey);
     }
   }
+
+  spillInstallmentOverpay(netPaidByHead, heads, extraFeesById);
+}
+
+/**
+ * Money recorded on the 1st installment above that installment's amount belongs on the 2nd.
+ * Receipt rows stay as saved; only the fees-sheet paid and balance move.
+ */
+export function spillInstallmentOverpay(
+  netPaidByHead: Map<string, number>,
+  heads: HeadRow[],
+  extraFeesById: Map<string, ExtraFeeMeta>
+): void {
+  const groups = new Map<string, HeadRow[]>();
+  for (const head of heads) {
+    const name = headDisplayName(head, extraFeesById);
+    const index = installmentIndexFromName(name);
+    if (!index) continue;
+    if (head.snapshotDue == null || !Number.isFinite(head.snapshotDue)) continue;
+    const base = canonicalExtraFeeBaseName(name).toLowerCase();
+    if (!base) continue;
+    const list = groups.get(base) ?? [];
+    list.push(head);
+    groups.set(base, list);
+  }
+
+  for (const group of groups.values()) {
+    const ordered = [...group].sort((a, b) => {
+      const ia = installmentIndexFromName(headDisplayName(a, extraFeesById)) ?? 99;
+      const ib = installmentIndexFromName(headDisplayName(b, extraFeesById)) ?? 99;
+      return ia - ib;
+    });
+
+    for (let i = 0; i < ordered.length - 1; i++) {
+      const from = ordered[i]!;
+      const cap = from.snapshotDue ?? 0;
+      const paid = netPaidByHead.get(from.key) ?? 0;
+      let excess = Math.round((paid - cap) * 100) / 100;
+      if (excess <= 0.009) continue;
+
+      netPaidByHead.set(from.key, Math.round(cap * 100) / 100);
+      for (let j = i + 1; j < ordered.length && excess > 0.009; j++) {
+        const to = ordered[j]!;
+        const toCap = to.snapshotDue ?? 0;
+        const toPaid = netPaidByHead.get(to.key) ?? 0;
+        const room = Math.round(Math.max(toCap - toPaid, 0) * 100) / 100;
+        if (room <= 0.009) continue;
+        const take = Math.min(excess, room);
+        netPaidByHead.set(to.key, Math.round((toPaid + take) * 100) / 100);
+        excess = Math.round((excess - take) * 100) / 100;
+      }
+      if (excess > 0.009) {
+        netPaidByHead.set(from.key, Math.round((cap + excess) * 100) / 100);
+      }
+    }
+  }
 }

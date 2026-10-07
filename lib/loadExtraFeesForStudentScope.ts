@@ -18,6 +18,7 @@ type ExtraFeeScopeRow = {
   targetStudentId: string | null;
   residencyScope: string;
   splitIntoTwoInstallments?: boolean;
+  residencyConversion?: boolean;
 };
 
 /** School-wide SCHOOL target extras — shared across students (avoids repeating the heaviest scan). */

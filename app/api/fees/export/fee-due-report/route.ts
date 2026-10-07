@@ -79,6 +79,7 @@ export async function GET(req: Request) {
           targetSection: true,
           targetStudentId: true,
           residencyScope: true,
+          residencyConversion: true,
         },
       }),
       prisma.class.findMany({
@@ -96,6 +97,7 @@ export async function GET(req: Request) {
       targetSection: e.targetSection,
       targetStudentId: e.targetStudentId,
       residencyScope: e.residencyScope,
+      residencyConversion: e.residencyConversion,
     }));
 
     const componentsByClassId = new Map<string, Array<{ name: string; amount: number }>>();

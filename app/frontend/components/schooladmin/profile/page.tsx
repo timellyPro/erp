@@ -17,7 +17,12 @@ import {
   peekStudentDetailsBundle,
   refreshStudentFeesAfterMutation,
 } from "@/lib/loadStudentDetailsBundle";
-import { dueHeadRowsFromBreakdown, type DueHeadRow } from "@/lib/feeBreakdownPaymentRows";
+import {
+  applyPendingDiscountsToDueRows,
+  dueHeadRowsFromBreakdown,
+  type DueHeadRow,
+  type SheetDiscountApproval,
+} from "@/lib/feeBreakdownPaymentRows";
 import { extraFeeIdFromAllocationKey, normalizeFeeAllocationKey } from "@/lib/feeAllocationKeys";
 import { isPreviousYearFeeHeadName } from "@/lib/feeYearClassification";
 import {
@@ -1474,6 +1479,37 @@ function dueToPayInputString(due: number): string {
   return String(Math.round(due * 100) / 100);
 }
 
+function sheetRowsFromBreakdown(
+  breakdown: AdminStudentFeeBreakdownResult | null | undefined,
+  approvals: readonly SheetDiscountApproval[]
+): DueHeadRow[] {
+  return applyPendingDiscountsToDueRows(
+    dueHeadRowsFromBreakdown(breakdown).filter((row) => !isPreviousYearFeeHeadName(row.label)),
+    approvals
+  );
+}
+
+function mergeSheetPayState(prev: DueHeadRow[], next: DueHeadRow[]): DueHeadRow[] {
+  const prevByKey = new Map(prev.map((row) => [row.key, row]));
+  return next.map((row) => {
+    const old = prevByKey.get(row.key);
+    if (!old) return row;
+    if (old.payEntireHead) {
+      return {
+        ...row,
+        payEntireHead: row.dueBefore > 0,
+        payAmount: dueToPayInputString(row.dueBefore),
+      };
+    }
+    const parsed = Number(old.payAmount);
+    const payAmount =
+      old.payAmount && Number.isFinite(parsed) && parsed > row.dueBefore + 0.01
+        ? dueToPayInputString(row.dueBefore)
+        : old.payAmount;
+    return { ...row, payAmount, payEntireHead: false };
+  });
+}
+
 /** Plain text amount field: digits and one decimal, max 2 fractional digits */
 function sanitizeMoneyInput(raw: string): string {
   if (!raw) return "";
@@ -1507,9 +1543,11 @@ function StudentFeesPaymentModal({
     (session?.user?.name || session?.user?.email || "").trim() || "Staff";
   const collectorUserId = session?.user?.id ?? null;
 
-  const seedRows = dueHeadRowsFromBreakdown(
-    initialFeeBreakdown ?? getFeeBreakdownCached(studentId)
-  ).filter((r) => !isPreviousYearFeeHeadName(r.label));
+  const [discountApprovals, setDiscountApprovals] = useState<SheetDiscountApproval[]>([]);
+  const [loadedBreakdown, setLoadedBreakdown] = useState<AdminStudentFeeBreakdownResult | null>(
+    () => initialFeeBreakdown ?? getFeeBreakdownCached(studentId) ?? null
+  );
+  const seedRows = sheetRowsFromBreakdown(loadedBreakdown, []);
   const [rows, setRows] = useState<DueHeadRow[]>(seedRows);
   const [loading, setLoading] = useState(seedRows.length === 0 && breakdownPending);
   const [saving, setSaving] = useState(false);
@@ -1518,25 +1556,42 @@ function StudentFeesPaymentModal({
   const [referenceNo, setReferenceNo] = useState("");
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [error, setError] = useState<string | null>(null);
+  const breakdownFetchStarted = useRef(false);
 
   useEffect(() => {
-    const next = dueHeadRowsFromBreakdown(initialFeeBreakdown);
-    if (next.length > 0) {
-      setRows((prev) => {
-        const payByKey = new Map(prev.map((r) => [r.key, r.payAmount]));
-        const entireByKey = new Map(prev.map((r) => [r.key, r.payEntireHead]));
-        return next.map((r) => ({
-          ...r,
-          payAmount: payByKey.get(r.key) ?? r.payAmount,
-          payEntireHead: entireByKey.get(r.key) ?? r.payEntireHead,
-        }));
-      });
-      setLoading(false);
-    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/fees/student/${studentId}/discount-approvals`, {
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as { approvals?: SheetDiscountApproval[] };
+        if (!cancelled && Array.isArray(data.approvals)) setDiscountApprovals(data.approvals);
+      } catch {
+        // Approved discounts still come from the fee breakdown.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
+  useEffect(() => {
+    if (initialFeeBreakdown?.dueHeads?.length) setLoadedBreakdown(initialFeeBreakdown);
   }, [initialFeeBreakdown]);
 
   useEffect(() => {
-    if (rows.length > 0) return;
+    const next = sheetRowsFromBreakdown(loadedBreakdown, discountApprovals);
+    if (next.length === 0) return;
+    setRows((prev) => mergeSheetPayState(prev, next));
+    setLoading(false);
+  }, [loadedBreakdown, discountApprovals]);
+
+  useEffect(() => {
+    if (loadedBreakdown?.dueHeads?.length || breakdownFetchStarted.current) return;
+    breakdownFetchStarted.current = true;
 
     let cancelled = false;
     (async () => {
@@ -1544,9 +1599,7 @@ function StudentFeesPaymentModal({
       try {
         const data = await fetchFeeBreakdownFast(studentId);
         if (!cancelled && data) {
-          setRows(
-            dueHeadRowsFromBreakdown(data).filter((r) => !isPreviousYearFeeHeadName(r.label))
-          );
+          setLoadedBreakdown(data);
           setPaymentDate(new Date().toISOString().slice(0, 10));
         } else if (!cancelled && !data) {
           throw new Error("Failed to load fee heads");
@@ -1560,7 +1613,7 @@ function StudentFeesPaymentModal({
     return () => {
       cancelled = true;
     };
-  }, [studentId, rows.length]);
+  }, [studentId, loadedBreakdown]);
 
   const setRowAmount = (key: string, value: string) => {
     setRows((prev) =>

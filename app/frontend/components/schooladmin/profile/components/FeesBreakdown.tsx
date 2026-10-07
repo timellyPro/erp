@@ -139,6 +139,7 @@ export const FeesBreakdown = ({
   const [showModifyFee, setShowModifyFee] = useState(false);
   const [modifyFeeOpening, setModifyFeeOpening] = useState(false);
   const [showAddExtraFee, setShowAddExtraFee] = useState(false);
+  const [residencyAdjustmentNote, setResidencyAdjustmentNote] = useState<string | null>(null);
   const [showAssignFeeHeadsCatalog, setShowAssignFeeHeadsCatalog] = useState(false);
   const [editExtra, setEditExtra] = useState<{
     id: string;
@@ -394,8 +395,20 @@ export const FeesBreakdown = ({
   const academicPaidForCards =
     academicCollected > 0 ? roundRupee(academicCollected) : displayAmountPaid;
   const cardTotalAmount = displayTotalAmount;
-  const cardAmountPaid = academicPaidForCards;
-  const cardRemainingAmount = roundRupee(Math.max(0, displayTotalAmount - academicPaidForCards));
+  // Due follows fee heads. A missing receipt row must not invent a pending balance
+  // when every installment is already fully paid.
+  const headSettled =
+    headCards.length > 0
+      ? roundRupee(Math.max(0, displayTotalAmount - displayRemainingAmount))
+      : displayAmountPaid;
+  const cardAmountPaid =
+    headCards.length > 0
+      ? roundRupee(Math.max(academicPaidForCards, headSettled))
+      : academicPaidForCards;
+  const cardRemainingAmount =
+    headCards.length > 0
+      ? displayRemainingAmount
+      : roundRupee(Math.max(0, displayTotalAmount - academicPaidForCards));
   const cardPaidPercentage = cardTotalAmount > 0 ? (cardAmountPaid / cardTotalAmount) * 100 : 0;
 
   const applyBreakdownData = (data: AdminStudentFeeBreakdownResult) => {
@@ -427,6 +440,11 @@ export const FeesBreakdown = ({
     );
     const splitHeads = splitFeeHeadsForDisplay(normalized);
     setHeadCards(splitHeads);
+    setResidencyAdjustmentNote(
+      typeof data?.residencyAdjustmentNote === "string" && data.residencyAdjustmentNote.trim()
+        ? data.residencyAdjustmentNote.trim()
+        : null
+    );
     setHeadsTotalAmount(
       roundRupee(
         Number(data?.totalAmount) > 0
@@ -737,6 +755,11 @@ export const FeesBreakdown = ({
           <span>
             <span className="font-semibold text-red-100">Inactive student.</span> You cannot record fees for this student.
           </span>
+        </div>
+      ) : null}
+      {residencyAdjustmentNote ? (
+        <div className="mb-4 rounded-xl border border-lime-500/30 bg-lime-500/10 px-3 py-2.5 text-sm text-lime-100">
+          {residencyAdjustmentNote}
         </div>
       ) : null}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-4 sm:mb-6 min-w-0">

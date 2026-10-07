@@ -11,7 +11,11 @@ import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
 import { FEE_MUTATION_TX } from "@/lib/prismaFeeMutationTx";
 import { loadExtraFeesForStudentScope } from "@/lib/loadExtraFeesForStudentScope";
 import { discountedSnapshotDueForHead, studentFeeDiscountFromRecord } from "@/lib/studentFeeHeadDiscount";
-import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
+import {
+  conversionDueCredit,
+  includeExtraFeeOnStudentBill,
+  residencyConversionStudentIds,
+} from "@/lib/residencyConversion";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 import { canonicalizeGatewayForStorage } from "@/lib/feePaymentGateway";
 import {
@@ -173,7 +177,7 @@ export async function POST(req: Request) {
         : Promise.resolve(null),
       loadExtraFeesForStudentScope(
         { schoolId, studentId: student.id, classId, classSection },
-        { id: true, name: true, amount: true, targetType: true, residencyScope: true }
+        { id: true, name: true, amount: true, targetType: true, targetStudentId: true, residencyScope: true, residencyConversion: true }
       ),
       prisma.paymentFeeAllocation.groupBy({
         by: ["allocationType", "headType", "componentIndex", "extraFeeId"],
@@ -207,8 +211,9 @@ export async function POST(req: Request) {
 
     const residency = student.residencyType ?? "Day Scholar";
     const rte = isStudentRte(residency);
+    const convertedStudentIds = residencyConversionStudentIds(extraFeesRaw);
     const extraFees = extraFeesRaw
-      .filter((ef) => extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, residency))
+      .filter((ef) => includeExtraFeeOnStudentBill(ef, residency, student.id, convertedStudentIds))
       .filter((ef) => !(rte && isTuitionNamedExtraFee(ef.name)));
 
     type Head =
@@ -274,6 +279,18 @@ export async function POST(req: Request) {
       })),
       extraFeesById
     );
+    const creditByKey = conversionDueCredit(
+      allHeads.map((h) => ({
+        key: h.key,
+        snapshotDue: h.snapshotDue,
+        extraFeeId: h.headType === "EXTRA_FEE" ? h.extraFeeId : undefined,
+        residencyConversion:
+          h.headType === "EXTRA_FEE" &&
+          extraFees.some((ef) => ef.id === h.extraFeeId && ef.residencyConversion),
+      })),
+      netPaidByHead,
+      new Map(extraFeesRaw.map((ef) => [ef.id, ef.name]))
+    );
 
     const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);
     const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);
@@ -284,7 +301,7 @@ export async function POST(req: Request) {
       const paidAlloc = netPaidByHead.get(h.key) ?? 0;
       const paidLegacy =
         totalSnapshotDue > 0 ? legacyPaidTotal * (h.snapshotDue / totalSnapshotDue) : 0;
-      const paidBefore = Math.max(paidAlloc + paidLegacy, 0);
+      const paidBefore = Math.max(paidAlloc + paidLegacy + (creditByKey.get(h.key) ?? 0), 0);
       const dueBefore = Math.max(h.snapshotDue - paidBefore, 0);
       return { ...h, paidBefore, dueBefore };
     });

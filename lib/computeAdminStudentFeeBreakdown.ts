@@ -14,8 +14,14 @@ function roundMoney(n: number): number {
 }
 import { shouldOmitLegacySplitHostelMessExtraForBreakdown } from "@/lib/studentTuitionFromStructure";
 import { defaultSplitIntoTwoInstallmentsForFeeName } from "@/lib/extraFeeResidencyScope";
-import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
+import { formatRupee } from "@/lib/formatRupee";
+import {
+  includeExtraFeeOnStudentBill,
+  isResidencyBoundFeeName,
+  residencyConversionCreditByHead,
+  residencyConversionStudentIds,
+} from "@/lib/residencyConversion";
 import { isInstallmentFeeName, isUnsplitLumpExtraFee } from "@/lib/extraFeeInstallments";
 import { formatFeeHeadDisplayLabel } from "@/lib/feeHeadInstallmentDisplay";
 import { loadExtraFeesForStudentScope } from "@/lib/loadExtraFeesForStudentScope";
@@ -98,6 +104,8 @@ export type AdminStudentFeeBreakdownResult = {
   previousYearAmountPaid?: number;
   previousYearRemainingFee?: number;
   dueHeads: AdminFeeBreakdownDueHead[];
+  /** Shown when a mid-year residency conversion moved already-paid hostel, mess, or transport onto the new dues. */
+  residencyAdjustmentNote?: string | null;
 };
 
 type InternalHead =
@@ -111,6 +119,7 @@ type InternalHead =
       extraFeeId: string;
       canDeleteOnStudentProfile: boolean;
       splitIntoTwoInstallments: boolean;
+      residencyConversion?: boolean;
     };
 
 export type BreakdownStudentCtx = {
@@ -131,6 +140,7 @@ const extraFeesScopeCache = new Map<
     targetStudentId: string | null;
     residencyScope: string;
     splitIntoTwoInstallments?: boolean;
+    residencyConversion?: boolean;
   }> }
 >();
 
@@ -217,6 +227,7 @@ export async function computeAdminStudentFeeBreakdown(
     targetStudentId: string | null;
     residencyScope: string;
     splitIntoTwoInstallments?: boolean;
+    residencyConversion?: boolean;
   };
 
   if (options?.cleanupHostelMessDuplicates === true) {
@@ -249,6 +260,7 @@ export async function computeAdminStudentFeeBreakdown(
     targetSection: true,
     targetStudentId: true,
     residencyScope: true,
+    residencyConversion: true,
   } as const;
 
   const extraFeesCacheKey = `${schoolId}:${classId ?? ""}:${classSection ?? ""}:${student.id}`;
@@ -410,9 +422,15 @@ export async function computeAdminStudentFeeBreakdown(
 
   const residency = student.residencyType ?? "Day Scholar";
   const rte = isStudentRte(residency);
+  const convertedStudentIds = residencyConversionStudentIds(extraFeesRaw);
   const extraFees = dedupeExtraFeesForStudent(
     extraFeesRaw.filter((ef) =>
-      extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, residency)
+      includeExtraFeeOnStudentBill(
+        { name: ef.name, residencyScope: ef.residencyScope, residencyConversion: ef.residencyConversion, targetStudentId: ef.targetStudentId },
+        residency,
+        student.id,
+        convertedStudentIds
+      )
     ),
     student.id
   )
@@ -447,7 +465,11 @@ export async function computeAdminStudentFeeBreakdown(
         grossDue: preDue,
         snapshotDue: discountedDue(key, preDue),
         extraFeeId: ef.id,
-        canDeleteOnStudentProfile: ef.targetType === "STUDENT" && ef.targetStudentId === student.id,
+        canDeleteOnStudentProfile:
+          ef.targetType === "STUDENT" &&
+          ef.targetStudentId === student.id &&
+          !ef.residencyConversion,
+        residencyConversion: Boolean(ef.residencyConversion),
         splitIntoTwoInstallments:
           !isInstallmentFeeName(ef.name) &&
           (Boolean(ef.splitIntoTwoInstallments) ||
@@ -515,6 +537,36 @@ export async function computeAdminStudentFeeBreakdown(
     extraFeesById
   );
 
+  const headExtraIds = new Set(
+    allHeads.flatMap((h) => (h.headType === "EXTRA_FEE" ? [h.extraFeeId] : []))
+  );
+  const hasConversionHead = allHeads.some((h) => h.headType === "EXTRA_FEE" && h.residencyConversion);
+  let orphanResidencyPaid = 0;
+  if (hasConversionHead) {
+    for (const [key, amount] of netPaidByHead) {
+      if (!key.startsWith("EXTRA:")) continue;
+      const id = key.slice("EXTRA:".length);
+      if (headExtraIds.has(id)) continue;
+      const name = extraFeesById.get(id)?.name;
+      if (name && isResidencyBoundFeeName(name)) orphanResidencyPaid += amount;
+    }
+  }
+  const { creditByKey, creditApplied } = hasConversionHead
+    ? residencyConversionCreditByHead(
+        allHeads.map((h) => ({
+          key: h.key,
+          snapshotDue: h.snapshotDue,
+          paid: netPaidByHead.get(h.key) ?? 0,
+          residencyConversion: h.headType === "EXTRA_FEE" && Boolean(h.residencyConversion),
+        })),
+        orphanResidencyPaid
+      )
+    : { creditByKey: new Map<string, number>(), creditApplied: 0 };
+  const residencyAdjustmentNote =
+    creditApplied > 0.5
+      ? `₹${formatRupee(creditApplied)} already collected on hostel, mess, or transport is adjusted onto the converted fees. Original receipts are unchanged.`
+      : null;
+
   /** Per-head paid comes from allocations only — never spread leftover amountPaid across all heads. */
   const legacyPaidTotal = 0;
   const totalSnapshotDue = Math.max(allHeads.reduce((s, h) => s + h.snapshotDue, 0), 0);
@@ -522,7 +574,7 @@ export async function computeAdminStudentFeeBreakdown(
   const dueHeads: AdminFeeBreakdownDueHead[] = allHeads.map((h) => {
     const paidAlloc = netPaidByHead.get(h.key) ?? 0;
     const paidLegacy = totalSnapshotDue > 0 ? legacyPaidTotal * (h.snapshotDue / totalSnapshotDue) : 0;
-    const paidBefore = roundMoney(Math.max(paidAlloc + paidLegacy, 0));
+    const paidBefore = roundMoney(Math.max(paidAlloc + paidLegacy + (creditByKey.get(h.key) ?? 0), 0));
     const dueBefore = roundMoney(Math.max(h.snapshotDue - paidBefore, 0));
     const grossAmount = roundMoney(h.grossDue);
     const snapshotAmount = roundMoney(h.snapshotDue);
@@ -602,5 +654,6 @@ export async function computeAdminStudentFeeBreakdown(
     previousYearAmountPaid,
     previousYearRemainingFee,
     dueHeads,
+    residencyAdjustmentNote,
   };
 }

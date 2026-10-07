@@ -19,7 +19,7 @@ const refreshFeesInflight = new Map<string, Promise<StudentDetailsFastBundle | n
 
 const BUNDLE_TTL_MS = 30 * 60 * 1000;
 /** Bump when fee attribution / breakdown merge logic changes. */
-const SESSION_KEY = "erp:student-details-bundle:v7";
+const SESSION_KEY = "erp:student-details-bundle:v8";
 const SESSION_TTL_MS = 30 * 60 * 1000;
 
 type SessionStore = Record<string, { savedAt: number; value: StudentDetailsFastBundle }>;
@@ -199,6 +199,14 @@ function mergeStudentPayments(
       continue;
     }
     if (Math.abs(prev.amount - p.amount) > 0.01) {
+      deduped.push(p);
+      continue;
+    }
+    // Two saved receipts can share a reference and amount (both hostel installments).
+    // Only an optimistic pending-* row should collapse into the confirmed payment.
+    const prevPending = prev.id.startsWith("pending-");
+    const nextPending = p.id.startsWith("pending-");
+    if (!prevPending && !nextPending) {
       deduped.push(p);
       continue;
     }

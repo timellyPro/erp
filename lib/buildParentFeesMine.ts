@@ -1,8 +1,13 @@
 import prisma from "@/lib/db";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
 import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
+import { rollupOrphanExtraFeeAllocations } from "@/lib/rollupOrphanExtraFeeAllocations";
 import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
-import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
+import {
+  conversionDueCredit,
+  includeExtraFeeOnStudentBill,
+  residencyConversionStudentIds,
+} from "@/lib/residencyConversion";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
 import {
   getParentPortalServerCached,
@@ -106,7 +111,15 @@ export async function buildParentFeesMine(studentId: string): Promise<ParentFees
               : []),
           ],
         },
-        select: { id: true, name: true, amount: true, residencyScope: true },
+        select: {
+          id: true,
+          name: true,
+          amount: true,
+          residencyScope: true,
+          targetType: true,
+          targetStudentId: true,
+          residencyConversion: true,
+        },
       }),
       prisma.payment.findMany({
         where: { studentId, eventRegistrationId: null, purpose: "FEES" },
@@ -146,8 +159,9 @@ export async function buildParentFeesMine(studentId: string): Promise<ParentFees
       }),
     ]);
 
+  const convertedStudentIds = residencyConversionStudentIds(extraFeesRaw);
   const extraFees = extraFeesRaw
-    .filter((ef) => extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, residency))
+    .filter((ef) => includeExtraFeeOnStudentBill(ef, residency, studentId, convertedStudentIds))
     .filter((ef) => !(rte && isTuitionNamedExtraFee(ef.name)));
 
   const baseComponents =
@@ -168,6 +182,8 @@ export async function buildParentFeesMine(studentId: string): Promise<ParentFees
       headType: "EXTRA_FEE" as const,
       label: ef.name,
       snapshotDue: Number(ef.amount) || 0,
+      extraFeeId: ef.id,
+      residencyConversion: Boolean(ef.residencyConversion),
     })),
   ];
 
@@ -187,6 +203,26 @@ export async function buildParentFeesMine(studentId: string): Promise<ParentFees
     netPaidByHead,
     heads.map((h) => ({ key: h.key, snapshotDue: h.snapshotDue }))
   );
+  rollupOrphanExtraFeeAllocations(
+    netPaidByHead,
+    heads.map((h) => ({
+      key: h.key,
+      label: h.label,
+      extraFeeId: "extraFeeId" in h ? h.extraFeeId : undefined,
+      snapshotDue: h.snapshotDue,
+    })),
+    new Map(extraFeesRaw.map((ef) => [ef.id, { id: ef.id, name: ef.name }]))
+  );
+  const creditByKey = conversionDueCredit(
+    heads.map((h) => ({
+      key: h.key,
+      snapshotDue: h.snapshotDue,
+      extraFeeId: "extraFeeId" in h ? h.extraFeeId : undefined,
+      residencyConversion: "residencyConversion" in h ? h.residencyConversion : false,
+    })),
+    netPaidByHead,
+    new Map(extraFeesRaw.map((ef) => [ef.id, ef.name]))
+  );
 
   const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);
   const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);
@@ -195,7 +231,7 @@ export async function buildParentFeesMine(studentId: string): Promise<ParentFees
   const dueHeads: ParentFeesDueHead[] = heads.map((h) => {
     const paidAlloc = netPaidByHead.get(h.key) ?? 0;
     const paidLegacy = totalSnapshotDue > 0 ? legacyPaidTotal * (h.snapshotDue / totalSnapshotDue) : 0;
-    const paidBefore = Math.max(paidAlloc + paidLegacy, 0);
+    const paidBefore = Math.max(paidAlloc + paidLegacy + (creditByKey.get(h.key) ?? 0), 0);
     const dueBefore = Math.max(h.snapshotDue - paidBefore, 0);
     return {
       key: h.key,
