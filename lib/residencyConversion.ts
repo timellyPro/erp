@@ -100,7 +100,8 @@ export function residencyConversionStudentIds(
 
 /**
  * Conversion rows always bill that student.
- * Once a student has conversion rows, class/school hostel, mess, and transport are replaced by those rows.
+ * A head assigned directly to the student still bills them after a conversion.
+ * Shared class, section, and school hostel, mess, and transport are replaced by the conversion rows.
  */
 export function includeExtraFeeOnStudentBill(
   fee: {
@@ -115,6 +116,14 @@ export function includeExtraFeeOnStudentBill(
 ): boolean {
   if (fee.residencyConversion) {
     return Boolean(studentId) && fee.targetStudentId === studentId;
+  }
+  // Catalog assigns are stored on this student. Keep those after a conversion.
+  // Conversion only replaces the shared class, section, and school hostel, mess, and transport.
+  if (studentId && fee.targetStudentId === studentId) {
+    return extraFeeAppliesToStudent(
+      { name: fee.name, residencyScope: fee.residencyScope },
+      studentResidency
+    );
   }
   if (studentId && convertedStudentIds.has(studentId) && isResidencyBoundFeeName(fee.name)) {
     return false;

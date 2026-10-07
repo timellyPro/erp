@@ -155,6 +155,21 @@ describe("residency conversion plan", () => {
     expect(includeExtraFeeOnStudentBill(fees[0]!, "Day Scholar", "stu-1", converted)).toBe(false);
     expect(includeExtraFeeOnStudentBill(fees[1]!, "Day Scholar", "stu-1", converted)).toBe(true);
     expect(includeExtraFeeOnStudentBill(fees[0]!, "Hosteller", "stu-2", converted)).toBe(true);
+    expect(
+      includeExtraFeeOnStudentBill(
+        fee({
+          id: "assigned-transport",
+          name: "Transport fee 7-10 kms (1st Installment)",
+          amount: 5500,
+          targetType: "STUDENT",
+          targetStudentId: "stu-1",
+          residencyConversion: false,
+        }),
+        "Day Scholar",
+        "stu-1",
+        converted
+      )
+    ).toBe(true);
   });
 
   it("moves hostel overpayment onto the new day-scholar fees without changing receipts", () => {
