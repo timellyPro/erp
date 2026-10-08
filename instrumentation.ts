@@ -8,4 +8,8 @@ export async function register() {
         "Set it to the app_tenant role's connection string (docs/SECURITY_REVIEW.md, section 3)."
     );
   }
+  const { getEnvProblems } = await import("./lib/env");
+  for (const problem of getEnvProblems()) {
+    console.error(`[startup] config problem: ${problem} (see .env.example)`);
+  }
 }
