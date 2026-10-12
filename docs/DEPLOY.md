@@ -1,6 +1,6 @@
 # Deploying Timelly (Vercel + Supabase)
 
-First-time deployment runbook. Nothing is deployed yet, so follow in order.
+First-time deployment runbook. Nothing is deployed yet, so follow in order. Moving existing data: see `docs/DB_MIGRATION.md`.
 Env var reference: `.env.example`. Gaps this closes: `docs/PRODUCT_READINESS_GAPS.md` #4, #6, #7.
 
 ## 0. Plans (decide before you start)
