@@ -1,20 +1,19 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { TeacherAuditCategory } from "@prisma/client";
+import { logger } from "@/lib/logger";
+import { schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 /* ================= HELPERS ================= */
 const SCORE_BASELINE = 50;
 const clampScore = (value: number) => Math.max(0, Math.min(100, value));
 
 async function resolveSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
-  if (session.user.schoolId) return session.user.schoolId;
-  const adminSchool = await prisma.school.findFirst({
-    where: { admins: { some: { id: session.user.id } } },
-    select: { id: true },
-  });
-  return adminSchool?.id ?? null;
+  return session.user.schoolId ?? (await schoolIdViaAdminRelation(session.user.id));
 }
 
 function academicYearRange(academicYear: string): { start: Date; end: Date } | null {
@@ -54,6 +53,7 @@ export async function GET(
     const schoolId = await resolveSchoolId(session);
     if (!schoolId) return NextResponse.json({ message: "School not found" }, { status: 400 });
 
+    return await runInTenantScope(schoolId, async () => {
     const teacher = await prisma.user.findFirst({
       where: { id: teacherId, schoolId, role: "TEACHER" },
       select: { id: true },
@@ -96,10 +96,11 @@ export async function GET(
       },
       { status: 200 }
     );
+    });
   } catch (e: unknown) {
-    console.error("Teacher audit records GET:", e);
+    logger.error("Teacher audit records GET:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }
@@ -122,6 +123,7 @@ export async function POST(
     const { teacherId } = await params;
     const schoolId = await resolveSchoolId(session);
     if (!schoolId) return NextResponse.json({ message: "School not found" }, { status: 400 });
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const teacher = await prisma.user.findFirst({
       where: { id: teacherId, schoolId, role: "TEACHER" },
@@ -129,7 +131,11 @@ export async function POST(
     });
     if (!teacher) return NextResponse.json({ message: "Teacher not found" }, { status: 404 });
 
-    const body = await req.json();
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
 
     const rawCategory = body.category as TeacherAuditCategory | undefined;
 
@@ -216,10 +222,11 @@ const category: TeacherAuditCategory =
     });
 
     return NextResponse.json({ record }, { status: 201 });
+    });
   } catch (e: unknown) {
-    console.error("Teacher audit records POST:", e);
+    logger.error("Teacher audit records POST:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

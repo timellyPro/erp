@@ -1,19 +1,21 @@
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { purgeExpiredNewsFeeds } from "@/lib/newsfeedRetention";
-import { buildSchoolDashboardCollectionSummary } from "@/lib/buildSchoolDashboardCollection";
-import { buildSchoolDashboardFast } from "@/lib/buildSchoolDashboardFast";
-import { getSchoolDashboardFeeTotals } from "@/lib/schoolDashboardFeeTotals";
-import { resolveSchoolAdminSchoolId } from "@/lib/resolveSchoolAdminSchoolId";
-import { todayYmdLocal } from "@/lib/schoolDashboardCollection";
+import { buildSchoolDashboardCollectionSummary } from "@/lib/school/buildSchoolDashboardCollection";
+import { buildSchoolDashboardFast } from "@/lib/school/buildSchoolDashboardFast";
+import { getSchoolDashboardFeeTotals } from "@/lib/fees/schoolDashboardFeeTotals";
+import { resolveSchoolAdminSchoolId } from "@/lib/school/resolveSchoolAdminSchoolId";
+import { todayYmdLocal } from "@/lib/school/schoolDashboardCollection";
 import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
-} from "@/lib/schoolDashboardServerCache";
-import { activeStudentWhere } from "@/lib/studentStatus";
+} from "@/lib/school/schoolDashboardServerCache";
+import { activeStudentWhere } from "@/lib/students/studentStatus";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 declare const globalThis: {
   schoolDashboardPurgeLastRunAt?: number;
@@ -26,7 +28,7 @@ function maybePurgeExpiredNewsFeeds() {
   if (now - lastRun < intervalMs) return;
   globalThis.schoolDashboardPurgeLastRunAt = now;
   purgeExpiredNewsFeeds().catch((error) => {
-    console.warn("Newsfeed purge skipped due to error:", error);
+    logger.warn("Newsfeed purge skipped due to error:", error);
   });
 }
 
@@ -74,7 +76,9 @@ export async function GET(request: Request) {
     const fastOnly = url.searchParams.get("fast") === "1";
 
     if (fastOnly) {
-      const payload = await buildSchoolDashboardFast(schoolId, dateParam);
+      const payload = await runInTenantScope(schoolId, () =>
+        buildSchoolDashboardFast(schoolId, dateParam)
+      );
       return NextResponse.json(payload, { status: 200 });
     }
 
@@ -92,20 +96,26 @@ export async function GET(request: Request) {
     const todayEnd = new Date(todayStart);
     todayEnd.setDate(todayEnd.getDate() + 1);
 
+    // One interactive transaction is a single connection, so queries inside it run one after
+    // another. The fee totals and collection summary are the heavy reads: give each its own scope
+    // (own connection, own timeout) so they run in parallel instead of sharing one 30s budget.
     const [
-      classCount,
-      studentCount,
-      teacherCount,
-      classCountLastMonth,
-      studentCountLastMonth,
-      teacherCountLastMonth,
+      [
+        classCount,
+        studentCount,
+        teacherCount,
+        classCountLastMonth,
+        studentCountLastMonth,
+        teacherCountLastMonth,
+        todayAttendance,
+        leaves,
+        newsFeeds,
+        recentPayments,
+      ],
       feeTotals,
-      todayAttendance,
-      leaves,
-      newsFeeds,
-      recentPayments,
       collection,
     ] = await Promise.all([
+      runInTenantScope(schoolId, () => Promise.all([
       prisma.class.count({ where: { schoolId } }),
       prisma.student.count({ where: { schoolId, ...activeStudentWhere } }),
       prisma.user.count({ where: { schoolId, role: "TEACHER" } }),
@@ -116,7 +126,6 @@ export async function GET(request: Request) {
       prisma.user.count({
         where: { schoolId, role: "TEACHER", createdAt: { lt: startOfMonth } },
       }),
-      getSchoolDashboardFeeTotals(schoolId),
       prisma.$queryRaw<Array<{ status: string; count: bigint }>>(Prisma.sql`
         SELECT a.status, COUNT(*)::bigint AS count
         FROM "Attendance" a
@@ -165,7 +174,9 @@ export async function GET(request: Request) {
         ORDER BY p."createdAt" DESC
         LIMIT 5
       `),
-      buildSchoolDashboardCollectionSummary(schoolId, dateParam),
+      ])),
+      runInTenantScope(schoolId, () => getSchoolDashboardFeeTotals(schoolId)),
+      runInTenantScope(schoolId, () => buildSchoolDashboardCollectionSummary(schoolId, dateParam)),
     ]);
 
     const totalPaid = feeTotals.totalPaid;
@@ -282,7 +293,7 @@ export async function GET(request: Request) {
     setSchoolDashboardServerCached(cacheKey, payload, 120_000);
     return NextResponse.json(payload);
   } catch (error: unknown) {
-    console.error("School dashboard error:", error);
+    logger.error("School dashboard error:", error);
 
     const err = error as { code?: string; message?: string; name?: string };
     if (
@@ -304,7 +315,7 @@ export async function GET(request: Request) {
     }
 
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

@@ -101,7 +101,9 @@ model User {
   teacherStatus     String?          @default("Active") // Active, Inactive
   address           String?          @db.Text
   leaveAprrover     Boolean          @default(false)
-  /** Classes this teacher teaches (marks/homework) — independent of Class.teacherId (class teacher). */
+  /**
+   * Classes this teacher teaches (marks/homework) — independent of Class.teacherId (class teacher).
+   */
   teachingClassIds  String[]         @default([])
   assignedClasses   Class[]          @relation("TeacherClass")
   attendances       Attendance[]     @relation("TeacherAttendance")
@@ -128,13 +130,15 @@ model User {
   certificatesIssued          Certificate[]         @relation("CertificateIssuer")
 
   // Transfer Certificate
-  tcRequests            TransferCertificate[] @relation("TCRequester")
-  tcApprovals           TransferCertificate[] @relation("TCApprover")
+  tcRequests            TransferCertificate[]    @relation("TCRequester")
+  tcApprovals           TransferCertificate[]    @relation("TCApprover")
   // Leave Requests
-  leavesApplied         LeaveRequest[]        @relation("TeacherLeaves")
-  leavesApproved        LeaveRequest[]        @relation("ApprovedLeaves")
+  leavesApplied         LeaveRequest[]           @relation("TeacherLeaves")
+  leavesApproved        LeaveRequest[]           @relation("ApprovedLeaves")
   // Student leave requests (teacher approves)
-  studentLeavesApproved StudentLeaveRequest[] @relation("StudentLeaveApprover")
+  studentLeavesApproved StudentLeaveRequest[]    @relation("StudentLeaveApprover")
+  // Daily attendance marked for this user as a teacher
+  dailyAttendances      TeacherDailyAttendance[] @relation("TeacherDailyAttendanceTeacher")
 
   // Notifications
   notifications Notification[]
@@ -230,6 +234,34 @@ model LeaveRequest {
   @@index([schoolId, teacherId, fromDate])
 }
 
+/**
+ * Daily attendance mark per teacher. Was previously created/altered only via raw
+ * DDL at request time (app/api/teacher/attendance/route.ts's ensureTable()) and did
+ * not appear here at all — invisible to `prisma migrate`/`prisma db pull`
+ * (PRODUCTION_READINESS.md's schema-drift finding). Formalized as a real model +
+ * migration; the route's ensureTable() DDL is left in place as an idempotent
+ * safety net for environments where this migration hasn't run yet, not removed.
+ */
+model TeacherDailyAttendance {
+  id String @id @default(cuid())
+
+  teacherId String
+  teacher   User   @relation("TeacherDailyAttendanceTeacher", fields: [teacherId], references: [id], onDelete: Cascade)
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  date   DateTime @db.Date
+  status String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([teacherId, date])
+  @@index([schoolId, date])
+  @@index([teacherId])
+}
+
 model School {
   id                   String                @id @default(cuid())
   name                 String
@@ -269,16 +301,17 @@ model School {
 
   createdAt DateTime @default(now())
 
-  users                 User[]
-  settings              SchoolSettings?
-  classFeeStructures    ClassFeeStructure[]
-  extraFees             ExtraFee[]
-  extraFeeHeadTemplates ExtraFeeHeadTemplate[]
-  pettyCashExpenses     PettyCashExpense[]
-  studentApplications   StudentApplication[]
-  feeDiscountApprovals  FeeDiscountApproval[]
-  timetables            Timetable[]
-  backupEmailSchedules  BackupEmailSchedule[]
+  users                   User[]
+  settings                SchoolSettings?
+  classFeeStructures      ClassFeeStructure[]
+  extraFees               ExtraFee[]
+  extraFeeHeadTemplates   ExtraFeeHeadTemplate[]
+  pettyCashExpenses       PettyCashExpense[]
+  studentApplications     StudentApplication[]
+  feeDiscountApprovals    FeeDiscountApproval[]
+  timetables              Timetable[]
+  backupEmailSchedules    BackupEmailSchedule[]
+  teacherDailyAttendances TeacherDailyAttendance[]
 }
 
 model BackupEmailSchedule {
@@ -496,8 +529,8 @@ model ExamTermSection {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([termId])
   @@unique([termId, name])
+  @@index([termId])
 }
 
 model ExamSchedule {
@@ -731,8 +764,8 @@ model MarkComponent {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([markId])
   @@unique([markId, name])
+  @@index([markId])
 }
 
 model ExamType {
@@ -798,8 +831,8 @@ model ExamTypeSection {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([examTypeId])
   @@unique([examTypeId, name])
+  @@index([examTypeId])
 }
 
 model ExamSubject {
@@ -1182,6 +1215,7 @@ model StudentFee {
   updatedAt DateTime @updatedAt
 
   @@index([studentId])
+  @@index([updatedAt, studentId])
 }
 
 model FeeDiscountApproval {
@@ -1355,6 +1389,12 @@ model Payment {
   purpose String @default("FEES")
 
   transactionId String? // Our order_id (TMLxxx) for lookups
+
+  // Per-submit-attempt idempotency key from the client (offline/manual entry form).
+  // Distinct from transactionId (the business reference/UTR shown in reports):
+  // this exists purely to collapse a double-click or a retried request into one
+  // Payment, even for cash entries that have no UTR at all.
+  clientRequestId String? @unique
 
   eventRegistrationId String? // When paying for workshop, links to EventRegistration
 

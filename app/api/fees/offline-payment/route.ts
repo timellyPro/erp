@@ -1,42 +1,77 @@
 import { NextResponse, after } from "next/server";
+import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
-import { redistributeBaseMinusOneAllocations } from "@/lib/redistributeBaseMinusOneAllocations";
-import { isPreviousYearFeeHeadName } from "@/lib/feeYearClassification";
-import { normalizeFeeAllocationKey } from "@/lib/feeAllocationKeys";
-import { rollupOrphanExtraFeeAllocations } from "@/lib/rollupOrphanExtraFeeAllocations";
-import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
-import { FEE_MUTATION_TX } from "@/lib/prismaFeeMutationTx";
-import { loadExtraFeesForStudentScope } from "@/lib/loadExtraFeesForStudentScope";
-import { discountedSnapshotDueForHead, studentFeeDiscountFromRecord } from "@/lib/studentFeeHeadDiscount";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/fees/feePaymentStatuses";
+import { redistributeBaseMinusOneAllocations } from "@/lib/fees/redistributeBaseMinusOneAllocations";
+import { isPreviousYearFeeHeadName } from "@/lib/fees/feeYearClassification";
+import { normalizeFeeAllocationKey } from "@/lib/fees/feeAllocationKeys";
+import { rollupOrphanExtraFeeAllocations } from "@/lib/fees/rollupOrphanExtraFeeAllocations";
+import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
+import { FEE_MUTATION_TX } from "@/lib/fees/prismaFeeMutationTx";
+import { loadExtraFeesForStudentScope } from "@/lib/fees/loadExtraFeesForStudentScope";
+import { discountedSnapshotDueForHead, studentFeeDiscountFromRecord } from "@/lib/fees/studentFeeHeadDiscount";
 import {
   conversionDueCredit,
   includeExtraFeeOnStudentBill,
   residencyConversionStudentIds,
-} from "@/lib/residencyConversion";
-import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
-import { canonicalizeGatewayForStorage } from "@/lib/feePaymentGateway";
+} from "@/lib/fees/residencyConversion";
+import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/students/studentRte";
+import { canonicalizeGatewayForStorage } from "@/lib/fees/feePaymentGateway";
 import {
   findExistingOfflinePaymentByRef,
+  findExistingPaymentByClientRequestId,
   resolveOfflinePaymentTransactionId,
-} from "@/lib/offlinePaymentIdempotency";
+} from "@/lib/fees/offlinePaymentIdempotency";
 import {
   planSameRefPayment,
   type ExistingPaymentAllocation,
-} from "@/lib/offlinePaymentSameRef";
+} from "@/lib/fees/offlinePaymentSameRef";
 import {
   labelForPaymentAllocation,
-} from "@/lib/paymentFeeHeadLines";
-import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
-import { resolveOfflinePaymentCollectorFromSession } from "@/lib/offlinePaymentCollector";
+} from "@/lib/fees/paymentFeeHeadLines";
+import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
+import { resolveOfflinePaymentCollectorFromSession } from "@/lib/fees/offlinePaymentCollector";
 import {
   canUseFastOfflineFeePayment,
   recordFastOfflineFeePayment,
-} from "@/lib/recordFastOfflineFeePayment";
-import { reconcileStudentFeeIntegrity } from "@/lib/reconcileStudentFeeIntegrity";
+} from "@/lib/fees/recordFastOfflineFeePayment";
+import { reconcileStudentFeeIntegrity } from "@/lib/fees/reconcileStudentFeeIntegrity";
 import { roundRupee } from "@/lib/formatRupee";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
+
+const selectedHeadSchema = z.union([
+  z.object({
+    headType: z.literal("BASE_COMPONENT"),
+    componentIndex: z.number(),
+    componentName: z.string().optional(),
+  }),
+  z.object({
+    headType: z.literal("EXTRA_FEE"),
+    extraFeeId: z.string(),
+  }),
+]);
+
+const explicitAllocationSchema = z.object({
+  key: z.string(),
+  amount: z.union([z.number(), z.string()]),
+  label: z.string().optional(),
+});
+
+const offlinePaymentBodySchema = z.object({
+  studentId: z.string().min(1),
+  amount: z.union([z.number(), z.string()]),
+  paymentMode: z.string().nullable().optional().transform((v) => v ?? undefined),
+  refNo: z.string().nullable().optional().transform((v) => v ?? undefined),
+  transactionId: z.string().nullable().optional().transform((v) => v ?? undefined),
+  paymentDate: z.string().nullable().optional().transform((v) => v ?? undefined),
+  selectedHeads: z.array(selectedHeadSchema).optional(),
+  explicitAllocations: z.array(explicitAllocationSchema).optional(),
+  clientRequestId: z.string().nullable().optional().transform((v) => v ?? undefined),
+});
 
 export async function POST(req: Request) {
   const [session, body] = await Promise.all([
@@ -66,6 +101,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
     }
 
+    const parsedBody = offlinePaymentBodySchema.safeParse(body);
+    if (!parsedBody.success) {
+      return NextResponse.json(
+        { message: "Invalid request body", issues: parsedBody.error.issues.map((i) => i.message) },
+        { status: 400 }
+      );
+    }
+
     const {
       studentId,
       amount: rawAmount,
@@ -75,7 +118,13 @@ export async function POST(req: Request) {
       paymentDate,
       selectedHeads: rawSelectedHeads,
       explicitAllocations: rawExplicitAllocations,
-    } = body;
+      clientRequestId: rawClientRequestId,
+    } = parsedBody.data;
+
+    const clientRequestId =
+      typeof rawClientRequestId === "string" && rawClientRequestId.trim()
+        ? rawClientRequestId.trim().slice(0, 128)
+        : null;
 
     const amount = typeof rawAmount === "string" ? parseFloat(rawAmount) : rawAmount;
     if (!studentId || typeof amount !== "number" || isNaN(amount) || amount <= 0) {
@@ -88,8 +137,9 @@ export async function POST(req: Request) {
 
     const normalizedSelectedHeads: SelectedHead[] = Array.isArray(rawSelectedHeads)
       ? rawSelectedHeads
-          .map((h: any): SelectedHead | null => {
-            if (!h || typeof h !== "object") return null;
+          .map((raw: unknown): SelectedHead | null => {
+            if (!raw || typeof raw !== "object") return null;
+            const h = raw as Record<string, unknown>;
             if (h.headType === "BASE_COMPONENT" && typeof h.componentIndex === "number") {
               return {
                 headType: "BASE_COMPONENT",
@@ -107,10 +157,11 @@ export async function POST(req: Request) {
 
     const normalizedExplicitAllocations = (Array.isArray(rawExplicitAllocations)
       ? rawExplicitAllocations
-          .map((a: any) => {
-            const key = typeof a?.key === "string" ? a.key.trim() : "";
-            const allocAmount = Number(a?.amount);
-            const label = typeof a?.label === "string" ? a.label.trim() : undefined;
+          .map((raw: unknown) => {
+            const a = (raw ?? {}) as Record<string, unknown>;
+            const key = typeof a.key === "string" ? a.key.trim() : "";
+            const allocAmount = Number(a.amount);
+            const label = typeof a.label === "string" ? a.label.trim() : undefined;
             if (!key || !Number.isFinite(allocAmount) || allocAmount <= 0) return null;
             return { key, amount: allocAmount, label };
           })
@@ -129,6 +180,7 @@ export async function POST(req: Request) {
           paymentDate,
           selectedHeads: normalizedSelectedHeads,
           explicitAllocations: normalizedExplicitAllocations,
+          clientRequestId,
           collectedByUserId: collector?.collectedByUserId,
           collectedByName: collector?.collectedByName,
         });
@@ -321,7 +373,7 @@ export async function POST(req: Request) {
 
     // Allocate: proportional on selected first, then spill remainder across unselected.
     const selectedDueSum = selectedHeads.reduce((s, h) => s + h.dueBefore, 0);
-    const unselectedDueSum = unselectedHeads.reduce((s, h) => s + h.dueBefore, 0);
+    const _unselectedDueSum = unselectedHeads.reduce((s, h) => s + h.dueBefore, 0);
     const totalDueSum = headsWithDueBefore.reduce((s, h) => s + h.dueBefore, 0);
 
     if (amount > totalDueSum + 0.01) {
@@ -484,8 +536,19 @@ export async function POST(req: Request) {
             amount: allocAmount,
           }));
 
-    const paymentAndAllocations = await prisma.$transaction(
+    const runOfflinePaymentTx = () => runInTenantScope(schoolId, () => prisma.$transaction(
       async (tx) => {
+        const byClientRequestId = await findExistingPaymentByClientRequestId(tx, clientRequestId);
+        if (byClientRequestId) {
+          const updatedFee = await tx.studentFee.findUnique({ where: { studentId } });
+          return {
+            payment: byClientRequestId,
+            updatedFee,
+            idempotent: true as const,
+            appended: false as const,
+          };
+        }
+
         if (txId) {
           const existing = await findExistingOfflinePaymentByRef(tx, studentId, txId);
           if (existing) {
@@ -510,7 +573,7 @@ export async function POST(req: Request) {
             }
 
             const deltaByKey = new Map(plan.deltas.map((d) => [d.key, d.amount]));
-            const appendRows = paymentAllocationsData.filter((d: { headType: string; componentIndex: number | null; extraFeeId: string | null }) => {
+            const appendRows = paymentAllocationsData.filter((d) => {
               const key =
                 d.headType === "EXTRA_FEE" && d.extraFeeId
                   ? normalizeFeeAllocationKey(`EXTRA:${d.extraFeeId}`)
@@ -521,7 +584,7 @@ export async function POST(req: Request) {
             });
 
             await tx.paymentFeeAllocation.createMany({
-              data: appendRows.map((d: any) => ({
+              data: appendRows.map((d) => ({
                 paymentId: existing.id,
                 studentId: d.studentId,
                 allocationType: d.allocationType,
@@ -567,13 +630,14 @@ export async function POST(req: Request) {
             gateway: offlineGateway,
             status: "SUCCESS",
             transactionId: txId,
+            clientRequestId,
             ...(collector?.collectedByUserId ? { collectedByUserId: collector.collectedByUserId } : {}),
             ...(collector?.collectedByName ? { collectedByName: collector.collectedByName } : {}),
             ...(selectedPaymentDate ? { createdAt: selectedPaymentDate } : {}),
           },
         });
 
-        const allocationsCreateMany = paymentAllocationsData.map((d: any) => ({
+        const allocationsCreateMany = paymentAllocationsData.map((d) => ({
           paymentId: payment.id,
           studentId: d.studentId,
           allocationType: d.allocationType,
@@ -596,7 +660,33 @@ export async function POST(req: Request) {
         return { payment, updatedFee, idempotent: false as const, appended: false as const };
       },
       FEE_MUTATION_TX
-    );
+    ));
+
+    let paymentAndAllocations: Awaited<ReturnType<typeof runOfflinePaymentTx>>;
+    try {
+      paymentAndAllocations = await runOfflinePaymentTx();
+    } catch (txError: unknown) {
+      // Two truly concurrent requests carrying the same clientRequestId can both pass the
+      // pre-check above and race on the unique index at insert time. Whichever loses just
+      // re-reads the row the winner created and returns it as idempotent, instead of 500ing.
+      const isClientRequestIdRace =
+        clientRequestId &&
+        txError instanceof Prisma.PrismaClientKnownRequestError &&
+        txError.code === "P2002" &&
+        Array.isArray((txError.meta as { target?: unknown } | undefined)?.target) &&
+        ((txError.meta as { target?: string[] }).target ?? []).includes("clientRequestId");
+      if (!isClientRequestIdRace) throw txError;
+
+      const racedPayment = await findExistingPaymentByClientRequestId(prisma, clientRequestId);
+      const updatedFee = await prisma.studentFee.findUnique({ where: { studentId } });
+      if (!racedPayment) throw txError;
+      paymentAndAllocations = {
+        payment: racedPayment,
+        updatedFee,
+        idempotent: true as const,
+        appended: false as const,
+      };
+    }
 
     if (!paymentAndAllocations.idempotent) {
       invalidateStudentFeeReadCaches({ studentId, schoolId });
@@ -685,10 +775,10 @@ export async function POST(req: Request) {
       },
       { status: paymentAndAllocations.idempotent ? 200 : 201 }
     );
-  } catch (error: any) {
-    console.error("Offline payment error:", error);
+  } catch (error: unknown) {
+    logger.error("Offline payment error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

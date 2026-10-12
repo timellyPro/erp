@@ -1,10 +1,10 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Inter, Geist, Geist_Mono } from "next/font/google";
-import { AuthProvider } from "@/context/AuthContext";
-import { GlobalBackground } from "./frontend/components/common/GlobalBackground";
-import PwaRegister from "./frontend/components/common/PwaRegister";
-import InstallAppBanner from "./frontend/components/common/InstallAppBanner";
+import { AuthProvider } from "@/app/_components/context/AuthContext";
+import { GlobalBackground } from "./_components/components/common/GlobalBackground";
+import PwaRegister from "./_components/components/common/PwaRegister";
+import InstallAppBanner from "./_components/components/common/InstallAppBanner";
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",
@@ -56,7 +56,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
+      {/* suppressHydrationWarning: browser extensions (e.g. Grammarly) inject attributes on <body> before hydration. */}
       <body
+        suppressHydrationWarning
         className={`
           ${inter.variable}
           ${geistSans.variable}

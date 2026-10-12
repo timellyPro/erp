@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import { buildParentProfileShell } from "@/lib/buildParentProfileShell";
+import { authOptions } from "@/lib/auth/authOptions";
+import { buildParentProfileShell } from "@/lib/parent/buildParentProfileShell";
 import {
   parentPortalSwrRead,
   parentPortalSwrWrite,
   PARENT_LIST_TTL,
-} from "@/lib/parentPortalSwr";
+} from "@/lib/parent/parentPortalSwr";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function GET(request: Request) {
   try {
@@ -55,9 +57,9 @@ export async function GET(request: Request) {
 
     return NextResponse.json(payload, { status: 200 });
   } catch (error: unknown) {
-    console.error("Parent profile shell error:", error);
+    logger.error("Parent profile shell error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

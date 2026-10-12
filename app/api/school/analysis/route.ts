@@ -1,18 +1,21 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import {
   buildSchoolAnalysisFast,
   buildSchoolAnalysisFull,
   buildSchoolAnalysisTables,
   type SchoolAnalysisTableSection,
-} from "@/lib/buildSchoolAnalysis";
-import { resolveAnalysisStartYear } from "@/lib/schoolAnalysisYear";
-import { resolveSchoolAdminSchoolId } from "@/lib/resolveSchoolAdminSchoolId";
+} from "@/lib/school/buildSchoolAnalysis";
+import { resolveAnalysisStartYear } from "@/lib/school/schoolAnalysisYear";
+import { resolveSchoolAdminSchoolId } from "@/lib/school/resolveSchoolAdminSchoolId";
 import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
-} from "@/lib/schoolDashboardServerCache";
+} from "@/lib/school/schoolDashboardServerCache";
+import { runInTenantScope } from "@/lib/db/tenantContext";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 export const dynamic = "force-dynamic";
 
@@ -61,20 +64,20 @@ export async function GET(req: Request) {
     let payload: Record<string, unknown>;
     const ttlMs = fastOnly ? 300_000 : 120_000;
 
-    if (fastOnly) {
-      payload = await buildSchoolAnalysisFast(schoolId, startYear, classId);
-    } else if (tablesOnly) {
-      payload = await buildSchoolAnalysisTables(schoolId, startYear, classId, undefined, tableSection);
-    } else {
-      payload = await buildSchoolAnalysisFull(schoolId, startYear, classId);
-    }
+    payload = await runInTenantScope(schoolId, () => {
+      if (fastOnly) return buildSchoolAnalysisFast(schoolId, startYear, classId);
+      if (tablesOnly) {
+        return buildSchoolAnalysisTables(schoolId, startYear, classId, undefined, tableSection);
+      }
+      return buildSchoolAnalysisFull(schoolId, startYear, classId);
+    });
 
     setSchoolDashboardServerCached(cacheKey, payload, ttlMs);
     return NextResponse.json(payload);
   } catch (error) {
-    console.error("Analysis API error:", error);
+    logger.error("Analysis API error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

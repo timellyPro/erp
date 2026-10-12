@@ -1,9 +1,10 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
+import { logger } from "@/lib/logger";
 
 /** P2021 = table does not exist (migrations not applied). */
 export function extraHeadTemplatesErrorResponse(error: unknown, logLabel: string) {
-  console.error(logLabel, error);
+  logger.error(logLabel, error);
   if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2021") {
     return NextResponse.json(
       {

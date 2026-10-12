@@ -2,7 +2,7 @@
 
 import { Download, CheckCircle2, Smartphone } from "lucide-react";
 import Link from "next/link";
-import { usePwaInstall } from "@/app/frontend/hooks/usePwaInstall";
+import { usePwaInstall } from "@/app/_components/hooks/usePwaInstall";
 
 export default function DownloadPage() {
   const { status, install, canInstall, isIos } = usePwaInstall({ autoPrompt: true });

@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
 import { parseScheduleTime } from "@/lib/backupScheduleUtils";
-import { getOrCreateBackupSchedule } from "@/lib/sendFeesBackupEmail";
+import { getOrCreateBackupSchedule } from "@/lib/fees/sendFeesBackupEmail";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 async function requireSuperAdmin() {
   const session = await getServerSession(authOptions);
@@ -25,7 +28,7 @@ export async function GET() {
     // Ensure local auto-scheduler is running (instrumentation may not load in all Turbopack cases)
     if (!process.env.VERCEL) {
       const { startLocalFeesBackupScheduler } = await import(
-        "@/lib/localFeesBackupScheduler"
+        "@/lib/fees/localFeesBackupScheduler"
       );
       startLocalFeesBackupScheduler();
     }
@@ -43,9 +46,9 @@ export async function GET() {
       },
     });
   } catch (error: unknown) {
-    console.error("Backup schedule GET error:", error);
+    logger.error("Backup schedule GET error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }
@@ -60,12 +63,17 @@ export async function PUT(req: Request) {
     const auth = await requireSuperAdmin();
     if ("error" in auth && auth.error) return auth.error;
 
-    const body = (await req.json()) as {
-      enabled?: boolean;
-      scheduleTime?: string;
-      recipient?: string;
-      schoolId?: string | null;
-    };
+    const backupScheduleBodySchema = z.object({
+      enabled: z.boolean().optional(),
+      scheduleTime: z.string().optional(),
+      recipient: z.string().optional(),
+      schoolId: z.string().nullable().optional(),
+    });
+    const parsedBody = backupScheduleBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
 
     const existing = await getOrCreateBackupSchedule();
     const data: {
@@ -126,9 +134,9 @@ export async function PUT(req: Request) {
       },
     });
   } catch (error: unknown) {
-    console.error("Backup schedule PUT error:", error);
+    logger.error("Backup schedule PUT error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

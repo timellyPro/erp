@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { assertCanManageAdmissions, getSessionSchoolId } from "../_utils";
 import {
   admissionListWhereSql,
@@ -9,12 +9,12 @@ import {
   admissionRawIdsPage,
   admissionWorkflowByIds,
   studentApplicationHasWorkflowColumn,
-} from "@/lib/admissionsListQuery";
+} from "@/lib/admission/admissionsListQuery";
 import {
   admissionsListCacheKey,
   getAdmissionsListCached,
   setAdmissionsListCached,
-} from "@/lib/admissionsListServerCache";
+} from "@/lib/admission/admissionsListServerCache";
 
 function parseIntSafe(value: string | null, fallback: number) {
   const n = value ? Number.parseInt(value, 10) : NaN;
@@ -108,6 +108,7 @@ export async function GET(req: Request) {
     const schoolId = await getSessionSchoolId(session);
     if (!schoolId) return NextResponse.json({ message: "School not found in session" }, { status: 400 });
 
+    return await runInTenantScope(schoolId, async () => {
     const { searchParams } = new URL(req.url);
     const page = parseIntSafe(searchParams.get("page"), 1);
     const pageSize = Math.min(50, parseIntSafe(searchParams.get("pageSize"), 10));
@@ -264,6 +265,7 @@ export async function GET(req: Request) {
     const payload = { applications, total, paidApplicationsTotal, page, pageSize };
     setAdmissionsListCached(cacheKey, payload);
     return NextResponse.json(payload, { status: 200 });
+    });
   } catch (e: unknown) {
     const err = e as { message?: string; statusCode?: number };
     return NextResponse.json(

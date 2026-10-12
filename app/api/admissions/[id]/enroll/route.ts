@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { getApplicationGateRow } from "@/lib/admissionsListQuery";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { getApplicationGateRow } from "@/lib/admission/admissionsListQuery";
 import { assertCanManageAdmissions, getSessionSchoolId } from "../../_utils";
-import { enrollStudentFromAdmissionApplication } from "@/lib/enrollStudentFromAdmissionApplication";
+import { enrollStudentFromAdmissionApplication } from "@/lib/admission/enrollStudentFromAdmissionApplication";
 
 export async function POST(_: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
@@ -15,6 +15,7 @@ export async function POST(_: Request, ctx: { params: Promise<{ id: string }> })
 
     const schoolId = await getSessionSchoolId(session);
     if (!schoolId) return NextResponse.json({ message: "School not found in session" }, { status: 400 });
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { id } = await ctx.params;
 
@@ -36,6 +37,7 @@ export async function POST(_: Request, ctx: { params: Promise<{ id: string }> })
       { message: "Student created and linked to this admission", studentId },
       { status: 200 }
     );
+    });
   } catch (e: unknown) {
     const err = e as { message?: string; statusCode?: number };
     return NextResponse.json(

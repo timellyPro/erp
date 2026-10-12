@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { CheckCircle, Users } from "lucide-react";
 import { useSession } from "next-auth/react";
-import PayButton from "@/app/frontend/components/common/PayButton";
+import PayButton from "@/app/_components/components/common/PayButton";
 
 interface StudentFee {
   id: string;
@@ -110,7 +110,7 @@ export default function Page() {
             amountToVerify = parseFloat(amt);
             document.cookie = "hyperpg_pending=; path=/; max-age=0";
           }
-        } catch (_) {}
+        } catch {}
       }
     }
     if (orderIdToVerify && !isNaN(amountToVerify) && amountToVerify > 0) {

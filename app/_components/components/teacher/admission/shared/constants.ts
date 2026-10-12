@@ -1,0 +1,70 @@
+import type { BoardingType, FormState, Gender, Grade } from "./types";
+
+export const GRADES: { label: string; value: Grade }[] = [
+  { label: "LKG", value: "LKG" },
+  { label: "UKG", value: "UKG" },
+  { label: "Grade 1", value: "GRADE_1" },
+  { label: "Grade 2", value: "GRADE_2" },
+  { label: "Grade 3", value: "GRADE_3" },
+  { label: "Grade 4", value: "GRADE_4" },
+  { label: "Grade 5", value: "GRADE_5" },
+  { label: "Grade 6", value: "GRADE_6" },
+  { label: "Grade 7", value: "GRADE_7" },
+  { label: "Grade 8", value: "GRADE_8" },
+  { label: "Grade 9", value: "GRADE_9" },
+  { label: "Grade 10", value: "GRADE_10" },
+  { label: "Grade 11", value: "GRADE_11" },
+];
+
+export const BOARDING: { label: string; value: BoardingType }[] = [
+  { label: "Semi Residential", value: "SEMI_RESIDENTIAL" },
+  { label: "Regular Boarder", value: "REGULAR_BOARDER" },
+];
+
+export const GENDERS: { label: string; value: Gender }[] = [
+  { label: "Male", value: "MALE" },
+  { label: "Female", value: "FEMALE" },
+];
+
+export const defaultForm = (): FormState => ({
+  applicationNo: "",
+  fedenaNo: "",
+  penNumber: "",
+  apaarId: "",
+  admissionNo: "",
+  classId: "",
+  gradeSought: "GRADE_1",
+  boardingType: "SEMI_RESIDENTIAL",
+  residencyType: "Day Scholar",
+  applicationFee: "",
+  admissionFee: "",
+  studentName: "",
+  gender: "MALE",
+  dateOfBirth: "",
+  aadharNo: "",
+  firstLanguage: "",
+  nationality: "Indian",
+  languagesAtHome: "",
+  caste: "",
+  religion: "",
+  presentAddress: "",
+  permanentAddress: "",
+  parentName: "",
+  parentOccupation: "",
+  officeAddress: "",
+  parentPhone: "",
+  parentEmail: "",
+  parentAadharNo: "",
+  parentWhatsapp: "",
+  bankAccountNo: "",
+  motherName: "",
+  motherPhone: "",
+  motherAadharNo: "",
+  motherEmail: "",
+  panNumber: "",
+  previousSchoolName: "",
+  previousSchoolAddress: "",
+  emergencyFatherNo: "",
+  emergencyMotherNo: "",
+  emergencyGuardianNo: "",
+});

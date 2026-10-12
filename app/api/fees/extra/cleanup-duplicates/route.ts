@@ -1,23 +1,26 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { runWithDeferredCacheInvalidation } from "@/lib/db";
 import {
   cleanupDuplicateHostelMessExtraFees,
   repairIncompleteHostelMessInstallmentPairs,
-} from "@/lib/cleanupDuplicateHostelMessExtraFees";
+} from "@/lib/fees/cleanupDuplicateHostelMessExtraFees";
 import {
   countMessDuplicateExtraFeeIds,
   findMessFeeDuplicateIssues,
-} from "@/lib/findMessFeeDuplicateIssues";
-import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+} from "@/lib/fees/findMessFeeDuplicateIssues";
+import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
 import {
   buildTuitionBulkCache,
   upsertStudentFeeFromStructure,
-} from "@/lib/studentTuitionFromStructure";
-import { backfillPaymentAllocationComponentNames } from "@/lib/backfillPaymentAllocationComponentNames";
-import { isMessCategoryExtraFeeName } from "@/lib/extraFeeResidencyScope";
+} from "@/lib/fees/studentTuitionFromStructure";
+import { backfillPaymentAllocationComponentNames } from "@/lib/fees/backfillPaymentAllocationComponentNames";
+import { isMessCategoryExtraFeeName } from "@/lib/fees/extraFeeResidencyScope";
+import { logger } from "@/lib/logger";
+import { invalidateFeeListServerCaches } from "@/lib/fees/feeListServerCache";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 async function loadSchoolExtras(schoolId: string) {
   return prisma.extraFee.findMany({
@@ -78,9 +81,9 @@ export async function GET() {
       ).length,
     });
   } catch (error: unknown) {
-    console.error("GET cleanup-duplicates error:", error);
+    logger.error("GET cleanup-duplicates error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }
@@ -104,6 +107,7 @@ export async function POST() {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const beforeExtras = await loadSchoolExtras(schoolId);
     const classes = await prisma.class.findMany({
@@ -166,6 +170,8 @@ export async function POST() {
     const afterIssues = findMessFeeDuplicateIssues(afterExtras, classes);
     const afterCount = countMessDuplicateExtraFeeIds(afterIssues);
 
+    invalidateFeeListServerCaches(schoolId);
+
     return NextResponse.json({
       message:
         beforeCount > 0 || hostelMessCleaned || installmentPairsRepaired > 0
@@ -179,10 +185,11 @@ export async function POST() {
       remainingDuplicateCount: afterCount,
       allocationNamesBackfilled,
     });
+    });
   } catch (error: unknown) {
-    console.error("POST cleanup-duplicates error:", error);
+    logger.error("POST cleanup-duplicates error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

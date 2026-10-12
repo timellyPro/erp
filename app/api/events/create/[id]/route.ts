@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function GET(
   req: Request,
@@ -44,7 +47,9 @@ export async function GET(
       );
     }
 
-    const event = await prisma.event.findFirst({
+    // Real DB-level tenant isolation: all reads run on the RLS-restricted connection.
+    const result = await withTenantScopedClient(schoolId, async (tx) => {
+    const event = await tx.event.findFirst({
       where: {
         id,
         schoolId,
@@ -62,16 +67,14 @@ export async function GET(
       },
     });
 
-    if (!event) {
-      return NextResponse.json({ message: "Event not found" }, { status: 404 });
-    }
+    if (!event) return null;
 
     let isRegistered = false;
     let registration: { id: string; paymentStatus: string } | null = null;
     let workshopCertificate: { id: string; title: string; certificateUrl: string | null; issuedDate: string } | null = null;
     if (session.user.studentId) {
       const [reg, cert] = await Promise.all([
-        prisma.eventRegistration.findUnique({
+        tx.eventRegistration.findUnique({
           where: {
             eventId_studentId: {
               eventId: id,
@@ -79,7 +82,7 @@ export async function GET(
             },
           },
         }),
-        prisma.certificate.findFirst({
+        tx.certificate.findFirst({
           where: {
             studentId: session.user.studentId,
             title: `${event.title} - Participation`,
@@ -101,13 +104,21 @@ export async function GET(
       }
     }
 
+      return { event, isRegistered, registration, workshopCertificate };
+    });
+
+    if (!result) {
+      return NextResponse.json({ message: "Event not found" }, { status: 404 });
+    }
+    const { event, isRegistered, registration, workshopCertificate } = result;
+
     return NextResponse.json({
       event: { ...event, isRegistered, registration, workshopCertificate },
     }, { status: 200 });
-  } catch (error: any) {
-    console.error("Get event error:", error);
+  } catch (error: unknown) {
+    logger.error("Get event error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

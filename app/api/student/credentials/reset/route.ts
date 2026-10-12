@@ -1,25 +1,27 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { hashStudentPasswordFromDob } from "@/lib/studentDefaultPassword";
-import { invalidateTenant } from "@/lib/tenantCache";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { hashStudentPasswordFromDob } from "@/lib/students/studentDefaultPassword";
+import { invalidateTenant } from "@/lib/cache/tenantCache";
+import { logger } from "@/lib/logger";
+import { schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 const MAX_RESET = 5000;
+
+const resetCredentialsBodySchema = z.object({
+  classId: z.string().optional(),
+  className: z.string().optional(),
+  section: z.string().optional(),
+});
 
 async function resolveSchoolId(session: {
   user: { id: string; schoolId?: string | null };
 }): Promise<string | null> {
-  let schoolId = session.user.schoolId ?? null;
-  if (!schoolId) {
-    const adminSchool = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = adminSchool?.id ?? null;
-  }
-  return schoolId;
+  return session.user.schoolId ?? (await schoolIdViaAdminRelation(session.user.id));
 }
 
 function buildWhere(
@@ -68,16 +70,17 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     if (session.user.schoolIsActive === false) {
       return NextResponse.json({ message: "School is paused" }, { status: 403 });
     }
 
-    const body = (await req.json().catch(() => ({}))) as {
-      classId?: string;
-      className?: string;
-      section?: string;
-    };
+    const parsedBody = resetCredentialsBodySchema.safeParse(await req.json().catch(() => ({})));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
 
     const classId = body.classId?.trim() || "";
     const className = body.className?.trim() || "";
@@ -131,10 +134,11 @@ export async function POST(req: Request) {
       },
       { status: 200 }
     );
+    });
   } catch (error: unknown) {
-    console.error("Student credentials reset error:", error);
+    logger.error("Student credentials reset error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

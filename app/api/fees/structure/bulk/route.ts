@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
-import * as XLSX from "xlsx";
+import { readFirstSheetRows } from "@/lib/excel/readWorkbookRows";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
-import { saveClassFeeStructureAndSyncStudents } from "@/lib/classFeeStructureApply";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
+import { saveClassFeeStructureAndSyncStudents } from "@/lib/fees/classFeeStructureApply";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 function normHeader(k: string) {
   return k
@@ -82,24 +84,15 @@ export async function POST(req: Request) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const workbook = XLSX.read(buffer, { type: "buffer" });
-    const firstName = workbook.SheetNames[0];
-    if (!firstName) {
-      return NextResponse.json({ message: "Excel workbook has no sheets" }, { status: 400 });
-    }
-    const sheet = workbook.Sheets[firstName];
-    if (!sheet) {
-      return NextResponse.json({ message: "Could not read the first worksheet" }, { status: 400 });
-    }
-    const rows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(sheet);
+    const rows = await readFirstSheetRows(buffer);
     if (!rows.length) {
       return NextResponse.json({ message: "Excel sheet is empty" }, { status: 400 });
     }
 
-    const classes = await prisma.class.findMany({
+    const classes = await runInTenantScope(schoolId, () => prisma.class.findMany({
       where: { schoolId },
       select: { id: true, name: true, section: true },
-    });
+    }));
 
     type Comp = { name: string; amount: number };
     const byClassId = new Map<string, Comp[]>();
@@ -146,20 +139,20 @@ export async function POST(req: Request) {
       }
       const merged = [...mergeMap.entries()].map(([name, amount]) => ({ name, amount }));
       try {
-        await saveClassFeeStructureAndSyncStudents({
+        await runInTenantScope(schoolId, () => saveClassFeeStructureAndSyncStudents({
           schoolId,
           classId,
           components: merged,
-        });
+        }));
         const cls = classes.find((c) => c.id === classId);
         const label = cls
           ? `Class ${cls.name}${cls.section ? `-${cls.section}` : ""}`
           : classId;
         updated.push({ classId, label, components: merged.length });
-      } catch (e: any) {
+      } catch (e: unknown) {
         failed.push({
           row: 0,
-          message: `${classes.find((c) => c.id === classId)?.name ?? classId}: ${e?.message || "Save failed"}`,
+          message: `${classes.find((c) => c.id === classId)?.name ?? classId}: ${getErrorMessage(e) || "Save failed"}`,
         });
       }
     }
@@ -177,10 +170,10 @@ export async function POST(req: Request) {
       updated,
       failed,
     });
-  } catch (error: any) {
-    console.error("Fee structure bulk POST error:", error);
+  } catch (error: unknown) {
+    logger.error("Fee structure bulk POST error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

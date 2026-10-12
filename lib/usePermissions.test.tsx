@@ -1,7 +1,7 @@
 "use client";
 
 import { render, screen } from "@testing-library/react";
-import { useHasFeature, useAllowedFeatures } from "@/lib/usePermissions";
+import { useHasFeature, useAllowedFeatures } from "@/lib/auth/usePermissions";
 import { FEATURE_IDS } from "@/lib/features";
 
 const mockUseSession = jest.fn();

@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { computeAdminStudentFeeBreakdown } from "@/lib/computeAdminStudentFeeBreakdown";
-import { isRedisEnabled } from "@/lib/redis";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { computeAdminStudentFeeBreakdown } from "@/lib/fees/computeAdminStudentFeeBreakdown";
+import { isRedisEnabled } from "@/lib/cache/redis";
 import {
   getBreakdownMemCached,
   setBreakdownMemCached,
-} from "@/lib/studentFeeReadCache";
-import { tenantCacheKey, swrGet, swrSet } from "@/lib/tenantCache";
+} from "@/lib/fees/studentFeeReadCache";
+import { tenantCacheKey, swrGet, swrSet } from "@/lib/cache/tenantCache";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -50,6 +52,7 @@ export async function GET(req: Request) {
     const schoolId = await getSchoolId(session);
     if (!schoolId) return NextResponse.json({ message: "School not found" }, { status: 400 });
 
+    return await runInTenantScope(schoolId, async () => {
     const { searchParams } = new URL(req.url);
     const studentId = searchParams.get("studentId")?.trim();
     if (!studentId) return NextResponse.json({ message: "studentId is required" }, { status: 400 });
@@ -99,15 +102,16 @@ export async function GET(req: Request) {
       );
     }
     return NextResponse.json(result, { status: 200 });
+    });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Internal server error";
+    const message = toClientErrorMessage(error, "Internal server error");
     if (message.includes("Fee record not found")) {
       return NextResponse.json({ message }, { status: 404 });
     }
     if (message.includes("not found")) {
       return NextResponse.json({ message }, { status: 404 });
     }
-    console.error("Admin fee breakdown error:", error);
+    logger.error("Admin fee breakdown error:", error);
     return NextResponse.json({ message }, { status: 500 });
   }
 }

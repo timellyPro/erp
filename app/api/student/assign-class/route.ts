@@ -1,9 +1,17 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
-import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { upsertStudentFeeFromStructure } from "@/lib/fees/studentTuitionFromStructure";
+import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
+
+const assignClassBodySchema = z.object({
+  studentId: z.string().optional().nullable(),
+  classId: z.string().optional().nullable(),
+});
 
 export async function PUT(req: Request) {
   try {
@@ -27,8 +35,14 @@ export async function PUT(req: Request) {
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
-    const { studentId, classId } = await req.json();
+    const rawBody = await req.json().catch(() => null);
+    const parsedBody = assignClassBodySchema.safeParse(rawBody);
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const { studentId, classId } = parsedBody.data;
 
     if (!studentId) {
       return NextResponse.json(
@@ -115,10 +129,11 @@ export async function PUT(req: Request) {
       },
       { status: 200 }
     );
-  } catch (error: any) {
-    console.error("Assign student to class error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Assign student to class error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

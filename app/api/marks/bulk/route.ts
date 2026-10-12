@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma, { runWithDeferredCacheInvalidation } from "@/lib/db";
-import { assertTeacherCanEnterMarks } from "@/lib/teacherMarksScope";
+import { authOptions } from "@/lib/auth/authOptions";
+import { runWithDeferredCacheInvalidation } from "@/lib/db";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { createNotification } from "@/lib/notificationService";
+import { assertTeacherCanEnterMarks } from "@/lib/teacher/teacherMarksScope";
 import {
   parseMarkComponents,
   sumComponents,
   type MarkComponentInput,
-} from "@/lib/markComponents";
-import { loadConfiguredMarkLimits, markLimitError } from "@/lib/examMarkLimits";
+} from "@/lib/exams/markComponents";
+import { loadConfiguredMarkLimits, markLimitError } from "@/lib/exams/examMarkLimits";
 import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 
@@ -378,6 +380,9 @@ export async function POST(req: Request) {
       );
     }
 
+    // Tenant-scoped (docs/SECURITY_REVIEW.md): every query below runs on the RLS-restricted
+    // app_tenant connection, in addition to the explicit schoolId filters.
+    return await runInTenantScope(schoolId, async (schoolId) => {
     const body = await req.json();
     const classId = typeof body.classId === "string" ? body.classId : "";
     const subjectName = typeof body.subject === "string" ? body.subject.trim() : "";
@@ -651,14 +656,16 @@ export async function POST(req: Request) {
       })
       .filter((row): row is NonNullable<typeof row> => row !== null);
 
-    if (notify.length > 0) {
-      void prisma.notification.createMany({ data: notify }).catch(() => {});
+    // Fire-and-forget; createNotification swallows its own errors and runs outside this scope's transaction.
+    for (const row of notify) {
+      void createNotification(row.userId, row.type, row.title, row.message);
     }
 
     return NextResponse.json(
       { message: "Successfully saved", saved },
       { status: 200, headers: { "Cache-Control": "private, no-store" } }
     );
+    });
   } catch (error: unknown) {
     console.error("Bulk marks save error:", error);
     return NextResponse.json(

@@ -1,6 +1,6 @@
 import prisma from "../lib/db";
 import { shouldRunScheduledBackup } from "../lib/backupScheduleUtils";
-import { runFeesBackupCron } from "../lib/runFeesBackupCron";
+import { runFeesBackupCron } from "../lib/fees/runFeesBackupCron";
 
 async function main() {
   const now = new Date();

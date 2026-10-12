@@ -8,10 +8,9 @@ import prisma from "../lib/db";
 import {
   buildStudentFeeRecalcPayload,
   buildTuitionBulkCache,
-  finalFeeFromStructureAndExtras,
-} from "../lib/studentTuitionFromStructure";
+} from "@/lib/fees/studentTuitionFromStructure";
 import { roundRupee } from "../lib/formatRupee";
-import { invalidateStudentFeeReadCaches } from "../lib/studentFeeReadCache";
+import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
 
 async function main() {
   const apply = process.argv.includes("--apply");

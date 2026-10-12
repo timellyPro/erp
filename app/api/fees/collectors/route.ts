@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import { authOptions } from "@/lib/auth/authOptions";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 /**
  * GET /api/fees/collectors
@@ -25,27 +27,33 @@ export async function GET() {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
 
-    const rows = await prisma.payment.groupBy({
-      by: ["collectedByUserId"],
-      where: {
-        student: { schoolId },
-        purpose: "FEES",
-        status: { in: ["SUCCESS", "COMPLETED"] },
-        collectedByUserId: { not: null },
-      },
-      _max: { collectedByName: true },
-    });
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go
+    // through the app_tenant connection, restricted by RLS, not just the
+    // `where: { student: { schoolId } }` filter above.
+    const { rows, users } = await withTenantScopedClient(schoolId, async (tx) => {
+      const groupRows = await tx.payment.groupBy({
+        by: ["collectedByUserId"],
+        where: {
+          student: { schoolId },
+          purpose: "FEES",
+          status: { in: ["SUCCESS", "COMPLETED"] },
+          collectedByUserId: { not: null },
+        },
+        _max: { collectedByName: true },
+      });
 
-    const userIds = rows
-      .map((r) => r.collectedByUserId)
-      .filter((id): id is string => Boolean(id));
-    const users =
-      userIds.length > 0
-        ? await prisma.user.findMany({
-            where: { id: { in: userIds } },
-            select: { id: true, name: true, email: true },
-          })
-        : [];
+      const userIds = groupRows
+        .map((r) => r.collectedByUserId)
+        .filter((id): id is string => Boolean(id));
+      const userRows =
+        userIds.length > 0
+          ? await tx.user.findMany({
+              where: { id: { in: userIds } },
+              select: { id: true, name: true, email: true },
+            })
+          : [];
+      return { rows: groupRows, users: userRows };
+    });
     const userLabelById = new Map(
       users.map((u) => [u.id, (u.name || "").trim() || (u.email || "").trim() || "Staff"])
     );
@@ -64,9 +72,9 @@ export async function GET() {
 
     return NextResponse.json({ collectors }, { status: 200 });
   } catch (error: unknown) {
-    console.error("Fee collectors error:", error);
+    logger.error("Fee collectors error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

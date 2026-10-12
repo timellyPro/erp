@@ -1,35 +1,28 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { schoolIdViaAdminRelation } from "@/lib/auth/tenant";
 import {
   applyStudentResidencyConversion,
   previewStudentResidencyConversion,
-} from "@/lib/applyStudentResidencyConversion";
-import { computeAdminStudentFeeBreakdown } from "@/lib/computeAdminStudentFeeBreakdown";
-import { invalidateStudentListCaches } from "@/lib/invalidateStudentListCaches";
+} from "@/lib/students/applyStudentResidencyConversion";
+import { computeAdminStudentFeeBreakdown } from "@/lib/fees/computeAdminStudentFeeBreakdown";
+import { invalidateStudentListCaches } from "@/lib/students/invalidateStudentListCaches";
 import {
   academicYearLabel,
   academicYearStartYearFromYmd,
   kolkataYmd,
   residencyKind,
   residencyPeriodTitle,
-} from "@/lib/residencyConversion";
-import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
-import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
+} from "@/lib/fees/residencyConversion";
+import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
+import { upsertStudentFeeFromStructure } from "@/lib/fees/studentTuitionFromStructure";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
 async function resolveSchoolId(session: { user: { id: string; schoolId?: string | null; role: string } }) {
-  let schoolId = session.user.schoolId;
-  if (!schoolId) {
-    const adminSchool = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = adminSchool?.id ?? null;
-  }
-  return schoolId;
+  return session.user.schoolId ?? (await schoolIdViaAdminRelation(session.user.id));
 }
 
 async function authorize() {
@@ -71,6 +64,9 @@ export async function GET(req: Request, context: RouteParams) {
   const schoolId = auth.schoolId;
   if (!schoolId) return NextResponse.json({ message: "School not found" }, { status: 400 });
 
+  // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): everything below runs on the
+  // RLS-restricted connection, in addition to the explicit schoolId filters.
+  return await runInTenantScope(schoolId, async () => {
   const student = await prisma.student.findFirst({
     where: { id, schoolId },
     select: {
@@ -124,6 +120,7 @@ export async function GET(req: Request, context: RouteParams) {
     })),
     savedPeriods: saved.map(periodPayload),
   });
+  });
 }
 
 export async function POST(req: Request, context: RouteParams) {
@@ -133,6 +130,9 @@ export async function POST(req: Request, context: RouteParams) {
   const schoolId = auth.schoolId;
   if (!schoolId) return NextResponse.json({ message: "School not found" }, { status: 400 });
 
+  // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): everything below runs on the
+  // RLS-restricted connection, in addition to the explicit schoolId filters.
+  return await runInTenantScope(schoolId, async () => {
   const student = await prisma.student.findFirst({
     where: { id, schoolId },
     select: {
@@ -209,4 +209,5 @@ export async function POST(req: Request, context: RouteParams) {
       { status: 500 }
     );
   }
+  });
 }

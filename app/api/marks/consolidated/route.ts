@@ -1,26 +1,21 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { activeStudentWhere } from "@/lib/studentStatus";
+import { authOptions } from "@/lib/auth/authOptions";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { activeStudentWhere } from "@/lib/students/studentStatus";
+import { logger } from "@/lib/logger";
+import { schoolIdViaAdminRelation, schoolIdViaTeacherClass } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 async function resolveSchoolId(session: {
   user: { id: string; schoolId?: string | null; role: string };
 }): Promise<string | null> {
   let schoolId = session.user.schoolId ?? null;
   if (!schoolId) {
-    const school = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = school?.id ?? null;
+    schoolId = await schoolIdViaAdminRelation(session.user.id);
   }
   if (!schoolId && session.user.role === "TEACHER") {
-    const teacherClass = await prisma.class.findFirst({
-      where: { teacherId: session.user.id },
-      select: { schoolId: true },
-    });
-    schoolId = teacherClass?.schoolId ?? null;
+    schoolId = await schoolIdViaTeacherClass(session.user.id);
   }
   return schoolId;
 }
@@ -114,7 +109,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: "classIds is required" }, { status: 400 });
     }
 
-    const school = await prisma.school.findUnique({
+    const school = await withTenantScopedClient(schoolId, (tx) => tx.school.findUnique({
       where: { id: schoolId },
       select: {
         id: true,
@@ -123,13 +118,13 @@ export async function GET(req: Request) {
         logoUrl: true,
         admins: { select: { photoUrl: true }, take: 1 },
       },
-    });
+    }));
 
-    const classes = await prisma.class.findMany({
+    const classes = await withTenantScopedClient(schoolId, (tx) => tx.class.findMany({
       where: { id: { in: classIds }, schoolId },
       select: { id: true, name: true, section: true },
       orderBy: [{ name: "asc" }, { section: "asc" }],
-    });
+    }));
 
     if (classes.length === 0) {
       return NextResponse.json({ message: "No classes found" }, { status: 404 });
@@ -137,7 +132,7 @@ export async function GET(req: Request) {
 
     const allowedClassIds = classes.map((c) => c.id);
 
-    const students = await prisma.student.findMany({
+    const students = await withTenantScopedClient(schoolId, (tx) => tx.student.findMany({
       where: {
         schoolId,
         classId: { in: allowedClassIds },
@@ -151,9 +146,9 @@ export async function GET(req: Request) {
         user: { select: { name: true } },
       },
       orderBy: { user: { name: "asc" } },
-    });
+    }));
 
-    const marks = await prisma.mark.findMany({
+    const marks = await withTenantScopedClient(schoolId, (tx) => tx.mark.findMany({
       where: {
         classId: { in: allowedClassIds },
         ...(examType ? { examType } : {}),
@@ -170,7 +165,7 @@ export async function GET(req: Request) {
         createdAt: true,
       },
       orderBy: { createdAt: "desc" },
-    });
+    }));
 
     const latestByStudentSubject = new Map<string, MarkVal>();
 
@@ -337,9 +332,9 @@ export async function GET(req: Request) {
       { status: 200 }
     );
   } catch (error: unknown) {
-    console.error("Consolidated marks error:", error);
+    logger.error("Consolidated marks error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

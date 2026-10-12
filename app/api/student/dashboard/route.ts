@@ -1,19 +1,21 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
 import { purgeExpiredNewsFeeds } from "@/lib/newsfeedRetention";
 import {
   buildParentDashboardFast,
   buildParentDashboardFull,
-} from "@/lib/buildParentDashboard";
-import { isActiveStudent } from "@/lib/studentStatus";
+} from "@/lib/parent/buildParentDashboard";
+import { isActiveStudent } from "@/lib/students/studentStatus";
 import {
   parentPortalSwrRead,
   parentPortalSwrWrite,
   PARENT_DASHBOARD_FAST_TTL,
   PARENT_DASHBOARD_FULL_TTL,
-} from "@/lib/parentPortalSwr";
+} from "@/lib/parent/parentPortalSwr";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 declare const globalThis: {
   parentDashboardPurgeLastRunAt?: number;
@@ -25,7 +27,7 @@ function maybePurgeExpiredNewsFeeds() {
   if (now - lastRun < 10 * 60 * 1000) return;
   globalThis.parentDashboardPurgeLastRunAt = now;
   purgeExpiredNewsFeeds().catch((error) => {
-    console.warn("Newsfeed purge skipped due to error:", error);
+    logger.warn("Newsfeed purge skipped due to error:", error);
   });
 }
 
@@ -104,7 +106,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json(payload, { status: 200 });
   } catch (error: unknown) {
-    console.error("Parent home dashboard error:", error);
+    logger.error("Parent home dashboard error:", error);
 
     const err = error as { code?: string; message?: string; name?: string };
     if (
@@ -126,7 +128,7 @@ export async function GET(request: Request) {
     }
 
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

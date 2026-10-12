@@ -1,13 +1,16 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import {
   getSchoolDashboardServerCached,
   purgeSchoolDashboardServerCacheMatching,
   setSchoolDashboardServerCached,
-} from "@/lib/schoolDashboardServerCache";
+} from "@/lib/school/schoolDashboardServerCache";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 type TeacherAttendanceRow = {
   id: string;
@@ -143,6 +146,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
 
+    return await runInTenantScope(schoolId, async () => {
     const { searchParams } = new URL(req.url);
     const dateStr = searchParams.get("date");
     if (!dateStr) {
@@ -175,10 +179,11 @@ export async function GET(req: Request) {
     };
     setSchoolDashboardServerCached(cacheKey, payload, 30_000);
     return NextResponse.json(payload);
+    });
   } catch (error: unknown) {
-    console.error("Get teacher attendance error:", error);
+    logger.error("Get teacher attendance error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }
@@ -211,11 +216,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
 
-    const body = await req.json();
-    const { date: dateStr, attendances } = body as {
-      date: string;
-      attendances: Array<{ teacherId: string; status: string }>;
-    };
+    const markTeacherAttendanceBodySchema = z.object({
+      date: z.string().optional(),
+      attendances: z.array(z.object({ teacherId: z.string(), status: z.string() })).optional(),
+    });
+    const parsedBody = markTeacherAttendanceBodySchema.safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
+    const { date: dateStr, attendances } = body;
     if (!dateStr || !Array.isArray(attendances)) {
       return NextResponse.json(
         { message: "date and attendances array required" },
@@ -249,10 +256,10 @@ export async function POST(req: Request) {
       }
     }
 
-    const teachers = await prisma.user.findMany({
+    const teachers = await runInTenantScope(schoolId, () => prisma.user.findMany({
       where: { id: { in: candidateIds }, schoolId, role: "TEACHER" },
       select: { id: true },
-    });
+    }));
     const validTeacherIds = new Set(teachers.map((t) => t.id));
 
     const rows = attendances.filter(
@@ -270,21 +277,21 @@ export async function POST(req: Request) {
         params.push(randomUUID(), a.teacherId, schoolId, dateIso, a.status);
       });
 
-      await prisma.$executeRawUnsafe(
+      await runInTenantScope(schoolId, () => prisma.$executeRawUnsafe(
         `INSERT INTO "TeacherDailyAttendance" ("id", "teacherId", "schoolId", "date", "status", "createdAt", "updatedAt")
          VALUES ${valueSql.join(", ")}
          ON CONFLICT ("teacherId", "date") DO UPDATE SET "status" = EXCLUDED."status", "updatedAt" = NOW()`,
         ...params
-      );
+      ));
     }
 
     purgeSchoolDashboardServerCacheMatching(`teacher:attendance:${schoolId}`);
 
     return NextResponse.json({ message: "Attendance saved", ok: true, saved: rows.length });
   } catch (error: unknown) {
-    console.error("Mark teacher attendance error:", error);
+    logger.error("Mark teacher attendance error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

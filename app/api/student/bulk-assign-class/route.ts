@@ -1,19 +1,28 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma, { runWithDeferredCacheInvalidation } from "@/lib/db";
-import { invalidateStudentListCaches } from "@/lib/invalidateStudentListCaches";
-import { purgeSchoolDashboardServerCacheMatching } from "@/lib/schoolDashboardServerCache";
-import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
-import { requireSchoolId } from "@/lib/tenant";
+import { invalidateStudentListCaches } from "@/lib/students/invalidateStudentListCaches";
+import { purgeSchoolDashboardServerCacheMatching } from "@/lib/school/schoolDashboardServerCache";
+import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
+import { requireSchoolId } from "@/lib/auth/tenant";
 import {
   buildTuitionBulkCache,
   buildStudentFeeRecalcPayload,
-} from "@/lib/studentTuitionFromStructure";
+} from "@/lib/fees/studentTuitionFromStructure";
+import { logger } from "@/lib/logger";
+import { runInTenantScope } from "@/lib/db/tenantContext";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 const STAFF_ROLES = new Set(["SCHOOLADMIN", "SUPERADMIN", "TEACHER"]);
 const MAX_BULK_ASSIGN = 500;
 const FEE_UPSERT_BATCH = 10;
+
+const bulkAssignClassBodySchema = z.object({
+  studentIds: z.array(z.unknown()).optional(),
+  classId: z.unknown().optional(),
+});
 
 export async function PUT(req: Request) {
   try {
@@ -33,7 +42,13 @@ export async function PUT(req: Request) {
     }
     const schoolId = ctx.schoolId;
 
-    const body = await req.json();
+    return await runInTenantScope(schoolId, async (schoolId) => {
+    const rawBody = await req.json().catch(() => null);
+    const parsedBody = bulkAssignClassBodySchema.safeParse(rawBody);
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
     const studentIds: string[] = Array.isArray(body?.studentIds)
       ? body.studentIds
           .filter(
@@ -174,10 +189,11 @@ export async function PUT(req: Request) {
       },
       { status: 200 }
     );
+    }, { timeout: 120_000 });
   } catch (error: unknown) {
-    console.error("Bulk assign student to class error:", error);
+    logger.error("Bulk assign student to class error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

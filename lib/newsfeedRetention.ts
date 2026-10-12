@@ -1,4 +1,5 @@
 import prisma from "@/lib/db";
+import { logger } from "@/lib/logger";
 
 /** News feed posts are removed after this age (7 days). */
 export const NEWSFEED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -19,7 +20,7 @@ export async function purgeExpiredNewsFeeds(): Promise<{ deleted: number }> {
     });
     return { deleted: result.count };
   } catch (e) {
-    console.warn("purgeExpiredNewsFeeds:", e);
+    logger.warn("purgeExpiredNewsFeeds:", e);
     return { deleted: 0 };
   }
 }

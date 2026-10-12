@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
 import {
   parentPortalSwrRead,
   parentPortalSwrWrite,
   PARENT_LIST_TTL,
-} from "@/lib/parentPortalSwr";
+} from "@/lib/parent/parentPortalSwr";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function GET(req: Request) {
   try {
@@ -77,32 +80,40 @@ export async function GET(req: Request) {
       }
     }
 
-    const events = await prisma.event.findMany({
-      where,
-      include: {
-        class: {
-          select: { id: true, name: true, section: true },
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go through
+    // the app_tenant connection, restricted by RLS (Event directly;
+    // EventRegistration/Certificate via their own studentId -> Student
+    // subquery policies), not just this route's own `where` filters.
+    const { events, registrations, workshopCerts } = await withTenantScopedClient(schoolId, async (tx) => {
+      const events = await tx.event.findMany({
+        where,
+        include: {
+          class: {
+            select: { id: true, name: true, section: true },
+          },
+          teacher: {
+            select: { id: true, name: true, email: true },
+          },
+          _count: {
+            select: { registrations: true },
+          },
         },
-        teacher: {
-          select: { id: true, name: true, email: true },
-        },
-        _count: {
-          select: { registrations: true },
-        },
-      },
-      orderBy: { createdAt: "desc" },
-      take: session.user.studentId ? 50 : undefined,
-    });
+        orderBy: { createdAt: "desc" },
+        take: session.user.studentId ? 50 : undefined,
+      });
 
-    if (session.user.studentId) {
+      if (!session.user.studentId) {
+        return { events, registrations: [], workshopCerts: [] };
+      }
+
       const studentId = session.user.studentId;
       const eventIds = events.map((e) => e.id);
 
       const [registrations, workshopCerts] = await Promise.all([
-        prisma.eventRegistration.findMany({
+        tx.eventRegistration.findMany({
           where: { studentId, eventId: { in: eventIds } },
         }),
-        prisma.certificate.findMany({
+        tx.certificate.findMany({
           where: {
             studentId,
             title: { endsWith: " - Participation" },
@@ -110,6 +121,12 @@ export async function GET(req: Request) {
           select: { title: true },
         }),
       ]);
+
+      return { events, registrations, workshopCerts };
+    });
+
+    if (session.user.studentId) {
+      const studentId = session.user.studentId;
 
       const regByEvent = new Map(registrations.map((r) => [r.eventId, r]));
       const eventTitlesWithCert = new Set(
@@ -143,9 +160,9 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ events }, { status: 200 });
   } catch (error: unknown) {
-    console.error("List events error:", error);
+    logger.error("List events error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

@@ -1,15 +1,18 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
-import { saveClassFeeStructureAndSyncStudents } from "@/lib/classFeeStructureApply";
-import { finalFeeFromStructureAndExtras, sumExtraFeesForStudent } from "@/lib/studentTuitionFromStructure";
-import { invalidateSchoolFeeReadCaches } from "@/lib/studentFeeReadCache";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
+import { saveClassFeeStructureAndSyncStudents } from "@/lib/fees/classFeeStructureApply";
+import { finalFeeFromStructureAndExtras, sumExtraFeesForStudent } from "@/lib/fees/studentTuitionFromStructure";
+import { invalidateSchoolFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
 import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
-} from "@/lib/schoolDashboardServerCache";
+} from "@/lib/school/schoolDashboardServerCache";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
+import { logger } from "@/lib/logger";
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -28,6 +31,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
 
+    return await runInTenantScope(schoolId, async () => {
     const { searchParams } = new URL(req.url);
     const classId = searchParams.get("classId");
 
@@ -52,10 +56,11 @@ export async function GET(req: Request) {
       setSchoolDashboardServerCached(`fees:structure:${schoolId}`, payload, 45_000);
     }
     return NextResponse.json(payload);
-  } catch (error: any) {
-    console.error("Fee structure GET error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Fee structure GET error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }
@@ -77,8 +82,14 @@ export async function PUT(req: Request) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async () => {
 
-    const body = await req.json();
+    const structureBodySchema = z.object({
+      classId: z.string().optional(),
+      components: z.array(z.unknown()).optional(),
+    });
+    const parsedBody = structureBodySchema.safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
     const { classId, components } = body;
 
     if (!classId || !Array.isArray(components)) {
@@ -107,17 +118,18 @@ export async function PUT(req: Request) {
       });
       await invalidateSchoolFeeReadCaches(schoolId);
       return NextResponse.json({ structure });
-    } catch (applyErr: any) {
-      const msg = String(applyErr?.message || "");
+    } catch (applyErr: unknown) {
+      const msg = String(getErrorMessage(applyErr) || "");
       if (msg.includes("Each component must have name")) {
         return NextResponse.json({ message: msg }, { status: 400 });
       }
       throw applyErr;
     }
-  } catch (error: any) {
-    console.error("Fee structure PUT error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Fee structure PUT error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }
@@ -139,6 +151,7 @@ export async function DELETE(req: Request) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { searchParams } = new URL(req.url);
     const classId = searchParams.get("classId");
@@ -202,10 +215,11 @@ export async function DELETE(req: Request) {
 
     await invalidateSchoolFeeReadCaches(schoolId);
     return NextResponse.json({ success: true });
-  } catch (error: any) {
-    console.error("Fee structure DELETE error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Fee structure DELETE error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

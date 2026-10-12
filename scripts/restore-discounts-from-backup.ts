@@ -10,7 +10,7 @@
 import prisma from "../lib/db";
 import * as XLSX from "xlsx";
 import { roundRupee } from "../lib/formatRupee";
-import { invalidateStudentFeeReadCaches } from "../lib/studentFeeReadCache";
+import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
 
 const BACKUP_PATH =
   "/Users/somasankar/Desktop/fees-backup-lotus-english-medium-high-school-2026-08-21 (2).xlsx";

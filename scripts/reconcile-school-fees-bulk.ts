@@ -7,7 +7,7 @@
  *   npx tsx scripts/reconcile-school-fees-bulk.ts --apply
  */
 import prisma from "../lib/db";
-import { repairOrphanExtraFeeAllocations } from "../lib/repairOrphanExtraFeeAllocations";
+import { repairOrphanExtraFeeAllocations } from "@/lib/fees/repairOrphanExtraFeeAllocations";
 
 async function main() {
   const apply = process.argv.includes("--apply");

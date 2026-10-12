@@ -1,9 +1,19 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInOptionalTenantScope } from "@/lib/db/tenantContext";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 const VALID_LEAVE_TYPES = ["CASUAL", "SICK", "PAID", "UNPAID"] as const;
+
+const updateLeaveBodySchema = z.object({
+  leaveType: z.string().optional(),
+  reason: z.string().optional(),
+  fromDate: z.string().optional(),
+  toDate: z.string().optional(),
+});
 
 type Params = Promise<{ id: string }>;
 
@@ -11,6 +21,7 @@ type Params = Promise<{ id: string }>;
 export async function PUT(req: Request, { params }: { params: Params }) {
   try {
     const session = await getServerSession(authOptions);
+    return await runInOptionalTenantScope(session?.user?.schoolId, async () => {
     if (!session?.user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -34,14 +45,12 @@ export async function PUT(req: Request, { params }: { params: Params }) {
       return NextResponse.json({ error: "Only pending leave can be updated" }, { status: 409 });
     }
 
-    let body: { leaveType?: string; reason?: string; fromDate?: string; toDate?: string };
-    try {
-      body = await req.json();
-    } catch {
+    const rawBody = await req.json().catch(() => null);
+    const parsedBody = updateLeaveBodySchema.safeParse(rawBody);
+    if (!parsedBody.success) {
       return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     }
-
-    const { leaveType, reason, fromDate, toDate } = body;
+    const { leaveType, reason, fromDate, toDate } = parsedBody.data;
     if (!fromDate || !toDate) {
       return NextResponse.json(
         { error: "Missing required fields: fromDate, toDate" },
@@ -49,7 +58,7 @@ export async function PUT(req: Request, { params }: { params: Params }) {
       );
     }
 
-    const normalizedType = leaveType && VALID_LEAVE_TYPES.includes(leaveType as any)
+    const normalizedType = leaveType && (VALID_LEAVE_TYPES as readonly string[]).includes(leaveType)
       ? (leaveType as (typeof VALID_LEAVE_TYPES)[number])
       : undefined;
     const reasonStr = typeof reason === "string" ? reason.trim() : undefined;
@@ -91,9 +100,10 @@ export async function PUT(req: Request, { params }: { params: Params }) {
     });
 
     return NextResponse.json(leave, { status: 200 });
+    });
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : "Internal Server Error";
-    console.error("Leaves update error:", e);
+    const message = toClientErrorMessage(e, "Internal Server Error");
+    logger.error("Leaves update error:", e);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -102,6 +112,7 @@ export async function PUT(req: Request, { params }: { params: Params }) {
 export async function DELETE(req: Request, { params }: { params: Params }) {
   try {
     const session = await getServerSession(authOptions);
+    return await runInOptionalTenantScope(session?.user?.schoolId, async () => {
     if (!session?.user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -130,9 +141,10 @@ export async function DELETE(req: Request, { params }: { params: Params }) {
     });
 
     return NextResponse.json({ success: true }, { status: 200 });
+    });
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : "Internal Server Error";
-    console.error("Leaves delete error:", e);
+    const message = toClientErrorMessage(e, "Internal Server Error");
+    logger.error("Leaves delete error:", e);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

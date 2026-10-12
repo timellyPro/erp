@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import { buildParentFeesMine } from "@/lib/buildParentFeesMine";
+import { authOptions } from "@/lib/auth/authOptions";
+import { buildParentFeesMine } from "@/lib/parent/buildParentFeesMine";
 import {
   parentPortalSwrRead,
   parentPortalSwrWrite,
   PARENT_LIST_TTL,
-} from "@/lib/parentPortalSwr";
+} from "@/lib/parent/parentPortalSwr";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function GET(request: Request) {
   const session = await getServerSession(authOptions);
@@ -64,9 +66,9 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ fee }, { status: 200 });
   } catch (error: unknown) {
-    console.error("Fetch student fee error:", error);
+    logger.error("Fetch student fee error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

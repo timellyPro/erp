@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function PATCH(req: Request) {
   try {
@@ -19,7 +22,15 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ message: "School id missing in URL" }, { status: 400 });
     }
 
-    const body = await req.json().catch(() => ({}));
+    const subscriptionBodySchema = z.object({
+      name: z.string().optional(),
+      billingMode: z.string().optional(),
+      parentSubscriptionAmount: z.union([z.number(), z.null()]).optional(),
+      parentSubscriptionTrialDays: z.number().optional(),
+      isActive: z.boolean().optional(),
+    });
+    const parsedBody = subscriptionBodySchema.safeParse(await req.json().catch(() => ({})));
+    const body = parsedBody.success ? parsedBody.data : {};
 
     const data: {
       name?: string;
@@ -67,9 +78,9 @@ export async function PATCH(req: Request) {
 
     return NextResponse.json({ school: updated }, { status: 200 });
   } catch (e: unknown) {
-    console.error("Superadmin update school subscription:", e);
+    logger.error("Superadmin update school subscription:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

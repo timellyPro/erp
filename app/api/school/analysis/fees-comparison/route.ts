@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import { buildFeesComparisonReport } from "@/lib/buildFeesComparisonReport";
-import { resolveSchoolAdminSchoolId } from "@/lib/resolveSchoolAdminSchoolId";
+import { authOptions } from "@/lib/auth/authOptions";
+import { buildFeesComparisonReport } from "@/lib/fees/buildFeesComparisonReport";
+import { resolveSchoolAdminSchoolId } from "@/lib/school/resolveSchoolAdminSchoolId";
 import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
-} from "@/lib/schoolDashboardServerCache";
+} from "@/lib/school/schoolDashboardServerCache";
+import { runInTenantScope } from "@/lib/db/tenantContext";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 export const dynamic = "force-dynamic";
 
@@ -46,19 +49,21 @@ export async function GET(req: Request) {
       return NextResponse.json(cached, { status: 200 });
     }
 
-    const report = await buildFeesComparisonReport(ctx.schoolId, {
-      rangeAFrom,
-      rangeATo,
-      rangeBFrom,
-      rangeBTo,
-    });
+    const report = await runInTenantScope(ctx.schoolId, () =>
+      buildFeesComparisonReport(ctx.schoolId, {
+        rangeAFrom,
+        rangeATo,
+        rangeBFrom,
+        rangeBTo,
+      })
+    );
 
     setSchoolDashboardServerCached(cacheKey, report, 60_000);
     return NextResponse.json(report);
   } catch (error) {
-    console.error("Fees comparison API error:", error);
+    logger.error("Fees comparison API error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

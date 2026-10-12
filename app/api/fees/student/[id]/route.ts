@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInOptionalTenantScope, runInTenantScope } from "@/lib/db/tenantContext";
+import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 type RouteParams =
   | { params: { id: string } }
@@ -19,15 +22,21 @@ export async function GET(_req: Request, context: RouteParams) {
   }
 
   try {
-    const fee = await prisma.studentFee.findUnique({
+    // SUPERADMIN reads across tenants (owner connection); everyone else is RLS-scoped.
+    const scopeSchoolId =
+      session.user.role !== "SUPERADMIN" && typeof session.user.schoolId === "string" && session.user.schoolId.trim()
+        ? session.user.schoolId
+        : null;
+    const fee = await runInOptionalTenantScope(scopeSchoolId, () => prisma.studentFee.findUnique({
       where: { studentId: id },
       include: {
+        student: { select: { schoolId: true } },
         discountApprovals: {
           orderBy: { createdAt: "desc" },
           take: 10,
         },
       },
-    });
+    }));
 
     if (!fee) {
       return NextResponse.json(
@@ -36,11 +45,23 @@ export async function GET(_req: Request, context: RouteParams) {
       );
     }
 
+    const sessionSchoolId =
+      typeof session.user.schoolId === "string" && session.user.schoolId.trim()
+        ? session.user.schoolId
+        : null;
+    if (
+      session.user.role !== "SUPERADMIN" &&
+      sessionSchoolId &&
+      sessionSchoolId !== fee.student.schoolId
+    ) {
+      return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+    }
+
     return NextResponse.json({ fee });
-  } catch (error: any) {
-    console.error("Get fee by student error:", error);
+  } catch (error: unknown) {
+    logger.error("Get fee by student error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }
@@ -94,7 +115,11 @@ export async function PATCH(req: Request, context: RouteParams) {
       );
     }
 
-    const body = await req.json();
+    // The initial lookup above is deliberately cross-tenant (it discovers the student's school).
+    // Everything after the authorization check acts on that ONE school, RLS-scoped.
+    return await runInTenantScope(schoolId, async () => {
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
     const {
       totalFee,
       discountPercent,
@@ -245,10 +270,11 @@ export async function PATCH(req: Request, context: RouteParams) {
     await invalidateStudentFeeReadCaches({ studentId: id, schoolId: student?.schoolId ?? null });
 
     return NextResponse.json({ fee: updated });
-  } catch (error: any) {
-    console.error("Update student fee error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Update student fee error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

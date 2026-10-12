@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { logger } from "@/lib/logger";
 
 export async function GET() {
   try {
@@ -54,7 +55,7 @@ export async function GET() {
       })),
     });
   } catch (error: unknown) {
-    console.error("Superadmin chairmen list:", error);
+    logger.error("Superadmin chairmen list:", error);
     const err = error as { code?: string; message?: string };
     const message =
       err?.code === "P1001"

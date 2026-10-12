@@ -1,15 +1,15 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { assertCanManageAdmissions, getSessionSchoolId } from "../_utils";
 import * as XLSX from "xlsx";
-import { formatResidencyTypeForDisplay } from "@/lib/residencyDisplay";
+import { formatResidencyTypeForDisplay } from "@/lib/students/residencyDisplay";
 import {
   admissionListWhereSql,
   admissionRawIdsPage,
   studentApplicationHasWorkflowColumn,
-} from "@/lib/admissionsListQuery";
+} from "@/lib/admission/admissionsListQuery";
 
 function formatDate(value: Date | null | undefined) {
   if (!value) return "";
@@ -54,6 +54,7 @@ export async function GET(req: Request) {
     const schoolId = await getSessionSchoolId(session);
     if (!schoolId) return NextResponse.json({ message: "School not found in session" }, { status: 400 });
 
+    return await runInTenantScope(schoolId, async () => {
     const { searchParams } = new URL(req.url);
     const search = (searchParams.get("search") ?? "").trim();
     const gradeSought = (searchParams.get("gradeSought") ?? "").trim();
@@ -339,6 +340,7 @@ tbody tr:nth-child(odd){background:#fcfdff}
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="${filename}"`,
       },
+    });
     });
   } catch (e: unknown) {
     const err = e as { message?: string; statusCode?: number };

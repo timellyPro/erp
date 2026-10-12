@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { randomUUID } from "crypto";
+import { logger } from "@/lib/logger";
+import { schoolIdViaTeacherClass, schoolIdViaTeacherRelation, schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 import {
   globalHiddenSubjectNames,
   hideSubjectEverywhere,
@@ -10,7 +14,7 @@ import {
   removedSubjectsByExam,
   restoreSubjectOnExamType,
   rewriteHiddenOnRename,
-} from "@/lib/examSubjectHide";
+} from "@/lib/exams/examSubjectHide";
 
 const DEFAULT_EXAM_SUBJECTS = [
   "MATHEMATICS",
@@ -31,27 +35,14 @@ async function resolveSchoolId(session: {
 
   if (!schoolId) {
     if (session.user.role === "TEACHER") {
-      const teacherClass = await prisma.class.findFirst({
-        where: { teacherId: session.user.id },
-        select: { schoolId: true },
-      });
-      schoolId = teacherClass?.schoolId ?? null;
-
+      schoolId = await schoolIdViaTeacherClass(session.user.id);
       if (!schoolId) {
-        const teacherSchool = await prisma.school.findFirst({
-          where: { teachers: { some: { id: session.user.id } } },
-          select: { id: true },
-        });
-        schoolId = teacherSchool?.id ?? null;
+        schoolId = await schoolIdViaTeacherRelation(session.user.id);
       }
     }
 
     if (!schoolId) {
-      const school = await prisma.school.findFirst({
-        where: { admins: { some: { id: session.user.id } } },
-        select: { id: true },
-      });
-      schoolId = school?.id ?? null;
+      schoolId = await schoolIdViaAdminRelation(session.user.id);
     }
   }
 
@@ -137,6 +128,7 @@ export async function GET() {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
 
+    return await runInTenantScope(schoolId, async () => {
     // Sequential reads — PgBouncer pool is tiny; parallel queries cause P2024 under tab warm.
     // One retry: the pooler often drops the first connect after 10s, then the next succeeds.
     const readSubjects = async () => {
@@ -196,10 +188,11 @@ export async function GET() {
       },
       { status: 200 }
     );
+    });
   } catch (e: unknown) {
-    console.error("Exam subjects GET:", e);
+    logger.error("Exam subjects GET:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }
@@ -220,8 +213,10 @@ export async function POST(req: Request) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
-    const body = await req.json();
+    const parsedPostBody = z.object({ name: z.string().optional(), restoreExamType: z.string().optional() }).safeParse(await req.json().catch(() => null));
+    const body = parsedPostBody.success ? parsedPostBody.data : {};
     const name =
       typeof body.name === "string" ? body.name.trim().toUpperCase() : "";
 
@@ -287,10 +282,11 @@ export async function POST(req: Request) {
     }
 
     return NextResponse.json({ subject: { id, name, schoolId } }, { status: 201 });
+    });
   } catch (e: unknown) {
-    console.error("Exam subjects POST:", e);
+    logger.error("Exam subjects POST:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }
@@ -311,8 +307,12 @@ export async function PATCH(req: Request) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
-    const body = await req.json();
+    const parsedPatchBody = z
+      .object({ from: z.string().optional(), to: z.string().optional() })
+      .safeParse(await req.json().catch(() => null));
+    const body = parsedPatchBody.success ? parsedPatchBody.data : {};
     const from =
       typeof body.from === "string" ? body.from.trim().toUpperCase() : "";
     const to = typeof body.to === "string" ? body.to.trim().toUpperCase() : "";
@@ -402,10 +402,11 @@ export async function PATCH(req: Request) {
     `;
 
     return NextResponse.json({ subject: { name: to } }, { status: 200 });
+    });
   } catch (e: unknown) {
-    console.error("Exam subjects PATCH:", e);
+    logger.error("Exam subjects PATCH:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }
@@ -426,6 +427,7 @@ export async function DELETE(req: Request) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { searchParams } = new URL(req.url);
     const nameParam = searchParams.get("name");
@@ -488,10 +490,11 @@ export async function DELETE(req: Request) {
     );
 
     return NextResponse.json({ success: true }, { status: 200 });
+    });
   } catch (e: unknown) {
-    console.error("Exam subjects DELETE:", e);
+    logger.error("Exam subjects DELETE:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

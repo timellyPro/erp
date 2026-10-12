@@ -1,18 +1,20 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
-import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/fees/feePaymentStatuses";
+import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
 import {
   buildFeeDueReportPayload,
   filterFeeDueReportToHead,
   fillMissingClassFeeStructuresFromSiblings,
   type ExtraFeeLite,
   type StudentFeeDueInput,
-} from "@/lib/feeDueReportCompute";
-import { buildFeeDueReportWorkbook } from "@/lib/feeDueReportExcel";
-import { studentStatusFilter } from "@/lib/studentStatus";
+} from "@/lib/fees/feeDueReportCompute";
+import { buildFeeDueReportWorkbook } from "@/lib/fees/feeDueReportExcel";
+import { studentStatusFilter } from "@/lib/students/studentStatus";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -32,6 +34,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: "School not found in session" }, { status: 400 });
     }
 
+    return await runInTenantScope(schoolId, async () => {
     const { searchParams } = new URL(req.url);
     const classIdFilter = searchParams.get("classId")?.trim() || undefined;
     const headFilter = searchParams.get("head")?.trim() || "";
@@ -229,9 +232,10 @@ export async function GET(req: Request) {
         "Cache-Control": "no-store",
       },
     });
+    });
   } catch (error: unknown) {
-    console.error("Fee due report export error:", error);
-    const message = error instanceof Error ? error.message : "Internal server error";
+    logger.error("Fee due report export error:", error);
+    const message = toClientErrorMessage(error, "Internal server error");
     return NextResponse.json({ message }, { status: 500 });
   }
 }

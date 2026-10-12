@@ -8,7 +8,7 @@
 
 const DOB_TIME_ZONE = "Asia/Kolkata";
 
-function pad2(n: number): string {
+function _pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
 

@@ -5,7 +5,7 @@
  * Usage: npx tsx scripts/reconcile-discount-fees.ts --apply
  */
 import prisma from "../lib/db";
-import { reconcileStudentFeeIntegrity } from "../lib/reconcileStudentFeeIntegrity";
+import { reconcileStudentFeeIntegrity } from "@/lib/fees/reconcileStudentFeeIntegrity";
 
 async function main() {
   const apply = process.argv.includes("--apply");

@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function GET() {
   try {
@@ -28,51 +31,55 @@ export async function GET() {
     }
     if (!schoolId) return NextResponse.json({ message: "School not found" }, { status: 400 });
 
-    const leaves = await prisma.studentLeaveRequest.findMany({
-      where: {
-        schoolId,
-        status: "PENDING", // only pending
-      },
-      select: {
-        id: true,
-        leaveType: true,
-        reason: true,
-        fromDate: true,
-        toDate: true,
-        status: true,
-        remarks: true,
-        createdAt: true,
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go through
+    // the app_tenant connection, restricted by RLS, not just this route's own
+    // `where: { schoolId }` filter.
+    const leaves = await withTenantScopedClient(schoolId, (tx) =>
+      tx.studentLeaveRequest.findMany({
+        where: {
+          schoolId,
+          status: "PENDING", // only pending
+        },
+        select: {
+          id: true,
+          leaveType: true,
+          reason: true,
+          fromDate: true,
+          toDate: true,
+          status: true,
+          remarks: true,
+          createdAt: true,
 
-
-        student: {
-          select: {
-            id: true,
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                photoUrl: true, // needed for avatar
+          student: {
+            select: {
+              id: true,
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                  photoUrl: true, // needed for avatar
+                },
               },
-            },
-            class: {
-              select: {
-                id: true,
-                name: true,
-                section: true,
+              class: {
+                select: {
+                  id: true,
+                  name: true,
+                  section: true,
+                },
               },
             },
           },
         },
-      },
-      orderBy: { createdAt: "desc" },
-    });
+        orderBy: { createdAt: "desc" },
+      })
+    );
 
     return NextResponse.json(leaves, { status: 200 });
   } catch (e: unknown) {
-    console.error("Student leaves pending:", e);
+    logger.error("Student leaves pending:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { assertTeacherCanEnterMarks } from "@/lib/teacherMarksScope";
-import { parseMarkComponents, sumComponents } from "@/lib/markComponents";
-import { loadConfiguredMarkLimits, markLimitError } from "@/lib/examMarkLimits";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInOptionalTenantScope } from "@/lib/db/tenantContext";
+import { assertTeacherCanEnterMarks } from "@/lib/teacher/teacherMarksScope";
+import { parseMarkComponents, sumComponents } from "@/lib/exams/markComponents";
+import { loadConfiguredMarkLimits, markLimitError } from "@/lib/exams/examMarkLimits";
 import { randomUUID } from "crypto";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 function calculateGrade(marks: number, totalMarks: number): string {
   const percentage = (marks / totalMarks) * 100;
@@ -25,6 +28,7 @@ export async function PUT(
 ) {
   try {
     const session = await getServerSession(authOptions);
+    return await runInOptionalTenantScope(session?.user?.schoolId, async () => {
 
     if (!session) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
@@ -32,7 +36,11 @@ export async function PUT(
 
     const { id } = await params;
     const markId = id;
-    const body = await req.json();
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
     const {
       subject,
       suggestions,
@@ -45,7 +53,7 @@ export async function PUT(
       components = parseMarkComponents(body.components);
     } catch (err) {
       return NextResponse.json(
-        { message: err instanceof Error ? err.message : "Invalid components" },
+        { message: toClientErrorMessage(err, "Invalid components") },
         { status: 400 }
       );
     }
@@ -189,12 +197,13 @@ export async function PUT(
       { message: "Marks updated successfully", mark: updatedMark },
       { status: 200 }
     );
+    });
   } catch (error: unknown) {
-    console.error("Update marks error:", error);
+    logger.error("Update marks error:", error);
     return NextResponse.json(
       {
         message:
-          error instanceof Error ? error.message : "Internal server error",
+          toClientErrorMessage(error, "Internal server error"),
       },
       { status: 500 }
     );
@@ -207,6 +216,7 @@ export async function DELETE(
 ) {
   try {
     const session = await getServerSession(authOptions);
+    return await runInOptionalTenantScope(session?.user?.schoolId, async () => {
 
     if (!session) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
@@ -241,12 +251,13 @@ export async function DELETE(
       { message: "Mark deleted successfully" },
       { status: 200 }
     );
+    });
   } catch (error: unknown) {
-    console.error("Delete marks error:", error);
+    logger.error("Delete marks error:", error);
     return NextResponse.json(
       {
         message:
-          error instanceof Error ? error.message : "Internal server error",
+          toClientErrorMessage(error, "Internal server error"),
       },
       { status: 500 }
     );

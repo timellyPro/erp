@@ -10,18 +10,21 @@ jest.mock("next-auth", () => ({
   getServerSession: (...args: unknown[]) => mockGetServerSession(...args),
 }));
 
-jest.mock("@/lib/authOptions", () => ({}));
+jest.mock("@/lib/auth/authOptions", () => ({}));
 
-jest.mock("@/lib/db", () => ({
-  __esModule: true,
-  default: {
-    school: {
-      findUnique: (...args: unknown[]) => mockFindUnique(...args),
-    },
-  },
+const mockWithTenantScopedClient = jest.fn(
+  async (_schoolId: string, fn: (tx: unknown) => unknown) =>
+    fn({
+      school: { findUnique: (...args: unknown[]) => mockFindUnique(...args) },
+    })
+);
+
+jest.mock("@/lib/db/tenantClient", () => ({
+  withTenantScopedClient: (...args: Parameters<typeof mockWithTenantScopedClient>) =>
+    mockWithTenantScopedClient(...args),
 }));
 
-jest.mock("@/lib/tenantCache", () => ({
+jest.mock("@/lib/cache/tenantCache", () => ({
   swrGet: jest.fn().mockResolvedValue(null),
   swrSet: jest.fn().mockResolvedValue(undefined),
 }));

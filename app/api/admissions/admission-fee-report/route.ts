@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import { admissionFeeTotalsByChannel } from "@/lib/admissionFeeCollectionChannel";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { admissionFeeTotalsByChannel } from "@/lib/fees/admissionFeeCollectionChannel";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
 import { assertCanManageAdmissions, getSessionSchoolId } from "../_utils";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 function parseYmd(value: string | null): Date | null {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) return null;
@@ -42,28 +44,33 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: "Invalid date range: from is after to" }, { status: 400 });
     }
 
-    const apps = await prisma.studentApplication.findMany({
-      where: {
-        schoolId,
-        admissionFeePaid: true,
-        admissionFeePaidAt: { not: null, gte: from, lte: to },
-        admissionFee: { gt: 0 },
-      },
-      select: {
-        id: true,
-        applicationNo: true,
-        firstName: true,
-        middleName: true,
-        lastName: true,
-        admissionFee: true,
-        admissionFeePaidAt: true,
-        admissionFeePaymentMode: true,
-        admissionFeePaymentMethod: true,
-        class: { select: { name: true, section: true } },
-        gradeSought: true,
-      },
-      orderBy: { admissionFeePaidAt: "desc" },
-    });
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): read goes
+    // through the app_tenant connection, restricted by RLS, not just the
+    // `where: { schoolId }` filter above.
+    const apps = await withTenantScopedClient(schoolId, (tx) =>
+      tx.studentApplication.findMany({
+        where: {
+          schoolId,
+          admissionFeePaid: true,
+          admissionFeePaidAt: { not: null, gte: from, lte: to },
+          admissionFee: { gt: 0 },
+        },
+        select: {
+          id: true,
+          applicationNo: true,
+          firstName: true,
+          middleName: true,
+          lastName: true,
+          admissionFee: true,
+          admissionFeePaidAt: true,
+          admissionFeePaymentMode: true,
+          admissionFeePaymentMethod: true,
+          class: { select: { name: true, section: true } },
+          gradeSought: true,
+        },
+        orderBy: { admissionFeePaidAt: "desc" },
+      })
+    );
 
     type Row = {
       id: string;
@@ -153,9 +160,9 @@ export async function GET(req: Request) {
     if (status === 403) {
       return NextResponse.json({ message: "You do not have permission to manage admissions" }, { status: 403 });
     }
-    console.error("Admission fee report error:", error);
+    logger.error("Admission fee report error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
 import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { logger } from "@/lib/logger";
 
 export async function POST(req: Request) {
   try {
@@ -15,7 +17,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
-    const body = await req.json().catch(() => ({}));
+    const rawBody = await req.json().catch(() => ({}));
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(rawBody);
+    const body = parsedBody.success ? parsedBody.data : {};
     const schoolId = typeof body.schoolId === "string" ? body.schoolId.trim() : "";
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
@@ -94,7 +98,7 @@ export async function POST(req: Request) {
       { status: 201 }
     );
   } catch (error: unknown) {
-    console.error("Superadmin create chairman:", error);
+    logger.error("Superadmin create chairman:", error);
     const err = error as { code?: string; message?: string };
     if (err?.code === "P1001") {
       return NextResponse.json(

@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInOptionalTenantScope } from "@/lib/db/tenantContext";
 import { NotificationType } from "@prisma/client";
-import { apiMemGetSwr, apiMemSet } from "@/lib/apiMemoryCache";
+import { apiMemGetSwr, apiMemSet } from "@/lib/cache/apiMemoryCache";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function GET(req: Request) {
   try {
@@ -55,9 +58,9 @@ export async function GET(req: Request) {
       headers: { "Cache-Control": "private, no-store, must-revalidate" },
     });
   } catch (e: unknown) {
-    console.error("Notifications GET:", e);
+    logger.error("Notifications GET:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }
@@ -67,11 +70,19 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
+    return await runInOptionalTenantScope(session?.user?.schoolId, async () => {
     if (!session) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const body = await req.json();
+    const createNotificationBodySchema = z.object({
+      userId: z.string().optional(),
+      title: z.string().optional(),
+      message: z.string().optional(),
+      type: z.string().optional(),
+    });
+    const parsedBody = createNotificationBodySchema.safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
     const userId = typeof body.userId === "string" ? body.userId : session.user.id;
     const title = typeof body.title === "string" ? body.title.trim() : "";
     const message = typeof body.message === "string" ? body.message.trim() : "";
@@ -94,10 +105,11 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({ notification }, { status: 201 });
+    });
   } catch (e: unknown) {
-    console.error("Notifications POST:", e);
+    logger.error("Notifications POST:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

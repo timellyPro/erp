@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { logger } from "@/lib/logger";
+import { getErrorCode, getErrorMessage } from "@/lib/errors/errorInfo";
+import { rateLimit, rateLimitKey } from "@/lib/rateLimit";
 
 export async function POST(req: Request) {
   try {
@@ -11,7 +15,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const { eventId } = await req.json();
+    const registerLimit = await rateLimit(
+      rateLimitKey("event-register", session.user.id),
+      20,
+      10 * 60
+    );
+    if (!registerLimit.allowed) {
+      return NextResponse.json(
+        { message: `Too many requests. Please try again in ${Math.ceil(registerLimit.resetInSeconds / 60)} minute(s).` },
+        { status: 429 }
+      );
+    }
+
+    const parsedBody = z.object({ eventId: z.string().optional() }).safeParse(await req.json().catch(() => null));
+    const eventId = parsedBody.success ? parsedBody.data.eventId : undefined;
 
     if (!eventId) {
       return NextResponse.json(
@@ -36,6 +53,7 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     // Verify event exists and belongs to student's school
     const event = await prisma.event.findFirst({
@@ -138,10 +156,11 @@ export async function POST(req: Request) {
       },
       { status: 201 }
     );
-  } catch (error: any) {
-    console.error("Register event error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Register event error:", error);
 
-    if (error?.code === "P2002") {
+    if (getErrorCode(error) === "P2002") {
       return NextResponse.json(
         { message: "You are already registered for this event" },
         { status: 400 }
@@ -149,7 +168,7 @@ export async function POST(req: Request) {
     }
 
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

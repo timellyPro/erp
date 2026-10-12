@@ -1,37 +1,24 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { randomUUID } from "crypto";
+import { logger } from "@/lib/logger";
+import { schoolIdViaAdminRelation, schoolIdViaTeacherClass, schoolIdViaTeacherRelation } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 async function resolveSchoolId(session: {
   user: { id: string; schoolId?: string | null; role: string };
 }) {
   let schoolId = session.user.schoolId;
-  if (!schoolId) {
-    if (session.user.role === "TEACHER") {
-      const teacherClass = await prisma.class.findFirst({
-        where: { teacherId: session.user.id },
-        select: { schoolId: true },
-      });
-      schoolId = teacherClass?.schoolId ?? null;
-      if (!schoolId) {
-        const teacherSchool = await prisma.school.findFirst({
-          where: { teachers: { some: { id: session.user.id } } },
-          select: { id: true },
-        });
-        schoolId = teacherSchool?.id ?? null;
-      }
-    }
-    if (!schoolId) {
-      const school = await prisma.school.findFirst({
-        where: { admins: { some: { id: session.user.id } } },
-        select: { id: true },
-      });
-      schoolId = school?.id ?? null;
-    }
+  if (schoolId) return schoolId;
+  if (session.user.role === "TEACHER") {
+    schoolId =
+      (await schoolIdViaTeacherClass(session.user.id)) ??
+      (await schoolIdViaTeacherRelation(session.user.id));
   }
-  return schoolId;
+  return schoolId ?? (await schoolIdViaAdminRelation(session.user.id));
 }
 
 /** Replace subsections for an exam type. Empty array = single score (no subsections). */
@@ -49,8 +36,13 @@ export async function PUT(req: Request) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
-    const body = await req.json();
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
     const name =
       typeof body.name === "string" ? body.name.trim().toUpperCase() : "";
     if (!name) {
@@ -156,10 +148,11 @@ export async function PUT(req: Request) {
     });
 
     return NextResponse.json({ examType: updated }, { status: 200 });
+    });
   } catch (e: unknown) {
-    console.error("Exam type sections PUT:", e);
+    logger.error("Exam type sections PUT:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

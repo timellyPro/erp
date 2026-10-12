@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { logger } from "@/lib/logger";
+import { schoolIdViaStudentId, schoolIdViaTeacherClass } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 const DAY_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const WRITABLE_ROLES = new Set(["SCHOOLADMIN", "SUPERADMIN"]);
@@ -25,19 +30,11 @@ async function resolveSchoolId(session: { user: { id: string; role?: string | nu
   let schoolId = session.user.schoolId ?? null;
 
   if (!schoolId && session.user.studentId) {
-    const student = await prisma.student.findUnique({
-      where: { id: session.user.studentId },
-      select: { schoolId: true },
-    });
-    schoolId = student?.schoolId ?? null;
+    schoolId = await schoolIdViaStudentId(session.user.studentId);
   }
 
   if (!schoolId && session.user.role === "TEACHER") {
-    const teacherClass = await prisma.class.findFirst({
-      where: { teacherId: session.user.id },
-      select: { schoolId: true },
-    });
-    schoolId = teacherClass?.schoolId ?? null;
+    schoolId = await schoolIdViaTeacherClass(session.user.id);
   }
 
   if (!schoolId) {
@@ -61,13 +58,20 @@ function teacherCanWrite(session: { user: { role?: string | null; allowedFeature
   return (session.user.allowedFeatures ?? []).some((feature) => TIMETABLE_FEATURES.has(feature));
 }
 
+ 
+type ClassStudentLookupClient = {
+  student: { findFirst: (args: any) => Promise<{ classId: string | null } | null> };
+  class: { findFirst: (args: any) => Promise<{ id: string } | null> };
+};
+
 async function resolveRequestedClassId(
+  client: ClassStudentLookupClient,
   session: { user: { id: string; role?: string | null; studentId?: string | null } },
   schoolId: string,
   requestedClassId: string | null
 ) {
   if (session.user.studentId) {
-    const student = await prisma.student.findFirst({
+    const student = await client.student.findFirst({
       where: { id: session.user.studentId, schoolId },
       select: { classId: true },
     });
@@ -75,14 +79,14 @@ async function resolveRequestedClassId(
   }
 
   if (requestedClassId) {
-    const classRow = await prisma.class.findFirst({
+    const classRow = await client.class.findFirst({
       where: { id: requestedClassId, schoolId },
       select: { id: true },
     });
     return classRow?.id ?? null;
   }
 
-  const firstClass = await prisma.class.findFirst({
+  const firstClass = await client.class.findFirst({
     where: {
       schoolId,
       ...(session.user.role === "TEACHER" ? { OR: [{ teacherId: session.user.id }, { teacherId: null }] } : {}),
@@ -154,9 +158,34 @@ export async function GET(req: Request) {
 
     const searchParams = new URL(req.url).searchParams;
     const loadAll = searchParams.get("all") === "1";
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go
+    // through the app_tenant connection, restricted by RLS, not just the
+    // `where: { schoolId }` filters below.
     if (loadAll && session.user.role !== "STUDENT") {
-      const timetables = await prisma.timetable.findMany({
-        where: { schoolId },
+      const timetables = await withTenantScopedClient(schoolId, (tx) =>
+        tx.timetable.findMany({
+          where: { schoolId },
+          include: {
+            class: { select: { id: true, name: true, section: true } },
+            entries: {
+              include: { teacher: { select: { id: true, name: true, subject: true } } },
+              orderBy: [{ dayOfWeek: "asc" }, { slotOrder: "asc" }, { startTime: "asc" }],
+            },
+          },
+          orderBy: [{ updatedAt: "desc" }],
+        })
+      );
+
+      return NextResponse.json({ timetables }, { status: 200 });
+    }
+
+    const requestedClassId = searchParams.get("classId");
+    const { classId, timetable } = await withTenantScopedClient(schoolId, async (tx) => {
+      const resolvedClassId = await resolveRequestedClassId(tx, session, schoolId, requestedClassId);
+      if (!resolvedClassId) return { classId: null, timetable: null };
+
+      const tt = await tx.timetable.findFirst({
+        where: { schoolId, classId: resolvedClassId },
         include: {
           class: { select: { id: true, name: true, section: true } },
           entries: {
@@ -164,34 +193,15 @@ export async function GET(req: Request) {
             orderBy: [{ dayOfWeek: "asc" }, { slotOrder: "asc" }, { startTime: "asc" }],
           },
         },
-        orderBy: [{ updatedAt: "desc" }],
       });
-
-      return NextResponse.json({ timetables }, { status: 200 });
-    }
-
-    const requestedClassId = searchParams.get("classId");
-    const classId = await resolveRequestedClassId(session, schoolId, requestedClassId);
-    if (!classId) {
-      return NextResponse.json({ timetable: null, classId: null }, { status: 200 });
-    }
-
-    const timetable = await prisma.timetable.findFirst({
-      where: { schoolId, classId },
-      include: {
-        class: { select: { id: true, name: true, section: true } },
-        entries: {
-          include: { teacher: { select: { id: true, name: true, subject: true } } },
-          orderBy: [{ dayOfWeek: "asc" }, { slotOrder: "asc" }, { startTime: "asc" }],
-        },
-      },
+      return { classId: resolvedClassId, timetable: tt };
     });
 
     return NextResponse.json({ timetable, classId }, { status: 200 });
   } catch (error: unknown) {
-    console.error("Get timetable error:", error);
+    logger.error("Get timetable error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }
@@ -212,8 +222,13 @@ export async function POST(req: Request) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
-    const body = await req.json();
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
     const classId = cleanText(body.classId, 120);
     if (!classId) {
       return NextResponse.json({ message: "Class is required" }, { status: 400 });
@@ -278,10 +293,11 @@ export async function POST(req: Request) {
     };
 
     return NextResponse.json({ message: "Timetable saved successfully", timetable }, { status: 200 });
+    });
   } catch (error: unknown) {
-    console.error("Save timetable error:", error);
+    logger.error("Save timetable error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

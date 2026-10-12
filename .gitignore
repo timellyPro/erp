@@ -28,10 +28,14 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# local database backups (contains real student/payment data)
+/backups
 .pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -43,3 +47,5 @@ next-env.d.ts
 /app/generated/prisma
 
 .early.coverage
+# python
+__pycache__/

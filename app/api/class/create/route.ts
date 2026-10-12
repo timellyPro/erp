@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { purgeSchoolDashboardServerCacheMatching } from "@/lib/schoolDashboardServerCache";
-import { requireSchoolId } from "@/lib/tenant";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { purgeSchoolDashboardServerCacheMatching } from "@/lib/school/schoolDashboardServerCache";
+import { requireSchoolId } from "@/lib/auth/tenant";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 const STAFF_ROLES = new Set(["SCHOOLADMIN", "SUPERADMIN", "TEACHER"]);
 
@@ -25,7 +28,17 @@ export async function POST(req: Request) {
     }
     const schoolId = ctx.schoolId;
 
-    const { name, section, teacherId } = await req.json();
+    return await runInTenantScope(schoolId, async (schoolId) => {
+    const createClassBodySchema = z.object({
+      name: z.string().optional(),
+      section: z.string().optional().nullable(),
+      teacherId: z.string().optional().nullable(),
+    });
+    const parsedBody = createClassBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Class name is required" }, { status: 400 });
+    }
+    const { name, section, teacherId } = parsedBody.data;
 
     if (!name) {
       return NextResponse.json(
@@ -77,14 +90,13 @@ export async function POST(req: Request) {
       { message: "Class created successfully", class: classData },
       { status: 201 }
     );
-  } catch (error: any) {
-    console.error("Class creation error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Class creation error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }
 }
-
-
 

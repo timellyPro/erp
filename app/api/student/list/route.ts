@@ -1,17 +1,19 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { requireSchoolId } from "@/lib/tenant";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { requireSchoolId } from "@/lib/auth/tenant";
 import { formatDobYmd } from "@/lib/dobCalendar";
-import { withRequestTiming } from "@/lib/requestTiming";
-import { tenantCacheKey, swrGet, swrSet } from "@/lib/tenantCache";
+import { withRequestTiming } from "@/lib/cache/requestTiming";
+import { tenantCacheKey, swrGet, swrSet } from "@/lib/cache/tenantCache";
 import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
-} from "@/lib/schoolDashboardServerCache";
-import { activeStudentWhere, studentStatusFilter } from "@/lib/studentStatus";
-import { resolveStudentDisplayClass } from "@/lib/resolveStudentDisplayClass";
+} from "@/lib/school/schoolDashboardServerCache";
+import { activeStudentWhere, studentStatusFilter } from "@/lib/students/studentStatus";
+import { resolveStudentDisplayClass } from "@/lib/students/resolveStudentDisplayClass";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 /** Admission / roll tokens usually include digits; pure letter queries are treated as names. */
 function studentSearchQueryLooksLikeAdmissionOrRoll(q: string): boolean {
@@ -40,6 +42,7 @@ export async function GET(req: Request) {
     if (!ctx.ok) return NextResponse.json({ message: ctx.message }, { status: ctx.status });
     const schoolId = ctx.schoolId;
 
+    return await runInTenantScope(schoolId, async () => {
     if (session.user.schoolIsActive === false) {
       return NextResponse.json(
         { message: "School is paused" },
@@ -282,10 +285,11 @@ export async function GET(req: Request) {
         return NextResponse.json(payload, { status: 200 });
       }
     );
+    });
   } catch (error: unknown) {
-    console.error("List students error:", error);
+    logger.error("List students error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

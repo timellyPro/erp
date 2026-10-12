@@ -1,13 +1,16 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import ownerPrisma from "@/lib/db";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import bcrypt from "bcryptjs";
 import { Role } from "@prisma/client";
-import * as XLSX from "xlsx";
-import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
-import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
-import { canonicalizeResidencyType } from "@/lib/residencyDisplay";
+import { readFirstSheetRows, excelSerialToYmd } from "@/lib/excel/readWorkbookRows";
+import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/school/schoolEmail";
+import { upsertStudentFeeFromStructure } from "@/lib/fees/studentTuitionFromStructure";
+import { canonicalizeResidencyType } from "@/lib/students/residencyDisplay";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 function toStr(value: unknown) {
   if (value === null || value === undefined) return "";
@@ -56,7 +59,7 @@ function parseDob(rawDob: unknown): Date {
   }
 
   if (typeof rawDob === "number") {
-    const d = XLSX.SSF.parse_date_code(rawDob);
+    const d = excelSerialToYmd(rawDob);
     const parsed = parseDobToDate(`${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`);
     if (!parsed) throw new Error("Invalid date of birth");
     return parsed;
@@ -172,22 +175,20 @@ export async function POST(req: Request) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const workbook = XLSX.read(buffer, { type: "buffer" });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows: any[] = XLSX.utils.sheet_to_json(sheet);
+    const rows = await readFirstSheetRows(buffer);
 
     if (!rows.length) {
       return NextResponse.json({ message: "Excel empty" }, { status: 400 });
     }
 
-    const created: any[] = [];
-    const failed: any[] = [];
+    const created: Array<{ row: number; name: string }> = [];
+    const failed: Array<{ row: number; error: string }> = [];
 
     // Preload classes once so we can map Class + Section -> classId
-    const classes = await prisma.class.findMany({
+    const classes = await runInTenantScope(schoolId, () => prisma.class.findMany({
       where: { schoolId },
       select: { id: true, name: true, section: true },
-    });
+    }));
 
     const [school, settings] = await Promise.all([
       prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } }),
@@ -227,7 +228,7 @@ export async function POST(req: Request) {
         );
         const rawDob = row.dob ?? row.dateOfBirth ?? row["Date of Birth"];
 
-        console.log("[student bulk upload] Parsed row", {
+        logger.info("[student bulk upload] Parsed row", {
           row: rowNumber,
           name,
           fatherName,
@@ -260,7 +261,9 @@ export async function POST(req: Request) {
         const apaarId = extractApaarId(row) || null;
         const normalizedName = normalizeStudentName(name);
 
-        const existingStudent = await prisma.student.findFirst({
+        // Deliberately NOT tenant-scoped: Aadhaar must be unique across ALL schools, and RLS would
+        // hide other schools' students and silently disable this check.
+        const existingStudent = await ownerPrisma.student.findFirst({
           where: { aadhaarNo },
           select: { id: true, userId: true, schoolId: true },
         });
@@ -270,10 +273,10 @@ export async function POST(req: Request) {
         }
 
         if (timellyId) {
-          const existingByRoll = await prisma.student.findFirst({
+          const existingByRoll = await runInTenantScope(schoolId, () => prisma.student.findFirst({
             where: { schoolId, rollNo: timellyId },
             select: { id: true, user: { select: { name: true } } },
-          });
+          }));
           if (existingByRoll && existingByRoll.id !== existingStudent?.id) {
             const existingName = normalizeStudentName(existingByRoll.user?.name ?? "");
             if (existingName && existingName === normalizedName) {
@@ -313,7 +316,7 @@ export async function POST(req: Request) {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Each student is created in its own short transaction
-        await prisma.$transaction(
+        await runInTenantScope(schoolId, () => prisma.$transaction(
           async (tx) => {
             const nameLocalPart = emailLocalPartFromFullName(name);
             // Student login email is always name@schoolDomain — CSV/row "email" is parent contact only, not User.email.
@@ -414,7 +417,7 @@ export async function POST(req: Request) {
 
             const rowTimellyId = timellyId;
             let nextNum = 0;
-            let updatedSettings: any = null;
+            let updatedSettings: { admissionPrefix: string; rollNoPrefix: string; admissionCounter: number } | null = null;
             let admissionNumber = "";
 
             if (rowTimellyId) {
@@ -559,24 +562,24 @@ export async function POST(req: Request) {
             maxWait: 10000,
             timeout: 120000,
           }
-        );
+        ));
 
-        console.log("[student bulk upload] Created student successfully", {
+        logger.info("[student bulk upload] Created student successfully", {
           row: rowNumber,
           name,
         });
 
         created.push({ row: rowNumber, name });
-      } catch (err: any) {
-        console.error("[student bulk upload] Failed row", {
+      } catch (err: unknown) {
+        logger.error("[student bulk upload] Failed row", {
           row: rowNumber,
-          error: err?.message || "Unknown error while creating student",
+          error: getErrorMessage(err) || "Unknown error while creating student",
           rawRow: row,
         });
 
         failed.push({
           row: rowNumber,
-          error: err?.message || "Unknown error while creating student",
+          error: getErrorMessage(err) || "Unknown error while creating student",
         });
       }
     }
@@ -589,10 +592,10 @@ export async function POST(req: Request) {
       failed,
     });
 
-  } catch (err: any) {
-    console.error("Bulk upload error", err);
+  } catch (err: unknown) {
+    logger.error("Bulk upload error", err);
     return NextResponse.json(
-      { message: err?.message || "Internal server error" },
+      { message: getErrorMessage(err) || "Internal server error" },
       { status: 500 }
     );
   }

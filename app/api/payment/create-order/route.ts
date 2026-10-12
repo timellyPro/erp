@@ -1,17 +1,21 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/feePaymentStatuses";
-import { structureMultiplierAfterDiscount } from "@/lib/studentTuitionFromStructure";
+import { rateLimit, rateLimitKey } from "@/lib/rateLimit";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/fees/feePaymentStatuses";
+import { structureMultiplierAfterDiscount } from "@/lib/fees/studentTuitionFromStructure";
 import type { Prisma } from "@prisma/client";
-import { rollupOrphanExtraFeeAllocations } from "@/lib/rollupOrphanExtraFeeAllocations";
+import { rollupOrphanExtraFeeAllocations } from "@/lib/fees/rollupOrphanExtraFeeAllocations";
 import {
   conversionDueCredit,
   includeExtraFeeOnStudentBill,
   residencyConversionStudentIds,
-} from "@/lib/residencyConversion";
-import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/studentRte";
+} from "@/lib/fees/residencyConversion";
+import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/students/studentRte";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 const hyperpgBaseUrl = process.env.HYPERPG_BASE_URL || "https://sandbox.hyperpg.in";
 const globalHyperpgMerchantId = process.env.HYPERPG_MERCHANT_ID;
@@ -19,6 +23,18 @@ const globalHyperpgApiKey = process.env.HYPERPG_API_KEY;
 const hyperpgClientId = process.env.HYPERPG_CLIENT_ID || "test";
 // JusPay/HyperPG Session API: Basic Base64(apiKey + ":") + mandatory x-merchantid header
 const hyperpgAuthStyle = process.env.HYPERPG_AUTH_STYLE || "api_key";
+
+const feeSelectionHeadSchema = z.union([
+  z.object({ headType: z.literal("BASE_COMPONENT"), componentIndex: z.number() }),
+  z.object({ headType: z.literal("EXTRA_FEE"), extraFeeId: z.string() }),
+]);
+
+const createOrderBodySchema = z.object({
+  amount: z.union([z.number(), z.string()]),
+  return_path: z.string().optional(),
+  event_registration_id: z.string().optional().nullable(),
+  fee_selection: z.array(feeSelectionHeadSchema).optional(),
+});
 
 /** HyperPG requires order_id: alphanumeric, max 20 chars */
 function generateOrderId(): string {
@@ -42,12 +58,31 @@ export async function POST(req: Request) {
   // Guarded above: `studentId` is required for students.
   const studentAllocId = session.user.studentId as string;
 
+  // Repeated order creation can be used for gateway abuse (e.g. testing stolen
+  // cards); 20 orders per student per 10 minutes is well above legitimate use.
+  const orderLimit = await rateLimit(
+    rateLimitKey("payment-create-order", studentAllocId),
+    20,
+    10 * 60
+  );
+  if (!orderLimit.allowed) {
+    return NextResponse.json(
+      { error: `Too many payment attempts. Please try again in ${Math.ceil(orderLimit.resetInSeconds / 60)} minute(s).` },
+      { status: 429 }
+    );
+  }
+
   try {
-    const body = await req.json();
+    const rawBody = await req.json().catch(() => null);
+    const parsedBody = createOrderBodySchema.safeParse(rawBody);
+    if (!parsedBody.success) {
+      return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
     const rawAmount = body.amount;
-    const returnPath = (body.return_path as string) || "/payments";
-    const eventRegistrationId = typeof body.event_registration_id === "string" && body.event_registration_id ? body.event_registration_id : null;
-    const feeSelection = Array.isArray(body.fee_selection) ? body.fee_selection : undefined;
+    const returnPath = body.return_path || "/payments";
+    const eventRegistrationId = body.event_registration_id || null;
+    const feeSelection = body.fee_selection;
 
     const amountNumber =
       typeof rawAmount === "string" ? parseFloat(rawAmount) : rawAmount;
@@ -128,8 +163,9 @@ export async function POST(req: Request) {
 
       const normalizedSelectedHeads: SelectedHead[] = Array.isArray(feeSelection)
         ? feeSelection
-            .map((h: any): SelectedHead | null => {
-              if (!h || typeof h !== "object") return null;
+            .map((raw: unknown): SelectedHead | null => {
+              if (!raw || typeof raw !== "object") return null;
+              const h = raw as Record<string, unknown>;
               if (h.headType === "BASE_COMPONENT" && typeof h.componentIndex === "number") {
                 return { headType: "BASE_COMPONENT", componentIndex: h.componentIndex };
               }
@@ -462,16 +498,16 @@ export async function POST(req: Request) {
 
     const errText = await res.text();
     if (!res.ok) {
-      console.error("HyperPG session error:", res.status, errText);
-      console.error("HyperPG request URL:", hyperpgBaseUrl + "/session");
-      console.error("HyperPG auth style:", hyperpgAuthStyle, "Authorization length:", headers.Authorization?.length ?? 0);
+      logger.error("HyperPG session error:", res.status, errText);
+      logger.error("HyperPG request URL:", hyperpgBaseUrl + "/session");
+      logger.error("HyperPG auth style:", hyperpgAuthStyle, "Authorization length:", headers.Authorization?.length ?? 0);
       let details = errText.slice(0, 500);
       try {
         const j = JSON.parse(errText) as Record<string, unknown>;
         if (j && typeof j.error_message === "string") details = j.error_message;
         else if (j && typeof j.error_code === "string") details = j.error_code;
         else if (j && typeof j.message === "string") details = j.message;
-      } catch (_) {}
+      } catch {}
       const hint =
         res.status === 403 || res.status === 401
           ? " Confirm with HyperPG: (1) This Merchant ID and API Key are for the correct account (e.g. school linked to your email). (2) HYPERPG_MERCHANT_ID and HYPERPG_API_KEY in .env match the credentials that work in Postman. (3) If they use whitelisting, your server IP or domain may need to be whitelisted."
@@ -502,7 +538,7 @@ export async function POST(req: Request) {
       null;
 
     if (!paymentUrl) {
-      console.error("HyperPG response missing payment_links.web:", data);
+      logger.error("HyperPG response missing payment_links.web:", data);
       return NextResponse.json(
         { error: "Payment gateway did not return payment URL" },
         { status: 500 }
@@ -510,7 +546,7 @@ export async function POST(req: Request) {
     }
 
     // Store Payment in DB (status PENDING) - will be updated on verify
-    const payment = await prisma.$transaction(async (tx) => {
+    const _payment = await runInTenantScope(student.schoolId, () => prisma.$transaction(async (tx) => {
       const payment = await tx.payment.create({
         data: {
           studentId: session.user.studentId,
@@ -541,7 +577,7 @@ export async function POST(req: Request) {
       }
 
       return payment;
-    });
+    }));
 
     return NextResponse.json({
       gateway: "HYPERPG",
@@ -552,11 +588,11 @@ export async function POST(req: Request) {
       payment_url: paymentUrl,
     });
   } catch (err: unknown) {
-    console.error("Order creation error:", err);
+    logger.error("Order creation error:", err);
     return NextResponse.json(
       {
         error: "Failed to create order",
-        details: err instanceof Error ? err.message : "Unknown error",
+        details: toClientErrorMessage(err, "Unknown error"),
       },
       { status: 500 }
     );

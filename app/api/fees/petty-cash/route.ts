@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
+import { logger } from "@/lib/logger";
 
 async function createPettyCashExpenseWithAutoVoucher(
   schoolId: string,
@@ -70,14 +73,19 @@ export async function GET() {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
 
-    const expenses = await prisma.pettyCashExpense.findMany({
-      where: { schoolId },
-      orderBy: [{ expenseDate: "desc" }, { voucherNo: "desc" }],
-    });
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go through
+    // the app_tenant connection, restricted by RLS, not just this route's own
+    // `where: { schoolId }` filter.
+    const expenses = await withTenantScopedClient(schoolId, (tx) =>
+      tx.pettyCashExpense.findMany({
+        where: { schoolId },
+        orderBy: [{ expenseDate: "desc" }, { voucherNo: "desc" }],
+      })
+    );
     return NextResponse.json({ expenses });
   } catch (error: unknown) {
     const err = error as { message?: string };
-    console.error("Petty cash GET error:", error);
+    logger.error("Petty cash GET error:", error);
     return NextResponse.json(
       { message: err?.message || "Internal server error" },
       { status: 500 }
@@ -103,8 +111,10 @@ export async function POST(req: Request) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
-    const body = await req.json();
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
     const itemName = String(body?.itemName ?? "").trim();
     const headOfAccount = String(body?.headOfAccount ?? "").trim();
     const paymentTypeRaw = String(body?.paymentType ?? "").trim().toUpperCase();
@@ -144,9 +154,10 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({ expense }, { status: 201 });
+    });
   } catch (error: unknown) {
     const err = error as { message?: string };
-    console.error("Petty cash POST error:", error);
+    logger.error("Petty cash POST error:", error);
     return NextResponse.json(
       { message: err?.message || "Internal server error" },
       { status: 500 }

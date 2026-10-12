@@ -1,13 +1,16 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { LeaveType } from "@prisma/client";
 import {
   createNotificationsForUserIds,
   getClassStaffNotifyUserIds,
 } from "@/lib/notificationService";
-import { invalidateParentPortalCaches } from "@/lib/invalidateParentPortalCaches";
+import { invalidateParentPortalCaches } from "@/lib/parent/invalidateParentPortalCaches";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function POST(req: Request) {
   try {
@@ -34,9 +37,22 @@ export async function POST(req: Request) {
       select: { schoolId: true },
     });
     if (!student?.schoolId) return NextResponse.json({ message: "School not found" }, { status: 400 });
+    return await runInTenantScope(student.schoolId, async () => {
 
-    const body = await req.json();
-    const { leaveType, reason, fromDate, toDate } = body;
+    const applyStudentLeaveBodySchema = z.object({
+      leaveType: z.string().optional(),
+      reason: z.string().optional(),
+      fromDate: z.string().optional(),
+      toDate: z.string().optional(),
+    });
+    const parsedBody = applyStudentLeaveBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json(
+        { message: "reason, fromDate, and toDate are required" },
+        { status: 400 }
+      );
+    }
+    const { leaveType, reason, fromDate, toDate } = parsedBody.data;
     if (!reason || !fromDate || !toDate) {
       return NextResponse.json(
         { message: "reason, fromDate, and toDate are required" },
@@ -45,7 +61,7 @@ export async function POST(req: Request) {
     }
 
     const validTypes: LeaveType[] = ["CASUAL", "SICK", "PAID", "UNPAID"];
-    const type = validTypes.includes(leaveType) ? leaveType : "CASUAL";
+    const type: LeaveType = validTypes.includes(leaveType as LeaveType) ? (leaveType as LeaveType) : "CASUAL";
 
     const leave = await prisma.studentLeaveRequest.create({
       data: {
@@ -86,16 +102,17 @@ export async function POST(req: Request) {
         );
       }
     } catch (nErr) {
-      console.warn("Student leave request notification failed:", nErr);
+      logger.warn("Student leave request notification failed:", nErr);
     }
 
     invalidateParentPortalCaches({ schoolId: student.schoolId, studentId });
 
     return NextResponse.json({ leave }, { status: 201 });
+    });
   } catch (e: unknown) {
-    console.error("Student leave apply:", e);
+    logger.error("Student leave apply:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

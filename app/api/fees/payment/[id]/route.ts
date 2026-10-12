@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
-import { canonicalizeGatewayForStorage } from "@/lib/feePaymentGateway";
-import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
-import { deleteFastFeePayment } from "@/lib/deleteFastFeePayment";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
+import { canonicalizeGatewayForStorage } from "@/lib/fees/feePaymentGateway";
+import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
+import { deleteFastFeePayment } from "@/lib/fees/deleteFastFeePayment";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -46,6 +49,7 @@ export async function PATCH(req: Request, context: RouteParams) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { id: paymentId } = await context.params;
     if (!paymentId?.trim()) {
@@ -64,7 +68,8 @@ export async function PATCH(req: Request, context: RouteParams) {
       );
     }
 
-    const body = await req.json().catch(() => ({}));
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
     const rawAmount = body.amount;
     const transactionId =
       body.transactionId === undefined ? undefined : body.transactionId === null ? null : String(body.transactionId).trim() || null;
@@ -218,10 +223,11 @@ export async function PATCH(req: Request, context: RouteParams) {
     const updated = await prisma.payment.findUnique({ where: { id: payment.id } });
     await invalidateStudentFeeReadCaches({ studentId: payment.studentId, schoolId });
     return NextResponse.json({ payment: updated, message: "Payment updated" }, { status: 200 });
+    });
   } catch (error: unknown) {
-    console.error("PATCH /api/fees/payment/[id] error:", error);
+    logger.error("PATCH /api/fees/payment/[id] error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }
@@ -249,6 +255,7 @@ export async function DELETE(req: Request, context: RouteParams) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found in session" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { id: paymentId } = await context.params;
     if (!paymentId?.trim()) {
@@ -260,14 +267,15 @@ export async function DELETE(req: Request, context: RouteParams) {
 
     const result = await deleteFastFeePayment(paymentId, schoolId, expectedStudentId);
     return NextResponse.json({ success: true, ...result }, { status: 200 });
+    });
   } catch (error: unknown) {
-    const msg = error instanceof Error ? error.message : "Internal server error";
+    const msg = toClientErrorMessage(error, "Internal server error");
     const status = msg.includes("not found")
       ? 404
       : msg.includes("blocked") || msg.includes("cannot") || msg.includes("Only school")
         ? 400
         : 500;
-    if (status === 500) console.error("DELETE /api/fees/payment/[id] error:", error);
+    if (status === 500) logger.error("DELETE /api/fees/payment/[id] error:", error);
     return NextResponse.json({ message: msg }, { status });
   }
 }

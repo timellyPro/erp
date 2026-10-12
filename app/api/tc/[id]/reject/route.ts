@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { createNotification } from "@/lib/notificationService";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function POST(
   req: Request,
@@ -30,6 +32,7 @@ export async function POST(
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     // Verify TC belongs to school
     const tc = await prisma.transferCertificate.findFirst({
@@ -76,10 +79,11 @@ export async function POST(
       { message: "TC request rejected", tc: updatedTC },
       { status: 200 }
     );
-  } catch (error: any) {
-    console.error("Reject TC error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Reject TC error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

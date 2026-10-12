@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import {
   createNotificationsForUserIds,
   getClassStaffNotifyUserIds,
 } from "@/lib/notificationService";
+import { getErrorCode, getErrorMessage, getErrorMeta, getErrorStack } from "@/lib/errors/errorInfo";
+import { logger } from "@/lib/logger";
 
 export async function POST(req: Request) {
   try {
@@ -15,17 +18,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    let body;
-    try {
-      body = await req.json();
-    } catch (parseError) {
+    const applyCertificateBodySchema = z.object({
+      certificateType: z.unknown().optional(),
+      reason: z.string().optional().nullable(),
+    });
+    const parsedBody = applyCertificateBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
       return NextResponse.json(
         { message: "Invalid request body" },
         { status: 400 }
       );
     }
-
-    const { certificateType, reason } = body;
+    const { certificateType: _certificateType, reason } = parsedBody.data;
 
     // Resolve student: use session.studentId or find student linked to this user (e.g. parent dashboard uses same user as student)
     let studentId = session.user.studentId ?? null;
@@ -60,6 +64,7 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async () => {
 
     // Allow multiple certificate requests - students can apply for multiple certificates
     // They can have multiple pending requests and multiple approved certificates
@@ -102,31 +107,34 @@ export async function POST(req: Request) {
         );
       }
     } catch (nErr) {
-      console.warn("Certificate request notification failed:", nErr);
+      logger.warn("Certificate request notification failed:", nErr);
     }
 
     return NextResponse.json(
       { message: "Certificate request submitted successfully", certificateRequest },
       { status: 201 }
     );
-  } catch (error: any) {
-    console.error("Apply certificate request error:", {
-      message: error?.message,
-      code: error?.code,
-      meta: error?.meta,
-      stack: error?.stack,
     });
-    
+  } catch (error: unknown) {
+    const errMessage = getErrorMessage(error);
+    const errCode = getErrorCode(error);
+    logger.error("Apply certificate request error:", {
+      message: errMessage,
+      code: errCode,
+      meta: getErrorMeta(error),
+      stack: getErrorStack(error),
+    });
+
     // Provide more specific error messages
     let errorMessage = "Internal server error";
-    if (error?.message) {
-      if (error.message.includes("certificateType") || error.code === "P2022") {
+    if (errMessage) {
+      if (errMessage.includes("certificateType") || errCode === "P2022") {
         errorMessage = "Database schema needs to be updated. Please contact administrator.";
       } else {
-        errorMessage = error.message;
+        errorMessage = errMessage;
       }
-    } else if (error?.code) {
-      switch (error.code) {
+    } else if (errCode) {
+      switch (errCode) {
         case "P2002":
           errorMessage = "Database constraint violation. Please try again.";
           break;
@@ -137,7 +145,7 @@ export async function POST(req: Request) {
           errorMessage = "Database schema needs to be updated. Please contact administrator.";
           break;
         default:
-          errorMessage = `Database error: ${error.code}`;
+          errorMessage = `Database error: ${errCode}`;
       }
     }
     

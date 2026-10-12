@@ -12,15 +12,25 @@ jest.mock("next-auth", () => ({
   getServerSession: (...args: unknown[]) => mockGetServerSession(...args),
 }));
 
-jest.mock("@/lib/authOptions", () => ({}));
+jest.mock("@/lib/auth/authOptions", () => ({}));
 
 jest.mock("@/lib/db", () => ({
   __esModule: true,
   default: {
-    homework: { findMany: (...args: unknown[]) => mockFindMany(...args) },
     class: { findFirst: (...args: unknown[]) => mockFindFirst(...args) },
     student: { findUnique: (...args: unknown[]) => mockFindUnique(...args) },
   },
+}));
+
+// Homework reads now go through the app_tenant-connected, RLS-restricted
+// client (docs/SECURITY_REVIEW.md) instead of the app's normal prisma import.
+const mockWithTenantScopedClient = jest.fn(async (_schoolId: string, fn: (tx: unknown) => unknown) =>
+  fn({ homework: { findMany: (...args: unknown[]) => mockFindMany(...args) } })
+);
+
+jest.mock("@/lib/db/tenantClient", () => ({
+  withTenantScopedClient: (...args: Parameters<typeof mockWithTenantScopedClient>) =>
+    mockWithTenantScopedClient(...args),
 }));
 
 describe("GET /api/homework/list", () => {
@@ -29,6 +39,7 @@ describe("GET /api/homework/list", () => {
     mockFindMany.mockReset();
     mockFindFirst.mockReset();
     mockFindUnique.mockReset();
+    mockWithTenantScopedClient.mockClear();
   });
 
   it("returns 401 when no session", async () => {
@@ -70,5 +81,6 @@ describe("GET /api/homework/list", () => {
     const json = await res.json();
     expect(json.homeworks).toHaveLength(1);
     expect(json.homeworks[0].title).toBe("Math HW");
+    expect(mockWithTenantScopedClient).toHaveBeenCalledWith("s1", expect.any(Function));
   });
 });

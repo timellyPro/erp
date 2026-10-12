@@ -1,25 +1,22 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
 import {
   parentPortalSwrRead,
   parentPortalSwrWrite,
   PARENT_LIST_TTL,
-} from "@/lib/parentPortalSwr";
+} from "@/lib/parent/parentPortalSwr";
+import { logger } from "@/lib/logger";
+import { schoolIdViaStudentId } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 async function resolveSchoolId(session: {
   user: { id: string; schoolId?: string | null; studentId?: string | null };
 }): Promise<string | null> {
-  let schoolId = session.user.schoolId ?? null;
-  if (!schoolId && session.user.studentId) {
-    const st = await prisma.student.findUnique({
-      where: { id: session.user.studentId },
-      select: { schoolId: true },
-    });
-    schoolId = st?.schoolId ?? null;
-  }
-  return schoolId;
+  if (session.user.schoolId) return session.user.schoolId;
+  if (session.user.studentId) return schoolIdViaStudentId(session.user.studentId);
+  return null;
 }
 
 export async function GET(req: Request) {
@@ -85,7 +82,7 @@ export async function GET(req: Request) {
       }
     }
 
-    const marks = await prisma.mark.findMany({
+    const marks = await withTenantScopedClient(schoolId, (tx) => tx.mark.findMany({
       where,
       include: {
         student: session.user.studentId
@@ -101,7 +98,7 @@ export async function GET(req: Request) {
       },
       orderBy: { createdAt: "desc" },
       take: session.user.studentId ? 500 : undefined,
-    });
+    }));
 
     // Distinct exam types already saved for this class (+ optional subject) so the UI can show prior entries
     let examTypesInUse: string[] = [];
@@ -116,17 +113,17 @@ export async function GET(req: Request) {
         examWhere.subject = { equals: subject.trim(), mode: "insensitive" };
       }
       const [distinctExams, latest] = await Promise.all([
-        prisma.mark.findMany({
+        withTenantScopedClient(schoolId, (tx) => tx.mark.findMany({
           where: examWhere,
           select: { examType: true },
           distinct: ["examType"],
           orderBy: { examType: "asc" },
-        }),
-        prisma.mark.findFirst({
+        })),
+        withTenantScopedClient(schoolId, (tx) => tx.mark.findFirst({
           where: examWhere,
           select: { examType: true },
           orderBy: { createdAt: "desc" },
-        }),
+        })),
       ]);
       examTypesInUse = distinctExams
         .map((r) => (r.examType || "").trim().toUpperCase())
@@ -154,9 +151,9 @@ export async function GET(req: Request) {
       headers: { "Cache-Control": "private, no-store" },
     });
   } catch (error: unknown) {
-    console.error("View marks error:", error);
+    logger.error("View marks error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

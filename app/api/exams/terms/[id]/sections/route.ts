@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
 import { randomUUID } from "crypto";
+import { logger } from "@/lib/logger";
+import { schoolIdViaTeacherClass, schoolIdViaTeacherRelation, schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 async function resolveSchoolId(session: {
   user: { id: string; schoolId?: string | null; role: string };
@@ -10,25 +15,13 @@ async function resolveSchoolId(session: {
   let schoolId = session.user.schoolId;
   if (!schoolId) {
     if (session.user.role === "TEACHER") {
-      const teacherClass = await prisma.class.findFirst({
-        where: { teacherId: session.user.id },
-        select: { schoolId: true },
-      });
-      schoolId = teacherClass?.schoolId ?? null;
+      schoolId = await schoolIdViaTeacherClass(session.user.id);
       if (!schoolId) {
-        const teacherSchool = await prisma.school.findFirst({
-          where: { teachers: { some: { id: session.user.id } } },
-          select: { id: true },
-        });
-        schoolId = teacherSchool?.id ?? null;
+        schoolId = await schoolIdViaTeacherRelation(session.user.id);
       }
     }
     if (!schoolId) {
-      const school = await prisma.school.findFirst({
-        where: { admins: { some: { id: session.user.id } } },
-        select: { id: true },
-      });
-      schoolId = school?.id ?? null;
+      schoolId = await schoolIdViaAdminRelation(session.user.id);
     }
   }
   return schoolId;
@@ -57,23 +50,28 @@ export async function GET(
     }
 
     const { id } = await params;
-    const term = await prisma.examTerm.findFirst({
-      where: { id, schoolId },
-      select: {
-        id: true,
-        name: true,
-        sections: { orderBy: { order: "asc" } },
-      },
-    });
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): read goes
+    // through the app_tenant connection, restricted by RLS, not just the
+    // `where: { schoolId }` filter above.
+    const term = await withTenantScopedClient(schoolId, (tx) =>
+      tx.examTerm.findFirst({
+        where: { id, schoolId },
+        select: {
+          id: true,
+          name: true,
+          sections: { orderBy: { order: "asc" } },
+        },
+      })
+    );
     if (!term) {
       return NextResponse.json({ message: "Exam term not found" }, { status: 404 });
     }
 
     return NextResponse.json({ sections: term.sections, termId: term.id, termName: term.name });
   } catch (e: unknown) {
-    console.error("Term sections GET:", e);
+    logger.error("Term sections GET:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }
@@ -97,6 +95,7 @@ export async function PUT(
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { id } = await params;
     const term = await prisma.examTerm.findFirst({
@@ -107,7 +106,11 @@ export async function PUT(
       return NextResponse.json({ message: "Exam term not found" }, { status: 404 });
     }
 
-    const body = await req.json();
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
     const rawSections = Array.isArray(body.sections) ? body.sections : null;
     if (!rawSections) {
       return NextResponse.json(
@@ -172,10 +175,11 @@ export async function PUT(
     });
 
     return NextResponse.json({ sections }, { status: 200 });
+    });
   } catch (e: unknown) {
-    console.error("Term sections PUT:", e);
+    logger.error("Term sections PUT:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

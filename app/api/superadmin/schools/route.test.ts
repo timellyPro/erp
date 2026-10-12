@@ -12,7 +12,7 @@ jest.mock("next-auth", () => ({
   getServerSession: (...args: unknown[]) => mockGetServerSession(...args),
 }));
 
-jest.mock("@/lib/authOptions", () => ({}));
+jest.mock("@/lib/auth/authOptions", () => ({}));
 
 jest.mock("@/lib/db", () => ({
   __esModule: true,

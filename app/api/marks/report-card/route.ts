@@ -1,25 +1,20 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { logger } from "@/lib/logger";
+import { schoolIdViaAdminRelation, schoolIdViaTeacherClass } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 async function resolveSchoolId(session: {
   user: { id: string; schoolId?: string | null };
 }): Promise<string | null> {
   let schoolId = session.user.schoolId ?? null;
   if (!schoolId) {
-    const admin = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = admin?.id ?? null;
+    schoolId = await schoolIdViaAdminRelation(session.user.id);
   }
   if (!schoolId) {
-    const teacher = await prisma.class.findFirst({
-      where: { teacherId: session.user.id },
-      select: { schoolId: true },
-    });
-    schoolId = teacher?.schoolId ?? null;
+    schoolId = await schoolIdViaTeacherClass(session.user.id);
   }
   return schoolId;
 }
@@ -60,7 +55,8 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: "studentId is required" }, { status: 400 });
     }
 
-    const student = await prisma.student.findFirst({
+    const student = await withTenantScopedClient(schoolId, (tx) =>
+      tx.student.findFirst({
       where: { id: studentId, schoolId },
       include: {
         user: { select: { name: true } },
@@ -74,7 +70,8 @@ export async function GET(req: Request) {
           },
         },
       },
-    });
+    })
+    );
 
     if (!student) {
       return NextResponse.json({ message: "Student not found" }, { status: 404 });
@@ -87,10 +84,12 @@ export async function GET(req: Request) {
     if (classId) where.classId = classId;
     if (examType && examType !== "ALL") where.examType = examType.toUpperCase();
 
-    const marks = await prisma.mark.findMany({
-      where,
-      orderBy: [{ subject: "asc" }, { createdAt: "desc" }],
-    });
+    const marks = await withTenantScopedClient(schoolId, (tx) =>
+      tx.mark.findMany({
+        where,
+        orderBy: [{ subject: "asc" }, { createdAt: "desc" }],
+      })
+    );
 
     const subjectBest = new Map<string, (typeof marks)[0]>();
     for (const m of marks) {
@@ -155,9 +154,9 @@ export async function GET(req: Request) {
       },
     });
   } catch (error: unknown) {
-    console.error("Report card error:", error);
+    logger.error("Report card error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

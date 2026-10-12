@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInOptionalTenantScope } from "@/lib/db/tenantContext";
+import { logger } from "@/lib/logger";
 
 type EndParams =
   | { params: { id: string } }
@@ -20,6 +21,7 @@ export async function POST(_req: Request, context: EndParams) {
   const isTeacher = session.user.role === "TEACHER";
 
   try {
+    return await runInOptionalTenantScope(session.user.schoolId, async () => {
     if (!appointmentId) {
       return NextResponse.json({ message: "Appointment id missing" }, { status: 400 });
     }
@@ -67,9 +69,10 @@ export async function POST(_req: Request, context: EndParams) {
       { message: "Chat ended", appointment: updated },
       { status: 200 }
     );
+    });
   } catch (error: unknown) {
     const err = error as { message?: string };
-    console.error("End chat error:", error);
+    logger.error("End chat error:", error);
     return NextResponse.json(
       { message: err?.message || "Internal server error" },
       { status: 500 }

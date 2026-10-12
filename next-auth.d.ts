@@ -36,7 +36,9 @@ declare module "next-auth/jwt" {
     image?: string | null;
     /** Superadmin: session cookie only (no persistent login across browser restarts). */
     sessionOnly?: boolean;
-    /** internal cache timestamp for DB sync (ms since epoch) */
+    /** internal cache timestamp for DB sync attempt, success or failure (ms since epoch) */
     _dbSyncAt?: number;
+    /** internal cache timestamp for the last *successful* DB sync (ms since epoch) */
+    _lastSuccessfulSyncAt?: number;
   }
 }

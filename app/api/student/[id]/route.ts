@@ -1,37 +1,41 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { requireSchoolId } from "@/lib/tenant";
-import { withRequestTiming } from "@/lib/requestTiming";
-import { backfillPaymentAllocationComponentNames } from "@/lib/backfillPaymentAllocationComponentNames";
+import { authOptions } from "@/lib/auth/authOptions";
+import ownerPrisma from "@/lib/db";
+import { tenantDb as prisma, runInOptionalTenantScope, runInTenantScope } from "@/lib/db/tenantContext";
+import { requireSchoolId, schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { withRequestTiming } from "@/lib/cache/requestTiming";
+import { backfillPaymentAllocationComponentNames } from "@/lib/fees/backfillPaymentAllocationComponentNames";
 import {
   buildFeeHeadAmountsByPaymentId,
   dominantFeeHead,
   feeHeadLinesFromMap,
-} from "@/lib/paymentFeeHeadLines";
+} from "@/lib/fees/paymentFeeHeadLines";
 import type { PrismaClient } from "@prisma/client";
-import { hashStudentPasswordFromDob } from "@/lib/studentDefaultPassword";
+import { hashStudentPasswordFromDob } from "@/lib/students/studentDefaultPassword";
 import {
   parseStudentStatus,
   STUDENT_STATUS_ACTIVE,
   STUDENT_STATUS_INACTIVE,
-} from "@/lib/studentStatus";
-import { ensureStudentApplicationLink } from "@/lib/ensureStudentApplicationLink";
-import { upsertStudentFeeFromStructure } from "@/lib/studentTuitionFromStructure";
-import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
-import { invalidateStudentListCaches } from "@/lib/invalidateStudentListCaches";
-import { canonicalizeResidencyType } from "@/lib/residencyDisplay";
-import { residencyKind } from "@/lib/residencyConversion";
+} from "@/lib/students/studentStatus";
+import { ensureStudentApplicationLink } from "@/lib/admission/ensureStudentApplicationLink";
+import { upsertStudentFeeFromStructure } from "@/lib/fees/studentTuitionFromStructure";
+import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
+import { invalidateStudentListCaches } from "@/lib/students/invalidateStudentListCaches";
+import { canonicalizeResidencyType } from "@/lib/students/residencyDisplay";
+import { residencyKind } from "@/lib/fees/residencyConversion";
 import { ageFromDob, formatDobYmd, parseDobToDate } from "@/lib/dobCalendar";
-import { syncStudentDisplayNameRecords } from "@/lib/syncStudentDisplayName";
-import { resolveStudentDisplayName } from "@/lib/resolveStudentDisplayName";
+import { syncStudentDisplayNameRecords } from "@/lib/students/syncStudentDisplayName";
+import { resolveStudentDisplayName } from "@/lib/students/resolveStudentDisplayName";
 import {
   loadStudentAdmissionApplicationPayments,
   loadStudentApplicationFeeSnapshot,
   mergeStudentProfilePayments,
   resolveStudentAdmissionApplicationFees,
-} from "@/lib/studentAdmissionApplicationPayments";
+} from "@/lib/admission/studentAdmissionApplicationPayments";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 type RouteParams =
   | { params: { id: string } }
@@ -74,7 +78,7 @@ export async function GET(_req: Request, context: RouteParams) {
 
     const schoolId = isOwnStudent ? null : ctx.schoolId;
 
-    return await withRequestTiming(
+    return await runInOptionalTenantScope(schoolId, () => withRequestTiming(
       { route: "GET /api/student/[id]", schoolId: schoolId, userId: session.user.id },
       async () => {
         const student = await prisma.student.findFirst({
@@ -395,26 +399,18 @@ export async function GET(_req: Request, context: RouteParams) {
       })),
     });
       }
-    );
+    ));
   } catch (error: unknown) {
-    console.error("Student details error:", error);
+    logger.error("Student details error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }
 }
 
 async function resolveSchoolId(session: { user: { id: string; schoolId?: string | null; role: string } }) {
-  let schoolId = session.user.schoolId;
-  if (!schoolId) {
-    const adminSchool = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = adminSchool?.id ?? null;
-  }
-  return schoolId;
+  return session.user.schoolId ?? (await schoolIdViaAdminRelation(session.user.id));
 }
 
 export async function PUT(req: Request, context: RouteParams) {
@@ -437,6 +433,10 @@ export async function PUT(req: Request, context: RouteParams) {
   }
 
   try {
+    // Reads/writes below run in ONE RLS-scoped transaction. Deliberately on the owner client: the
+    // reactivation password restore (its failure is reported, not rolled back) and the background
+    // sync tasks (they outlive the request, so they cannot share the scope's transaction).
+    return await runInTenantScope(schoolId, async () => {
     const student = await prisma.student.findFirst({
       where: { id, schoolId },
       include: {
@@ -448,7 +448,11 @@ export async function PUT(req: Request, context: RouteParams) {
       return NextResponse.json({ message: "Student not found" }, { status: 404 });
     }
 
-    const body = await req.json();
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
     const name = typeof body.name === "string" ? body.name.trim() : undefined;
     const fatherName = typeof body.fatherName === "string" ? body.fatherName.trim() : undefined;
     const motherName = typeof body.motherName === "string" ? body.motherName.trim() || null : undefined;
@@ -578,7 +582,7 @@ export async function PUT(req: Request, context: RouteParams) {
     if (fatherName !== undefined) studentUpdate.fatherName = fatherName;
     if (motherName !== undefined) studentUpdate.motherName = motherName;
     if (occupation !== undefined) studentUpdate.occupation = occupation;
-    const effectiveStatus = status ?? student.status ?? "Active";
+    const _effectiveStatus = status ?? student.status ?? "Active";
     if (classId !== undefined) {
       studentUpdate.classId = classId;
     }
@@ -641,7 +645,7 @@ export async function PUT(req: Request, context: RouteParams) {
       const effectiveDob = dob !== undefined ? dob : student.dob;
       try {
         const hashedPassword = await hashStudentPasswordFromDob(effectiveDob);
-        await prisma.user.update({
+        await ownerPrisma.user.update({
           where: { id: student.user.id },
           data: { password: hashedPassword },
         });
@@ -686,7 +690,7 @@ export async function PUT(req: Request, context: RouteParams) {
       void (async () => {
         try {
           const applicationId = await ensureStudentApplicationLink(
-            prisma as unknown as Pick<PrismaClient, "studentApplication">,
+            ownerPrisma as unknown as Pick<PrismaClient, "studentApplication">,
             {
               id: studentSnapshot.id,
               schoolId: studentSnapshot.schoolId,
@@ -713,13 +717,13 @@ export async function PUT(req: Request, context: RouteParams) {
             }
           );
           if (applicationId) {
-            await prisma.studentApplication.update({
+            await ownerPrisma.studentApplication.update({
               where: { id: applicationId },
               data: applicationPayload as Record<string, never>,
             });
           }
         } catch (err) {
-          console.error("Student application sync (background):", err);
+          logger.error("Student application sync (background):", err);
         }
       })();
     }
@@ -737,16 +741,16 @@ export async function PUT(req: Request, context: RouteParams) {
     if (needsFeeSync) {
       void (async () => {
         try {
-          const refreshed = await prisma.student.findFirst({
+          const refreshed = await ownerPrisma.student.findFirst({
             where: { id, schoolId },
             include: { class: { select: { section: true } } },
           });
           if (!refreshed) return;
-          const fee = await prisma.studentFee.findUnique({
+          const fee = await ownerPrisma.studentFee.findUnique({
             where: { studentId: id },
             select: { discountPercent: true, amountPaid: true },
           });
-          await upsertStudentFeeFromStructure(prisma, {
+          await upsertStudentFeeFromStructure(ownerPrisma, {
             schoolId,
             studentId: id,
             classId: refreshed.classId,
@@ -755,7 +759,7 @@ export async function PUT(req: Request, context: RouteParams) {
             amountPaid: fee?.amountPaid ?? 0,
           });
         } catch (err) {
-          console.error("Student fee sync (background):", err);
+          logger.error("Student fee sync (background):", err);
         }
       })();
     }
@@ -792,10 +796,11 @@ export async function PUT(req: Request, context: RouteParams) {
       },
       { status: 200 }
     );
+    });
   } catch (error: unknown) {
-    console.error("Student update error:", error);
+    logger.error("Student update error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }
@@ -821,6 +826,7 @@ export async function DELETE(_req: Request, context: RouteParams) {
   }
 
   try {
+    return await runInTenantScope(schoolId, async (schoolId) => {
     const student = await prisma.student.findFirst({
       where: { id, schoolId },
       select: { id: true, userId: true },
@@ -835,10 +841,11 @@ export async function DELETE(_req: Request, context: RouteParams) {
     invalidateStudentListCaches(schoolId);
 
     return NextResponse.json({ message: "Student deleted successfully" }, { status: 200 });
+    });
   } catch (error: unknown) {
-    console.error("Student delete error:", error);
+    logger.error("Student delete error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

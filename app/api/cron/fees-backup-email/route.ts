@@ -1,24 +1,16 @@
 import { NextResponse } from "next/server";
-import { runFeesBackupCron } from "@/lib/runFeesBackupCron";
+import { runFeesBackupCron } from "@/lib/fees/runFeesBackupCron";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 function isAuthorized(req: Request): boolean {
-  // Vercel Cron sends this header on scheduled invocations
-  if (req.headers.get("x-vercel-cron") === "1") return true;
-
+  // Bearer-only on purpose: Vercel Cron (and the GitHub workflow) send
+  // `Authorization: Bearer $CRON_SECRET`. Do not trust the spoofable
+  // `x-vercel-cron` header or a ?secret= query param (leaks into logs).
   const secret = process.env.CRON_SECRET?.trim();
   if (!secret) return false;
   const auth = req.headers.get("authorization") || "";
-  if (auth === `Bearer ${secret}`) return true;
-
-  // Allow ?secret= for external cron services (cron-job.org, etc.)
-  try {
-    const url = new URL(req.url);
-    if (url.searchParams.get("secret") === secret) return true;
-  } catch {
-    // ignore
-  }
-
-  return false;
+  return auth === `Bearer ${secret}`;
 }
 
 /**
@@ -35,9 +27,9 @@ export async function GET(req: Request) {
     const result = await runFeesBackupCron();
     return NextResponse.json(result);
   } catch (error: unknown) {
-    console.error("Fees backup email cron error:", error);
+    logger.error("Fees backup email cron error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

@@ -1,31 +1,26 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { runInTenantScope } from "@/lib/db/tenantContext";
 import {
   computeStudentCredentials,
   type StudentCredentialRow,
-} from "@/lib/computeStudentCredentials";
-import { isRedisEnabled } from "@/lib/redis";
-import { tenantCacheKey, swrGet, swrSet } from "@/lib/tenantCache";
+} from "@/lib/students/computeStudentCredentials";
+import { isRedisEnabled } from "@/lib/cache/redis";
+import { tenantCacheKey, swrGet, swrSet } from "@/lib/cache/tenantCache";
 import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
-} from "@/lib/schoolDashboardServerCache";
+} from "@/lib/school/schoolDashboardServerCache";
+import { logger } from "@/lib/logger";
+import { schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 async function resolveSchoolId(session: {
   user: { id: string; schoolId?: string | null };
 }): Promise<string | null> {
-  let schoolId = session.user.schoolId ?? null;
-  if (!schoolId) {
-    const adminSchool = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = adminSchool?.id ?? null;
-  }
-  return schoolId;
+  return session.user.schoolId ?? (await schoolIdViaAdminRelation(session.user.id));
 }
 
 async function assertAdminSession() {
@@ -130,6 +125,7 @@ export async function GET(req: Request) {
     if ("error" in auth) return auth.error;
     const { schoolId } = auth;
 
+    return await runInTenantScope(schoolId, async () => {
     const { searchParams } = new URL(req.url);
     const classId = searchParams.get("classId")?.trim() || "";
     const className = searchParams.get("className")?.trim() || "";
@@ -165,7 +161,7 @@ export async function GET(req: Request) {
     }
 
     if (format === "csv") {
-      const wb = XLSX.utils.book_new();
+      const _wb = XLSX.utils.book_new();
       const ws = XLSX.utils.json_to_sheet(toExportRows(rows));
       const csv = XLSX.utils.sheet_to_csv(ws);
       const suffix = className || section || classId ? "filtered" : "all";
@@ -184,9 +180,10 @@ export async function GET(req: Request) {
         : payload,
       { status: 200 }
     );
+    });
   } catch (error: unknown) {
-    console.error("Student credentials error:", error);
-    const message = error instanceof Error ? error.message : "Internal server error";
+    logger.error("Student credentials error:", error);
+    const message = toClientErrorMessage(error, "Internal server error");
     const status = message.includes("Class not found") ? 404 : 500;
     return NextResponse.json({ message }, { status });
   }

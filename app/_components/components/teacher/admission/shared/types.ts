@@ -1,0 +1,106 @@
+import type { ApplicationGrade } from "@/lib/gradeFromClassName";
+
+export type Gender = "MALE" | "FEMALE";
+export type BoardingType = "SEMI_RESIDENTIAL" | "REGULAR_BOARDER";
+export type Grade = ApplicationGrade;
+
+export type AdmissionRow = {
+  id: string;
+  applicationNo: string;
+  admissionNo: string | null;
+  fedenaNo: string | null;
+  studentId?: string | null;
+  workflowStatus?: "PENDING" | "UPCOMING" | "APPROVED";
+  classId?: string | null;
+  class?: { id: string; name: string; section: string | null } | null;
+  gradeSought: Grade;
+  boardingType: BoardingType;
+  residencyType?: string | null;
+  totalFee?: number | null;
+  discountPercent?: number | null;
+  applicationFee?: number | null;
+  admissionFee?: number | null;
+  applicationFeePaid?: boolean;
+  applicationFeePaidAt?: string | null;
+  applicationFeePaymentMode?: string | null;
+  applicationFeePaymentMethod?: string | null;
+  admissionFeePaid?: boolean;
+  admissionFeePaidAt?: string | null;
+  admissionFeePaymentMode?: string | null;
+  admissionFeePaymentMethod?: string | null;
+  remarks?: string | null;
+  firstName: string;
+  middleName: string | null;
+  lastName: string;
+  gender: Gender;
+  dateOfBirth: string;
+  aadharNo: string;
+  parentName: string;
+  parentPhone: string;
+  parentEmail: string;
+  city: string;
+  state: string;
+  pinCode: string;
+  createdAt: string;
+};
+
+export type FeeType = "APPLICATION" | "ADMISSION";
+export type FeeAssignRow = {
+  id: string;
+  name: string;
+  amount: string;
+  residencyScope?: string;
+  splitIntoTwoInstallments?: boolean;
+};
+export type FeeHeadOption = {
+  key: string;
+  name: string;
+  amount: number;
+  selected: boolean;
+  scopeLabel: string;
+  residencyScope: string;
+  splitIntoTwoInstallments: boolean;
+};
+
+export type FormState = {
+  applicationNo: string;
+  fedenaNo: string;
+  penNumber: string;
+  apaarId: string;
+  admissionNo: string;
+  classId: string;
+  gradeSought: Grade;
+  boardingType: BoardingType;
+  residencyType: string;
+  applicationFee: string;
+  admissionFee: string;
+  studentName: string;
+  gender: Gender;
+  dateOfBirth: string; // yyyy-mm-dd
+  aadharNo: string;
+  firstLanguage: string;
+  nationality: string;
+  languagesAtHome: string;
+  caste: string;
+  religion: string;
+  presentAddress: string;
+  permanentAddress: string;
+  parentName: string;
+  parentOccupation: string;
+  officeAddress: string;
+  parentPhone: string;
+  parentEmail: string;
+  parentAadharNo: string;
+  parentWhatsapp: string;
+  bankAccountNo: string;
+  motherName: string;
+  motherPhone: string;
+  motherAadharNo: string;
+  motherEmail: string;
+  panNumber: string;
+  previousSchoolName: string;
+  previousSchoolAddress: string;
+  emergencyFatherNo: string;
+  emergencyMotherNo: string;
+  emergencyGuardianNo: string;
+};

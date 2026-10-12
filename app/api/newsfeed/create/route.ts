@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { randomBytes } from "crypto";
 import {
   createNotificationsForUserIds,
   getSchoolUserIds,
 } from "@/lib/notificationService";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 function generateId(): string {
   const prefix = "c";
@@ -37,7 +40,11 @@ export async function POST(req: Request) {
 
     const schoolId = await getSchoolId(session);
 
-    const body = await req.json();
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
     const title =
       typeof body.title === "string" ? body.title.trim() : "";
     const description =
@@ -71,7 +78,7 @@ export async function POST(req: Request) {
     };
 
     try {
-      const newsFeed = await prisma.newsFeed.create({
+      const newsFeed = await runInTenantScope(schoolId, () => prisma.newsFeed.create({
         data: {
           title,
           description,
@@ -86,7 +93,7 @@ export async function POST(req: Request) {
             select: { id: true, name: true, email: true },
           },
         },
-      });
+      }));
 
       try {
         const userIds = await getSchoolUserIds(schoolId);
@@ -97,7 +104,7 @@ export async function POST(req: Request) {
           title.length > 60 ? title.slice(0, 60) + "…" : title
         );
       } catch (nErr) {
-        console.warn("News notification creation failed:", nErr);
+        logger.warn("News notification creation failed:", nErr);
       }
 
       return NextResponse.json(
@@ -119,7 +126,7 @@ export async function POST(req: Request) {
         { status: 201 }
       );
     } catch (prismaErr) {
-      console.warn("News feed create via Prisma failed, trying raw SQL:", prismaErr);
+      logger.warn("News feed create via Prisma failed, trying raw SQL:", prismaErr);
     }
 
     const id = generateId();
@@ -127,7 +134,7 @@ export async function POST(req: Request) {
     const isoNow = now.toISOString();
 
     const photosArr = photos.length > 0 ? photos : (photo ? [photo] : []);
-    await prisma.$executeRawUnsafe(
+    await runInTenantScope(schoolId, () => prisma.$executeRawUnsafe(
       `INSERT INTO "NewsFeed" (id, title, description, photo, photos, likes, "schoolId", "createdById", "createdAt", "updatedAt")
        VALUES ($1, $2, $3, $4, $9::text[], 0, $5, $6, $7::timestamptz, $8::timestamptz)`,
       id,
@@ -139,7 +146,7 @@ export async function POST(req: Request) {
       isoNow,
       isoNow,
       photosArr
-    );
+    ));
 
     try {
       const userIds = await getSchoolUserIds(schoolId);
@@ -150,7 +157,7 @@ export async function POST(req: Request) {
         title.length > 60 ? title.slice(0, 60) + "…" : title
       );
     } catch (nErr) {
-      console.warn("News notification creation failed (raw insert path):", nErr);
+      logger.warn("News notification creation failed (raw insert path):", nErr);
     }
 
     return NextResponse.json(
@@ -172,8 +179,8 @@ export async function POST(req: Request) {
       { status: 201 }
     );
   } catch (error: unknown) {
-    console.error("Create news feed error:", error);
-    const msg = error instanceof Error ? error.message : "Internal server error";
+    logger.error("Create news feed error:", error);
+    const msg = toClientErrorMessage(error, "Internal server error");
     return NextResponse.json({ message: msg }, { status: 500 });
   }
 }

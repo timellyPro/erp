@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { extraHeadTemplatesErrorResponse } from "../mapPrismaError";
 import { resolveFeesSchoolIdForSession } from "../resolveSchoolId";
-import { invalidateAssignCatalogServerCache } from "@/lib/assignCatalogServerCache";
+import { invalidateAssignCatalogServerCache } from "@/lib/fees/assignCatalogServerCache";
 
 function canManage(session: { user?: { role?: string | null } }) {
   const r = String(session.user?.role ?? "");
@@ -32,6 +33,7 @@ export async function PATCH(req: Request, ctx: RouteCtx) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const existing = await prisma.extraFeeHeadTemplate.findFirst({
       where: { id, schoolId },
@@ -40,7 +42,8 @@ export async function PATCH(req: Request, ctx: RouteCtx) {
       return NextResponse.json({ message: "Not found" }, { status: 404 });
     }
 
-    const body = await req.json();
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
     const name = typeof body.name === "string" ? body.name.trim() : existing.name;
     const amount =
       body.amount !== undefined && body.amount !== null ? Number(body.amount) : existing.amount;
@@ -58,6 +61,7 @@ export async function PATCH(req: Request, ctx: RouteCtx) {
     });
     invalidateAssignCatalogServerCache(schoolId);
     return NextResponse.json({ template: updated });
+    });
   } catch (error: unknown) {
     return extraHeadTemplatesErrorResponse(error, "extra-head-templates PATCH");
   }
@@ -82,6 +86,7 @@ export async function DELETE(_req: Request, ctx: RouteCtx) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const deleted = await prisma.extraFeeHeadTemplate.deleteMany({
       where: { id, schoolId },
@@ -91,6 +96,7 @@ export async function DELETE(_req: Request, ctx: RouteCtx) {
     }
     invalidateAssignCatalogServerCache(schoolId);
     return NextResponse.json({ ok: true });
+    });
   } catch (error: unknown) {
     return extraHeadTemplatesErrorResponse(error, "extra-head-templates DELETE");
   }

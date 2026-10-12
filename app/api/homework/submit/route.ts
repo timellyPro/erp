@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { invalidateParentPortalCaches } from "@/lib/invalidateParentPortalCaches";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInOptionalTenantScope } from "@/lib/db/tenantContext";
+import { invalidateParentPortalCaches } from "@/lib/parent/invalidateParentPortalCaches";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
+    return await runInOptionalTenantScope(session?.user?.schoolId, async () => {
 
     if (!session) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
@@ -19,7 +23,16 @@ export async function POST(req: Request) {
       );
     }
 
-    const { homeworkId, content, fileUrl } = await req.json();
+    const submitHomeworkBodySchema = z.object({
+      homeworkId: z.string().optional(),
+      content: z.string().optional().nullable(),
+      fileUrl: z.string().optional().nullable(),
+    });
+    const parsedBody = submitHomeworkBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Homework ID is required" }, { status: 400 });
+    }
+    const { homeworkId, content, fileUrl } = parsedBody.data;
 
     if (!homeworkId) {
       return NextResponse.json(
@@ -117,10 +130,11 @@ export async function POST(req: Request) {
       },
       { status: existingSubmission ? 200 : 201 }
     );
-  } catch (error: any) {
-    console.error("Submit homework error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Submit homework error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

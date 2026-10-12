@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { Role, type Prisma } from "@prisma/client";
-import { authOptions } from "../../../../lib/authOptions";
-import prisma from "../../../../lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
 import {
   getUserListCached,
   setUserListCached,
   userListCacheKey,
-} from "@/lib/userListServerCache";
+} from "@/lib/school/userListServerCache";
+import { logger } from "@/lib/logger";
 
 export async function GET(req: Request) {
   try {
@@ -56,25 +57,30 @@ export async function GET(req: Request) {
       ];
     }
 
-    const [users, total] = await Promise.all([
-      prisma.user.findMany({
-        where,
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        orderBy: { createdAt: "desc" },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          createdAt: true,
-          photoUrl: true,
-          subject: true,
-          allowedFeatures: true,
-        },
-      }),
-      prisma.user.count({ where }),
-    ]);
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go
+    // through the app_tenant connection, restricted by RLS, not just the
+    // `where: { schoolId }` filter above.
+    const [users, total] = await withTenantScopedClient(schoolId, (tx) =>
+      Promise.all([
+        tx.user.findMany({
+          where,
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            createdAt: true,
+            photoUrl: true,
+            subject: true,
+            allowedFeatures: true,
+          },
+        }),
+        tx.user.count({ where }),
+      ])
+    );
 
     const payload = {
       users,
@@ -85,7 +91,7 @@ export async function GET(req: Request) {
     setUserListCached(cacheKey, payload);
     return NextResponse.json(payload);
   } catch (error: unknown) {
-    console.error(error);
+    logger.error(error);
     return NextResponse.json(
       { message: "Internal server error" },
       { status: 500 }

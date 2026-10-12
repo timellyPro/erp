@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInOptionalTenantScope } from "@/lib/db/tenantContext";
+import type { Prisma } from "@prisma/client";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function GET() {
   try {
@@ -41,9 +45,9 @@ export async function GET() {
       fatherPhone: student.phoneNo ?? "",
     });
   } catch (e: unknown) {
-    console.error("Get parent details error:", e);
+    logger.error("Get parent details error:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }
@@ -52,6 +56,7 @@ export async function GET() {
 export async function PUT(req: Request) {
   try {
     const session = await getServerSession(authOptions);
+    return await runInOptionalTenantScope(session?.user?.schoolId, async () => {
     if (!session?.user) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
@@ -69,21 +74,31 @@ export async function PUT(req: Request) {
       );
     }
 
-    const body = await req.json();
+    const updateParentDetailsBodySchema = z.object({
+      address: z.string().optional().nullable(),
+      fatherName: z.string().optional().nullable(),
+      motherName: z.string().optional().nullable(),
+      occupation: z.string().optional().nullable(),
+      fatherPhone: z.string().optional().nullable(),
+    });
+    const parsedBody = updateParentDetailsBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
     const {
       address,
       fatherName,
       motherName,
       occupation,
       fatherPhone,
-    } = body;
+    } = parsedBody.data;
 
-    const updateData: any = {};
+    const updateData: Prisma.StudentUpdateInput = {};
     if (address !== undefined) updateData.address = address || null;
-    if (fatherName !== undefined) updateData.fatherName = fatherName || null;
+    if (fatherName) updateData.fatherName = fatherName;
     if (motherName !== undefined) updateData.motherName = motherName || null;
     if (occupation !== undefined) updateData.occupation = occupation || null;
-    if (fatherPhone !== undefined) updateData.phoneNo = fatherPhone || null;
+    if (fatherPhone) updateData.phoneNo = fatherPhone;
 
     await prisma.student.update({
       where: { id: existingStudent.id },
@@ -91,10 +106,11 @@ export async function PUT(req: Request) {
     });
 
     return NextResponse.json({ message: "Parent details updated successfully" });
+    });
   } catch (e: unknown) {
-    console.error("Update parent details error:", e);
+    logger.error("Update parent details error:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

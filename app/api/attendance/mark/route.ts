@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { createNotification } from "@/lib/notificationService";
-import { isActiveStudent } from "@/lib/studentStatus";
+import { isActiveStudent } from "@/lib/students/studentStatus";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function POST(req: Request) {
   try {
@@ -13,7 +16,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const { classId, date, period, attendances } = await req.json();
+    const markAttendanceBodySchema = z.object({
+      classId: z.string().optional(),
+      date: z.string().optional(),
+      period: z.number().optional(),
+      attendances: z.array(z.object({ studentId: z.string(), status: z.string() })).optional(),
+    });
+    const parsedBody = markAttendanceBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json(
+        { message: "Missing required fields: classId, date, period, and attendances array" },
+        { status: 400 }
+      );
+    }
+    const { classId, date, period, attendances } = parsedBody.data;
 
     if (!classId || !date || !period || !attendances || !Array.isArray(attendances)) {
       return NextResponse.json(
@@ -38,6 +54,7 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     // Verify class belongs to teacher's school
     const classData = await prisma.class.findFirst({
@@ -136,10 +153,11 @@ export async function POST(req: Request) {
       { message: "Attendance marked successfully", attendances: results },
       { status: 201 }
     );
-  } catch (error: any) {
-    console.error("Mark attendance error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Mark attendance error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

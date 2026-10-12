@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import { supabaseAdmin, SUPABASE_BUCKET } from "@/lib/supabase";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 const MAX_SIZE_MB = 10;
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
@@ -56,7 +58,7 @@ export async function POST(req: Request) {
         SUPABASE_BUCKET
       );
       if (bucketError || !bucketInfo) {
-        console.error("Supabase bucket check failed:", {
+        logger.error("Supabase bucket check failed:", {
           bucket: SUPABASE_BUCKET,
           message: bucketError?.message ?? "Bucket not found",
         });
@@ -170,7 +172,7 @@ export async function POST(req: Request) {
         code: error?.statusCode ?? null,
         type: error?.error ?? null,
       };
-      console.error("Supabase upload error:", details);
+      logger.error("Supabase upload error:", details);
       return NextResponse.json(
         {
           message: error?.message || "Upload failed at storage provider.",
@@ -181,9 +183,9 @@ export async function POST(req: Request) {
     }
     return NextResponse.json({ message: "Upload failed." }, { status: 502 });
   } catch (e) {
-    console.error("Upload API error:", e);
+    logger.error("Upload API error:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

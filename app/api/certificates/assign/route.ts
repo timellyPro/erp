@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { createNotification } from "@/lib/notificationService";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function POST(req: Request) {
   try {
@@ -12,7 +15,22 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const { templateId, studentId, title, description, certificateUrl, eventId } = await req.json();
+    const assignCertificateBodySchema = z.object({
+      templateId: z.string().optional(),
+      studentId: z.string().optional(),
+      title: z.string().optional(),
+      description: z.string().optional().nullable(),
+      certificateUrl: z.string().optional().nullable(),
+      eventId: z.string().optional().nullable(),
+    });
+    const parsedBody = assignCertificateBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json(
+        { message: "Template ID, student ID, and title are required" },
+        { status: 400 }
+      );
+    }
+    const { templateId, studentId, title, description, certificateUrl, eventId } = parsedBody.data;
 
     if (!templateId || !studentId || !title) {
       return NextResponse.json(
@@ -35,6 +53,7 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     // Verify template belongs to school
     const template = await prisma.certificateTemplate.findFirst({
@@ -118,10 +137,11 @@ export async function POST(req: Request) {
       { message: "Certificate assigned successfully", certificate },
       { status: 201 }
     );
-  } catch (error: any) {
-    console.error("Assign certificate error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Assign certificate error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

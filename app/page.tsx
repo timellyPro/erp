@@ -3,10 +3,10 @@
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ROUTES } from "@/app/frontend/constants/routes";
-import { shouldForceSuperAdminRelogin } from "@/lib/superAdminBrowserSession";
-import Spinner from "./frontend/components/common/Spinner";
-import LoginForm from "./frontend/auth/LoginForm";
+import { ROUTES } from "@/app/_components/constants/routes";
+import { shouldForceSuperAdminRelogin } from "@/lib/auth/superAdminBrowserSession";
+import Spinner from "./_components/components/common/Spinner";
+import LoginForm from "./_components/auth/LoginForm";
 
 export default function Home() {
   const router = useRouter();

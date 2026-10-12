@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
 import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
-} from "@/lib/schoolDashboardServerCache";
-import { loadFeeReportTransactions } from "@/lib/loadDayFeeCollectionTransactions";
-import { buildFeeHeadAmountsByPaymentId, dominantFeeHead, feeHeadLinesFromMap } from "@/lib/paymentFeeHeadLines";
+} from "@/lib/school/schoolDashboardServerCache";
+import { loadFeeReportTransactions } from "@/lib/fees/loadDayFeeCollectionTransactions";
+import { buildFeeHeadAmountsByPaymentId, dominantFeeHead, feeHeadLinesFromMap } from "@/lib/fees/paymentFeeHeadLines";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 /**
  * GET /api/fees/transactions
@@ -32,6 +34,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
 
+    return await runInTenantScope(schoolId, async () => {
     const { searchParams } = new URL(req.url);
     const studentId = searchParams.get("studentId")?.trim() || undefined;
     const rawLimit = Number(searchParams.get("limit")) || 100;
@@ -118,6 +121,7 @@ export async function GET(req: Request) {
               extraFeeId: true,
               allocatedAmount: true,
             },
+            orderBy: [{ paymentId: "asc" }, { id: "asc" }],
           })
         : [];
     const extraFeeIds = Array.from(
@@ -194,10 +198,11 @@ export async function GET(req: Request) {
       setSchoolDashboardServerCached(`fees:transactions:${schoolId}:${limit}`, payload, 20_000);
     }
     return NextResponse.json(payload, { status: 200 });
+    });
   } catch (error: unknown) {
-    console.error("Transactions error:", error);
+    logger.error("Transactions error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

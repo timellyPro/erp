@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
 import { Prisma } from "@prisma/client";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
+import { logger } from "@/lib/logger";
+import { invalidateFeeListServerCaches } from "@/lib/fees/feeListServerCache";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 const MAX_ROWS = 800;
 const WRITE_BATCH_SIZE = 100;
@@ -108,8 +112,10 @@ export async function POST(req: Request) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
-    const body = await req.json().catch(() => ({}));
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
     const cleanupDuplicates = Boolean(body.cleanupDuplicates);
     const cleanupFeeNamesRaw: unknown[] = Array.isArray(body.cleanupFeeNames)
       ? body.cleanupFeeNames
@@ -349,6 +355,8 @@ export async function POST(req: Request) {
       created += batch.length;
     }
 
+    invalidateFeeListServerCaches(schoolId);
+
     return NextResponse.json(
       {
         created,
@@ -358,10 +366,11 @@ export async function POST(req: Request) {
       },
       { status: 200 }
     );
+    }, { timeout: 120_000 });
   } catch (error: unknown) {
-    console.error("POST /api/fees/extra/bulk-by-timelly error:", error);
+    logger.error("POST /api/fees/extra/bulk-by-timelly error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

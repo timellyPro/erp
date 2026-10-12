@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { createNotification } from "@/lib/notificationService";
-import { assertTeacherCanEnterMarks } from "@/lib/teacherMarksScope";
-import { parseMarkComponents, sumComponents } from "@/lib/markComponents";
-import { loadConfiguredMarkLimits, markLimitError } from "@/lib/examMarkLimits";
+import { assertTeacherCanEnterMarks } from "@/lib/teacher/teacherMarksScope";
+import { parseMarkComponents, sumComponents } from "@/lib/exams/markComponents";
+import { loadConfiguredMarkLimits, markLimitError } from "@/lib/exams/examMarkLimits";
 import { randomUUID } from "crypto";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 function calculateGrade(marks: number, totalMarks: number): string {
   const percentage = (marks / totalMarks) * 100;
@@ -28,7 +31,22 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const body = await req.json();
+    const createMarkBodySchema = z.object({
+      studentId: z.string().optional(),
+      classId: z.string().optional(),
+      subject: z.string().optional(),
+      suggestions: z.string().optional().nullable(),
+      examType: z.string().optional().nullable(),
+      grade: z.string().optional().nullable(),
+      components: z.unknown().optional(),
+      marks: z.union([z.number(), z.string()]).optional(),
+      totalMarks: z.union([z.number(), z.string()]).optional(),
+    });
+    const parsedBody = createMarkBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
     const {
       studentId,
       classId,
@@ -43,7 +61,7 @@ export async function POST(req: Request) {
       components = parseMarkComponents(body.components);
     } catch (err) {
       return NextResponse.json(
-        { message: err instanceof Error ? err.message : "Invalid components" },
+        { message: toClientErrorMessage(err, "Invalid components") },
         { status: 400 }
       );
     }
@@ -89,6 +107,7 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const classData = await prisma.class.findFirst({
       where: {
@@ -221,12 +240,13 @@ export async function POST(req: Request) {
       { message: "Marks added successfully", mark },
       { status: 201 }
     );
+    });
   } catch (error: unknown) {
-    console.error("Create marks error:", error);
+    logger.error("Create marks error:", error);
     return NextResponse.json(
       {
         message:
-          error instanceof Error ? error.message : "Internal server error",
+          toClientErrorMessage(error, "Internal server error"),
       },
       { status: 500 }
     );

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { assertCanManageAdmissions, getSessionSchoolId } from "../../_utils";
 
 type FeeType = "APPLICATION" | "ADMISSION";
@@ -28,6 +28,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { id } = await ctx.params;
     const body = await req.json().catch(() => ({}));
@@ -157,6 +158,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       { message: "Admission fee marked as paid", application: updated },
       { status: 200 }
     );
+    });
   } catch (e: unknown) {
     const err = e as { message?: string; statusCode?: number };
     return NextResponse.json(

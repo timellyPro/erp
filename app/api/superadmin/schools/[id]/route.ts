@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 /**
  * Permanently delete a school and tenant data: students (fees, payments, etc.),
@@ -25,12 +28,9 @@ export async function DELETE(
 
     const { id: schoolId } = await params;
 
-    let body: { schoolName?: string } = {};
-    try {
-      body = (await req.json()) as { schoolName?: string };
-    } catch {
-      body = {};
-    }
+    const deleteSchoolBodySchema = z.object({ schoolName: z.string().optional() });
+    const parsedBody = deleteSchoolBodySchema.safeParse(await req.json().catch(() => ({})));
+    const body = parsedBody.success ? parsedBody.data : {};
     const confirmName = typeof body.schoolName === "string" ? body.schoolName.trim() : "";
 
     const school = await prisma.school.findUnique({
@@ -118,9 +118,9 @@ export async function DELETE(
       { status: 200 }
     );
   } catch (e: unknown) {
-    console.error("Superadmin school DELETE:", e);
+    logger.error("Superadmin school DELETE:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

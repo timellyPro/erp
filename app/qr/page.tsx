@@ -2,7 +2,7 @@
 
 import { FileDown, Printer } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import InstallAppPoster from "@/app/frontend/components/common/InstallAppPoster";
+import InstallAppPoster from "@/app/_components/components/common/InstallAppPoster";
 import { generatePDF, printFromElement } from "@/lib/pdfUtils";
 
 const POSTER_WIDTH = 595;

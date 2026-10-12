@@ -1,30 +1,23 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { logger } from "@/lib/logger";
+import { schoolIdViaTeacherClass, schoolIdViaTeacherRelation, schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 async function resolveSchoolId(session: { user: { id: string; schoolId?: string | null; role: string } }) {
   let schoolId = session.user.schoolId;
   if (!schoolId && session.user.role === "TEACHER") {
-    const teacherClass = await prisma.class.findFirst({
-      where: { teacherId: session.user.id },
-      select: { schoolId: true },
-    });
-    schoolId = teacherClass?.schoolId ?? null;
+    schoolId = await schoolIdViaTeacherClass(session.user.id);
     if (!schoolId) {
-      const teacherSchool = await prisma.school.findFirst({
-        where: { teachers: { some: { id: session.user.id } } },
-        select: { id: true },
-      });
-      schoolId = teacherSchool?.id ?? null;
+      schoolId = await schoolIdViaTeacherRelation(session.user.id);
     }
   }
   if (!schoolId) {
-    const school = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = school?.id ?? null;
+    schoolId = await schoolIdViaAdminRelation(session.user.id);
   }
   return schoolId;
 }
@@ -63,15 +56,27 @@ export async function GET(
 
     const { id } = await params;
 
-    const schedule = await prisma.examSchedule.findUnique({
-      where: { id },
-      include: {
-        term: {
-          include: {
-            class: { select: { id: true, name: true, section: true } },
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go
+    // through the app_tenant connection, restricted by RLS, not just the
+    // post-fetch `schedule.term.schoolId !== schoolId` check below.
+    const { schedule, tracking } = await withTenantScopedClient(schoolId, async (tx) => {
+      const sch = await tx.examSchedule.findUnique({
+        where: { id },
+        include: {
+          term: {
+            include: {
+              class: { select: { id: true, name: true, section: true } },
+            },
           },
         },
-      },
+      });
+      if (!sch || !sch.term) return { schedule: sch, tracking: null };
+
+      const trk = await tx.syllabusTracking.findFirst({
+        where: { termId: sch.term.id, subject: sch.subject },
+        include: { units: { orderBy: { order: "asc" } } },
+      });
+      return { schedule: sch, tracking: trk };
     });
 
     if (!schedule || !schedule.term || schedule.term.schoolId !== schoolId) {
@@ -79,10 +84,6 @@ export async function GET(
     }
 
     const term = schedule.term;
-    const tracking = await prisma.syllabusTracking.findFirst({
-      where: { termId: term.id, subject: schedule.subject },
-      include: { units: { orderBy: { order: "asc" } } },
-    });
 
     const syllabusList = tracking
       ? tracking.units.map((u) => ({
@@ -120,9 +121,9 @@ export async function GET(
 
     return NextResponse.json({ exam }, { status: 200 });
   } catch (e: unknown) {
-    console.error("Exams schedule GET [id]:", e);
+    logger.error("Exams schedule GET [id]:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }
@@ -141,6 +142,7 @@ export async function PUT(
 
     const schoolId = await resolveSchoolId(session);
     if (!schoolId) return NextResponse.json({ message: "School not found" }, { status: 400 });
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { id } = await params;
     const schedule = await prisma.examSchedule.findUnique({
@@ -151,9 +153,13 @@ export async function PUT(
       return NextResponse.json({ message: "Exam schedule not found" }, { status: 404 });
     }
 
-    const body = await req.json();
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
     const subject = typeof body.subject === "string" ? body.subject.trim() : "";
-    const examDate = body.examDate ? new Date(body.examDate) : null;
+    const examDate = body.examDate ? new Date(body.examDate as string) : null;
     const startTime = typeof body.startTime === "string" ? body.startTime.trim() : "";
     const durationMin = Number(body.durationMin);
 
@@ -174,10 +180,11 @@ export async function PUT(
       },
     });
     return NextResponse.json({ schedule: updated }, { status: 200 });
+    });
   } catch (e: unknown) {
-    console.error("Exams schedule PUT [id]:", e);
+    logger.error("Exams schedule PUT [id]:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }
@@ -196,6 +203,7 @@ export async function DELETE(
 
     const schoolId = await resolveSchoolId(session);
     if (!schoolId) return NextResponse.json({ message: "School not found" }, { status: 400 });
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { id } = await params;
     const schedule = await prisma.examSchedule.findUnique({
@@ -209,10 +217,11 @@ export async function DELETE(
 
     await prisma.examSchedule.delete({ where: { id } });
     return NextResponse.json({ success: true }, { status: 200 });
+    });
   } catch (e: unknown) {
-    console.error("Exams schedule DELETE [id]:", e);
+    logger.error("Exams schedule DELETE [id]:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

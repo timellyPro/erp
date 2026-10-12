@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 
 type RouteParams =
   | { params: { id: string } }
@@ -26,7 +26,9 @@ export async function GET(_req: Request, context: RouteParams) {
       ? session.user.schoolId
       : null;
 
-  const rows = await prisma.$queryRaw<
+  // SUPERADMIN (or a session with no school) legitimately reads across tenants: stay on the
+  // owner connection. Everyone else runs on the RLS-restricted tenant connection.
+  const query = () => prisma.$queryRaw<
     Array<{
       id: string;
       status: "PENDING" | "APPROVED" | "REJECTED";
@@ -53,6 +55,8 @@ export async function GET(_req: Request, context: RouteParams) {
     ORDER BY fda."createdAt" DESC
     LIMIT 10
   `;
+  const rows =
+    role !== "SUPERADMIN" && sessionSchoolId ? await runInTenantScope(sessionSchoolId, query) : await query();
 
   return NextResponse.json({
     approvals: rows.map((row) => ({

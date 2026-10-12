@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "async_hooks";
 import { PrismaClient } from "@prisma/client";
-import { bumpTenantCacheVersion } from "@/lib/redis";
+import { bumpTenantCacheVersion } from "@/lib/cache/redis";
+import { logger } from "@/lib/logger";
 
 /** Bulk writes (e.g. recalculate all fees) bump Redis once at the end, not per row. */
 const deferredInvalidation = new AsyncLocalStorage<{ active: boolean }>();
@@ -25,9 +26,10 @@ export async function runWithDeferredCacheInvalidation<T>(fn: () => Promise<T>):
   });
 }
 
-// Use the transaction pooler (DATABASE_URL, port 6543). The session pooler
-// (DIRECT_URL, port 5432) allows only about 15 clients; dev was hitting
-// EMAXCONNSESSION and exam types/subjects came back empty.
+// Always prefer the PgBouncer transaction pooler (DATABASE_URL, :6543) when available.
+// It multiplexes many short-lived connections cheaply, which matters far more than
+// raw round-trip latency once concurrent requests fan out (see lib/db.ts pool sizing below).
+// DIRECT_URL (:5432, unpooled) is reserved as a fallback when the pooler isn't configured.
 const base = process.env.DATABASE_URL || process.env.DIRECT_URL;
 
 if (!base) {
@@ -46,31 +48,33 @@ function withParam(url: string, key: string, value: string) {
 
 let connectionString = base || "";
 if (connectionString) {
-  // Supabase transaction pooler (6543 / pgbouncer=true): keep Prisma's pool modest.
-  // connection_limit=1 breaks Promise.all dashboards; too high exhausts PgBouncer.
+  // Supabase transaction pooler (6543 / pgbouncer=true): PgBouncer connections are cheap,
+  // so size Prisma's pool for real concurrency. connection_limit=1 was previously forcing
+  // every Promise.all([...]) fan-out to serialize through a single connection — measured
+  // to turn a ~5ms-server-side query batch into 6-9s of client-side queueing.
   const isPgBouncer =
     /(?:^|[?&])pgbouncer=true(?:&|$)/i.test(connectionString) ||
     /:6543(?:\/|\?|$)/.test(connectionString);
   if (!isPgBouncer) {
     connectionString = withParam(connectionString, "statement_timeout", "120000");
   }
-  // Dev used to use 2; parallel tab warmers (exams terms+types+subjects) hit P2024.
-  // Student-details fans out shell/payments/breakdown — need headroom or queries queue for ~7–10s.
-  // Keep prod PgBouncer modest; override anytime with PRISMA_CONNECTION_LIMIT.
-  // Supabase session mode (port 5432) allows only pool_size clients (often 15).
-  // A limit of 10 on one Next process, plus HMR, fills that pool and exam-types/subjects 500.
+  // Production runs as Vercel serverless functions: each concurrent invocation can be
+  // a separate instance with its OWN pool, so this value gets multiplied by however many
+  // instances are warm at once (a traffic spike can mean dozens). Keep it just above what
+  // one request's Promise.all([...]) fan-out needs (3-6 parallel queries is typical here),
+  // not sized like a single long-lived dev server's pool.
+  // Supabase session mode (port 5432) allows only pool_size clients (often 15), so keep
+  // that tiny; override anytime with PRISMA_CONNECTION_LIMIT.
   const isSessionPooler = !isPgBouncer && /:5432(?:\/|\?|$)/.test(connectionString);
   const poolLimit =
     process.env.PRISMA_CONNECTION_LIMIT ||
     (isPgBouncer
       ? process.env.NODE_ENV === "development"
-        ? "8"
+        ? "20"
         : "5"
       : isSessionPooler
         ? "3"
-        : process.env.NODE_ENV === "development"
-          ? "10"
-          : "8");
+        : "5");
   connectionString = withParam(connectionString, "connection_limit", poolLimit);
   connectionString = withParam(connectionString, "pool_timeout", "60");
   connectionString = withParam(connectionString, "connect_timeout", "10");
@@ -96,9 +100,46 @@ type LocalCacheEntry = {
 };
 
 const localQueryCache = new Map<string, LocalCacheEntry>();
+// Concurrent callers requesting the same read (e.g. two Promise.all branches both
+// fetching extraFee.findMany({where:{schoolId}}) at once) would otherwise each open
+// their own connection before either result lands in localQueryCache above.
+// Sharing the in-flight promise collapses them into a single DB round trip.
+const inFlightQueries = new Map<string, Promise<unknown>>();
 
 function isWriteOperation(operation: string) {
   return WRITE_OPERATIONS.has(operation);
+}
+
+// Transient connection drops (pooler recycling a connection, DB-side idle timeout) surface as
+// these Prisma error codes. Safe to retry only for reads: a retried write could double-apply
+// if the original actually committed before the connection reportedly closed.
+const RETRYABLE_PRISMA_CODES = new Set(["P1017", "P1001", "P2024"]);
+const RETRYABLE_READ_RETRIES = Number(process.env.PRISMA_READ_RETRY_COUNT || "2");
+const RETRYABLE_READ_RETRY_DELAY_MS = Number(process.env.PRISMA_READ_RETRY_DELAY_MS || "150");
+
+function isRetryableConnectionError(error: unknown): boolean {
+  const code = (error as { code?: string })?.code;
+  return typeof code === "string" && RETRYABLE_PRISMA_CODES.has(code);
+}
+
+async function withReadRetry<T>(run: () => Promise<T>, model?: string, operation?: string): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= RETRYABLE_READ_RETRIES; attempt++) {
+    try {
+      return await run();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableConnectionError(error) || attempt === RETRYABLE_READ_RETRIES) throw error;
+      logger.warn("prisma_retry_connection_error", {
+        model,
+        operation,
+        attempt: attempt + 1,
+        code: (error as { code?: string })?.code,
+      });
+      await new Promise((r) => setTimeout(r, RETRYABLE_READ_RETRY_DELAY_MS * (attempt + 1)));
+    }
+  }
+  throw lastError;
 }
 
 function getLocalCachedValue(cacheKey: string) {
@@ -172,17 +213,25 @@ const createPrisma = () => {
         if (cacheKey) {
           const hit = getLocalCachedValue(cacheKey);
           if (hit !== null) return hit;
+
+          const inFlight = inFlightQueries.get(cacheKey);
+          if (inFlight) return inFlight;
         }
 
+        const isRead = !!model && READ_OPERATIONS.has(operation);
+        const promise = isRead ? withReadRetry(() => query(args), model, operation) : query(args);
+        if (cacheKey) inFlightQueries.set(cacheKey, promise);
+
         try {
-          const result = await query(args);
+          const result = await promise;
           if (cacheKey) setLocalCachedValue(cacheKey, result);
           return result;
         } finally {
+          if (cacheKey) inFlightQueries.delete(cacheKey);
           const ms = performance.now() - start;
           const slowMs = Number(process.env.PRISMA_SLOW_QUERY_MS || "50");
           if (ms >= slowMs) {
-            console.warn("prisma_slow_query", {
+            logger.warn("prisma_slow_query", {
               model,
               operation,
               ms: Math.round(ms),

@@ -1,20 +1,23 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import {
   extraFeeAppliesToStudent,
   parseExtraFeeResidencyScopeBody,
   suggestedResidencyScopeForExtraFeeName,
-} from "@/lib/extraFeeResidencyScope";
-import { createExtraFeeRows, migrateUnsplitLumpExtraFees, type ExtraFeeCreatePayload } from "@/lib/extraFeeInstallmentDb";
-import { isUnsplitLumpExtraFee } from "@/lib/extraFeeInstallments";
+} from "@/lib/fees/extraFeeResidencyScope";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
+import { createExtraFeeRows, migrateUnsplitLumpExtraFees, type ExtraFeeCreatePayload } from "@/lib/fees/extraFeeInstallmentDb";
+import { isUnsplitLumpExtraFee } from "@/lib/fees/extraFeeInstallments";
 import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
-} from "@/lib/schoolDashboardServerCache";
-import { invalidateAssignCatalogServerCache } from "@/lib/assignCatalogServerCache";
-import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
+} from "@/lib/school/schoolDashboardServerCache";
+import { invalidateAssignCatalogServerCache } from "@/lib/fees/assignCatalogServerCache";
+import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
+import { logger } from "@/lib/logger";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -61,6 +64,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
 
+    return await runInTenantScope(schoolId, async () => {
     const { searchParams } = new URL(req.url);
     const runMaintenance = searchParams.get("maintenance") === "1";
 
@@ -112,10 +116,11 @@ export async function GET(req: Request) {
       setSchoolDashboardServerCached(`fees:extra:${schoolId}`, payload, 30_000);
     }
     return NextResponse.json(payload);
-  } catch (error: any) {
-    console.error("Extra fees GET error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Extra fees GET error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }
@@ -139,8 +144,20 @@ export async function POST(req: Request) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
-    const body = await req.json();
+    const createExtraFeeBodySchema = z.object({
+      name: z.string().optional(),
+      amount: z.number().optional(),
+      targetType: z.string().optional(),
+      targetClassId: z.string().optional().nullable(),
+      targetSection: z.string().optional().nullable(),
+      targetStudentId: z.string().optional().nullable(),
+      splitIntoTwoInstallments: z.boolean().optional(),
+      residencyScope: z.unknown().optional(),
+    });
+    const parsedBody = createExtraFeeBodySchema.safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
     const { name, amount, targetType, targetClassId, targetSection, targetStudentId } = body;
     const splitIntoTwoInstallments = Boolean(body.splitIntoTwoInstallments);
     const parsedScope = parseExtraFeeResidencyScopeBody(body.residencyScope);
@@ -238,10 +255,11 @@ export async function POST(req: Request) {
     }
 
     return NextResponse.json({ extraFee, extraFeeIds: ids }, { status: 201 });
-  } catch (error: any) {
-    console.error("Extra fee POST error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Extra fee POST error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

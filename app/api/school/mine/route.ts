@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { swrGet, swrSet } from "@/lib/tenantCache";
+import { authOptions } from "@/lib/auth/authOptions";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { swrGet, swrSet } from "@/lib/cache/tenantCache";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -34,16 +34,21 @@ export async function GET() {
     return NextResponse.json({ school: cached.value.school }, { status: 200 });
   }
 
-  const school = await prisma.school.findUnique({
-    where: { id: schoolId },
-    include: {
-      admins: {
-        where: { role: "SCHOOLADMIN", photoUrl: { not: null } },
-        select: { photoUrl: true },
-        take: 1,
+  // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): read goes
+  // through the app_tenant connection, restricted by RLS, not just the
+  // `where: { id: schoolId }` filter above.
+  const school = await withTenantScopedClient(schoolId, (tx) =>
+    tx.school.findUnique({
+      where: { id: schoolId },
+      include: {
+        admins: {
+          where: { role: "SCHOOLADMIN", photoUrl: { not: null } },
+          select: { photoUrl: true },
+          take: 1,
+        }
       }
-    }
-  });
+    })
+  );
 
   await swrSet(
     cacheKey,

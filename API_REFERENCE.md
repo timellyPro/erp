@@ -304,7 +304,7 @@ All fields optional
 
 **Methods**: `POST`
 
-**Authentication**: Required
+**Authentication**: Required; role `SCHOOLADMIN` or `SUPERADMIN` (others get 403)
 
 **Request Body**:
 ```json

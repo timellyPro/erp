@@ -1,15 +1,15 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { assertCanManageAdmissions, getSessionSchoolId } from "../_utils";
 import { randomUUID } from "crypto";
+import type { Gender, BoardingType, Grade } from "@prisma/client";
+import { HttpError, getErrorMessage, getErrorCode, getErrorMeta, getErrorStatusCode } from "@/lib/errors/errorInfo";
 
 function requiredString(value: unknown, field: string) {
   if (typeof value !== "string" || !value.trim()) {
-    const err = new Error(`${field} is required`);
-    (err as any).statusCode = 400;
-    throw err;
+    throw new HttpError(`${field} is required`, 400);
   }
   return value.trim();
 }
@@ -49,6 +49,7 @@ export async function POST(req: Request) {
 
     const schoolId = await getSessionSchoolId(session);
     if (!schoolId) return NextResponse.json({ message: "School not found in session" }, { status: 400 });
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const rawBody = await req.json();
     const input =
@@ -100,7 +101,7 @@ export async function POST(req: Request) {
       "emergencyMotherNo",
       "emergencyGuardianNo",
     ]);
-    const body: any = Object.fromEntries(
+    const body: Record<string, unknown> = Object.fromEntries(
       Object.entries(input).filter(([key]) => allowedFields.has(key))
     );
 
@@ -143,8 +144,8 @@ export async function POST(req: Request) {
         penNumber: optionalString(body.penNumber),
         apaarId: optionalString(body.apaarId),
         admissionNo: optionalString(body.admissionNo),
-        gradeSought: body.gradeSought,
-        boardingType: body.boardingType,
+        gradeSought: body.gradeSought as Grade,
+        boardingType: body.boardingType as BoardingType,
         residencyType: normalizeResidencyType(body.residencyType),
         totalFee: null,
         discountPercent: null,
@@ -163,7 +164,7 @@ export async function POST(req: Request) {
         firstName: requiredString(body.firstName, "firstName"),
         middleName: optionalString(body.middleName),
         lastName: requiredString(body.lastName, "lastName"),
-        gender: body.gender,
+        gender: body.gender as Gender,
         dateOfBirth: dob,
         aadharNo,
         firstLanguage: optionalString(body.firstLanguage) ?? "English",
@@ -210,17 +211,18 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({ message: "Admission saved", application: created }, { status: 201 });
+    });
   } catch (e: unknown) {
-    const err = e as { message?: string; code?: string; meta?: any; statusCode?: number };
-
-    if (err?.code === "P2002") {
-      const field = Array.isArray(err?.meta?.target) ? err.meta.target[0] : undefined;
+    if (getErrorCode(e) === "P2002") {
+      const meta = getErrorMeta(e);
+      const target = meta && typeof meta === "object" && "target" in meta ? (meta as { target?: unknown }).target : undefined;
+      const field = Array.isArray(target) ? target[0] : undefined;
       return NextResponse.json({ message: `Duplicate value for ${field ?? "a unique field"}` }, { status: 400 });
     }
 
     return NextResponse.json(
-      { message: err?.message ?? "Internal server error" },
-      { status: err?.statusCode ?? 500 }
+      { message: getErrorMessage(e) ?? "Internal server error" },
+      { status: getErrorStatusCode(e) ?? 500 }
     );
   }
 }

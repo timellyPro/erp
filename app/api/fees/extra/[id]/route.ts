@@ -1,15 +1,24 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
-import { extraFeeAppliesToStudent } from "@/lib/extraFeeResidencyScope";
-import { snapshotExtraFeeNameOnAllocations } from "@/lib/backfillPaymentAllocationComponentNames";
-import { patchExtraFeeWithInstallmentSupport } from "@/lib/extraFeeInstallmentDb";
-import { invalidateSchoolFeeReadCaches } from "@/lib/studentFeeReadCache";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
+import { extraFeeAppliesToStudent } from "@/lib/fees/extraFeeResidencyScope";
+import { snapshotExtraFeeNameOnAllocations } from "@/lib/fees/backfillPaymentAllocationComponentNames";
+import { patchExtraFeeWithInstallmentSupport } from "@/lib/fees/extraFeeInstallmentDb";
+import { invalidateSchoolFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
 import { Prisma } from "@prisma/client";
+import { logger } from "@/lib/logger";
 
 const STUDENT_FEE_UPDATE_CHUNK = 200;
+
+const patchExtraFeeBodySchema = z.object({
+  name: z.string().optional(),
+  amount: z.number().optional(),
+  splitIntoTwoInstallments: z.boolean().optional(),
+  combinedInstallmentTotal: z.number().optional(),
+});
 
 function getStudentWhere(
   targetType: string,
@@ -102,6 +111,7 @@ export async function PATCH(
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { id } = await params;
     const extraFee = await prisma.extraFee.findFirst({
@@ -114,17 +124,18 @@ export async function PATCH(
       );
     }
 
-    const body = await req.json();
-    console.log("\n========== EXTRA FEE PATCH ==========");
-    console.log("Fee ID:", id);
-    console.log("Current DB row:", {
+    const parsedBody = patchExtraFeeBodySchema.safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
+    logger.info("\n========== EXTRA FEE PATCH ==========");
+    logger.info("Fee ID:", id);
+    logger.info("Current DB row:", {
       name: extraFee.name,
       amount: extraFee.amount,
       splitIntoTwoInstallments: extraFee.splitIntoTwoInstallments,
       targetType: extraFee.targetType,
     });
-    console.log("Request body:", body);
-    console.log("====================================\n");
+    logger.info("Request body:", body);
+    logger.info("====================================\n");
 
     const result = await patchExtraFeeWithInstallmentSupport(prisma, extraFee, {
       name: body.name,
@@ -134,29 +145,29 @@ export async function PATCH(
     });
 
     if (result === "no_changes") {
-      console.log("[ExtraFee Installments] PATCH result: no changes\n");
+      logger.info("[ExtraFee Installments] PATCH result: no changes\n");
       return NextResponse.json({ extraFee });
     }
 
     if (result.studentFeeDelta !== 0) {
       const eligibleIds = await eligibleStudentIdsForExtra(extraFee, schoolId);
       await applyStudentFeeDelta(eligibleIds, result.studentFeeDelta);
-      console.log("[ExtraFee Installments] Student fee totals adjusted:", {
+      logger.info("[ExtraFee Installments] Student fee totals adjusted:", {
         studentCount: eligibleIds.length,
         delta: result.studentFeeDelta,
       });
     }
 
-    console.log("\n========== EXTRA FEE PATCH RESULT ==========");
-    console.log("Action:", result.migrated ? "SPLIT (1 row → 2 rows)" : result.splitApplied ? "UPDATED PAIR" : "SINGLE ROW");
-    console.log("Row IDs now:", result.extraFeeIds);
-    console.log("migrated:", result.migrated, "| splitApplied:", result.splitApplied);
+    logger.info("\n========== EXTRA FEE PATCH RESULT ==========");
+    logger.info("Action:", result.migrated ? "SPLIT (1 row → 2 rows)" : result.splitApplied ? "UPDATED PAIR" : "SINGLE ROW");
+    logger.info("Row IDs now:", result.extraFeeIds);
+    logger.info("migrated:", result.migrated, "| splitApplied:", result.splitApplied);
     if (result.migrated) {
-      console.log("✓ Old lump was replaced by two installment rows in the database.");
+      logger.info("✓ Old lump was replaced by two installment rows in the database.");
     } else if (result.splitApplied) {
-      console.log("✓ Both installment rows were updated together.");
+      logger.info("✓ Both installment rows were updated together.");
     }
-    console.log("============================================\n");
+    logger.info("============================================\n");
 
     await invalidateSchoolFeeReadCaches(schoolId);
 
@@ -166,9 +177,10 @@ export async function PATCH(
       splitApplied: result.splitApplied,
       migrated: result.migrated,
     });
+    });
   } catch (error: unknown) {
     const err = error as { message?: string };
-    console.error("Extra fee PATCH error:", error);
+    logger.error("Extra fee PATCH error:", error);
     return NextResponse.json(
       { message: err?.message || "Internal server error" },
       { status: 500 }
@@ -196,6 +208,7 @@ export async function DELETE(
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { id } = await params;
     const extraFee = await prisma.extraFee.findFirst({
@@ -215,9 +228,10 @@ export async function DELETE(
 
     await invalidateSchoolFeeReadCaches(schoolId);
     return NextResponse.json({ success: true });
+    });
   } catch (error: unknown) {
     const err = error as { message?: string };
-    console.error("Extra fee DELETE error:", error);
+    logger.error("Extra fee DELETE error:", error);
     return NextResponse.json(
       { message: err?.message || "Internal server error" },
       { status: 500 }

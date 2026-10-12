@@ -1,14 +1,17 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import { authOptions } from "@/lib/auth/authOptions";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
 import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
-} from "@/lib/schoolDashboardServerCache";
+} from "@/lib/school/schoolDashboardServerCache";
 import { roundRupee } from "@/lib/formatRupee";
-import { storedDiscountRupeeAmount } from "@/lib/studentFeeHeadDiscount";
+import { storedDiscountRupeeAmount } from "@/lib/fees/studentFeeHeadDiscount";
+import { logger } from "@/lib/logger";
+import { FEE_LIST_SERVER_CACHE_TTL_MS } from "@/lib/fees/feeListServerCache";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 /**
  * Fast fee records list for the Fees Records table (no per-head allocation work).
@@ -41,29 +44,34 @@ export async function GET(req: Request) {
       return NextResponse.json(cached, { status: 200 });
     }
 
-    const rows = await prisma.studentFee.findMany({
-      where: { student: { schoolId } },
-      select: {
-        id: true,
-        studentId: true,
-        totalFee: true,
-        finalFee: true,
-        amountPaid: true,
-        remainingFee: true,
-        discountPercent: true,
-        student: {
-          select: {
-            id: true,
-            status: true,
-            user: { select: { name: true, email: true } },
-            class: { select: { id: true, name: true, section: true } },
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): read goes
+    // through the app_tenant connection, restricted by RLS, not just the
+    // `where: { student: { schoolId } }` filter above.
+    const rows = await withTenantScopedClient(schoolId, (tx) =>
+      tx.studentFee.findMany({
+        where: { student: { schoolId } },
+        select: {
+          id: true,
+          studentId: true,
+          totalFee: true,
+          finalFee: true,
+          amountPaid: true,
+          remainingFee: true,
+          discountPercent: true,
+          student: {
+            select: {
+              id: true,
+              status: true,
+              user: { select: { name: true, email: true } },
+              class: { select: { id: true, name: true, section: true } },
+            },
           },
         },
-      },
-      orderBy: [{ updatedAt: "desc" }, { studentId: "desc" }],
-      take: take + 1,
-      ...(cursor ? { cursor: { studentId: cursor }, skip: 1 } : {}),
-    });
+        orderBy: [{ updatedAt: "desc" }, { studentId: "desc" }],
+        take: take + 1,
+        ...(cursor ? { cursor: { studentId: cursor }, skip: 1 } : {}),
+      })
+    );
 
     const hasNext = rows.length > take;
     const page = hasNext ? rows.slice(0, take) : rows;
@@ -91,12 +99,12 @@ export async function GET(req: Request) {
     });
 
     const payload = { fees, nextCursor };
-    setSchoolDashboardServerCached(memKey, payload, 25_000);
+    setSchoolDashboardServerCached(memKey, payload, FEE_LIST_SERVER_CACHE_TTL_MS);
     return NextResponse.json(payload, { status: 200 });
   } catch (error: unknown) {
-    console.error("Fee records list error:", error);
+    logger.error("Fee records list error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

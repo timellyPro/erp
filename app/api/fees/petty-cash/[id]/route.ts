@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
-import { resolveFeesSchoolId } from "@/lib/resolveFeesSchoolId";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
+import { logger } from "@/lib/logger";
 
 export async function PATCH(
   req: Request,
@@ -25,6 +27,7 @@ export async function PATCH(
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { id } = await params;
     const existing = await prisma.pettyCashExpense.findFirst({
@@ -34,7 +37,8 @@ export async function PATCH(
       return NextResponse.json({ message: "Expense not found" }, { status: 404 });
     }
 
-    const body = await req.json();
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
     const itemName = body?.itemName !== undefined ? String(body.itemName).trim() : undefined;
     const headOfAccount = body?.headOfAccount !== undefined ? String(body.headOfAccount).trim() : undefined;
     const paymentTypeRaw = body?.paymentType !== undefined ? String(body.paymentType).trim().toUpperCase() : undefined;
@@ -104,9 +108,10 @@ export async function PATCH(
       data: updates,
     });
     return NextResponse.json({ expense });
+    });
   } catch (error: unknown) {
     const err = error as { message?: string };
-    console.error("Petty cash PATCH error:", error);
+    logger.error("Petty cash PATCH error:", error);
     return NextResponse.json(
       { message: err?.message || "Internal server error" },
       { status: 500 }
@@ -135,6 +140,7 @@ export async function DELETE(
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { id } = await params;
     const existing = await prisma.pettyCashExpense.findFirst({
@@ -147,9 +153,10 @@ export async function DELETE(
 
     await prisma.pettyCashExpense.delete({ where: { id } });
     return NextResponse.json({ success: true });
+    });
   } catch (error: unknown) {
     const err = error as { message?: string };
-    console.error("Petty cash DELETE error:", error);
+    logger.error("Petty cash DELETE error:", error);
     return NextResponse.json(
       { message: err?.message || "Internal server error" },
       { status: 500 }

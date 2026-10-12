@@ -8,7 +8,7 @@
  *   npx tsx scripts/reconcile-school-fees.ts --apply --school-id <id>
  */
 import prisma from "../lib/db";
-import { reconcileSchoolFeeIntegrity } from "../lib/reconcileStudentFeeIntegrity";
+import { reconcileSchoolFeeIntegrity } from "@/lib/fees/reconcileStudentFeeIntegrity";
 
 async function main() {
   const args = process.argv.slice(2);

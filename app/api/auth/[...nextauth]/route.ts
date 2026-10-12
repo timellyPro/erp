@@ -1,7 +1,7 @@
 import NextAuth from "next-auth";
 import type { NextRequest } from "next/server";
-import { authOptions } from "@/lib/authOptions";
-import { adaptSuperAdminSessionCookies } from "@/lib/superAdminAuthCookies";
+import { authOptions } from "@/lib/auth/authOptions";
+import { adaptSuperAdminSessionCookies } from "@/lib/auth/superAdminAuthCookies";
 
 const handler = NextAuth(authOptions);
 

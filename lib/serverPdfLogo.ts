@@ -2,6 +2,7 @@ import { readFile } from "fs/promises";
 import path from "path";
 import sharp from "sharp";
 import { supabaseAdmin, SUPABASE_BUCKET } from "@/lib/supabase";
+import { getInternalSecret } from "@/lib/internalSecret";
 
 export type PdfLogoAsset = {
   data: string;
@@ -66,9 +67,9 @@ function absUrl(raw: string, origin: string): string {
   return `${origin}/${raw.replace(/^\//, "")}`;
 }
 
-async function fetchRemoteLogo(url: string): Promise<PdfLogoAsset | null> {
+async function fetchRemoteLogo(url: string, headers?: Record<string, string>): Promise<PdfLogoAsset | null> {
   try {
-    const res = await fetch(url, { cache: "no-store" });
+    const res = await fetch(url, { cache: "no-store", headers });
     if (!res.ok) return null;
     const buf = Buffer.from(await res.arrayBuffer());
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
@@ -104,13 +105,20 @@ async function loadSingleLogo(trimmed: string, origin: string): Promise<PdfLogoA
     if (fromStorage) return fromStorage;
   }
 
-  const mediaUrl = trimmed.includes("/storage/v1/object/")
+  const viaMediaProxy = trimmed.includes("/storage/v1/object/");
+  const mediaUrl = viaMediaProxy
     ? absUrl(`/api/media?url=${encodeURIComponent(trimmed)}`, origin)
     : trimmed.startsWith("http")
       ? trimmed
       : absUrl(trimmed, origin);
 
-  return fetchRemoteLogo(mediaUrl);
+  // /api/media now requires a session or this internal secret — never sent to
+  // third-party URLs, only to our own media proxy.
+  const internalSecret = getInternalSecret();
+  const headers =
+    viaMediaProxy && internalSecret ? { "x-internal-secret": internalSecret } : undefined;
+
+  return fetchRemoteLogo(mediaUrl, headers);
 }
 
 /** School logo for PDF — uses school logoUrl (WebP/JPEG/PNG via sharp). No Timelly fallback here. */

@@ -1,22 +1,22 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
 import {
   getSchoolDashboardServerCached,
   setSchoolDashboardServerCached,
-} from "@/lib/schoolDashboardServerCache";
-import { activeStudentWhere } from "@/lib/studentStatus";
-import { getTeacherAccessibleClassIds } from "@/lib/teacherClassAccess";
+} from "@/lib/school/schoolDashboardServerCache";
+import { activeStudentWhere } from "@/lib/students/studentStatus";
+import { getTeacherAccessibleClassIds } from "@/lib/teacher/teacherClassAccess";
+import { logger } from "@/lib/logger";
+import { schoolIdViaTeacherClass, schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 async function resolveSchoolId(session: { user: { id: string; schoolId?: string | null; role: string } }) {
   let schoolId = session.user.schoolId;
   if (!schoolId && session.user.role === "TEACHER") {
-    const teacherClass = await prisma.class.findFirst({
-      where: { teacherId: session.user.id },
-      select: { schoolId: true },
-    });
-    schoolId = teacherClass?.schoolId ?? null;
+    schoolId = await schoolIdViaTeacherClass(session.user.id);
     if (!schoolId) {
       const teacherSchool = await prisma.user.findUnique({
         where: { id: session.user.id },
@@ -26,11 +26,7 @@ async function resolveSchoolId(session: { user: { id: string; schoolId?: string 
     }
   }
   if (!schoolId) {
-    const school = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = school?.id ?? null;
+    schoolId = await schoolIdViaAdminRelation(session.user.id);
   }
   return schoolId;
 }
@@ -83,25 +79,27 @@ export async function GET(req: Request) {
         return NextResponse.json(cached, { status: 200 });
       }
 
-      const classes = await prisma.class.findMany({
-        where,
-        select: {
-          id: true,
-          name: true,
-          section: true,
-          teacherId: true,
-          teacher: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              teacherId: true,
-              photoUrl: true,
+      const classes = await withTenantScopedClient(schoolId, (tx) =>
+        tx.class.findMany({
+          where,
+          select: {
+            id: true,
+            name: true,
+            section: true,
+            teacherId: true,
+            teacher: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                teacherId: true,
+                photoUrl: true,
+              },
             },
           },
-        },
-        orderBy: [{ name: "asc" }, { section: "asc" }],
-      });
+          orderBy: [{ name: "asc" }, { section: "asc" }],
+        })
+      );
       const payload = { classes };
       // Don't cache empty teacher lists — assignments change often via Add User
       if (!(session.user.role === "TEACHER" && classes.length === 0)) {
@@ -110,24 +108,29 @@ export async function GET(req: Request) {
       return NextResponse.json(payload, { status: 200 });
     }
 
-    const classes = await prisma.class.findMany({
-      where,
-      include: {
-        teacher: {
-          select: { id: true, name: true, email: true, subject: true },
-        },
-        _count: {
-          select: {
-            students: {
-              where: activeStudentWhere,
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go through
+    // the app_tenant connection, restricted by RLS, not just this route's own
+    // `where: { schoolId }` filter.
+    const classes = await withTenantScopedClient(schoolId, (tx) =>
+      tx.class.findMany({
+        where,
+        include: {
+          teacher: {
+            select: { id: true, name: true, email: true, subject: true },
+          },
+          _count: {
+            select: {
+              students: {
+                where: activeStudentWhere,
+              },
             },
           },
         },
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-    });
+        orderBy: {
+          createdAt: "desc",
+        },
+      })
+    );
     const classesWithTeacherId = classes.map((c) => ({
       ...c,
       teacherId: c.teacher?.id || null,
@@ -135,9 +138,9 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ classes: classesWithTeacherId }, { status: 200 });
   } catch (error: unknown) {
-    console.error("List classes error:", error);
+    logger.error("List classes error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

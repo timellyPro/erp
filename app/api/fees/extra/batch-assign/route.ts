@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import { batchAssignStudentExtraFees } from "@/lib/batchAssignStudentExtraFees";
+import { authOptions } from "@/lib/auth/authOptions";
+import { batchAssignStudentExtraFees } from "@/lib/fees/batchAssignStudentExtraFees";
 import { resolveFeesSchoolIdForSession } from "../../extra-head-templates/resolveSchoolId";
-import { invalidateStudentFeeReadCaches } from "@/lib/studentFeeReadCache";
+import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
+import { logger } from "@/lib/logger";
+import { runInTenantScope } from "@/lib/db/tenantContext";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 function canManage(role: string | null | undefined) {
   return role === "SCHOOLADMIN" || role === "SUPERADMIN" || role === "TEACHER";
@@ -24,8 +28,10 @@ export async function POST(req: Request) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
-    const body = await req.json();
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
     const studentId = String(body?.studentId ?? "").trim();
     const fees = Array.isArray(body?.fees) ? body.fees : [];
 
@@ -39,10 +45,11 @@ export async function POST(req: Request) {
     const result = await batchAssignStudentExtraFees(schoolId, studentId, fees);
     invalidateStudentFeeReadCaches({ studentId, schoolId });
     return NextResponse.json(result, { status: 201 });
+    });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Internal server error";
+    const message = toClientErrorMessage(error, "Internal server error");
     const status = message.includes("not found") ? 404 : 500;
-    console.error("batch-assign error:", error);
+    logger.error("batch-assign error:", error);
     return NextResponse.json({ message }, { status });
   }
 }

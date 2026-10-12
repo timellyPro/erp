@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { runInOptionalTenantScope } from "@/lib/db/tenantContext";
 import {
   buildStudentDetailsCoreBundle,
   buildStudentDetailsNonPaymentExtras,
@@ -9,12 +9,15 @@ import {
   buildStudentDetailsShellPayload,
   buildStudentDetailsTabExtras,
   buildStudentDetailsTabPayload,
-} from "@/lib/buildStudentDetailsTabPayload";
-import { computeAdminStudentFeeBreakdown } from "@/lib/computeAdminStudentFeeBreakdown";
+} from "@/lib/students/buildStudentDetailsTabPayload";
+import { computeAdminStudentFeeBreakdown } from "@/lib/fees/computeAdminStudentFeeBreakdown";
 import {
   getShellCached,
   setShellCached,
-} from "@/lib/studentFeeReadCache";
+} from "@/lib/fees/studentFeeReadCache";
+import { logger } from "@/lib/logger";
+import { schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 type RouteParams =
   | { params: { id: string } }
@@ -25,11 +28,7 @@ async function resolveSchoolId(session: {
 }) {
   let schoolId = session.user.schoolId;
   if (!schoolId && (session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN")) {
-    const adminSchool = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = adminSchool?.id ?? null;
+    schoolId = await schoolIdViaAdminRelation(session.user.id);
   }
   return schoolId;
 }
@@ -83,6 +82,7 @@ export async function GET(req: Request, context: RouteParams) {
     const schoolId = await resolveSchoolId(session);
     const resolvedSchoolId = schoolId ?? null;
 
+    return await runInOptionalTenantScope(resolvedSchoolId, async () => {
     if (extrasOnly) {
       if (url.searchParams.get("scope") === "payments") {
         const includeAdmissionApplicationPayments =
@@ -176,10 +176,11 @@ export async function GET(req: Request, context: RouteParams) {
       : null;
 
     return NextResponse.json({ ...detail, feeBreakdown }, { status: 200 });
+    });
   } catch (error: unknown) {
-    console.error("Student details bundle error:", error);
+    logger.error("Student details bundle error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

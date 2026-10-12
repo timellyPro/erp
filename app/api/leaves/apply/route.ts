@@ -1,9 +1,19 @@
 import { NextResponse } from "next/server";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { z } from "zod";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { getServerSession } from "next-auth";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 const VALID_LEAVE_TYPES = ["CASUAL", "SICK", "PAID", "UNPAID"] as const;
+
+const applyLeaveBodySchema = z.object({
+  leaveType: z.string().optional(),
+  reason: z.string().optional(),
+  fromDate: z.string().optional(),
+  toDate: z.string().optional(),
+});
 
 export async function POST(req: Request) {
   try {
@@ -14,14 +24,11 @@ export async function POST(req: Request) {
     }
 
     const user = session.user;
-    let body: { leaveType?: string; reason?: string; fromDate?: string; toDate?: string };
-    try {
-      body = await req.json();
-    } catch {
+    const parsedBody = applyLeaveBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
       return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     }
-
-    const { leaveType, reason, fromDate, toDate } = body;
+    const { leaveType, reason, fromDate, toDate } = parsedBody.data;
 
     if (!leaveType || !fromDate || !toDate) {
       return NextResponse.json(
@@ -30,7 +37,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const normalizedType = VALID_LEAVE_TYPES.includes(leaveType as any)
+    const normalizedType = (VALID_LEAVE_TYPES as readonly string[]).includes(leaveType)
       ? (leaveType as (typeof VALID_LEAVE_TYPES)[number])
       : "CASUAL";
     const reasonStr = typeof reason === "string" ? reason.trim() : "";
@@ -58,6 +65,7 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const from = new Date(fromDate);
     const to = new Date(toDate);
@@ -96,9 +104,10 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json(leave, { status: 201 });
+    });
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : "Internal Server Error";
-    console.error("Leaves apply error:", e);
+    const message = toClientErrorMessage(e, "Internal Server Error");
+    logger.error("Leaves apply error:", e);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -2,13 +2,16 @@ import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
 import * as XLSX from "xlsx";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import {
   buildStudentDetailsExportWorkbook,
   studentToDetailsExportRow,
-} from "@/lib/studentDetailsExport";
-import { resolveStudentDisplayClass } from "@/lib/resolveStudentDisplayClass";
+} from "@/lib/students/studentDetailsExport";
+import { resolveStudentDisplayClass } from "@/lib/students/resolveStudentDisplayClass";
+import { logger } from "@/lib/logger";
+import { schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 const MAX_EXPORT = 5000;
 
@@ -17,11 +20,7 @@ async function resolveSchoolId(session: {
 }): Promise<string | null> {
   let schoolId = session.user.schoolId ?? null;
   if (!schoolId) {
-    const adminSchool = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = adminSchool?.id ?? null;
+    schoolId = await schoolIdViaAdminRelation(session.user.id);
     if (schoolId) {
       await prisma.user.update({
         where: { id: session.user.id },
@@ -51,6 +50,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: "School is paused" }, { status: 403 });
     }
 
+    return await runInTenantScope(schoolId, async () => {
     const { searchParams } = new URL(req.url);
     const classId = searchParams.get("classId")?.trim() || "";
     const className = searchParams.get("className")?.trim() || "";
@@ -148,12 +148,13 @@ export async function GET(req: Request) {
         "Cache-Control": "no-store",
       },
     });
+    });
   } catch (error: unknown) {
-    console.error("Student details export error:", error);
+    logger.error("Student details export error:", error);
     return NextResponse.json(
       {
         message:
-          error instanceof Error ? error.message : "Internal server error",
+          toClientErrorMessage(error, "Internal server error"),
       },
       { status: 500 }
     );

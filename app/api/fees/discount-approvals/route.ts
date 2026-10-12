@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { requireSchoolId } from "@/lib/auth/tenant";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import {
   getDiscountApprovalsListCached,
   setDiscountApprovalsListCached,
-} from "@/lib/discountApprovalsListCache";
+} from "@/lib/fees/discountApprovalsListCache";
 
 const ALLOWED_ROLES = new Set(["CHAIRMAN", "SCHOOLADMIN", "SUPERADMIN"]);
 
@@ -72,16 +73,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
 
+  const tenant = await requireSchoolId(session);
+  if (!tenant.ok) {
+    return NextResponse.json({ message: tenant.message }, { status: tenant.status });
+  }
+  const schoolId = tenant.schoolId;
+
   const { searchParams } = new URL(req.url);
   const status = (searchParams.get("status") || "PENDING").toUpperCase();
-  const schoolId =
-    typeof session.user.schoolId === "string" && session.user.schoolId.trim()
-      ? session.user.schoolId
-      : searchParams.get("schoolId")?.trim();
-
-  if (!schoolId) {
-    return NextResponse.json({ message: "School not found in session" }, { status: 400 });
-  }
 
   const safeStatus = ["ALL", "PENDING", "APPROVED", "REJECTED"].includes(status) ? status : "PENDING";
   const cacheKey = `${schoolId}:${safeStatus}`;
@@ -90,7 +89,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ approvals: cached });
   }
 
-  const rows =
+  const rows = await runInTenantScope(schoolId, async () =>
     safeStatus === "ALL"
       ? await prisma.$queryRaw<ApprovalListRow[]>`
     SELECT
@@ -158,7 +157,8 @@ export async function GET(req: NextRequest) {
       AND fda.status = CAST(${safeStatus} AS "DiscountApprovalStatus")
     ORDER BY fda."createdAt" DESC
     LIMIT 100
-  `;
+  `
+  );
 
   const approvals = mapApprovals(rows);
   setDiscountApprovalsListCached(cacheKey, approvals);

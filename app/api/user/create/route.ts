@@ -1,11 +1,34 @@
 import { NextResponse, NextRequest } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "../../../../lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "../../../../lib/db";
 import bcrypt from "bcryptjs";
-import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
-import { purgeSchoolDashboardServerCacheMatching } from "@/lib/schoolDashboardServerCache";
-import { sanitizeTeachingClassIds } from "@/lib/teacherClassAccess";
+import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/school/schoolEmail";
+import { purgeSchoolDashboardServerCacheMatching } from "@/lib/school/schoolDashboardServerCache";
+import { sanitizeTeachingClassIds } from "@/lib/teacher/teacherClassAccess";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
+import { runInTenantScope } from "@/lib/db/tenantContext";
+import type { Role } from "@prisma/client";
+
+const createUserBodySchema = z.object({
+  name: z.string().min(1),
+  email: z.string().optional().nullable(),
+  role: z.string().min(1),
+  designation: z.string().optional().nullable(),
+  password: z.string().min(1),
+  allowedFeatures: z.array(z.string()).optional().nullable(),
+  teacherId: z.union([z.string(), z.number()]).optional().nullable(),
+  subjects: z.array(z.unknown()).optional().nullable(),
+  assignedClassIds: z.array(z.unknown()).optional().nullable(),
+  qualification: z.union([z.string(), z.number()]).optional().nullable(),
+  experience: z.union([z.string(), z.number()]).optional().nullable(),
+  joiningDate: z.string().optional().nullable(),
+  teacherStatus: z.string().optional().nullable(),
+  mobile: z.union([z.string(), z.number()]).optional().nullable(),
+  address: z.string().optional().nullable(),
+});
 
 export async function POST(req: NextRequest) {
   try {
@@ -21,6 +44,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    return await runInTenantScope(session.user.schoolId, async () => {
     // Check if user has permission to create users
     const requesterRole = session.user.role as string;
     const isAdmin = ["SCHOOLADMIN", "SUPERADMIN"].includes(requesterRole);
@@ -33,7 +57,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const body = await req.json();
+    const rawBody = await req.json().catch(() => null);
+    const parsedBody = createUserBodySchema.safeParse(rawBody);
+    if (!parsedBody.success) {
+      return NextResponse.json(
+        { message: "Missing required fields" },
+        { status: 400 }
+      );
+    }
     const {
       name,
       email,
@@ -51,15 +82,7 @@ export async function POST(req: NextRequest) {
       teacherStatus,
       mobile,
       address,
-    } = body;
-
-    // Validation
-    if (!name || !role || !password) {
-      return NextResponse.json(
-        { message: "Missing required fields" },
-        { status: 400 }
-      );
-    }
+    } = parsedBody.data;
 
     const [school, settings] = await Promise.all([
       prisma.school.findUnique({ where: { id: session.user.schoolId as string }, select: { name: true } }),
@@ -149,7 +172,7 @@ export async function POST(req: NextRequest) {
         name,
         email: finalEmail,
         password: hashedPassword,
-        role: finalRole,
+        role: finalRole as Role,
         schoolId,
         ...(designation && { subject: designation }),
         allowedFeatures: finalAllowedFeatures || [],
@@ -186,10 +209,11 @@ export async function POST(req: NextRequest) {
       },
       { status: 201 }
     );
-  } catch (error: any) {
-    console.error("User creation error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("User creation error:", error);
     return NextResponse.json(
-      { message: error.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }
