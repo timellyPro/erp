@@ -32,27 +32,27 @@ export function SubjectsManager({
   onDeleteSubject: (name: string) => void;
 }) {
   return (
-    <div className="somu border-none bg-white/5! rounded-3xl p-5 mb-6">
+    <div className="somu border-none bg-white/5! rounded-2xl sm:rounded-3xl p-4 sm:p-5 mb-4 sm:mb-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h3 className="text-lg font-bold">Subjects</h3>
+          <h3 className="text-base sm:text-lg font-bold">Subjects</h3>
           <p className="text-xs text-white/50">
             Add, rename, or remove subjects. Only removes from this list — your choice.
           </p>
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+        <div className="flex flex-col sm:flex-row gap-2 sm:items-center w-full md:w-auto">
           <input
             value={newSubject}
             onChange={(e) => onNewSubjectChange(e.target.value.toUpperCase())}
             placeholder="e.g. MATHEMATICS, SCIENCE"
-            className="px-4 py-2.5 rounded-2xl bg-black/40 border border-white/10 text-white text-sm outline-none focus:border-[#B4F42A]/50 uppercase"
+            className="w-full sm:w-auto px-4 py-2.5 rounded-2xl bg-black/40 border border-white/10 text-white text-sm outline-none focus:border-[#B4F42A]/50 uppercase"
           />
           <button
             type="button"
             onClick={onAddSubject}
             disabled={subjectSaving}
-            className="px-4 py-2.5 rounded-2xl bg-[#B4F42A] text-black text-sm font-bold inline-flex items-center justify-center gap-2 disabled:opacity-60"
+            className="w-full sm:w-auto px-4 py-2.5 rounded-2xl bg-[#B4F42A] text-black text-sm font-bold inline-flex items-center justify-center gap-2 disabled:opacity-60"
           >
             <Plus size={16} />
             {subjectSaving ? "Saving..." : "Add"}
@@ -68,12 +68,14 @@ export function SubjectsManager({
         {subjectsLoading ? (
           <span className="text-xs text-white/50">Loading subjects...</span>
         ) : subjects.length === 0 ? (
-          <span className="text-xs text-white/50">No subjects found.</span>
+          <span className="text-xs text-white/50">
+            {subjectError ? "Subjects could not be loaded." : "No subjects found."}
+          </span>
         ) : (
           subjects.map((t) => (
             <div
               key={t}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold bg-white/5 border border-white/10 text-white/80"
+              className="flex max-w-full items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold bg-white/5 border border-white/10 text-white/80"
             >
               {editingSubject === t ? (
                 <>
@@ -93,7 +95,7 @@ export function SubjectsManager({
                         onEditingSubjectValueChange("");
                       }
                     }}
-                    className="w-36 px-2 py-0.5 rounded-lg bg-black/40 border border-[#B4F42A]/40 text-white text-xs outline-none uppercase"
+                    className="w-full min-w-0 max-w-36 px-2 py-1 rounded-lg bg-black/40 border border-[#B4F42A]/40 text-white text-xs outline-none uppercase"
                   />
                   <button
                     type="button"
@@ -119,7 +121,7 @@ export function SubjectsManager({
                 </>
               ) : (
                 <>
-                  <span>{t}</span>
+                  <span className="break-words">{t}</span>
                   <button
                     type="button"
                     disabled={subjectSaving}
@@ -138,7 +140,7 @@ export function SubjectsManager({
                     disabled={subjectSaving}
                     onClick={() => onDeleteSubject(t)}
                     className="inline-flex items-center justify-center rounded-full p-0.5 hover:bg-red-500/20 disabled:opacity-50"
-                    title="Delete subject"
+                    title="Remove from every exam type"
                   >
                     <Trash2 className="w-3 h-3 text-red-400" />
                   </button>

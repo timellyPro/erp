@@ -7,6 +7,14 @@ import { randomUUID } from "crypto";
 import { logger } from "@/lib/logger";
 import { schoolIdViaTeacherClass, schoolIdViaTeacherRelation, schoolIdViaAdminRelation } from "@/lib/auth/tenant";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
+import {
+  globalHiddenSubjectNames,
+  hideSubjectEverywhere,
+  hideSubjectOnExamType,
+  removedSubjectsByExam,
+  restoreSubjectOnExamType,
+  rewriteHiddenOnRename,
+} from "@/lib/exams/examSubjectHide";
 
 const DEFAULT_EXAM_SUBJECTS = [
   "MATHEMATICS",
@@ -121,19 +129,39 @@ export async function GET() {
     }
 
     return await runInTenantScope(schoolId, async () => {
-    const [customSubjects, teacherSubjects, hidden] = await Promise.all([
-      prisma.examSubject.findMany({
+    // Sequential reads — PgBouncer pool is tiny; parallel queries cause P2024 under tab warm.
+    // One retry: the pooler often drops the first connect after 10s, then the next succeeds.
+    const readSubjects = async () => {
+      const customSubjects = await prisma.examSubject.findMany({
         where: { schoolId },
         select: { name: true },
-      }),
-      prisma.$queryRaw<Array<{ subjects: string[] }>>`
+      });
+      const teacherSubjects = await prisma.$queryRaw<Array<{ subjects: string[] }>>`
         SELECT "subjects" FROM "User"
         WHERE "schoolId" = ${schoolId}
           AND "role" = 'TEACHER'
           AND array_length("subjects", 1) > 0
-      `,
-      getHiddenSubjects(schoolId),
-    ]);
+      `;
+      const hidden = await getHiddenSubjects(schoolId);
+      return { customSubjects, teacherSubjects, hidden };
+    };
+    let customSubjects;
+    let teacherSubjects;
+    let hidden;
+    try {
+      ({ customSubjects, teacherSubjects, hidden } = await readSubjects());
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      const retryable =
+        message.includes("Can't reach database server") ||
+        message.includes("Engine is not yet connected") ||
+        message.includes("max clients reached") ||
+        message.includes("EMAXCONNSESSION") ||
+        message.includes("Response from the Engine was empty");
+      if (!retryable) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      ({ customSubjects, teacherSubjects, hidden } = await readSubjects());
+    }
 
     const names = new Set<string>();
     DEFAULT_EXAM_SUBJECTS.forEach((n) => names.add(n));
@@ -146,12 +174,20 @@ export async function GET() {
       });
     });
 
-    // Admin-deleted subjects stay hidden even if defaults/teachers still have them
+    // Admin-deleted subjects stay hidden even if defaults/teachers still have them.
+    // Entries scoped to one exam type are not catalog deletions.
+    const globallyHidden = globalHiddenSubjectNames(Array.from(hidden));
     const subjects = Array.from(names)
-      .filter((n) => !hidden.has(n))
+      .filter((n) => !globallyHidden.has(n))
       .sort();
 
-    return NextResponse.json({ subjects }, { status: 200 });
+    return NextResponse.json(
+      {
+        subjects,
+        removedByExam: removedSubjectsByExam(Array.from(hidden)),
+      },
+      { status: 200 }
+    );
     });
   } catch (e: unknown) {
     logger.error("Exam subjects GET:", e);
@@ -169,7 +205,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    if (session.user.role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
@@ -179,7 +215,7 @@ export async function POST(req: Request) {
     }
     return await runInTenantScope(schoolId, async (schoolId) => {
 
-    const parsedPostBody = z.object({ name: z.string().optional() }).safeParse(await req.json().catch(() => null));
+    const parsedPostBody = z.object({ name: z.string().optional(), restoreExamType: z.string().optional() }).safeParse(await req.json().catch(() => null));
     const body = parsedPostBody.success ? parsedPostBody.data : {};
     const name =
       typeof body.name === "string" ? body.name.trim().toUpperCase() : "";
@@ -188,6 +224,24 @@ export async function POST(req: Request) {
       return NextResponse.json(
         { message: "Subject name is required" },
         { status: 400 }
+      );
+    }
+
+    const restoreExamType =
+      typeof body.restoreExamType === "string"
+        ? body.restoreExamType.trim().toUpperCase()
+        : "";
+    if (restoreExamType) {
+      const settings = await ensureSettings(schoolId);
+      const nextHidden = restoreSubjectOnExamType(
+        settings.hiddenExamSubjects ?? [],
+        restoreExamType,
+        name
+      );
+      await setHiddenSubjects(schoolId, nextHidden);
+      return NextResponse.json(
+        { subject: { name }, restored: true, examType: restoreExamType },
+        { status: 200 }
       );
     }
 
@@ -245,7 +299,7 @@ export async function PATCH(req: Request) {
     if (!session) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
-    if (session.user.role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
@@ -303,14 +357,49 @@ export async function PATCH(req: Request) {
     }
 
     const settings = await ensureSettings(schoolId);
-    const nextHidden = (settings.hiddenExamSubjects ?? [])
-      .map((n) => n.trim().toUpperCase())
-      .filter((n) => n && n !== from && n !== to);
+    await setHiddenSubjects(
+      schoolId,
+      rewriteHiddenOnRename(settings.hiddenExamSubjects ?? [], from, to)
+    );
 
-    // Hide old name so it doesn't reappear from defaults/teachers
-    nextHidden.push(from);
-
-    await setHiddenSubjects(schoolId, Array.from(new Set(nextHidden)));
+    await prisma.$executeRaw`
+      UPDATE "ExamTypeSubject" AS ets
+      SET subject = ${to}, "updatedAt" = NOW()
+      FROM "ExamType" AS et
+      WHERE ets."examTypeId" = et.id
+        AND et."schoolId" = ${schoolId}
+        AND ets.subject = ${from}
+        AND NOT EXISTS (
+          SELECT 1 FROM "ExamTypeSubject" AS other
+          WHERE other."examTypeId" = ets."examTypeId"
+            AND other.subject = ${to}
+            AND other.id <> ets.id
+        )
+    `;
+    await prisma.$executeRaw`
+      UPDATE "Mark" AS m
+      SET subject = ${to}, "updatedAt" = NOW()
+      FROM "Class" AS c
+      WHERE m."classId" = c.id
+        AND c."schoolId" = ${schoolId}
+        AND UPPER(TRIM(m.subject)) = ${from}
+    `;
+    await prisma.$executeRaw`
+      UPDATE "SyllabusTracking" AS st
+      SET subject = ${to}, "updatedAt" = NOW()
+      FROM "ExamTerm" AS t
+      WHERE st."termId" = t.id
+        AND t."schoolId" = ${schoolId}
+        AND UPPER(TRIM(st.subject)) = ${from}
+    `;
+    await prisma.$executeRaw`
+      UPDATE "ExamSchedule" AS es
+      SET subject = ${to}, "updatedAt" = NOW()
+      FROM "ExamTerm" AS t
+      WHERE es."termId" = t.id
+        AND t."schoolId" = ${schoolId}
+        AND UPPER(TRIM(es.subject)) = ${from}
+    `;
 
     return NextResponse.json({ subject: { name: to } }, { status: 200 });
     });
@@ -330,7 +419,7 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    if (session.user.role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
@@ -344,11 +433,44 @@ export async function DELETE(req: Request) {
     const nameParam = searchParams.get("name");
     const name =
       typeof nameParam === "string" ? nameParam.trim().toUpperCase() : "";
+    const examType =
+      typeof searchParams.get("examType") === "string"
+        ? searchParams.get("examType")!.trim().toUpperCase()
+        : "";
 
     if (!name) {
       return NextResponse.json(
         { message: "Subject name is required" },
         { status: 400 }
+      );
+    }
+
+    if (examType) {
+      const settings = await ensureSettings(schoolId);
+      await setHiddenSubjects(
+        schoolId,
+        hideSubjectOnExamType(settings.hiddenExamSubjects ?? [], examType, name)
+      );
+      await prisma.$executeRaw`
+        DELETE FROM "ExamTypeSubjectSection" AS sec
+        USING "ExamTypeSubject" AS s, "ExamType" AS et
+        WHERE sec."examTypeSubjectId" = s.id
+          AND s."examTypeId" = et.id
+          AND et."schoolId" = ${schoolId}
+          AND UPPER(TRIM(et.name)) = ${examType}
+          AND UPPER(TRIM(s.subject)) = ${name}
+      `;
+      await prisma.$executeRaw`
+        DELETE FROM "ExamTypeSubject" AS s
+        USING "ExamType" AS et
+        WHERE s."examTypeId" = et.id
+          AND et."schoolId" = ${schoolId}
+          AND UPPER(TRIM(et.name)) = ${examType}
+          AND UPPER(TRIM(s.subject)) = ${name}
+      `;
+      return NextResponse.json(
+        { success: true, scope: "examType", examType, subject: name },
+        { status: 200 }
       );
     }
 
@@ -362,13 +484,10 @@ export async function DELETE(req: Request) {
 
     // Always hide so defaults / teacher-assigned names don't come back
     const settings = await ensureSettings(schoolId);
-    const nextHidden = Array.from(
-      new Set([
-        ...(settings.hiddenExamSubjects ?? []).map((n) => n.trim().toUpperCase()),
-        name,
-      ].filter(Boolean))
+    await setHiddenSubjects(
+      schoolId,
+      hideSubjectEverywhere(settings.hiddenExamSubjects ?? [], name)
     );
-    await setHiddenSubjects(schoolId, nextHidden);
 
     return NextResponse.json({ success: true }, { status: 200 });
     });

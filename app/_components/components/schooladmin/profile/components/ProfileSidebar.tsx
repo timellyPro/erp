@@ -7,6 +7,7 @@ import { getResidencyLabel, type ProfileSidebarProps } from "./shared";
 import { useProfileSidebarState } from "./shared";
 import { EditStudentModal } from "./shared";
 import { EditParentModal } from "./shared";
+import ResidencyConversionModal from "./ResidencyConversionModal";
 
 export type { SidebarSavedPatch } from "./shared";
 
@@ -61,6 +62,16 @@ export const ProfileSidebar = (props: ProfileSidebarProps) => {
     classOptions,
     saveStudent,
     saveParent,
+    conversionOpen,
+    setConversionOpen,
+    conversionPreview,
+    setConversionPreview,
+    conversionTransportKey,
+    conversionSaving,
+    residencyPeriods,
+    residencyYearLabel,
+    chooseConversionTransport,
+    confirmConversion,
   } = useProfileSidebarState(props);
 
   return (
@@ -116,6 +127,17 @@ export const ProfileSidebar = (props: ProfileSidebarProps) => {
           <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 min-w-0">
             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Type</p>
             <p className="text-xs font-semibold text-white truncate">{getResidencyLabel(residencyType)}</p>
+            {residencyPeriods.length > 0 ? (
+              <p className="mt-1 text-[10px] leading-snug text-lime-200/80">
+                {residencyYearLabel ? `${residencyYearLabel}: ` : ""}
+                {residencyPeriods
+                  .map(
+                    (period) =>
+                      `${period.months} mo ${period.title}${period.transportLabel ? ` (${period.transportLabel})` : ""}`
+                  )
+                  .join(" · ")}
+              </p>
+            ) : null}
           </div>
           <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 min-w-0">
             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">DOB</p>
@@ -228,6 +250,20 @@ export const ProfileSidebar = (props: ProfileSidebarProps) => {
           saving={saving}
           onClose={() => setParentModalOpen(false)}
           onSave={() => void saveParent()}
+        />
+      ) : null}
+      {conversionOpen && conversionPreview ? (
+        <ResidencyConversionModal
+          preview={conversionPreview}
+          transportKey={conversionTransportKey}
+          saving={conversionSaving}
+          onTransportKey={(key) => void chooseConversionTransport(key)}
+          onClose={() => {
+            if (conversionSaving) return;
+            setConversionOpen(false);
+            setConversionPreview(null);
+          }}
+          onConfirm={() => void confirmConversion()}
         />
       ) : null}
     </div>

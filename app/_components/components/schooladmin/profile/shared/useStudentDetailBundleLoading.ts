@@ -35,24 +35,26 @@ export function useStudentDetailBundleLoading({
 }) {
   const warmFeeBreakdown = useCallback(() => {
     if (!selectedId) return;
+    const requestId = selectedId;
     const shellPaid = Number(detail?.fee?.amountPaid) || 0;
-    const cached = getFeeBreakdownCached(selectedId);
+    const cached = getFeeBreakdownCached(requestId);
     if (cached && cached.amountPaid + 0.02 >= shellPaid) {
-      setFeeBreakdown(cached);
-      setFeeBreakdownPending(false);
+      if (selectedIdRef.current === requestId) {
+        setFeeBreakdown(cached);
+        setFeeBreakdownPending(false);
+      }
       return;
     }
     if (feeBreakdown && feeBreakdown.amountPaid + 0.02 >= shellPaid) return;
-    void fetchFeeBreakdownFast(selectedId, {
+    void fetchFeeBreakdownFast(requestId, {
       force: Boolean(cached && shellPaid > cached.amountPaid + 0.02),
       minAmountPaid: shellPaid,
     }).then((breakdown) => {
-      if (breakdown) {
-        setFeeBreakdown(breakdown);
-        setFeeBreakdownPending(false);
-      }
+      if (!breakdown || selectedIdRef.current !== requestId) return;
+      setFeeBreakdown(breakdown);
+      setFeeBreakdownPending(false);
     });
-  }, [selectedId, feeBreakdown, detail?.fee?.amountPaid, setFeeBreakdown, setFeeBreakdownPending]);
+  }, [selectedId, selectedIdRef, feeBreakdown, detail?.fee?.amountPaid, setFeeBreakdown, setFeeBreakdownPending]);
 
   useEffect(() => {
     if (reloadKey === 0) return;
@@ -64,39 +66,45 @@ export function useStudentDetailBundleLoading({
     if (!selectedId) {
       setDetail(null);
       setFeeBreakdown(null);
+      setFeeBreakdownPending(false);
       setTransactionsReady(false);
       return;
     }
 
     let cancelled = false;
+    const controller = new AbortController();
+    const requestId = selectedId;
 
-    const cachedBreakdown = getFeeBreakdownCached(selectedId);
-    const cachedBundle = reloadKey === 0 ? peekStudentDetailsBundle(selectedId) : null;
+    const cachedBreakdown = getFeeBreakdownCached(requestId);
+    const cachedBundle = reloadKey === 0 ? peekStudentDetailsBundle(requestId) : null;
     if (cachedBundle?.student) {
       applyDetailsBundle(cachedBundle);
     } else {
       setTransactionsReady(false);
       setDetail((prev) => {
-        if (prev?.student.id === selectedId) return prev;
-        const fromList = students.find((s) => s.id === selectedId);
+        if (prev?.student.id === requestId) return prev;
+        const fromList = students.find((s) => s.id === requestId);
         return fromList
           ? buildPlaceholderDetail(normalizeStudentOption(fromList))
-          : buildPlaceholderById(selectedId);
+          : buildPlaceholderById(requestId);
       });
     }
     if (cachedBreakdown) {
       setFeeBreakdown(cachedBreakdown);
       setFeeBreakdownPending(false);
     } else {
+      // Clear previous student's fees immediately — never show A while loading B.
+      setFeeBreakdown(null);
       setFeeBreakdownPending(true);
     }
 
-    loadStudentDetailsBundle(selectedId, {
+    loadStudentDetailsBundle(requestId, {
       force: reloadKey > 0,
+      signal: controller.signal,
       onShellLoaded: (partial) => {
-        if (cancelled) return;
+        if (cancelled || selectedIdRef.current !== requestId) return;
         const { feeBreakdown: bd, ...rest } = partial;
-        if (rest?.student) {
+        if (rest?.student?.id === requestId) {
           setDetail((prev) => patchDetailShell(prev, rest as StudentDetail));
           setStudents((prev) => {
             const row = normalizeStudentOption({
@@ -121,29 +129,34 @@ export function useStudentDetailBundleLoading({
         }
       },
       onBreakdownLoaded: (bd) => {
-        if (cancelled) return;
+        if (cancelled || selectedIdRef.current !== requestId) return;
         setFeeBreakdown(bd);
         setFeeBreakdownPending(false);
       },
       onExtrasLoaded: (full) => {
-        if (cancelled) return;
+        if (cancelled || selectedIdRef.current !== requestId) return;
         applyDetailsBundle(full);
       },
     })
       .then((bundle) => {
-        if (cancelled) return;
+        if (cancelled || selectedIdRef.current !== requestId) return;
         applyDetailsBundle(bundle);
       })
       .catch((err) => {
-        if (cancelled) return;
+        if (cancelled || selectedIdRef.current !== requestId) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (err instanceof Error && err.name === "AbortError") return;
         console.error("Student details error:", err);
       })
       .finally(() => {
-        if (!cancelled) setFeeBreakdownPending(false);
+        if (!cancelled && selectedIdRef.current === requestId) {
+          setFeeBreakdownPending(false);
+        }
       });
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
     // `students` read for placeholder only — must not restart fetch when list hydrates
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional

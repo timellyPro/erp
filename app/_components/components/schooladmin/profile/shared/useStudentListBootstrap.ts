@@ -1,10 +1,10 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, type MutableRefObject } from "react";
 import { readStudentListCacheLegacy, writeStudentListCacheLegacy } from "@/lib/students/studentListSessionCache";
 import { resolveStudentDisplayName } from "@/lib/students/resolveStudentDisplayName";
 import type { StudentDetail, StudentOption } from "./types";
-import { buildPlaceholderDetail, normalizeStudentOption } from "./studentDetailHelpers";
+import { buildPlaceholderById, normalizeStudentOption } from "./studentDetailHelpers";
 
-/** Loads the student list + classes, and follows a `?studentId=` deep link (fetch shell row, seed placeholder). */
+/** Loads the student list + classes, and follows a `?studentId=` deep link (seeds a placeholder; the details bundle fills in the rest). */
 export function useStudentListBootstrap({
   studentIdFromUrl,
   students,
@@ -13,6 +13,10 @@ export function useStudentListBootstrap({
   setClasses,
   setSelectedId,
   setDetail,
+  selectedIdRef,
+  setFeeBreakdown,
+  setFeeBreakdownPending,
+  setTransactionsReady,
 }: {
   studentIdFromUrl: string | null;
   students: StudentOption[];
@@ -21,6 +25,10 @@ export function useStudentListBootstrap({
   setClasses: (classes: { id: string; name: string; section: string | null }[]) => void;
   setSelectedId: (updater: string | null | ((prev: string | null) => string | null)) => void;
   setDetail: (updater: StudentDetail | null | ((prev: StudentDetail | null) => StudentDetail | null)) => void;
+  selectedIdRef: MutableRefObject<string | null>;
+  setFeeBreakdown: (breakdown: null) => void;
+  setFeeBreakdownPending: (pending: boolean) => void;
+  setTransactionsReady: (ready: boolean) => void;
 }) {
   const mapListRow = useCallback(
     (s: {
@@ -72,7 +80,7 @@ export function useStudentListBootstrap({
     (async () => {
       try {
         // One lean request (search=1 => minimal columns, all=1 => no cursor round-trips), in parallel with classes.
-        const classesPromise = fetch("/api/class/list", { credentials: "include" }).then(async (r) => {
+        const classesPromise = fetch("/api/class/list?lite=1", { credentials: "include" }).then(async (r) => {
           if (!cancelled && r.ok) {
             const c = await r.json();
             setClasses(c.classes ?? []);
@@ -107,44 +115,26 @@ export function useStudentListBootstrap({
   // Deep link (?studentId=…): follow the URL when it changes. Do NOT depend on `students` here — that
   // was resetting selection back to the URL id on every list refresh and overwrote the student's dropdown pick.
   useEffect(() => {
-    if (studentIdFromUrl) {
-      setSelectedId(studentIdFromUrl);
-    }
-  }, [studentIdFromUrl, setSelectedId]);
-
-  /** Deep link: fetch one row by id so the sidebar shows name/class immediately (not "Loading…"). */
-  useEffect(() => {
     if (!studentIdFromUrl) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetch(
-          `/api/student/list?search=1&studentId=${encodeURIComponent(studentIdFromUrl)}&take=1`,
-          { credentials: "include", cache: "no-store" }
-        );
-        if (!res.ok || cancelled) return;
-        const data = await res.json().catch(() => ({}));
-        const row = Array.isArray(data?.students) ? data.students[0] : null;
-        if (!row?.id || cancelled) return;
-        const option = mapListRow(row);
-        setStudents((prev) => {
-          if (prev.some((s) => s.id === option.id)) {
-            return prev.map((s) => (s.id === option.id ? { ...s, ...option } : s));
-          }
-          return [option, ...prev];
-        });
-        setDetail((prev) => {
-          if (prev?.student.id === option.id && prev.student.name !== "Loading…") return prev;
-          return buildPlaceholderDetail(normalizeStudentOption(option));
-        });
-      } catch {
-        /* shell fetch will replace placeholder */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [studentIdFromUrl, mapListRow, setDetail, setStudents]);
+    if (selectedIdRef.current !== studentIdFromUrl) {
+      setFeeBreakdown(null);
+      setFeeBreakdownPending(true);
+      setTransactionsReady(false);
+      setDetail(buildPlaceholderById(studentIdFromUrl));
+    }
+    setSelectedId(studentIdFromUrl);
+  }, [
+    studentIdFromUrl,
+    selectedIdRef,
+    setSelectedId,
+    setDetail,
+    setFeeBreakdown,
+    setFeeBreakdownPending,
+    setTransactionsReady,
+  ]);
+
+  // Deep-link name/class comes from the details bundle (core/shell). Do not also hit
+  // /api/student/list — that competed for the Prisma pool (~7s findUnique in logs).
 
   useEffect(() => {
     if (studentIdFromUrl) return;

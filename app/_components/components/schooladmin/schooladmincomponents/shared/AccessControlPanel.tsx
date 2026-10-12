@@ -51,6 +51,7 @@ export function AccessControlPanel({
           <AllowedFeatureToggle
             key={feature.key}
             label={feature.label}
+            description={feature.description}
             checked={allowedFeatures.includes(feature.key)}
             onChange={() => onToggleFeature(feature.key)}
           />

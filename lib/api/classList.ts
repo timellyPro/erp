@@ -13,8 +13,12 @@ export type ClassListLiteResponse = {
   classes?: { id: string; name?: string; section?: string | null }[];
 };
 
-export function fetchClassListLite() {
-  return apiGet<ClassListLiteResponse>("/api/class/list?lite=1", { cache: "no-store" });
+/** `all: true` lists every class in the school, not just the caller's assigned ones. */
+export function fetchClassListLite(opts?: { all?: boolean }) {
+  return apiGet<ClassListLiteResponse>(
+    opts?.all ? "/api/class/list?lite=1&all=1" : "/api/class/list?lite=1",
+    { cache: "no-store" }
+  );
 }
 
 export type ClassStudentsResponse = {

@@ -61,7 +61,7 @@ function StudentDetailsPageContent() {
   } = useStudentDetailsPageState();
 
   return (
-    <div className="space-y-4 sm:space-y-6 md:space-y-8 w-full min-h-0 min-w-0 overflow-x-hidden pb-6 sm:pb-8">
+    <div className="w-full min-w-0 space-y-4 pb-6 sm:space-y-6 sm:pb-8 md:space-y-8">
       <PageHeader
         compact
         title="Student Details"
@@ -113,11 +113,11 @@ function StudentDetailsPageContent() {
       {detail && (
         <>
           {showStickyStudentName && pageStudentName ? (
-            <div className="hidden xl:block fixed z-30 left-64 top-[5.5rem] w-[280px] 2xl:w-[300px] px-2 pointer-events-none">
+            <div className="pointer-events-none fixed top-[5.75rem] left-[calc(16rem+1.25rem)] z-30 hidden w-[200px] xl:block">
               <StudentNameCard
                 name={pageStudentName}
                 meta={pageStudentMeta}
-                className="pointer-events-auto bg-[#0a0f1a]/95 backdrop-blur-md shadow-lg border-white/15"
+                className="pointer-events-auto border-white/15 bg-[#0a0f1a]/70 shadow-lg backdrop-blur-md"
               />
             </div>
           ) : null}
@@ -139,7 +139,7 @@ function StudentDetailsPageContent() {
           <div className="flex flex-col xl:flex-row xl:flex-wrap gap-4 sm:gap-6 md:gap-8 min-w-0 w-full items-start">
             <aside
               ref={sidebarAsideRef}
-              className="w-full xl:w-[280px] 2xl:w-[300px] shrink-0 min-w-0 relative z-10 xl:sticky xl:top-[5.5rem] xl:self-start"
+              className="relative z-10 w-full min-w-0 shrink-0 self-start xl:w-[280px] 2xl:w-[300px]"
             >
             <ProfileSidebar
               studentId={detail.student.id}
@@ -186,9 +186,10 @@ function StudentDetailsPageContent() {
             </div>
             </div>
 
-            <div className="w-full min-w-0 basis-full space-y-4 sm:space-y-6 md:space-y-8 relative z-0">
+            <div className="relative z-0 min-w-0 w-full basis-full space-y-4 sm:space-y-6 md:space-y-8">
             {detail.fee ? (
               <FeesBreakdown
+                key={`fees-${detail.student.id}`}
                 studentId={detail.student.id}
                 classId={detail.student.class?.id ?? null}
                 feesRecordingDisabled={isSelectedInactive}
@@ -226,6 +227,7 @@ function StudentDetailsPageContent() {
             ) : null}
 
             <FeeTransactions
+              key={`txns-${detail.student.id}`}
               fee={detail.fee}
               feeBreakdown={feeBreakdown}
               payments={detail.payments}

@@ -279,7 +279,11 @@ export async function loadAllSchoolFeeBackupTransactions(schoolId: string): Prom
         a.componentName ||
         (typeof a.componentIndex === "number" ? `Component ${a.componentIndex + 1}` : "School Fees");
     } else if (a.headType === "EXTRA_FEE") {
-      label = a.extraFeeId ? (extraFeeNameById.get(a.extraFeeId) ?? "Extra Fee") : "Extra Fee";
+      // Prefer live ExtraFee name, then allocation snapshot (componentName), else generic fallback.
+      // Snapshot matters when the ExtraFee row was deleted/merged — otherwise backups show "Extra Fee".
+      const fromId = a.extraFeeId ? extraFeeNameById.get(a.extraFeeId)?.trim() : "";
+      const fromSnap = a.componentName?.trim() || "";
+      label = fromId || fromSnap || "Extra Fee";
     }
     const perPayment = allocationLabelAmountByPayment.get(a.paymentId) ?? new Map<string, number>();
     allocationLabelAmountByPayment.set(a.paymentId, perPayment);

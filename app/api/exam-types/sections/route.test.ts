@@ -59,8 +59,8 @@ describe("PUT /api/exam-types/sections", () => {
     expect(res.status).toBe(401);
   });
 
-  it("returns 403 for a non-admin", async () => {
-    mockGetServerSession.mockResolvedValue({ user: { id: "u1", role: "TEACHER", schoolId: "s1" } });
+  it("returns 403 for a role that is neither school admin nor teacher", async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: "u1", role: "STUDENT", schoolId: "s1" } });
     const res = await PUT(makeRequest({}));
     expect(res.status).toBe(403);
   });

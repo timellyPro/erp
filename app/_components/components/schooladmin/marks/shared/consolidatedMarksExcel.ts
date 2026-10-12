@@ -1,8 +1,8 @@
-import { sheetNameSafe, type ConsolidatedPayload } from "./downloadReportsTypes";
+import { examFileLabel, sheetNameSafe, type ConsolidatedPayload } from "./downloadReportsTypes";
 
 export async function generateConsolidatedMarksExcel(
   data: ConsolidatedPayload,
-  selectedExamType: string,
+  examTypes: string[],
   selectMode: "class" | "section"
 ) {
   const ExcelJS = await import("exceljs");
@@ -10,12 +10,16 @@ export async function generateConsolidatedMarksExcel(
   workbook.creator = "Timelly";
   const usedNames = new Set<string>();
 
-  const examLabel =
-    data.examType && data.examType !== "ALL" ? data.examType : "ALL EXAMS";
   const schoolName = data.school?.name ?? "School";
 
   for (const sheet of data.sheets ?? []) {
-    const ws = workbook.addWorksheet(sheetNameSafe(sheet.label, usedNames));
+    const examLabel =
+      sheet.examType && sheet.examType !== "ALL" ? sheet.examType : "ALL EXAMS";
+    const sheetTitle =
+      examTypes.length > 1 && sheet.examType && sheet.examType !== "ALL"
+        ? `${sheet.examType} ${sheet.label}`
+        : sheet.label;
+    const ws = workbook.addWorksheet(sheetNameSafe(sheetTitle, usedNames));
     const subjects = sheet.subjects ?? [];
     const showSection = Boolean(sheet.includeSectionCol);
     const colCount = 2 + (showSection ? 1 : 0) + subjects.length + 4;
@@ -117,8 +121,7 @@ export async function generateConsolidatedMarksExcel(
   });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  const examFile =
-    selectedExamType === "ALL" ? "ALL_EXAMS" : selectedExamType.replace(/\s+/g, "_");
+  const examFile = examFileLabel(examTypes);
   const modeFile = selectMode === "class" ? "BY_CLASS" : "BY_SECTION";
   a.href = url;
   a.download = `${examFile}_CONSOLIDATED_${modeFile}_${new Date().toISOString().slice(0, 10)}.xlsx`;

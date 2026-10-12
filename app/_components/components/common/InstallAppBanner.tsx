@@ -30,7 +30,15 @@ export default function InstallAppBanner() {
     }
   }, [install]);
 
-  if (pathname === "/download" || pathname === "/qr" || !canInstall || dismissed) return null;
+  if (
+    pathname === "/download" ||
+    pathname === "/qr" ||
+    pathname === "/privacy-policy" ||
+    !canInstall ||
+    dismissed
+  ) {
+    return null;
+  }
 
   return (
     <div

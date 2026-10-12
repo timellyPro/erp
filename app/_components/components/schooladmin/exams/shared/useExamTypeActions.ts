@@ -20,7 +20,6 @@ export function useExamTypeActions(
   const [sectionDraftsByType, setSectionDraftsByType] = useState<
     Record<string, Array<{ id?: string; name: string; maxMarks: string }>>
   >({});
-  const [expandedExamType, setExpandedExamType] = useState<string | null>(null);
   const [sectionSaving, setSectionSaving] = useState(false);
   const [sectionError, setSectionError] = useState("");
 
@@ -167,6 +166,7 @@ export function useExamTypeActions(
         name: data?.examType?.name ?? name,
         maxMarks: data?.examType?.maxMarks ?? maxMarks,
         sections: Array.isArray(data?.examType?.sections) ? data.examType.sections : [],
+        subjectConfigs: [],
       };
       const next = [...examTypes.filter((t) => t.name !== created.name), created].sort(
         (a, b) => a.name.localeCompare(b.name)
@@ -256,13 +256,12 @@ export function useExamTypeActions(
     newExamTypeMax,
     setNewExamTypeMax,
     examTypeError,
+    setExamTypeError,
     examTypeSaving,
     maxMarksDrafts,
     setMaxMarksDrafts,
     sectionDraftsByType,
     setSectionDraftsByType,
-    expandedExamType,
-    setExpandedExamType,
     sectionSaving,
     sectionError,
     syncMaxDrafts,

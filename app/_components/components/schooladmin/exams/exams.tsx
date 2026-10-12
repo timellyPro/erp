@@ -14,18 +14,21 @@ export default function ExamsTab() {
         examTypesLoading,
         newExamType,
         setNewExamType,
-        newExamTypeMax,
-        setNewExamTypeMax,
         examTypeError,
         examTypeSaving,
-        maxMarksDrafts,
-        setMaxMarksDrafts,
-        sectionDraftsByType,
-        setSectionDraftsByType,
-        expandedExamType,
-        setExpandedExamType,
-        sectionSaving,
         sectionError,
+        subjectMaxByExam,
+        setSubjectMaxByExam,
+        subjectPartsByKey,
+        setSubjectPartsByKey,
+        subjectConfigSavingFor,
+        subjectConfigMessage,
+        openExamType,
+        setOpenExamType,
+        saveSubjectParts,
+        removedByExam,
+        deleteSubjectFromExam,
+        restoreSubjectOnExam,
         subjects,
         subjectsLoading,
         newSubject,
@@ -48,13 +51,11 @@ export default function ExamsTab() {
         showAllSchedules,
         setShowAllSchedules,
         deleteExamType,
-        saveExamTypeMaxMarks,
         addExamType,
         deleteSubject,
         renameSubject,
         addSubject,
         uniqueTerms,
-        saveExamTypeSections,
         isTermCompleted,
         activeSchedules,
         activeSubjects,
@@ -72,13 +73,13 @@ export default function ExamsTab() {
         );
 
     return (
-        <div className="min-h-screen text-white max-w-7xl mx-auto md:p-0">
+        <div className="min-h-screen text-white max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 pb-8">
             <PageHeader
                 title={
-                    <div className="flex items-center gap-3">
-                        <span>Exams & Syllabus</span>
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
+                        <span className="truncate">Exams & Syllabus</span>
                         <span
-                            className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md uppercase ${isTermCompleted ? "bg-white/20 text-white" : "bg-[#B4F42A] text-black"
+                            className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md uppercase shrink-0 ${isTermCompleted ? "bg-white/20 text-white" : "bg-[#B4F42A] text-black"
                                 }`}
                         >
                             {isTermCompleted ? "Completed" : "Active Term"}
@@ -87,8 +88,8 @@ export default function ExamsTab() {
                 }
                 subtitle={`Viewing details for ${selectedTermName}`}
                 rightSlot={
-                    <div className="flex gap-2 md:gap-6">
-                        <div className="text-right md:text-center border-r border-white/10 pr-6 text-white/40">
+                    <div className="flex gap-4 sm:gap-6 justify-between sm:justify-end w-full md:w-auto">
+                        <div className="text-left sm:text-right md:text-center border-r border-white/10 pr-4 sm:pr-6 text-white/40">
                             <p className="text-xs">Next Exam</p>
                             <p className="text-sm font-bold text-white">
                                 {nextExamDate
@@ -96,13 +97,13 @@ export default function ExamsTab() {
                                     : "--"}
                             </p>
                         </div>
-                        <div className="text-right md:text-center">
+                        <div className="text-left sm:text-right md:text-center">
                             <p className="text-xs">Days Left</p>
                             <p className="text-sm font-bold text-[#B4F42A]">{daysLeft}</p>
                         </div>
                     </div>
                 }
-                className="somu border-none bg-white/5! mb-6"
+                className="somu border-none bg-white/5! mb-4 sm:mb-6"
             />
 
             <ExamTypesManager
@@ -110,22 +111,37 @@ export default function ExamsTab() {
                 examTypes={examTypes}
                 newExamType={newExamType}
                 onNewExamTypeChange={setNewExamType}
-                newExamTypeMax={newExamTypeMax}
-                onNewExamTypeMaxChange={setNewExamTypeMax}
                 onAddExamType={addExamType}
                 examTypeSaving={examTypeSaving}
                 examTypeError={examTypeError}
-                sectionDraftsByType={sectionDraftsByType}
-                onSectionDraftsByTypeChange={setSectionDraftsByType}
-                expandedExamType={expandedExamType}
-                onExpandedExamTypeChange={setExpandedExamType}
-                maxMarksDrafts={maxMarksDrafts}
-                onMaxMarksDraftsChange={setMaxMarksDrafts}
-                onSaveExamTypeMaxMarks={saveExamTypeMaxMarks}
-                onDeleteExamType={deleteExamType}
-                onSaveExamTypeSections={saveExamTypeSections}
-                sectionSaving={sectionSaving}
                 sectionError={sectionError}
+                subjectConfigMessage={subjectConfigMessage}
+                onDeleteExamType={deleteExamType}
+                openExamType={openExamType}
+                onOpenExamTypeChange={setOpenExamType}
+                subjects={subjects}
+                removedByExam={removedByExam}
+                subjectMaxByExam={subjectMaxByExam}
+                onSubjectMaxChange={(rowKey, value) =>
+                    setSubjectMaxByExam((prev) => ({ ...prev, [rowKey]: value }))
+                }
+                subjectPartsByKey={subjectPartsByKey}
+                onSubjectPartsChange={(rowKey, update) =>
+                    setSubjectPartsByKey((prev) => ({ ...prev, [rowKey]: update(prev[rowKey] ?? []) }))
+                }
+                subjectConfigSavingFor={subjectConfigSavingFor}
+                subjectSaving={subjectSaving}
+                onSaveSubject={saveSubjectParts}
+                onRemoveSubjectFromExam={deleteSubjectFromExam}
+                onRestoreSubjectOnExam={restoreSubjectOnExam}
+                editing={{
+                    editingSubject,
+                    onEditingSubjectChange: setEditingSubject,
+                    editingSubjectValue,
+                    onEditingSubjectValueChange: setEditingSubjectValue,
+                    onRenameSubject: renameSubject,
+                    onSubjectErrorChange: setSubjectError,
+                }}
             />
 
             <SubjectsManager
@@ -223,8 +239,8 @@ export default function ExamsTab() {
                                             {new Date(exam.examDate).toLocaleString("default", { month: "short" })}
                                         </p>
                                     </div>
-                                    <div>
-                                        <p className="font-bold capitalize text-sm">{exam.subject}</p>
+                                    <div className="min-w-0">
+                                        <p className="font-bold capitalize text-sm break-words">{exam.subject}</p>
                                         <p className="text-[10px] text-white/40">{exam.startTime}</p>
                                     </div>
                                 </div>
@@ -287,8 +303,8 @@ export default function ExamsTab() {
                                     : syllabusItem.completedPercent;
 
                                 return (
-                                    <div key={subName} className="somu rounded-3xl p-6 md:p-8 border-none mb-6">
-                                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8">
+                                    <div key={subName} className="somu rounded-3xl p-4 sm:p-6 md:p-8 border-none mb-6">
+                                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 sm:gap-6 mb-6 sm:mb-8">
                                             <div className="flex items-center gap-4">
                                                 <div className="bg-white/10 p-3 rounded-2xl">
                                                     <BookOpen className="text-[#B4F42A]" size={24} />
@@ -324,14 +340,14 @@ export default function ExamsTab() {
                                             {syllabusItem.units.map((unit) => (
                                                 <div
                                                     key={unit.id}
-                                                    className="bg-white/5 p-4 rounded-2xl flex justify-between items-center border border-white/5"
+                                                    className="bg-white/5 p-4 rounded-2xl flex justify-between items-center gap-3 border border-white/5"
                                                 >
-                                                    <div className="flex items-center gap-3">
+                                                    <div className="flex min-w-0 items-center gap-3">
                                                         <div
-                                                            className={`w-2 h-2 rounded-full ${unit.completedPercent === 100 ? "bg-[#B4F42A]" : "bg-blue-400"
+                                                            className={`w-2 h-2 shrink-0 rounded-full ${unit.completedPercent === 100 ? "bg-[#B4F42A]" : "bg-blue-400"
                                                                 }`}
                                                         />
-                                                        <span className="text-sm font-medium text-white/90">{unit.unitName}</span>
+                                                        <span className="min-w-0 break-words text-sm font-medium text-white/90">{unit.unitName}</span>
                                                     </div>
                                                     {unit.completedPercent === 100 ? (
                                                         <div className="flex items-center gap-1.5 bg-[#B4F42A]/10 px-3 py-1 rounded-lg border border-[#B4F42A]/20">

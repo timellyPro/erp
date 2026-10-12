@@ -22,8 +22,11 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
   const [searchName, setSearchName] = useState("");
   const [selectedClass, setSelectedClass] = useState("");
   const [studentStatusFilter, setStudentStatusFilter] = useState<StudentStatusFilter>("Active");
+  const [selectedHead, setSelectedHead] = useState("");
+  const [feeHeadOptions, setFeeHeadOptions] = useState<string[]>([]);
   const [reportPeriod, setReportPeriod] = useState<ReportPeriod>("DAY_WISE");
-  const [reportDate, setReportDate] = useState(() => todayYmdLocal());
+  const [reportDateFrom, setReportDateFrom] = useState(() => todayYmdLocal());
+  const [reportDateTo, setReportDateTo] = useState(() => todayYmdLocal());
   const [reportMonth, setReportMonth] = useState(new Date().toISOString().slice(0, 7));
   const [reportYear, setReportYear] = useState(String(new Date().getFullYear()));
   const [academicYear, setAcademicYear] = useState(() => {
@@ -53,6 +56,39 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     setPage(1);
   }, [searchName, selectedClass, studentStatusFilter]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [structureRes, extraRes] = await Promise.all([
+        fetch("/api/fees/structure", { credentials: "include" }),
+        fetch("/api/fees/extra", { credentials: "include" }),
+      ]);
+      const structureData = (await structureRes.json().catch(() => ({}))) as {
+        structures?: Array<{ components?: Array<{ name?: string }> }>;
+      };
+      const extraData = (await extraRes.json().catch(() => ({}))) as {
+        extraFees?: Array<{ name?: string }>;
+      };
+      const names = new Set<string>();
+      for (const structure of structureData.structures ?? []) {
+        for (const component of structure.components ?? []) {
+          const name = String(component?.name ?? "").trim();
+          if (name) names.add(name);
+        }
+      }
+      for (const extra of extraData.extraFees ?? []) {
+        const name = String(extra?.name ?? "").trim();
+        if (name) names.add(name);
+      }
+      if (!cancelled) {
+        setFeeHeadOptions([...names].sort((a, b) => a.localeCompare(b)));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const totalPages = Math.max(1, Math.ceil(filteredFees.length / PAGE_SIZE));
   const paginatedFees = useMemo(
     () => filteredFees.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
@@ -74,9 +110,10 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
     exportFeeDueReport,
     exportSelectedClass,
   } = useFeeRecordsExportActions({
-    periodState: { reportPeriod, reportDate, reportMonth, reportYear, academicYear },
+    periodState: { reportPeriod, reportDateFrom, reportDateTo, reportMonth, reportYear, academicYear },
     exportFormat,
     selectedClass,
+    selectedHead,
     studentStatusFilter,
     statusFilteredFees,
     classLabelById,
@@ -94,35 +131,56 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
       <div className="mb-4 rounded-xl border border-white/10 bg-black/10 p-3 sm:p-4">
         <div className="mb-4 flex flex-col gap-1 border-b border-white/10 pb-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm font-semibold text-white">Fee collection report</p>
+            <p className="text-sm font-semibold text-white">Day report</p>
             <p className="mt-0.5 text-xs text-gray-400">
-              Pick a period, then export or view collections.
+              Choose a from date and a to date, then download the collections for that range.
             </p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <SelectInput
             label="Report period"
             value={reportPeriod}
             onChange={(value) => setReportPeriod(value as ReportPeriod)}
             options={[
-              { label: "Day Wise", value: "DAY_WISE" },
+              { label: "Date Range", value: "DAY_WISE" },
               { label: "Month Wise", value: "MONTH_WISE" },
               { label: "Year Wise", value: "YEAR_WISE" },
               { label: "Academic Year Wise", value: "ACADEMIC_YEAR_WISE" },
             ]}
           />
           {reportPeriod === "DAY_WISE" && (
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-gray-400">Date</label>
-              <input
-                type="date"
-                value={reportDate}
-                onChange={(e) => setReportDate(e.target.value)}
-                className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-white"
-              />
-            </div>
+            <>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-gray-400">From date</label>
+                <input
+                  type="date"
+                  value={reportDateFrom}
+                  max={reportDateTo || undefined}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setReportDateFrom(next);
+                    if (reportDateTo && next > reportDateTo) setReportDateTo(next);
+                  }}
+                  className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-white"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-gray-400">To date</label>
+                <input
+                  type="date"
+                  value={reportDateTo}
+                  min={reportDateFrom || undefined}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setReportDateTo(next);
+                    if (reportDateFrom && next < reportDateFrom) setReportDateFrom(next);
+                  }}
+                  className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-white"
+                />
+              </div>
+            </>
           )}
           {reportPeriod === "MONTH_WISE" && (
             <div className="flex flex-col gap-1">
@@ -216,6 +274,16 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
               { label: "Active Students", value: "Active" },
               { label: "Inactive Students", value: "Inactive" },
               { label: "All Students", value: "All" },
+            ]}
+          />
+        </div>
+        <div className="w-full sm:w-auto sm:min-w-[220px]">
+          <SelectInput
+            value={selectedHead}
+            onChange={setSelectedHead}
+            options={[
+              { label: "All Fee Heads", value: "" },
+              ...feeHeadOptions.map((name) => ({ label: name, value: name })),
             ]}
           />
         </div>

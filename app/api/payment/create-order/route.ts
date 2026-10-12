@@ -7,7 +7,12 @@ import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { FEE_ALLOCATION_PAYMENT_STATUSES } from "@/lib/fees/feePaymentStatuses";
 import { structureMultiplierAfterDiscount } from "@/lib/fees/studentTuitionFromStructure";
 import type { Prisma } from "@prisma/client";
-import { extraFeeAppliesToStudent } from "@/lib/fees/extraFeeResidencyScope";
+import { rollupOrphanExtraFeeAllocations } from "@/lib/fees/rollupOrphanExtraFeeAllocations";
+import {
+  conversionDueCredit,
+  includeExtraFeeOnStudentBill,
+  residencyConversionStudentIds,
+} from "@/lib/fees/residencyConversion";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/students/studentRte";
 import { logger } from "@/lib/logger";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
@@ -214,12 +219,21 @@ export async function POST(req: Request) {
             { targetType: "STUDENT", targetStudentId: student.id },
           ],
         },
-        select: { id: true, name: true, amount: true, targetType: true, residencyScope: true },
+        select: {
+          id: true,
+          name: true,
+          amount: true,
+          targetType: true,
+          targetStudentId: true,
+          residencyScope: true,
+          residencyConversion: true,
+        },
       });
       const residency = student.residencyType ?? "Day Scholar";
       const rte = isStudentRte(residency);
+      const convertedStudentIds = residencyConversionStudentIds(extraFeesRaw);
       const extraFees = extraFeesRaw
-        .filter((ef) => extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, residency))
+        .filter((ef) => includeExtraFeeOnStudentBill(ef, residency, student.id, convertedStudentIds))
         .filter((ef) => !(rte && isTuitionNamedExtraFee(ef.name)));
 
       const getHeadKey = (h: SelectedHead) => {
@@ -227,7 +241,15 @@ export async function POST(req: Request) {
         return `EXTRA:${h.extraFeeId}`;
       };
 
-      type Head = { key: string; headType: "BASE_COMPONENT" | "EXTRA_FEE"; snapshotDue: number; componentIndex?: number; componentName?: string; extraFeeId?: string };
+      type Head = {
+        key: string;
+        headType: "BASE_COMPONENT" | "EXTRA_FEE";
+        snapshotDue: number;
+        componentIndex?: number;
+        componentName?: string;
+        extraFeeId?: string;
+        residencyConversion?: boolean;
+      };
 
       const allHeads: Head[] = [
         ...baseComponents.map((c, idx): Head => ({
@@ -242,6 +264,7 @@ export async function POST(req: Request) {
           headType: "EXTRA_FEE",
           snapshotDue: Number(ef.amount) || 0,
           extraFeeId: ef.id,
+          residencyConversion: Boolean(ef.residencyConversion),
         })),
       ];
 
@@ -276,6 +299,22 @@ export async function POST(req: Request) {
         netPaidByHead.set(key, (netPaidByHead.get(key) ?? 0) - a.allocatedAmount);
       }
 
+      rollupOrphanExtraFeeAllocations(
+        netPaidByHead,
+        allHeads.map((h) => ({
+          key: h.key,
+          label: h.componentName ?? "",
+          extraFeeId: h.extraFeeId,
+          snapshotDue: h.snapshotDue,
+        })),
+        new Map(extraFeesRaw.map((ef) => [ef.id, { id: ef.id, name: ef.name }]))
+      );
+      const creditByKey = conversionDueCredit(
+        allHeads,
+        netPaidByHead,
+        new Map(extraFeesRaw.map((ef) => [ef.id, ef.name]))
+      );
+
       const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);
       const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);
       const totalSnapshotDue = Math.max(fee.finalFee, 0);
@@ -283,7 +322,7 @@ export async function POST(req: Request) {
       const headsWithDueBefore = allHeads.map((h) => {
         const paidAlloc = netPaidByHead.get(h.key) ?? 0;
         const paidLegacy = totalSnapshotDue > 0 ? legacyPaidTotal * (h.snapshotDue / totalSnapshotDue) : 0;
-        const dueBefore = Math.max(h.snapshotDue - (paidAlloc + paidLegacy), 0);
+        const dueBefore = Math.max(h.snapshotDue - (paidAlloc + paidLegacy + (creditByKey.get(h.key) ?? 0)), 0);
         return { ...h, dueBefore, paidAlloc, paidLegacy };
       });
 

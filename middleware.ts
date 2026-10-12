@@ -41,7 +41,9 @@ export async function middleware(request: NextRequest) {
   const skipApiCache =
     pathname.startsWith("/api/auth/") ||
     pathname === "/api/health" ||
-    pathname.startsWith("/api/notifications");
+    pathname.startsWith("/api/notifications") ||
+    pathname.startsWith("/api/marks") ||
+    pathname.startsWith("/api/exam-types");
 
   if (
     request.method === "GET" &&

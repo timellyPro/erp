@@ -151,6 +151,9 @@ export function EditStudentModal({
               options={[...RESIDENCY_OPTIONS]}
               bgColor="black"
             />
+            <p className="mt-1 text-[11px] leading-snug text-white/45">
+              Hostel and Day Scholar changes apply to this student only. Fees for the months already spent stay, and a transport kilometre choice opens if they become a day scholar.
+            </p>
           </div>
         </div>
         <div className="mt-5 flex justify-end gap-2">

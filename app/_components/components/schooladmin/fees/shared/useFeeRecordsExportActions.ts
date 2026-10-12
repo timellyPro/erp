@@ -6,7 +6,6 @@ import type { FeeRecord } from "../types";
 import {
   appendDayReportSheet,
   drawFeeDayReportPdf,
-  formatDdMmYyyyFromYmdInput,
   formatStudentClassForReport,
   type DayReportTx,
 } from "@/lib/fees/feeDayReportExcel";
@@ -16,6 +15,8 @@ import { drawPrettyPdf } from "./feeRecordsPdfExport";
 import {
   buildReportTxQueryParams,
   filterReportTransactions,
+  formatDateRangeLabel,
+  getReportDateRange,
   getReportPeriodLabel,
   getReportPeriodValue,
   type ReportPeriodState,
@@ -35,6 +36,7 @@ export default function useFeeRecordsExportActions({
   periodState,
   exportFormat,
   selectedClass,
+  selectedHead,
   studentStatusFilter,
   statusFilteredFees,
   classLabelById,
@@ -42,6 +44,7 @@ export default function useFeeRecordsExportActions({
   periodState: ReportPeriodState;
   exportFormat: ExportFormat;
   selectedClass: string;
+  selectedHead: string;
   studentStatusFilter: string;
   statusFilteredFees: FeeRecord[];
   classLabelById: Map<string, string>;
@@ -49,6 +52,13 @@ export default function useFeeRecordsExportActions({
   const [feeDueExporting, setFeeDueExporting] = useState(false);
 
   const exportFinalTemplate = async () => {
+    if (periodState.reportPeriod === "DAY_WISE") {
+      if (!periodState.reportDateFrom || !periodState.reportDateTo) {
+        alert("Please select both From date and To date.");
+        return;
+      }
+    }
+
     const txQs = buildReportTxQueryParams(periodState);
     const [txRes, schoolRes] = await Promise.all([
       fetch(`/api/fees/transactions?${txQs.toString()}`, { credentials: "include" }),
@@ -66,23 +76,32 @@ export default function useFeeRecordsExportActions({
 
     const transactions: DayReportTx[] = Array.isArray(txData?.transactions) ? txData.transactions : [];
 
-    const filteredTx = filterReportTransactions(transactions, periodState, selectedClass);
+    const filteredTx = filterReportTransactions(transactions, periodState, selectedClass, selectedHead);
     if (filteredTx.length === 0) {
       alert("No fee transactions found for the selected report period.");
       return;
     }
 
+    const { from: rangeFrom, to: rangeTo } = getReportDateRange(periodState);
     const headerDateLabel =
       periodState.reportPeriod === "DAY_WISE"
-        ? formatDdMmYyyyFromYmdInput(periodState.reportDate)
+        ? formatDateRangeLabel(rangeFrom, rangeTo)
         : getReportPeriodValue(periodState);
     const dayReportTitle =
       periodState.reportPeriod === "DAY_WISE"
-        ? "Day Report"
+        ? rangeFrom === rangeTo
+          ? "Day Report"
+          : "Date Range Report"
         : `${getReportPeriodLabel(periodState.reportPeriod)} — collections`;
 
-    const fileDate = new Date().toISOString().slice(0, 10);
-    const safePeriod = periodState.reportPeriod.toLowerCase();
+    const fileDate =
+      periodState.reportPeriod === "DAY_WISE"
+        ? rangeFrom === rangeTo
+          ? rangeFrom
+          : `${rangeFrom}_to_${rangeTo}`
+        : new Date().toISOString().slice(0, 10);
+    const safePeriod =
+      periodState.reportPeriod === "DAY_WISE" ? "date_range" : periodState.reportPeriod.toLowerCase();
     const baseName = `fee-report-${safePeriod}-${fileDate}`;
     const rows = filteredTx.map((t) => ({
       Date: new Date(t.createdAt).toLocaleDateString("en-GB"),
@@ -159,6 +178,7 @@ export default function useFeeRecordsExportActions({
     try {
       const params = new URLSearchParams();
       if (selectedClass) params.set("classId", selectedClass);
+      if (selectedHead) params.set("head", selectedHead);
       if (studentStatusFilter !== "All") params.set("status", studentStatusFilter);
       const q = params.toString() ? `?${params.toString()}` : "";
       const res = await fetch(`/api/fees/export/fee-due-report${q}`, {
@@ -174,7 +194,10 @@ export default function useFeeRecordsExportActions({
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `fee-due-report-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      const headSlug = selectedHead
+        ? `-${selectedHead.replace(/[^\w]+/g, "_").replace(/^_|_$/g, "").slice(0, 40)}`
+        : "";
+      a.download = `fee-due-report${headSlug}-${new Date().toISOString().slice(0, 10)}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {

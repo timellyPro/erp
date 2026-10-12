@@ -77,6 +77,11 @@ export const FeesBreakdown = (props: Props) => {
     displayAmountPaid,
     displayRemainingAmount,
     paidPercentage,
+    cardTotalAmount,
+    cardAmountPaid,
+    cardRemainingAmount,
+    cardPaidPercentage,
+    residencyAdjustmentNote,
     previousYearRemainingAmount,
     openModifyFeeModal,
     openHeadPaymentModal,
@@ -96,6 +101,11 @@ export const FeesBreakdown = (props: Props) => {
           <span>
             <span className="font-semibold text-red-100">Inactive student.</span> You cannot record fees for this student.
           </span>
+        </div>
+      ) : null}
+      {residencyAdjustmentNote ? (
+        <div className="mb-4 rounded-xl border border-lime-500/30 bg-lime-500/10 px-3 py-2.5 text-sm text-lime-100">
+          {residencyAdjustmentNote}
         </div>
       ) : null}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-4 sm:mb-6 min-w-0">
@@ -145,7 +155,7 @@ export const FeesBreakdown = (props: Props) => {
       </div>
 
       <FeeSummaryCards
-        displayTotalAmount={displayTotalAmount}
+        displayTotalAmount={cardTotalAmount}
         displayPreDiscountTotal={displayPreDiscountTotal}
         raisedDiscountAmount={raisedDiscountAmount}
         discountAmount={discountAmount}
@@ -154,9 +164,9 @@ export const FeesBreakdown = (props: Props) => {
         discountFeeHeadLabel={discountFeeHeadLabel}
         discountFeeHeadKey={discountFeeHeadKey}
         discountRemarks={discountRemarks}
-        displayAmountPaid={displayAmountPaid}
-        paidPercentage={paidPercentage}
-        displayRemainingAmount={displayRemainingAmount}
+        displayAmountPaid={cardAmountPaid}
+        paidPercentage={cardPaidPercentage}
+        displayRemainingAmount={cardRemainingAmount}
         previousYearRemainingAmount={previousYearRemainingAmount}
       />
 

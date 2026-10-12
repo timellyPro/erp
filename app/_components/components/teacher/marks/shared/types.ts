@@ -10,6 +10,17 @@ export type StudentRow = {
   componentScores?: Record<string, number | "" | "AB">;
 };
 
+export type SavedMarkRow = {
+  id: string;
+  studentId: string;
+  studentName: string;
+  marks: number;
+  totalMarks: number;
+  grade: string | null;
+  components?: Array<{ name: string; marks: number; totalMarks: number }>;
+  status: "saved" | "already_saved";
+};
+
 export type ClassOption = { id: string; name: string; section: string | null };
 export type MarksEntryForm = {
   classId: string;

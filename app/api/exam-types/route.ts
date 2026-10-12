@@ -18,10 +18,17 @@ export type ExamTypeSectionPayload = {
   order: number;
 };
 
+export type ExamTypeSubjectPayload = {
+  subject: string;
+  maxMarks: number | null;
+  sections: ExamTypeSectionPayload[];
+};
+
 export type ExamTypePayload = {
   name: string;
   maxMarks: number | null;
   sections: ExamTypeSectionPayload[];
+  subjectConfigs: ExamTypeSubjectPayload[];
 };
 
 async function resolveSchoolId(session: {
@@ -120,9 +127,67 @@ export async function GET() {
       return [types, marks] as const;
     });
 
+    const subjectConfigsByExam = new Map<string, ExamTypeSubjectPayload[]>();
+    try {
+      // Separate scope on purpose: a failed statement aborts a Postgres transaction,
+      // and this lookup is best-effort (the page still works without per-subject config).
+      const subjectRows = await withTenantScopedClient(schoolId, (tx) =>
+        tx.$queryRaw<
+          Array<{
+            examTypeName: string;
+            subject: string;
+            maxMarks: number | null;
+            sectionId: string | null;
+            sectionName: string | null;
+            sectionMax: number | null;
+            sectionOrder: number | null;
+          }>
+        >`
+          SELECT et.name AS "examTypeName",
+                 s.subject AS "subject",
+                 s."maxMarks" AS "maxMarks",
+                 sec.id AS "sectionId",
+                 sec.name AS "sectionName",
+                 sec."maxMarks" AS "sectionMax",
+                 sec."order" AS "sectionOrder"
+          FROM "ExamTypeSubject" s
+          INNER JOIN "ExamType" et ON et.id = s."examTypeId"
+          LEFT JOIN "ExamTypeSubjectSection" sec ON sec."examTypeSubjectId" = s.id
+          WHERE et."schoolId" = ${schoolId}
+          ORDER BY et.name ASC, s.subject ASC, sec."order" ASC
+        `
+      );
+      for (const row of subjectRows) {
+        const examName = row.examTypeName.trim().toUpperCase();
+        const subject = row.subject.trim().toUpperCase();
+        if (!examName || !subject) continue;
+        const list = subjectConfigsByExam.get(examName) ?? [];
+        let config = list.find((c) => c.subject === subject);
+        if (!config) {
+          config = {
+            subject,
+            maxMarks: row.maxMarks,
+            sections: [],
+          };
+          list.push(config);
+          subjectConfigsByExam.set(examName, list);
+        }
+        if (row.sectionId && row.sectionName && row.sectionMax != null) {
+          config.sections.push({
+            id: row.sectionId,
+            name: row.sectionName,
+            maxMarks: Number(row.sectionMax),
+            order: row.sectionOrder ?? config.sections.length,
+          });
+        }
+      }
+    } catch (err) {
+      logger.error("Exam type subject configs:", err);
+    }
+
     const byName = new Map<string, ExamTypePayload>();
     DEFAULT_EXAM_TYPES.forEach((n) =>
-      byName.set(n, { name: n, maxMarks: null, sections: [] })
+      byName.set(n, { name: n, maxMarks: null, sections: [], subjectConfigs: [] })
     );
     customTypes.forEach((t) => {
       const name = t.name.trim().toUpperCase();
@@ -131,6 +196,7 @@ export async function GET() {
         name,
         maxMarks: t.maxMarks ?? null,
         sections: t.sections,
+        subjectConfigs: subjectConfigsByExam.get(name) ?? [],
       });
     });
     fromMarks.forEach((t) => {
@@ -138,7 +204,7 @@ export async function GET() {
       const name = t.examType.trim().toUpperCase();
       if (!name) return;
       if (!byName.has(name)) {
-        byName.set(name, { name, maxMarks: null, sections: [] });
+        byName.set(name, { name, maxMarks: null, sections: [], subjectConfigs: [] });
       }
     });
 
@@ -163,7 +229,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    if (session.user.role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
@@ -243,7 +309,7 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    if (session.user.role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
@@ -339,7 +405,7 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    if (session.user.role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 

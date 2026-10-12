@@ -30,22 +30,6 @@ async function resolveSchoolId(session: {
   return schoolId;
 }
 
-function formatExamDate(d: Date): string {
-  const date = new Date(d);
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function formatDuration(minutes: number): string {
-  if (minutes >= 60) {
-    const h = Math.floor(minutes / 60);
-    return h === 1 ? "1 Hour" : `${h} Hours`;
-  }
-  return `${minutes} Mins`;
-}
-
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -69,67 +53,15 @@ export async function GET(req: Request) {
     // through the app_tenant connection, restricted by RLS, not just the
     // `where: { schoolId }` filters in each branch below.
     const result = await withTenantScopedClient(schoolId, async (tx) => {
-      /* ======================================================
-         TEACHER – OLD LOGIC (UNCHANGED)
-      ====================================================== */
-      if (role === "TEACHER") {
-        const terms = await tx.examTerm.findMany({
-          where: {
-            schoolId,
-            ...(classIdParam ? { classId: classIdParam } : {}),
-            ...(status ? { status: status as ExamTermStatus } : {}),
-          },
-          include: {
-            class: { select: { id: true, name: true, section: true } },
-            schedules: { orderBy: { examDate: "asc" } },
-            syllabus: { orderBy: { subject: "asc" }, include: { units: { orderBy: { order: "asc" } } } },
-          },
-          orderBy: { createdAt: "desc" },
-        });
-
-        const exams: Array<{
-          id: string;
-          termId: string;
-          name: string;
-          status: ExamTermStatus;
-          subject: string;
-          class: { id: string; name: string; section: string };
-          date: string;
-          time: string;
-          duration: string;
-          syllabus: Array<{ completedPercent: number }>;
-        }> = [];
-
-        for (const term of terms) {
-          const classInfo = term.class
-            ? { id: term.class.id, name: term.class.name, section: term.class.section ?? "" }
-            : { id: "", name: "", section: "" };
-
-          for (const s of term.schedules) {
-            const tracking = term.syllabus.find((sy) => sy.subject === s.subject);
-            const syllabus = tracking
-              ? tracking.units.length > 0
-                ? tracking.units.map((u) => ({ completedPercent: u.completedPercent }))
-                : [{ completedPercent: tracking.completedPercent }]
-              : [];
-
-            exams.push({
-              id: s.id,
-              termId: term.id,
-              name: term.name,
-              status: term.status,
-              subject: s.subject,
-              class: classInfo,
-              date: formatExamDate(s.examDate),
-              time: s.startTime,
-              duration: formatDuration(s.durationMin),
-              syllabus,
-            });
-          }
-        }
-
-        return { kind: "teacher" as const, exams };
-      }
+      const termInclude = {
+        class: { include: { teacher: { select: { name: true } } } },
+        schedules: { orderBy: { examDate: "asc" as const } },
+        syllabus: {
+          orderBy: { subject: "asc" as const },
+          include: { units: { orderBy: { order: "asc" as const } } },
+        },
+        sections: { orderBy: { order: "asc" as const } },
+      };
 
       /* ======================================================
          STUDENT
@@ -150,12 +82,7 @@ export async function GET(req: Request) {
             classId: student.classId,
             ...(status ? { status: status as ExamTermStatus } : {}),
           },
-          include: {
-            class: { include: { teacher: { select: { name: true } } } },
-            schedules: { orderBy: { examDate: "asc" } },
-            syllabus: { orderBy: { subject: "asc" }, include: { units: { orderBy: { order: "asc" } } } },
-            sections: { orderBy: { order: "asc" } },
-          },
+          include: termInclude,
           orderBy: { createdAt: "desc" },
         });
 
@@ -163,7 +90,8 @@ export async function GET(req: Request) {
       }
 
       /* ======================================================
-         SCHOOL ADMIN – UPDATED
+         SCHOOL ADMIN / TEACHER – full school terms + classes
+         (Teacher portal uses the same Exams UI as school admin.)
       ====================================================== */
       const classes = await tx.class.findMany({
         where: { schoolId },
@@ -177,21 +105,13 @@ export async function GET(req: Request) {
           ...(classIdParam ? { classId: classIdParam } : {}),
           ...(status ? { status: status as ExamTermStatus } : {}),
         },
-        include: {
-          class: { include: { teacher: { select: { name: true } } } },
-          schedules: { orderBy: { examDate: "asc" } },
-          syllabus: { orderBy: { subject: "asc" }, include: { units: { orderBy: { order: "asc" } } } },
-          sections: { orderBy: { order: "asc" } },
-        },
+        include: termInclude,
         orderBy: { createdAt: "desc" },
       });
 
       return { kind: "schooladmin" as const, terms, classes };
     });
 
-    if (result.kind === "teacher") {
-      return NextResponse.json({ exams: result.exams }, { status: 200 });
-    }
     if (result.kind === "studentNoClass") {
       return NextResponse.json({ message: "Student class not assigned" }, { status: 400 });
     }

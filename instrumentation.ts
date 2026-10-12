@@ -1,5 +1,6 @@
 export async function register() {
-  if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  // Edge sets NEXT_RUNTIME=edge. On Node/Turbopack it may be "nodejs" or unset.
+  if (process.env.NEXT_RUNTIME === "edge") return;
   if (!process.env.DATABASE_URL_TENANT) {
     // Tenant-scoped routes (lib/db/tenantContext.ts) throw on first use without this,
     // so surface it at boot rather than as scattered 500s.
@@ -12,4 +13,12 @@ export async function register() {
   for (const problem of getEnvProblems()) {
     console.error(`[startup] config problem: ${problem} (see .env.example)`);
   }
+
+  // Vercel serverless: use vercel.json cron instead of an in-process interval.
+  if (process.env.VERCEL) return;
+
+  const { startLocalFeesBackupScheduler } = await import(
+    "@/lib/fees/localFeesBackupScheduler"
+  );
+  startLocalFeesBackupScheduler();
 }
