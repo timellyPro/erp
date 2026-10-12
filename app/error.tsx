@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import * as Sentry from "@sentry/nextjs";
 
 export default function Error({
   error,
@@ -10,7 +11,7 @@ export default function Error({
   reset: () => void;
 }) {
   useEffect(() => {
-    // Single hook point for an error tracker (e.g. Sentry.captureException) once added.
+    Sentry.captureException(error);
     console.error("[ui] unhandled render error", error);
   }, [error]);
 
