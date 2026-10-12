@@ -4,13 +4,18 @@ import { lazy, Suspense } from "react";
 import PageHeader from "../../common/PageHeader";
 import TimellyLoader from "../../common/TimellyLoader";
 import { SelectField } from "./MarksSelectField";
-import { Save, ClipboardList, PenLine, Download } from "lucide-react";
+import { Save, ClipboardList, PenLine, Download, X } from "lucide-react";
 import DataTable from "../../common/TableLayout";
 import type { StudentRow } from "./shared";
 import { useMarksEntryState } from "./shared";
 
 const TeacherReportCard = lazy(() => import("./ReportCard"));
-const TeacherDownloadReports = lazy(() => import("./DownloadReports"));
+const SchoolAdminDownloadReports = lazy(
+  () => import("../../schooladmin/marks/DownloadReports")
+);
+const DownloadClassPdf = lazy(
+  () => import("../../schooladmin/marks/DownloadClassPdf")
+);
 
 export default function TeacherMarksTab() {
   const {
@@ -26,9 +31,15 @@ export default function TeacherMarksTab() {
     sectionOptions,
     examTypeOptions,
     maxMarksLocked,
+    markSetup,
     hasSubsections,
+    termSections,
     sectionsTotalMax,
     updateMaxMarks,
+    updateComponentScore,
+    marksTableRef,
+    savePopup,
+    setSavePopup,
     activeBtn,
     setActiveBtn,
     loading,
@@ -54,8 +65,60 @@ export default function TeacherMarksTab() {
     displayClass,
   } = useMarksEntryState();
 
+  const alreadySavedNames = (savePopup ?? []).filter((row) => row.status === "already_saved");
+  const newlySavedNames = (savePopup ?? []).filter((row) => row.status === "saved");
+
   return (
     <div className="min-h-screen text-white px-3 sm:px-6 lg:px-8 py-4">
+      {savePopup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#12141c] p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-bold text-white">Successfully saved</h3>
+                <p className="mt-1 text-xs text-white/50">
+                  Names below are the ones stored in the database.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSavePopup(null)}
+                className="rounded-full p-1.5 text-white/60 hover:bg-white/10"
+                aria-label="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {alreadySavedNames.length > 0 && (
+              <div className="mt-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-white/40">Already saved</p>
+                <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-sm text-white">
+                  {alreadySavedNames.map((row) => (
+                    <li key={row.id}>{row.studentName}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {newlySavedNames.length > 0 && (
+              <div className="mt-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-lime-400/80">Saved now</p>
+                <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-sm text-white">
+                  {newlySavedNames.map((row) => (
+                    <li key={row.id}>{row.studentName}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setSavePopup(null)}
+              className="mt-5 w-full rounded-xl bg-lime-400 py-2.5 text-sm font-bold text-black"
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      )}
       <div className="max-w-7xl mx-auto space-y-6">
         <PageHeader
           title={subTab === "entry" ? "Marks Entry" : subTab === "report-card" ? "Report Card" : "Download Reports"}
@@ -63,49 +126,55 @@ export default function TeacherMarksTab() {
         />
 
         {/* SUB-TAB TOGGLE */}
-        <div className="flex gap-2">
+        <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 pb-0.5">
           <button
             onClick={() => setSubTab("entry")}
-            className={`px-5 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition ${
+            className={`shrink-0 px-3.5 sm:px-5 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition ${
               subTab === "entry"
                 ? "bg-lime-400/20 text-lime-400 border border-lime-400/40 shadow-md"
                 : "bg-white/5 text-white/60 border border-white/10 hover:bg-white/10"
             }`}
           >
-            <PenLine size={15} />
-            Marks Entry
+            <PenLine size={15} className="shrink-0" />
+            <span className="sm:hidden">Entry</span>
+            <span className="hidden sm:inline">Marks Entry</span>
           </button>
           <button
             onClick={() => setSubTab("report-card")}
-            className={`px-5 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition ${
+            className={`shrink-0 px-3.5 sm:px-5 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition ${
               subTab === "report-card"
                 ? "bg-lime-400/20 text-lime-400 border border-lime-400/40 shadow-md"
                 : "bg-white/5 text-white/60 border border-white/10 hover:bg-white/10"
             }`}
           >
-            <ClipboardList size={15} />
-            Report Card
+            <ClipboardList size={15} className="shrink-0" />
+            <span className="sm:hidden">Reports</span>
+            <span className="hidden sm:inline">Report Card</span>
           </button>
           <button
             onClick={() => setSubTab("download")}
-            className={`px-5 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition ${
+            className={`shrink-0 px-3.5 sm:px-5 py-2.5 rounded-xl flex items-center gap-2 text-sm font-medium transition ${
               subTab === "download"
                 ? "bg-lime-400/20 text-lime-400 border border-lime-400/40 shadow-md"
                 : "bg-white/5 text-white/60 border border-white/10 hover:bg-white/10"
             }`}
           >
-            <Download size={15} />
-            Download Reports
+            <Download size={15} className="shrink-0" />
+            <span className="sm:hidden">Download</span>
+            <span className="hidden sm:inline">Download Reports</span>
           </button>
         </div>
 
         {subTab === "report-card" ? (
           <Suspense fallback={<div className="flex justify-center py-16"><div className="w-10 h-10 border-2 border-lime-500/30 border-t-lime-500 rounded-full animate-spin" /></div>}>
-            <TeacherReportCard />
+            <div className="space-y-6">
+              <DownloadClassPdf />
+              <TeacherReportCard scope="school" />
+            </div>
           </Suspense>
         ) : subTab === "download" ? (
           <Suspense fallback={<div className="flex justify-center py-16"><div className="w-10 h-10 border-2 border-lime-500/30 border-t-lime-500 rounded-full animate-spin" /></div>}>
-            <TeacherDownloadReports />
+            <SchoolAdminDownloadReports />
           </Suspense>
         ) : (
         <>
@@ -169,11 +238,15 @@ export default function TeacherMarksTab() {
                 className="w-full px-4 py-2.5 bg-black/40 border border-white/10 rounded-xl focus:outline-none focus:border-lime-400/50 text-white text-sm disabled:opacity-70 disabled:cursor-not-allowed"
               />
               <p className="mt-1 text-[10px] text-white/40">
-                {hasSubsections
-                  ? `From exam type subsections (sum ${sectionsTotalMax})`
-                  : maxMarksLocked
-                    ? "Set by school admin for this exam type"
-                    : "Clear this field to clear max marks for all students"}
+                {markSetup.source === "subject" && hasSubsections
+                  ? `From ${form.subject} subsections (sum ${sectionsTotalMax})`
+                  : markSetup.source === "subject"
+                    ? `Set by school admin for ${form.subject}`
+                    : hasSubsections
+                      ? `From exam type subsections (sum ${sectionsTotalMax})`
+                      : maxMarksLocked
+                        ? "Set by school admin for this exam type"
+                        : "Clear this field to clear max marks for all students"}
               </p>
             </div>
           </div>
@@ -204,7 +277,7 @@ export default function TeacherMarksTab() {
         </div>
 
         {/* TABLE CARD */}
-        <div className="glass-card rounded-2xl overflow-hidden border border-white/10 flex flex-col">
+        <div ref={marksTableRef} className="glass-card rounded-2xl overflow-hidden border border-white/10 flex flex-col">
           <div className="p-6 border-b border-white/10 bg-white/[0.02]">
             <h3 className="font-bold text-white text-lg">Enter Marks</h3>
             <div className="flex items-center gap-2 mt-2 text-sm text-white/60">
@@ -226,6 +299,9 @@ export default function TeacherMarksTab() {
                 <DataTable<StudentRow>
                   columns={columns}
                   rounded={false}
+                  scrollableWide
+                  stickyFirstColumn
+                  stickyLeadingCount={2}
                   data={rows}
                   rowKey={(row) => row.id}
                   emptyText="No students in this class. Select a class above."
@@ -257,38 +333,94 @@ export default function TeacherMarksTab() {
                           </span>
                         </div>
                         <div className="mt-4 flex flex-col gap-3">
-                          <div className="flex items-center justify-between gap-4">
-                            <label className="text-xs text-white/60 shrink-0">Marks Obtained</label>
-                            <div className="flex items-center gap-2">
-                              {student.marks === "AB" ? (
-                                <span className="w-24 text-center text-red-400 font-semibold text-sm py-2">Absent</span>
-                              ) : (
-                                <input
-                                  type="number"
-                                  inputMode="numeric"
-                                  min={0}
-                                  max={student.maxMarks === "" ? undefined : student.maxMarks}
-                                  value={student.marks === "" ? "" : student.marks}
-                                  onChange={(e) => updateMarks(student.id, e.target.value)}
-                                  className="w-24 text-center rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-white text-sm outline-none focus:border-lime-400/50"
-                                />
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => toggleAbsent(student.id)}
-                                className={`px-2.5 py-2 rounded-lg text-xs font-bold border transition ${
-                                  student.marks === "AB"
-                                    ? "bg-red-500/20 text-red-400 border-red-500/30"
-                                    : "bg-white/5 text-white/40 border-white/10"
-                                }`}
-                              >
-                                AB
-                              </button>
+                          {hasSubsections ? (
+                            <>
+                              {termSections.map((sec) => {
+                                const val = student.componentScores?.[sec.name];
+                                return (
+                                  <div key={sec.name} className="flex items-center justify-between gap-4">
+                                    <label className="text-xs text-white/60 shrink-0 min-w-0">
+                                      <span className="block truncate">{sec.name}</span>
+                                      <span className="text-white/40">/ {sec.maxMarks}</span>
+                                    </label>
+                                    <div className="flex items-center gap-2">
+                                      {val === "AB" || student.marks === "AB" ? (
+                                        <span className="w-24 text-center text-red-400 font-semibold text-sm py-2">
+                                          AB
+                                        </span>
+                                      ) : (
+                                        <input
+                                          type="number"
+                                          inputMode="numeric"
+                                          min={0}
+                                          max={sec.maxMarks}
+                                          value={val === undefined || val === "" ? "" : val}
+                                          onChange={(e) =>
+                                            updateComponentScore(student.id, sec.name, e.target.value)
+                                          }
+                                          className="w-24 text-center rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-white text-sm outline-none focus:border-lime-400/50"
+                                        />
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                              <div className="flex items-center justify-between gap-4 pt-1 border-t border-white/10">
+                                <span className="text-xs text-white/60">Total</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="w-24 text-center text-white font-semibold text-sm py-2">
+                                    {student.marks === "AB" ? "AB" : student.marks === "" ? "—" : student.marks}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleAbsent(student.id)}
+                                    className={`px-2.5 py-2 rounded-lg text-xs font-bold border transition ${
+                                      student.marks === "AB"
+                                        ? "bg-red-500/20 text-red-400 border-red-500/30"
+                                        : "bg-white/5 text-white/40 border-white/10"
+                                    }`}
+                                  >
+                                    AB
+                                  </button>
+                                </div>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex items-center justify-between gap-4">
+                              <label className="text-xs text-white/60 shrink-0">Marks Obtained</label>
+                              <div className="flex items-center gap-2">
+                                {student.marks === "AB" ? (
+                                  <span className="w-24 text-center text-red-400 font-semibold text-sm py-2">
+                                    Absent
+                                  </span>
+                                ) : (
+                                  <input
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={0}
+                                    max={student.maxMarks === "" ? undefined : student.maxMarks}
+                                    value={student.marks === "" ? "" : student.marks}
+                                    onChange={(e) => updateMarks(student.id, e.target.value)}
+                                    className="w-24 text-center rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-white text-sm outline-none focus:border-lime-400/50"
+                                  />
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => toggleAbsent(student.id)}
+                                  className={`px-2.5 py-2 rounded-lg text-xs font-bold border transition ${
+                                    student.marks === "AB"
+                                      ? "bg-red-500/20 text-red-400 border-red-500/30"
+                                      : "bg-white/5 text-white/40 border-white/10"
+                                  }`}
+                                >
+                                  AB
+                                </button>
+                              </div>
                             </div>
-                          </div>
+                          )}
                           <div className="flex justify-between text-sm items-center gap-3">
                             <span className="text-white/60 shrink-0">Max</span>
-                            {editingMaxId === student.id ? (
+                            {editingMaxId === student.id && !maxMarksLocked ? (
                               <input
                                 type="number"
                                 autoFocus
@@ -312,8 +444,16 @@ export default function TeacherMarksTab() {
                             ) : (
                               <button
                                 type="button"
-                                title="Double-tap to edit max marks"
-                                onDoubleClick={() => startEditMaxMarks(student.id, student.maxMarks)}
+                                title={
+                                  maxMarksLocked
+                                    ? "Locked by school admin"
+                                    : "Double-tap to edit max marks"
+                                }
+                                onDoubleClick={() => {
+                                  if (!maxMarksLocked) {
+                                    startEditMaxMarks(student.id, student.maxMarks);
+                                  }
+                                }}
                                 className="text-white font-semibold px-2 py-1 rounded-lg hover:bg-white/10"
                               >
                                 {student.maxMarks === "" ? "—" : student.maxMarks}

@@ -1,7 +1,16 @@
 import { useState } from "react";
-import type { useRouter } from "next/navigation";
 import type { ExamTypeSectionOption } from "@/lib/exams/examTypes";
-import type { MarkApi, StudentRow } from "./types";
+import type { SavedMarkRow, StudentRow } from "./types";
+
+/** Saved rows first, then by name — keeps the table order stable across saves. */
+export function sortRowsSavedFirst(rows: StudentRow[]): StudentRow[] {
+  return [...rows].sort((a, b) => {
+    const aSaved = a.markId ? 0 : 1;
+    const bSaved = b.markId ? 0 : 1;
+    if (aSaved !== bSaved) return aSaved - bSaved;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  });
+}
 
 export function useMarksSaveAll({
   form,
@@ -10,8 +19,7 @@ export function useMarksSaveAll({
   hasSubsections,
   termSections,
   sectionsTotalMax,
-  fetchStudentsAndMarks,
-  router,
+  cancelPendingLoad,
 }: {
   form: { classId: string; subject: string; examType: string };
   rows: StudentRow[];
@@ -19,11 +27,12 @@ export function useMarksSaveAll({
   hasSubsections: boolean;
   termSections: ExamTypeSectionOption[];
   sectionsTotalMax: number;
-  fetchStudentsAndMarks: () => Promise<void>;
-  router: ReturnType<typeof useRouter>;
+  /** Drops any in-flight students/marks load so a stale response cannot clear marks after a save. */
+  cancelPendingLoad: () => void;
 }) {
   const [saveLoading, setSaveLoading] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string>("");
+  const [savePopup, setSavePopup] = useState<SavedMarkRow[] | null>(null);
 
   const handleSaveAll = async () => {
     if (!form.classId || !form.subject || form.subject === "No subjects assigned") return;
@@ -56,89 +65,57 @@ export function useMarksSaveAll({
     }
     setSaveLoading(true);
     setSaveMessage("");
+    cancelPendingLoad();
     try {
-      const results = await Promise.all(
-        filledRows.map(async (row) => {
-          const isAbsent = row.marks === "AB";
-          const totalMarks = hasSubsections
-            ? sectionsTotalMax
-            : (row.maxMarks as number);
+      const entries = filledRows.map((row) => {
+        const isAbsent = row.marks === "AB";
+        const totalMarks = hasSubsections ? sectionsTotalMax : (row.maxMarks as number);
+        const components = hasSubsections
+          ? termSections.map((sec) => ({
+              name: sec.name,
+              marks: isAbsent ? 0 : Number(row.componentScores?.[sec.name] ?? 0),
+              totalMarks: sec.maxMarks,
+            }))
+          : undefined;
+        const obtained = hasSubsections
+          ? isAbsent
+            ? 0
+            : termSections.reduce((a, sec) => a + Number(row.componentScores?.[sec.name] ?? 0), 0)
+          : isAbsent
+            ? 0
+            : Number(row.marks);
+        return {
+          studentId: row.id,
+          marks: obtained,
+          totalMarks,
+          ...(isAbsent ? { grade: "AB" as const } : {}),
+          ...(components ? { components } : {}),
+        };
+      });
 
-          const components =
-            hasSubsections && !isAbsent
-              ? termSections.map((sec) => ({
-                  name: sec.name,
-                  marks: Number(row.componentScores?.[sec.name] ?? 0),
-                  totalMarks: sec.maxMarks,
-                }))
-              : hasSubsections && isAbsent
-                ? termSections.map((sec) => ({
-                    name: sec.name,
-                    marks: 0,
-                    totalMarks: sec.maxMarks,
-                  }))
-                : undefined;
+      const res = await fetch("/api/marks/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          classId: form.classId,
+          subject: form.subject,
+          examType: form.examType || null,
+          entries,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setSaveMessage(data?.message || "Failed to save marks.");
+        return;
+      }
 
-          const obtained = hasSubsections
-            ? isAbsent
-              ? 0
-              : termSections.reduce(
-                  (a, sec) => a + Number(row.componentScores?.[sec.name] ?? 0),
-                  0
-                )
-            : isAbsent
-              ? 0
-              : Number(row.marks);
-
-          const payload = {
-            studentId: row.id,
-            classId: form.classId,
-            subject: form.subject,
-            marks: obtained,
-            totalMarks,
-            examType: form.examType || null,
-            ...(isAbsent ? { grade: "AB" } : {}),
-            ...(components ? { components } : {}),
-          };
-
-          const res = row.markId
-            ? await fetch(`/api/marks/${row.markId}`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  marks: payload.marks,
-                  totalMarks: payload.totalMarks,
-                  examType: payload.examType,
-                  ...(isAbsent ? { grade: "AB" } : {}),
-                  ...(components ? { components } : {}),
-                }),
-              })
-            : await fetch("/api/marks/create", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-              });
-
-          const data = await res.json().catch(() => null);
-          return {
-            rowId: row.id,
-            ok: res.ok,
-            mark: data?.mark as MarkApi | undefined,
-            message: data?.message as string | undefined,
-          };
-        })
-      );
-
-      const successMap = new Map(
-        results
-          .filter((result) => result.ok && result.mark)
-          .map((result) => [result.rowId, result.mark as MarkApi])
-      );
-
-      if (successMap.size > 0) {
-        setRows((prev) =>
+      const savedRows: SavedMarkRow[] = Array.isArray(data?.saved) ? data.saved : [];
+      const byStudent = new Map(savedRows.map((row) => [row.studentId, row]));
+      setRows((prev) =>
+        sortRowsSavedFirst(
           prev.map((row) => {
-            const savedMark = successMap.get(row.id);
+            const savedMark = byStudent.get(row.id);
             if (!savedMark) return row;
             const isAbsent = savedMark.grade === "AB";
             const componentScores: Record<string, number | "" | "AB"> | undefined =
@@ -155,34 +132,21 @@ export function useMarksSaveAll({
                 : undefined;
             return {
               ...row,
+              name: savedMark.studentName || row.name,
               marks: isAbsent ? ("AB" as const) : Number(savedMark.marks),
               maxMarks: savedMark.totalMarks,
               markId: savedMark.id,
               componentScores,
             };
           })
-        );
-      }
-
-      const failed = results.filter((result) => !result.ok);
-      if (failed.length > 0) {
-        setSaveMessage(
-          failed[0]?.message || `${failed.length} mark entr${failed.length > 1 ? "ies" : "y"} failed to save.`
-        );
-      } else {
-        setSaveMessage("Marks updated successfully.");
-      }
-
-      await fetchStudentsAndMarks();
-      try {
-        router.refresh();
-      } catch {
-        /* noop */
-      }
+        )
+      );
+      setSavePopup(savedRows);
+      setSaveMessage("Successfully saved");
     } finally {
       setSaveLoading(false);
     }
   };
 
-  return { saveLoading, saveMessage, setSaveMessage, handleSaveAll };
+  return { saveLoading, saveMessage, setSaveMessage, savePopup, setSavePopup, handleSaveAll };
 }

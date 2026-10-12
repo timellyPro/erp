@@ -1,60 +1,63 @@
-import type { DayReportTx } from "@/lib/fees/feeDayReportExcel";
+import { formatDdMmYyyyFromYmdInput, type DayReportTx } from "@/lib/fees/feeDayReportExcel";
+import {
+  filterDayReportTransactions,
+  isCreatedAtInDateRange,
+  narrowDayReportTransactionToHead,
+  orderedYmdRange,
+} from "@/lib/fees/feeReportFilters";
 import type { ReportPeriod } from "./feeRecordsTableTypes";
 
 export const getReportPeriodLabel = (value: ReportPeriod) => {
-  if (value === "DAY_WISE") return "Day Wise";
+  if (value === "DAY_WISE") return "Date Range";
   if (value === "MONTH_WISE") return "Month Wise";
   if (value === "YEAR_WISE") return "Year Wise";
   return "Academic Year Wise";
 };
 
+export const formatDateRangeLabel = (from: string, to: string) => {
+  const fromLabel = formatDdMmYyyyFromYmdInput(from);
+  const toLabel = formatDdMmYyyyFromYmdInput(to);
+  if (!from && !to) return "-";
+  if (from === to || !to) return fromLabel || from || "-";
+  return `${fromLabel || from} – ${toLabel || to}`;
+};
+
 export const getReportPeriodValue = ({
   reportPeriod,
-  reportDate,
+  reportDateFrom,
+  reportDateTo,
   reportMonth,
   reportYear,
   academicYear,
 }: {
   reportPeriod: ReportPeriod;
-  reportDate: string;
+  reportDateFrom: string;
+  reportDateTo: string;
   reportMonth: string;
   reportYear: string;
   academicYear: string;
 }) => {
-  if (reportPeriod === "DAY_WISE") return reportDate || "-";
+  if (reportPeriod === "DAY_WISE") return formatDateRangeLabel(reportDateFrom, reportDateTo);
   if (reportPeriod === "MONTH_WISE") return reportMonth || "-";
   if (reportPeriod === "YEAR_WISE") return reportYear || "-";
   return academicYear || "-";
 };
 
-const toDateOnly = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-
-/** Parse `YYYY-MM-DD` as a local calendar date (avoids UTC off-by-one with `new Date("yyyy-mm-dd")`). */
-const parseYmdLocal = (ymd: string) => {
-  const parts = ymd.split("-").map((v) => Number(v));
-  const y = parts[0];
-  const m = parts[1];
-  const day = parts[2];
-  if (!y || !m || !day) return new Date(NaN);
-  return new Date(y, m - 1, day);
-};
-
 export type ReportPeriodState = {
   reportPeriod: ReportPeriod;
-  reportDate: string;
+  reportDateFrom: string;
+  reportDateTo: string;
   reportMonth: string;
   reportYear: string;
   academicYear: string;
 };
 
 const inSelectedPeriod = (createdAt: string, state: ReportPeriodState) => {
-  const { reportPeriod, reportDate, reportMonth, reportYear, academicYear } = state;
+  const { reportPeriod, reportDateFrom, reportDateTo, reportMonth, reportYear, academicYear } = state;
   const d = new Date(createdAt);
   if (Number.isNaN(d.getTime())) return false;
   if (reportPeriod === "DAY_WISE") {
-    const picked = parseYmdLocal(reportDate);
-    if (Number.isNaN(picked.getTime())) return false;
-    return toDateOnly(d).getTime() === toDateOnly(picked).getTime();
+    return isCreatedAtInDateRange(createdAt, reportDateFrom, reportDateTo);
   }
   if (reportPeriod === "MONTH_WISE") {
     const [y, m] = reportMonth.split("-").map((v) => Number(v));
@@ -72,9 +75,9 @@ const inSelectedPeriod = (createdAt: string, state: ReportPeriodState) => {
 };
 
 export const getReportDateRange = (state: ReportPeriodState): { from: string; to: string } => {
-  const { reportPeriod, reportDate, reportMonth, reportYear, academicYear } = state;
+  const { reportPeriod, reportDateFrom, reportDateTo, reportMonth, reportYear, academicYear } = state;
   if (reportPeriod === "DAY_WISE") {
-    return { from: reportDate, to: reportDate };
+    return orderedYmdRange(reportDateFrom, reportDateTo);
   }
   if (reportPeriod === "MONTH_WISE") {
     const [y, m] = reportMonth.split("-").map((v) => Number(v));
@@ -104,10 +107,22 @@ export const buildReportTxQueryParams = (state: ReportPeriodState) => {
 export const filterReportTransactions = (
   transactions: DayReportTx[],
   state: ReportPeriodState,
-  selectedClass: string
-): DayReportTx[] =>
-  transactions.filter((t) => {
-    const classId = t.student?.class?.id || "";
-    if (selectedClass && classId !== selectedClass) return false;
-    return inSelectedPeriod(t.createdAt, state);
+  selectedClass: string,
+  selectedHead: string
+): DayReportTx[] => {
+  if (state.reportPeriod === "DAY_WISE") {
+    return filterDayReportTransactions(transactions, {
+      fromYmd: state.reportDateFrom,
+      toYmd: state.reportDateTo,
+      classId: selectedClass || undefined,
+      headName: selectedHead,
+    });
+  }
+  return transactions.flatMap((transaction) => {
+    const classId = transaction.student?.class?.id || "";
+    if (selectedClass && classId !== selectedClass) return [];
+    if (!inSelectedPeriod(transaction.createdAt, state)) return [];
+    const narrowed = narrowDayReportTransactionToHead(transaction, selectedHead);
+    return narrowed ? [narrowed] : [];
   });
+};

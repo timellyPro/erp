@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { getServerSession } from "next-auth";
@@ -13,7 +13,11 @@ import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
 import { FEE_MUTATION_TX } from "@/lib/fees/prismaFeeMutationTx";
 import { loadExtraFeesForStudentScope } from "@/lib/fees/loadExtraFeesForStudentScope";
 import { discountedSnapshotDueForHead, studentFeeDiscountFromRecord } from "@/lib/fees/studentFeeHeadDiscount";
-import { extraFeeAppliesToStudent } from "@/lib/fees/extraFeeResidencyScope";
+import {
+  conversionDueCredit,
+  includeExtraFeeOnStudentBill,
+  residencyConversionStudentIds,
+} from "@/lib/fees/residencyConversion";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/students/studentRte";
 import { canonicalizeGatewayForStorage } from "@/lib/fees/feePaymentGateway";
 import {
@@ -225,7 +229,7 @@ export async function POST(req: Request) {
         : Promise.resolve(null),
       loadExtraFeesForStudentScope(
         { schoolId, studentId: student.id, classId, classSection },
-        { id: true, name: true, amount: true, targetType: true, residencyScope: true }
+        { id: true, name: true, amount: true, targetType: true, targetStudentId: true, residencyScope: true, residencyConversion: true }
       ),
       prisma.paymentFeeAllocation.groupBy({
         by: ["allocationType", "headType", "componentIndex", "extraFeeId"],
@@ -259,8 +263,9 @@ export async function POST(req: Request) {
 
     const residency = student.residencyType ?? "Day Scholar";
     const rte = isStudentRte(residency);
+    const convertedStudentIds = residencyConversionStudentIds(extraFeesRaw);
     const extraFees = extraFeesRaw
-      .filter((ef) => extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, residency))
+      .filter((ef) => includeExtraFeeOnStudentBill(ef, residency, student.id, convertedStudentIds))
       .filter((ef) => !(rte && isTuitionNamedExtraFee(ef.name)));
 
     type Head =
@@ -326,6 +331,18 @@ export async function POST(req: Request) {
       })),
       extraFeesById
     );
+    const creditByKey = conversionDueCredit(
+      allHeads.map((h) => ({
+        key: h.key,
+        snapshotDue: h.snapshotDue,
+        extraFeeId: h.headType === "EXTRA_FEE" ? h.extraFeeId : undefined,
+        residencyConversion:
+          h.headType === "EXTRA_FEE" &&
+          extraFees.some((ef) => ef.id === h.extraFeeId && ef.residencyConversion),
+      })),
+      netPaidByHead,
+      new Map(extraFeesRaw.map((ef) => [ef.id, ef.name]))
+    );
 
     const allocationsNetTotal = Array.from(netPaidByHead.values()).reduce((s, v) => s + v, 0);
     const legacyPaidTotal = Math.max(fee.amountPaid - allocationsNetTotal, 0);
@@ -336,7 +353,7 @@ export async function POST(req: Request) {
       const paidAlloc = netPaidByHead.get(h.key) ?? 0;
       const paidLegacy =
         totalSnapshotDue > 0 ? legacyPaidTotal * (h.snapshotDue / totalSnapshotDue) : 0;
-      const paidBefore = Math.max(paidAlloc + paidLegacy, 0);
+      const paidBefore = Math.max(paidAlloc + paidLegacy + (creditByKey.get(h.key) ?? 0), 0);
       const dueBefore = Math.max(h.snapshotDue - paidBefore, 0);
       return { ...h, paidBefore, dueBefore };
     });
@@ -672,10 +689,25 @@ export async function POST(req: Request) {
     }
 
     if (!paymentAndAllocations.idempotent) {
-      await reconcileStudentFeeIntegrity(schoolId, studentId, {
-        repairAllocations: true,
-        apply: true,
-      });
+      invalidateStudentFeeReadCaches({ studentId, schoolId });
+      const runIntegrity = async () => {
+        try {
+          await reconcileStudentFeeIntegrity(schoolId, studentId, {
+            repairAllocations: true,
+            apply: true,
+          });
+        } catch (err) {
+          console.error("[offline-payment] post-commit integrity failed", {
+            studentId,
+            err,
+          });
+        }
+      };
+      try {
+        after(runIntegrity);
+      } catch {
+        void runIntegrity();
+      }
     } else {
       invalidateStudentFeeReadCaches({ studentId, schoolId });
     }
@@ -720,9 +752,7 @@ export async function POST(req: Request) {
       }));
     }
 
-    const updatedFeeRow = !paymentAndAllocations.idempotent
-      ? await prisma.studentFee.findUnique({ where: { studentId } })
-      : paymentAndAllocations.updatedFee;
+    const updatedFeeRow = paymentAndAllocations.updatedFee;
     if (!updatedFeeRow) {
       return NextResponse.json({ message: "Fee record not found for this student" }, { status: 404 });
     }

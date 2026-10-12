@@ -12,7 +12,6 @@ import TeacherClasses from "@/app/_components/components/teacher/classes/Classes
 import TeacherMarksTab from "@/app/_components/components/teacher/marks/Marks";
 import TeacherHomeworkTab from "@/app/_components/components/teacher/homework/Homework";
 import TeacherAttendanceTab from "@/app/_components/components/teacher/attendance/Attendance";
-import TeacherExamsTab from "@/app/_components/components/teacher/exams/Exams";
 import TeacherTimetableTab from "@/app/_components/components/teacher/timetable/TeacherTimetable";
 import TeacherWorkshopsTab from "@/app/_components/components/teacher/workshops/WorkShops";
 import TeacherParentChatTab from "@/app/_components/components/teacher/parentchat/ParentChat";
@@ -28,6 +27,7 @@ import SchoolTeacherLeavesTab from "@/app/_components/components/schooladmin/Tea
 import TeacherAuditTab from "@/app/_components/components/schooladmin/TeacherAudit";
 import Certificates from "@/app/_components/components/schooladmin/Certificates";
 import SchoolAdminFeesTab from "@/app/_components/components/schooladmin/Fees";
+import TeacherExamsHub from "@/app/_components/components/teacher/exams/TeacherExamsHub";
 import TimellyLoader from "@/app/_components/components/common/TimellyLoader";
 import { warmTeacherFastTabs, warmTeacherTab } from "@/lib/teacher/loadTeacherFastTabs";
 
@@ -96,7 +96,8 @@ function TeacherDashboardInner() {
       case "timetable":
         return <TeacherTimetableTab />;
       case "exams":
-        return <TeacherExamsTab />;
+        // School-admin exams + marks reports (report card / consolidated download)
+        return <TeacherExamsHub />;
       case "workshops":
         return <TeacherWorkshopsTab />;
       case "newsfeed":

@@ -3,6 +3,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { AdminStudentFeeBreakdownResult } from "@/lib/fees/computeAdminStudentFeeBreakdown";
 import { isInactiveStudentStatus } from "@/lib/students/resolveStudentDisplayClass";
 import type { StudentDetail, StudentOption } from "./types";
+import { buildPlaceholderById, buildPlaceholderDetail, normalizeStudentOption } from "./studentDetailHelpers";
 import { useStudentFeeMutations } from "./useStudentFeeMutations";
 import { useStudentListBootstrap } from "./useStudentListBootstrap";
 import { useStudentDetailBundleLoading } from "./useStudentDetailBundleLoading";
@@ -49,6 +50,10 @@ export function useStudentDetailsPageState() {
     setClasses,
     setSelectedId,
     setDetail,
+    selectedIdRef,
+    setFeeBreakdown,
+    setFeeBreakdownPending,
+    setTransactionsReady,
   });
 
   const syncStudentIdInUrl = useCallback(
@@ -71,6 +76,13 @@ export function useStudentDetailsPageState() {
         }
         return [student, ...prev];
       });
+      if (selectedIdRef.current !== student.id) {
+        // Immediate clear so the next paint never shows the previous student's fees.
+        setFeeBreakdown(null);
+        setFeeBreakdownPending(true);
+        setTransactionsReady(false);
+        setDetail(buildPlaceholderDetail(student));
+      }
       setSelectedId(student.id);
       syncStudentIdInUrl(student.id);
     },
@@ -79,10 +91,30 @@ export function useStudentDetailsPageState() {
 
   const changeSelectedId = useCallback(
     (nextId: string | null) => {
+      if (!nextId) {
+        setSelectedId(null);
+        setFeeBreakdown(null);
+        setFeeBreakdownPending(false);
+        setTransactionsReady(false);
+        setDetail(null);
+        syncStudentIdInUrl(null);
+        return;
+      }
+      if (selectedIdRef.current !== nextId) {
+        const fromList = students.find((s) => s.id === nextId);
+        setFeeBreakdown(null);
+        setFeeBreakdownPending(true);
+        setTransactionsReady(false);
+        setDetail(
+          fromList
+            ? buildPlaceholderDetail(normalizeStudentOption(fromList))
+            : buildPlaceholderById(nextId)
+        );
+      }
       setSelectedId(nextId);
       syncStudentIdInUrl(nextId);
     },
-    [syncStudentIdInUrl]
+    [students, syncStudentIdInUrl]
   );
 
   useLayoutEffect(() => {
@@ -102,6 +134,7 @@ export function useStudentDetailsPageState() {
     setFeeBreakdown,
     setTransactionsReady,
     deletedPaymentIdsRef,
+    selectedIdRef,
   });
 
   const { warmFeeBreakdown } = useStudentDetailBundleLoading({
@@ -180,19 +213,19 @@ export function useStudentDetailsPageState() {
   }, [detail?.student]);
   useEffect(() => {
     const aside = sidebarAsideRef.current;
-    if (!aside || !pageStudentName) {
+    const scrollRoot = aside?.closest("main");
+    if (!aside || !pageStudentName || !scrollRoot) {
       setShowStickyStudentName(false);
       return;
     }
-    const scrollRoot = aside.closest("main");
-    const observer = new IntersectionObserver(
-      ([entry]) => setShowStickyStudentName(!entry.isIntersecting),
-      scrollRoot
-        ? { root: scrollRoot, threshold: 0, rootMargin: "-88px 0px 0px 0px" }
-        : { threshold: 0, rootMargin: "-88px 0px 0px 0px" }
-    );
-    observer.observe(aside);
-    return () => observer.disconnect();
+    const update = () => {
+      const asideBottom = aside.getBoundingClientRect().bottom;
+      const rootTop = scrollRoot.getBoundingClientRect().top;
+      setShowStickyStudentName(asideBottom < rootTop + 12);
+    };
+    update();
+    scrollRoot.addEventListener("scroll", update, { passive: true });
+    return () => scrollRoot.removeEventListener("scroll", update);
   }, [pageStudentName, selectedId, detail?.student.id]);
   const classOptions = [{ label: "All Classes", value: "" }, ...classes.map((c) => ({ label: `${c.name}${c.section ? ` - ${c.section}` : ""}`, value: c.id }))];
   const statusOptions = [

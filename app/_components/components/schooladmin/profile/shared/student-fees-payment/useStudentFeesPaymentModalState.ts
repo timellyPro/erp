@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
-import { dueHeadRowsFromBreakdown, type DueHeadRow } from "@/lib/fees/feeBreakdownPaymentRows";
+import type { DueHeadRow, SheetDiscountApproval } from "@/lib/fees/feeBreakdownPaymentRows";
 import { extraFeeIdFromAllocationKey, normalizeFeeAllocationKey } from "@/lib/fees/feeAllocationKeys";
-import { isPreviousYearFeeHeadName } from "@/lib/fees/feeYearClassification";
 import {
   fetchFeeBreakdownFast,
   getFeeBreakdownCached,
@@ -10,6 +9,7 @@ import {
 import type { AdminStudentFeeBreakdownResult } from "@/lib/fees/computeAdminStudentFeeBreakdown";
 import type { FeePaymentSuccess } from "../types";
 import { buildConfirmedPaymentResult, dueToPayInputString, sanitizeMoneyInput } from "../studentDetailHelpers";
+import { mergeSheetPayState, sheetRowsFromBreakdown } from "../feeSheetRows";
 import { recordOfflinePayment } from "@/lib/api/offlinePayment";
 import { useIdempotencyKey } from "@/lib/utils/idempotencyKey";
 
@@ -31,9 +31,11 @@ export function useStudentFeesPaymentModalState({
     (session?.user?.name || session?.user?.email || "").trim() || "Staff";
   const collectorUserId = session?.user?.id ?? null;
 
-  const seedRows = dueHeadRowsFromBreakdown(
-    initialFeeBreakdown ?? getFeeBreakdownCached(studentId)
-  ).filter((r) => !isPreviousYearFeeHeadName(r.label));
+  const [discountApprovals, setDiscountApprovals] = useState<SheetDiscountApproval[]>([]);
+  const [loadedBreakdown, setLoadedBreakdown] = useState<AdminStudentFeeBreakdownResult | null>(
+    () => initialFeeBreakdown ?? getFeeBreakdownCached(studentId) ?? null
+  );
+  const seedRows = sheetRowsFromBreakdown(loadedBreakdown, []);
   const [rows, setRows] = useState<DueHeadRow[]>(seedRows);
   const [loading, setLoading] = useState(seedRows.length === 0 && breakdownPending);
   const [saving, setSaving] = useState(false);
@@ -43,25 +45,42 @@ export function useStudentFeesPaymentModalState({
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [error, setError] = useState<string | null>(null);
   const idempotencyKey = useIdempotencyKey();
+  const breakdownFetchStarted = useRef(false);
 
   useEffect(() => {
-    const next = dueHeadRowsFromBreakdown(initialFeeBreakdown);
-    if (next.length > 0) {
-      setRows((prev) => {
-        const payByKey = new Map(prev.map((r) => [r.key, r.payAmount]));
-        const entireByKey = new Map(prev.map((r) => [r.key, r.payEntireHead]));
-        return next.map((r) => ({
-          ...r,
-          payAmount: payByKey.get(r.key) ?? r.payAmount,
-          payEntireHead: entireByKey.get(r.key) ?? r.payEntireHead,
-        }));
-      });
-      setLoading(false);
-    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/fees/student/${studentId}/discount-approvals`, {
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as { approvals?: SheetDiscountApproval[] };
+        if (!cancelled && Array.isArray(data.approvals)) setDiscountApprovals(data.approvals);
+      } catch {
+        // Approved discounts still come from the fee breakdown.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
+  useEffect(() => {
+    if (initialFeeBreakdown?.dueHeads?.length) setLoadedBreakdown(initialFeeBreakdown);
   }, [initialFeeBreakdown]);
 
   useEffect(() => {
-    if (rows.length > 0) return;
+    const next = sheetRowsFromBreakdown(loadedBreakdown, discountApprovals);
+    if (next.length === 0) return;
+    setRows((prev) => mergeSheetPayState(prev, next));
+    setLoading(false);
+  }, [loadedBreakdown, discountApprovals]);
+
+  useEffect(() => {
+    if (loadedBreakdown?.dueHeads?.length || breakdownFetchStarted.current) return;
+    breakdownFetchStarted.current = true;
 
     let cancelled = false;
     (async () => {
@@ -69,9 +88,7 @@ export function useStudentFeesPaymentModalState({
       try {
         const data = await fetchFeeBreakdownFast(studentId);
         if (!cancelled && data) {
-          setRows(
-            dueHeadRowsFromBreakdown(data).filter((r) => !isPreviousYearFeeHeadName(r.label))
-          );
+          setLoadedBreakdown(data);
           setPaymentDate(new Date().toISOString().slice(0, 10));
         } else if (!cancelled && !data) {
           throw new Error("Failed to load fee heads");
@@ -85,7 +102,7 @@ export function useStudentFeesPaymentModalState({
     return () => {
       cancelled = true;
     };
-  }, [studentId, rows.length]);
+  }, [studentId, loadedBreakdown]);
 
   const setRowAmount = (key: string, value: string) => {
     setRows((prev) =>
@@ -108,6 +125,26 @@ export function useStudentFeesPaymentModalState({
     setRows((prev) =>
       prev.map((r) => {
         if (r.key !== key) return r;
+        if (checked) {
+          return {
+            ...r,
+            payEntireHead: true,
+            payAmount: dueToPayInputString(r.dueBefore),
+          };
+        }
+        return { ...r, payEntireHead: false, payAmount: "" };
+      })
+    );
+    setShowPaymentStep(false);
+  };
+
+  const payableRows = rows.filter((r) => r.dueBefore > 0);
+  const allPayableChecked = payableRows.length > 0 && payableRows.every((r) => r.payEntireHead);
+
+  const togglePayAllHeads = (checked: boolean) => {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.dueBefore <= 0) return { ...r, payEntireHead: false, payAmount: "" };
         if (checked) {
           return {
             ...r,
@@ -237,6 +274,10 @@ export function useStudentFeesPaymentModalState({
         );
       }
       idempotencyKey.renew();
+      const paymentRow = data.payment as { id?: unknown } | undefined;
+      if (typeof paymentRow?.id !== "string" || !paymentRow.id.trim()) {
+        throw new Error("Payment was not saved. Please try again.");
+      }
       const confirmedResult = buildConfirmedPaymentResult(
         data,
         total,
@@ -250,6 +291,9 @@ export function useStudentFeesPaymentModalState({
           collectedByUserId: collectorUserId,
         }
       );
+      if (!confirmedResult.payment.id || confirmedResult.payment.id.startsWith("pending-")) {
+        throw new Error("Payment was not saved. Please try again.");
+      }
       onSuccess(confirmedResult);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Payment failed";
@@ -273,6 +317,9 @@ export function useStudentFeesPaymentModalState({
     error,
     setRowAmount,
     togglePayEntireHead,
+    togglePayAllHeads,
+    allPayableChecked,
+    payableCount: payableRows.length,
     total,
     totals,
     continueToPayment,

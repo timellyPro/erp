@@ -5,7 +5,6 @@
   "app/api/circular/list/route.ts",
   "app/api/class/list/route.ts",
   "app/api/class/students/route.ts",
-  "app/api/cron/fees-backup-email/route.ts",
   "app/api/events/[id]/registrations/route.ts",
   "app/api/events/create/[id]/route.ts",
   "app/api/events/list/route.ts",

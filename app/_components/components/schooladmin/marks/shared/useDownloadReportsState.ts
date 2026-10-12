@@ -5,6 +5,8 @@ import { generateConsolidatedMarksExcel } from "./consolidatedMarksExcel";
 import {
   DEFAULT_EXAM_TYPES,
   normalizeClassName,
+  examFileLabel,
+  resolveChosenExamTypes,
   type ClassOption,
   type ConsolidatedPayload,
 } from "./downloadReportsTypes";
@@ -16,7 +18,7 @@ export function useDownloadReportsState() {
   const [selectMode, setSelectMode] = useState<"class" | "section">("class");
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [examTypeOptions, setExamTypeOptions] = useState<string[]>(DEFAULT_EXAM_TYPES);
-  const [selectedExamType, setSelectedExamType] = useState("ALL");
+  const [selectedExamTypes, setSelectedExamTypes] = useState<Set<string>>(new Set(["ALL"]));
   const [subjectOptions, setSubjectOptions] = useState<string[]>([]);
   const [selectedSubjects, setSelectedSubjects] = useState<Set<string>>(new Set());
   const [classSearch, setClassSearch] = useState("");
@@ -28,7 +30,7 @@ export function useDownloadReportsState() {
     (async () => {
       setClassesLoading(true);
       try {
-        const res = await fetch("/api/class/list?lite=1", {
+        const res = await fetch("/api/class/list?lite=1&all=1", {
           credentials: "include",
           cache: "no-store",
         });
@@ -55,15 +57,19 @@ export function useDownloadReportsState() {
   useEffect(() => {
     (async () => {
       try {
-        const [examRes, subRes] = await Promise.all([
-          fetch("/api/exam-types", { cache: "no-store", credentials: "include" }),
-          fetch("/api/exam-subjects", { cache: "no-store", credentials: "include" }),
-        ]);
+        const examRes = await fetch("/api/exam-types", {
+          cache: "no-store",
+          credentials: "include",
+        });
         if (examRes.ok) {
           const data = await examRes.json();
           const names = normalizeExamTypes(data.examTypes).map((t) => t.name);
           if (names.length > 0) setExamTypeOptions(["ALL", ...names]);
         }
+        const subRes = await fetch("/api/exam-subjects", {
+          cache: "no-store",
+          credentials: "include",
+        });
         if (subRes.ok) {
           const data = await subRes.json();
           const names: string[] = Array.isArray(data.subjects) ? data.subjects : [];
@@ -149,6 +155,19 @@ export function useDownloadReportsState() {
     setClassSearch("");
   };
 
+  const chosenExamTypes = (): string[] => resolveChosenExamTypes(selectedExamTypes);
+
+  const toggleExamType = (name: string) => {
+    setSelectedExamTypes((prev) => {
+      if (name === "ALL") return new Set(["ALL"]);
+      const next = new Set(prev);
+      next.delete("ALL");
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next.size === 0 ? new Set(["ALL"]) : next;
+    });
+  };
+
   const toggleSubject = (name: string) => {
     setSelectedSubjects((prev) => {
       const next = new Set(prev);
@@ -169,25 +188,38 @@ export function useDownloadReportsState() {
     const classIds = resolveSelectedClassIds();
     if (classIds.length === 0) throw new Error("Select at least one class or section");
 
-    const params = new URLSearchParams({
-      classIds: classIds.join(","),
-      groupBy: selectMode,
-    });
-    if (selectedExamType && selectedExamType !== "ALL") {
-      params.set("examType", selectedExamType);
-    }
-    if (selectedSubjects.size > 0) {
-      params.set("subjects", Array.from(selectedSubjects).join(","));
-    }
+    const examTypes = chosenExamTypes();
+    const payloads = await Promise.all(
+      examTypes.map(async (examType) => {
+        const params = new URLSearchParams({
+          classIds: classIds.join(","),
+          groupBy: selectMode,
+        });
+        if (examType !== "ALL") params.set("examType", examType);
+        if (selectedSubjects.size > 0) {
+          params.set("subjects", Array.from(selectedSubjects).join(","));
+        }
+        const res = await fetch(`/api/marks/consolidated?${params.toString()}`, {
+          credentials: "include",
+          cache: "no-store",
+        });
+        const data = (await res.json()) as ConsolidatedPayload & { message?: string };
+        if (!res.ok) throw new Error(data.message || `Failed to load ${examType}`);
+        return data;
+      })
+    );
 
-    const res = await fetch(`/api/marks/consolidated?${params.toString()}`, {
-      credentials: "include",
-      cache: "no-store",
-    });
-    const data = (await res.json()) as ConsolidatedPayload & { message?: string };
-    if (!res.ok) throw new Error(data.message || "Failed to load consolidated marks");
-    if ((data.sheets ?? []).length === 0) throw new Error("No class sheets to export");
-    return data;
+    const first = payloads[0];
+    if (!first) throw new Error("No class sheets to export");
+    const sheets = payloads.flatMap((data) =>
+      (data.sheets ?? []).map((sheet) => ({ ...sheet, examType: data.examType }))
+    );
+    if (sheets.length === 0) throw new Error("No class sheets to export");
+    return {
+      ...first,
+      examType: examTypes.length === 1 ? (first.examType ?? examTypes[0]) : examTypes.join(", "),
+      sheets,
+    };
   };
 
   const handleDownloadExcel = async () => {
@@ -199,7 +231,7 @@ export function useDownloadReportsState() {
     try {
       const data = await fetchConsolidated();
       setProgress("Downloading Excel…");
-      await generateConsolidatedMarksExcel(data, selectedExamType, selectMode);
+      await generateConsolidatedMarksExcel(data, chosenExamTypes(), selectMode);
       setProgress("Done");
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to generate Excel");
@@ -223,8 +255,7 @@ export function useDownloadReportsState() {
       const data = await fetchConsolidated();
       setProgress("Generating PDF…");
 
-      const examFile =
-        selectedExamType === "ALL" ? "ALL_EXAMS" : selectedExamType.replace(/\s+/g, "_");
+      const examFile = examFileLabel(chosenExamTypes());
       const modeFile = selectMode === "class" ? "BY_CLASS" : "BY_SECTION";
 
       await downloadConsolidatedMarksPdf(
@@ -258,8 +289,9 @@ export function useDownloadReportsState() {
     selectedKeys,
     setSelectedKeys,
     examTypeOptions,
-    selectedExamType,
-    setSelectedExamType,
+    selectedExamTypes,
+    chosenExamTypes,
+    toggleExamType,
     subjectOptions,
     selectedSubjects,
     classSearch,

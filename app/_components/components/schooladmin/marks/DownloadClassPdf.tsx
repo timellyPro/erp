@@ -61,7 +61,7 @@ export default function DownloadClassPdf() {
       setClassesLoading(true);
       try {
         const [classResult, examResult, subResult] = await Promise.all([
-          fetchClassListLite(),
+          fetchClassListLite({ all: true }),
           fetchExamTypes(),
           fetchExamSubjects(),
         ]);
@@ -285,7 +285,7 @@ export default function DownloadClassPdf() {
         type="button"
         disabled={downloading || !classId}
         onClick={handleDownload}
-        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-lime-400 text-black text-sm font-bold disabled:opacity-60"
+        className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-lime-400 text-black text-sm font-bold disabled:opacity-60"
       >
         {downloading ? (
           <Loader2 size={16} className="animate-spin" />

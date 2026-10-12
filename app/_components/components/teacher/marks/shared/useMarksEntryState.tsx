@@ -1,10 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { peekTeacherMarksClasses } from "@/lib/teacher/loadTeacherFastTabs";
-import { maxMarksForExamType, sectionsForExamType } from "@/lib/exams/examTypes";
+import { resolveMarkSetup } from "@/lib/exams/examTypes";
 import type { MarkApi, StudentApi, StudentRow } from "./types";
 import { useMarksEntryColumns } from "./useMarksEntryColumns";
-import { useMarksSaveAll } from "./useMarksSaveAll";
+import { sortRowsSavedFirst, useMarksSaveAll } from "./useMarksSaveAll";
 import { useMarksClassesMetadata } from "./useMarksClassesMetadata";
 import { useMarksRowMutators } from "./useMarksRowMutators";
 
@@ -20,7 +19,6 @@ import { useMarksRowMutators } from "./useMarksRowMutators";
  * would require an indirection layer for little benefit.
  */
 export function useMarksEntryState() {
-  const router = useRouter();
   const [subTab, setSubTab] = useState<"entry" | "report-card" | "download">("entry");
   const initialClasses = peekTeacherMarksClasses();
   const [form, setForm] = useState<{
@@ -50,6 +48,8 @@ export function useMarksEntryState() {
   const [loading, setLoading] = useState(false);
   const userSelectedClassRef = useRef(false);
   const userSelectedExamTypeRef = useRef(false);
+  /** Bumped on every load and on save; a load only applies if its number is still current. */
+  const fetchSeqRef = useRef(0);
 
   const {
     classes,
@@ -67,8 +67,12 @@ export function useMarksEntryState() {
     userSelectedExamTypeRef,
   });
 
-  const configuredMaxMarks = maxMarksForExamType(examTypeCatalog, form.examType);
-  const termSections = sectionsForExamType(examTypeCatalog, form.examType);
+  const markSetup = useMemo(
+    () => resolveMarkSetup(examTypeCatalog, form.examType, form.subject),
+    [examTypeCatalog, form.examType, form.subject]
+  );
+  const termSections = markSetup.sections;
+  const configuredMaxMarks = markSetup.maxMarks;
   const hasSubsections = termSections.length > 0;
   const sectionsTotalMax = termSections.reduce((a, s) => a + s.maxMarks, 0);
   const maxMarksLocked =
@@ -92,6 +96,7 @@ export function useMarksEntryState() {
       setRows([]);
       return;
     }
+    const seq = ++fetchSeqRef.current;
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -113,6 +118,8 @@ export function useMarksEntryState() {
       const studentsData = await studentsRes.json();
       const marksData = await marksRes.json();
       const students: StudentApi[] = Array.isArray(studentsData.students) ? studentsData.students : [];
+      if (seq !== fetchSeqRef.current) return;
+
       const marks: MarkApi[] = Array.isArray(marksData.marks) ? marksData.marks : [];
       const examTypesInUse: string[] = Array.isArray(marksData.examTypesInUse)
         ? marksData.examTypesInUse.map((t: string) => String(t).trim().toUpperCase()).filter(Boolean)
@@ -154,11 +161,11 @@ export function useMarksEntryState() {
       const latestTotal = savedMarksList.find(
         (m) => typeof m.totalMarks === "number" && m.totalMarks > 0
       )?.totalMarks;
-      // Prefer subsections sum, else school-admin configured max, else saved/previous
+      // Prefer subject or exam-type settings, else what was already saved
       const lockedMax =
         termSections.length > 0
           ? termSections.reduce((a, s) => a + s.maxMarks, 0)
-          : maxMarksForExamType(examTypeCatalog, form.examType);
+          : configuredMaxMarks;
       const defaultMax =
         lockedMax != null && lockedMax > 0
           ? lockedMax
@@ -173,6 +180,8 @@ export function useMarksEntryState() {
           prev.maxMarks === defaultMax ? prev : { ...prev, maxMarks: defaultMax }
         );
       }
+
+      if (seq !== fetchSeqRef.current) return;
 
       const newRows: StudentRow[] = students
         .map((s) => {
@@ -214,27 +223,42 @@ export function useMarksEntryState() {
             componentScores: termSections.length > 0 ? componentScores : undefined,
           };
         })
-        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-      setRows(newRows);
+      setRows(sortRowsSavedFirst(newRows));
       setEditingMaxId(null);
       setSaveMessage("");
     } catch {
-      setRows([]);
+      if (seq === fetchSeqRef.current) setRows([]);
     } finally {
-      setLoading(false);
+      if (seq === fetchSeqRef.current) setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- form.maxMarks intentionally excluded (matches original); setSaveMessage is a stable setter
-  }, [form.classId, form.subject, form.examType, examTypeCatalog, termSections]);
+  }, [form.classId, form.subject, form.examType, markSetup, configuredMaxMarks, termSections]);
 
   useEffect(() => {
     fetchStudentsAndMarks();
   }, [fetchStudentsAndMarks]);
 
+  // Scrolling over a focused number input must not change its value; scroll the page instead.
+  const marksTableRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const root = marksTableRef.current;
+    if (!root) return;
+    const onWheel = (event: WheelEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement) || target.type !== "number") return;
+      event.preventDefault();
+      const scroller = root.closest("main");
+      scroller?.scrollBy({ top: event.deltaY, left: 0 });
+    };
+    root.addEventListener("wheel", onWheel, { passive: false });
+    return () => root.removeEventListener("wheel", onWheel);
+  }, []);
+
   const handleChange = (key: string, value: string) => {
     if (key === "examType") {
       userSelectedExamTypeRef.current = true;
       const nextType = value.toUpperCase();
-      const locked = maxMarksForExamType(examTypeCatalog, nextType);
+      const locked = resolveMarkSetup(examTypeCatalog, nextType, form.subject).maxMarks;
       setForm((prev) => ({
         ...prev,
         examType: nextType,
@@ -277,7 +301,12 @@ export function useMarksEntryState() {
     }
     if (key === "subject") {
       userSelectedExamTypeRef.current = false;
-      setForm((prev) => ({ ...prev, subject: value }));
+      const locked = resolveMarkSetup(examTypeCatalog, form.examType, value).maxMarks;
+      setForm((prev) => ({
+        ...prev,
+        subject: value,
+        maxMarks: locked != null && locked > 0 ? locked : prev.maxMarks,
+      }));
       return;
     }
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -310,16 +339,19 @@ export function useMarksEntryState() {
     maxMarksLocked,
   });
 
-  const { saveLoading, saveMessage, setSaveMessage, handleSaveAll } = useMarksSaveAll({
-    form,
-    rows,
-    setRows,
-    hasSubsections,
-    termSections,
-    sectionsTotalMax,
-    fetchStudentsAndMarks,
-    router,
-  });
+  const { saveLoading, saveMessage, setSaveMessage, savePopup, setSavePopup, handleSaveAll } =
+    useMarksSaveAll({
+      form,
+      rows,
+      setRows,
+      hasSubsections,
+      termSections,
+      sectionsTotalMax,
+      cancelPendingLoad: () => {
+        fetchSeqRef.current += 1;
+        setLoading(false);
+      },
+    });
 
   const { columns } = useMarksEntryColumns({
     hasSubsections,
@@ -354,9 +386,15 @@ export function useMarksEntryState() {
     sectionOptions,
     examTypeOptions,
     maxMarksLocked,
+    markSetup,
     hasSubsections,
+    termSections,
     sectionsTotalMax,
     updateMaxMarks,
+    updateComponentScore,
+    marksTableRef,
+    savePopup,
+    setSavePopup,
     activeBtn,
     setActiveBtn,
     loading,

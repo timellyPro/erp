@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth/authOptions";
 import { tenantDb as prisma, runInOptionalTenantScope } from "@/lib/db/tenantContext";
 import { assertTeacherCanEnterMarks } from "@/lib/teacher/teacherMarksScope";
 import { parseMarkComponents, sumComponents } from "@/lib/exams/markComponents";
+import { loadConfiguredMarkLimits, markLimitError } from "@/lib/exams/examMarkLimits";
 import { randomUUID } from "crypto";
 import { logger } from "@/lib/logger";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
@@ -132,36 +133,21 @@ export async function PUT(
     const finalTotal =
       totalMarks !== undefined ? totalMarks : existingMark.totalMarks;
 
-    if (finalExamType && existingMark.class?.schoolId && !hasComponents) {
-      const configured = await prisma.examType.findFirst({
-        where: {
-          schoolId: existingMark.class.schoolId,
-          name: String(finalExamType).trim().toUpperCase(),
-        },
-        select: {
-          maxMarks: true,
-          sections: { select: { id: true } },
-        },
+    if (finalExamType && existingMark.class?.schoolId) {
+      const limits = await loadConfiguredMarkLimits({
+        schoolId: existingMark.class.schoolId,
+        examType: String(finalExamType),
+        subject: nextSubject,
       });
-      if (configured?.sections?.length) {
-        return NextResponse.json(
-          {
-            message: `${finalExamType} requires subsection marks (configured by school admin)`,
-          },
-          { status: 400 }
-        );
-      }
-      if (
-        configured?.maxMarks != null &&
-        configured.maxMarks > 0 &&
-        Number(finalTotal) !== Number(configured.maxMarks)
-      ) {
-        return NextResponse.json(
-          {
-            message: `Max marks for ${finalExamType} must be ${configured.maxMarks} (set by school admin)`,
-          },
-          { status: 400 }
-        );
+      const limitMessage = markLimitError({
+        limits,
+        totalMarks: Number(finalTotal),
+        hasComponents,
+        examType: String(finalExamType),
+        subject: nextSubject,
+      });
+      if (limitMessage) {
+        return NextResponse.json({ message: limitMessage }, { status: 400 });
       }
     }
 

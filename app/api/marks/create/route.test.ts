@@ -12,7 +12,7 @@ jest.mock("@/lib/db/tenantContext", () => ({
 const mockGetServerSession = jest.fn();
 const mockClassFindFirst = jest.fn();
 const mockStudentFindFirst = jest.fn();
-const mockExamTypeFindFirst = jest.fn();
+const mockLoadConfiguredMarkLimits = jest.fn();
 const mockMarkCreate = jest.fn();
 const mockAssertTeacherCanEnterMarks = jest.fn();
 const mockCreateNotification = jest.fn();
@@ -27,6 +27,12 @@ jest.mock("@/lib/teacher/teacherMarksScope", () => ({
   assertTeacherCanEnterMarks: (...args: unknown[]) => mockAssertTeacherCanEnterMarks(...args),
 }));
 
+// Exam-type / subject max marks and subsections come from one raw query inside this helper.
+jest.mock("@/lib/exams/examMarkLimits", () => ({
+  ...jest.requireActual("@/lib/exams/examMarkLimits"),
+  loadConfiguredMarkLimits: (...args: unknown[]) => mockLoadConfiguredMarkLimits(...args),
+}));
+
 jest.mock("@/lib/notificationService", () => ({
   createNotification: (...args: unknown[]) => mockCreateNotification(...args),
 }));
@@ -36,7 +42,6 @@ jest.mock("@/lib/db", () => ({
   default: {
     class: { findFirst: (...args: unknown[]) => mockClassFindFirst(...args) },
     student: { findFirst: (...args: unknown[]) => mockStudentFindFirst(...args) },
-    examType: { findFirst: (...args: unknown[]) => mockExamTypeFindFirst(...args) },
     mark: { create: (...args: unknown[]) => mockMarkCreate(...args) },
   },
 }));
@@ -55,7 +60,7 @@ describe("POST /api/marks/create", () => {
     mockGetServerSession.mockReset();
     mockClassFindFirst.mockReset();
     mockStudentFindFirst.mockReset();
-    mockExamTypeFindFirst.mockReset();
+    mockLoadConfiguredMarkLimits.mockReset().mockResolvedValue(null);
     mockMarkCreate.mockReset();
     mockAssertTeacherCanEnterMarks.mockReset();
     mockCreateNotification.mockReset();
@@ -120,7 +125,11 @@ describe("POST /api/marks/create", () => {
     mockGetServerSession.mockResolvedValue({ user: { id: "t1", schoolId: "s1" } });
     mockClassFindFirst.mockResolvedValue({ id: "c1" });
     mockStudentFindFirst.mockResolvedValue({ id: "st1" });
-    mockExamTypeFindFirst.mockResolvedValue({ maxMarks: 100, sections: [{ id: "sec1" }] });
+    mockLoadConfiguredMarkLimits.mockResolvedValue({
+      maxMarks: 100,
+      sections: [{ name: "Written", maxMarks: 100, order: 0 }],
+      source: "exam",
+    });
     const res = await POST(makeRequest({ ...validBody, examType: "midterm" }));
     expect(res.status).toBe(400);
   });

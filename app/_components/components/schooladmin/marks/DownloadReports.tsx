@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Check,
   Download,
   FileSpreadsheet,
   FileText,
@@ -17,8 +18,9 @@ export default function SchoolAdminDownloadReports() {
     selectedKeys,
     setSelectedKeys,
     examTypeOptions,
-    selectedExamType,
-    setSelectedExamType,
+    selectedExamTypes,
+    chosenExamTypes,
+    toggleExamType,
     subjectOptions,
     selectedSubjects,
     classSearch,
@@ -78,18 +80,34 @@ export default function SchoolAdminDownloadReports() {
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-white/60 mb-1.5">EXAM TYPE</label>
-          <select
-            value={selectedExamType}
-            onChange={(e) => setSelectedExamType(e.target.value)}
-            className="w-full sm:w-72 px-4 py-2.5 bg-black/40 border border-white/10 rounded-xl focus:outline-none focus:border-lime-400/50 text-white text-sm"
-          >
-            {examTypeOptions.map((t) => (
-              <option key={t} value={t} className="bg-gray-900">
-                {t}
-              </option>
-            ))}
-          </select>
+          <label className="block text-xs font-medium text-white/60 mb-1.5">
+            EXAM TYPE <span className="text-white/35">(select one or more, then download)</span>
+          </label>
+          <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto no-scrollbar">
+            {examTypeOptions.map((name) => {
+              const on = name === "ALL" ? selectedExamTypes.has("ALL") : selectedExamTypes.has(name);
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => toggleExamType(name)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition ${
+                    on
+                      ? "bg-lime-400/20 border-lime-400/40 text-lime-300"
+                      : "bg-white/5 border-white/10 text-white/70 hover:bg-white/10"
+                  }`}
+                >
+                  {on ? <Check size={12} strokeWidth={3} /> : null}
+                  {name}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-[11px] text-white/40">
+            {chosenExamTypes().includes("ALL")
+              ? "Download includes every exam type."
+              : `Download includes ${chosenExamTypes().join(", ")}. Each exam type is a separate sheet.`}
+          </p>
         </div>
 
         <div>
@@ -142,12 +160,12 @@ export default function SchoolAdminDownloadReports() {
           onToggleKey={toggleKey}
         />
 
-        <div className="flex flex-wrap items-center gap-3 pt-2">
+        <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3 pt-2">
           <button
             type="button"
             disabled={downloading || selectedKeys.size === 0}
             onClick={() => void handleDownloadExcel()}
-            className={`px-5 py-3 rounded-xl flex items-center gap-2 text-sm font-bold transition ${
+            className={`w-full sm:w-auto justify-center px-5 py-3 rounded-xl flex items-center gap-2 text-sm font-bold transition ${
               !downloading && selectedKeys.size > 0
                 ? "bg-lime-400 text-black hover:bg-lime-300"
                 : "bg-white/5 text-white/40 border border-white/10 cursor-not-allowed"
@@ -164,7 +182,7 @@ export default function SchoolAdminDownloadReports() {
             type="button"
             disabled={downloading || selectedKeys.size === 0}
             onClick={() => void handleDownloadPdf()}
-            className={`px-5 py-3 rounded-xl flex items-center gap-2 text-sm font-bold transition ${
+            className={`w-full sm:w-auto justify-center px-5 py-3 rounded-xl flex items-center gap-2 text-sm font-bold transition ${
               !downloading && selectedKeys.size > 0
                 ? "bg-blue-500 text-white hover:bg-blue-400"
                 : "bg-white/5 text-white/40 border border-white/10 cursor-not-allowed"

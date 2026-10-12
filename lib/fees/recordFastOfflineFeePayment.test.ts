@@ -10,6 +10,13 @@ jest.mock("@/lib/db", () => ({
   },
 }));
 
+// `after()` only works inside a Next.js request; outside one it throws and the code runs the work directly.
+jest.mock("next/server", () => ({
+  after: () => {
+    throw new Error("`after` was called outside a request scope");
+  },
+}));
+
 const mockBreakdown = jest.fn();
 jest.mock("@/lib/fees/computeAdminStudentFeeBreakdown", () => ({
   computeAdminStudentFeeBreakdown: (...a: unknown[]) => mockBreakdown(...a),

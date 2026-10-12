@@ -5,12 +5,16 @@ import {
   studentFeeDiscountFromRecord,
 } from "@/lib/fees/studentFeeHeadDiscount";
 import {
-  extraFeeAppliesToStudent,
   isHostelCategoryExtraFeeName,
   isMessCategoryExtraFeeName,
 } from "@/lib/fees/extraFeeResidencyScope";
+import {
+  includeExtraFeeOnStudentBill,
+  residencyConversionStudentIds,
+} from "@/lib/fees/residencyConversion";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/students/studentRte";
 import { previousYearFeeHeadLabel } from "@/lib/fees/feeYearClassification";
+import { feeHeadNameMatches } from "@/lib/fees/feeReportFilters";
 
 export type FeeDueColumnGroup = {
   /** Stable id: `BASE@classId@index`, `EXTRA_NAME@slug` (merged extras with same name), or legacy `EXTRA:id` */
@@ -57,6 +61,7 @@ export type ExtraFeeLite = {
   targetSection: string | null;
   targetStudentId: string | null;
   residencyScope?: string | null;
+  residencyConversion?: boolean | null;
 };
 
 export type StudentFeeDueInput = {
@@ -146,8 +151,9 @@ function applicableExtrasForDueReport(
   },
   includeSchoolWideExtras: boolean
 ): ExtraFeeLite[] {
+  const convertedStudentIds = residencyConversionStudentIds(extraFees);
   return extraFees.filter((ef) => {
-    if (!extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, opts.studentResidency))
+    if (!includeExtraFeeOnStudentBill(ef, opts.studentResidency, opts.studentId, convertedStudentIds))
       return false;
     if (isStudentRte(opts.studentResidency) && isTuitionNamedExtraFee(ef.name)) return false;
     if (ef.targetType === "SCHOOL") return includeSchoolWideExtraInDueReport(ef, includeSchoolWideExtras);
@@ -158,9 +164,10 @@ function applicableExtrasForDueReport(
 function extraFeeAppliesToStudentForRoster(
   ef: ExtraFeeLite,
   st: StudentFeeDueInput,
-  includeSchoolWideExtras: boolean
+  includeSchoolWideExtras: boolean,
+  convertedStudentIds: ReadonlySet<string>
 ): boolean {
-  if (!extraFeeAppliesToStudent({ name: ef.name, residencyScope: ef.residencyScope }, st.category)) return false;
+  if (!includeExtraFeeOnStudentBill(ef, st.category, st.studentId, convertedStudentIds)) return false;
   if (isStudentRte(st.category) && isTuitionNamedExtraFee(ef.name)) return false;
   if (ef.targetType === "SCHOOL") return includeSchoolWideExtraInDueReport(ef, includeSchoolWideExtras);
   return extraFeeApplies(ef, { classId: st.classId, section: st.section, studentId: st.studentId });
@@ -172,8 +179,9 @@ export function extraFeesForExportRoster(
   students: StudentFeeDueInput[],
   includeSchoolWideExtras: boolean
 ): ExtraFeeLite[] {
+  const convertedStudentIds = residencyConversionStudentIds(extraFees);
   return extraFees.filter((ef) =>
-    students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, includeSchoolWideExtras))
+    students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, includeSchoolWideExtras, convertedStudentIds))
   );
 }
 
@@ -186,12 +194,13 @@ export function extraFeesForDueReportRoster(
   if (includeSchoolWideExtras) {
     return extraFeesForExportRoster(extraFees, students, true);
   }
+  const convertedStudentIds = residencyConversionStudentIds(extraFees);
   return extraFees.filter((ef) => {
     if (ef.targetType === "SCHOOL") {
       if (!includeSchoolWideExtraInDueReport(ef, false)) return false;
-      return students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, false));
+      return students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, false, convertedStudentIds));
     }
-    return students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, false));
+    return students.some((st) => extraFeeAppliesToStudentForRoster(ef, st, false, convertedStudentIds));
   });
 }
 
@@ -363,15 +372,34 @@ function computeStudentHeads(
     if (!extraByNorm.has(nk)) extraByNorm.set(nk, []);
     extraByNorm.get(nk)!.push(ef);
   }
+  const scopePriority = (f: ExtraFeeLite) => {
+    if (f.targetType === "STUDENT" && f.targetStudentId === fee.studentId) return 4;
+    if (f.targetType === "SECTION") return 3;
+    if (f.targetType === "CLASS") return 2;
+    if (f.targetType === "SCHOOL") return 1;
+    return 0;
+  };
   const normKeys = [...extraByNorm.keys()].sort((a, b) => a.localeCompare(b));
   for (const nk of normKeys) {
     const efs = extraByNorm.get(nk)!;
+    /**
+     * Catalog often has duplicate rows with the same name+amount (e.g. two Mess 2nd installments).
+     * Student Details dedupes these; summing them here inflated Fee Due / Backup / StudentFee totals.
+     * Keep one row per amount (prefer tighter scope), then sum distinct amounts only.
+     */
+    const bestByAmount = new Map<string, ExtraFeeLite>();
+    for (const ef of efs) {
+      const amtKey = String(Math.round((Number(ef.amount) || 0) * 100) / 100);
+      const cur = bestByAmount.get(amtKey);
+      if (!cur || scopePriority(ef) > scopePriority(cur)) bestByAmount.set(amtKey, ef);
+    }
+    const uniqueEfs = [...bestByAmount.values()];
     const slug = extraNameSlugFromNorm(nk);
     const groupId = `EXTRA_NAME@${slug}`;
     const headKey = groupId;
     let gross = 0;
     let snapshotDue = 0;
-    for (const ef of efs) {
+    for (const ef of uniqueEfs) {
       const g = Number(ef.amount) || 0;
       gross += g;
       snapshotDue += discountedSnapshotDueForHead(`EXTRA:${ef.id}`, g, discount);
@@ -385,6 +413,7 @@ function computeStudentHeads(
       snapshotDue,
       gross,
       concession,
+      // Keep all ids so payments allocated to duplicate catalog rows still roll into this column
       extraFeeIds: efs.map((e) => e.id),
     });
   }
@@ -557,6 +586,41 @@ export function buildFeeDueReportPayload(args: {
     groups,
     rows,
   };
+}
+
+/** Keep one fee head (and installment labels that start with that name) and retotal each row. */
+export function filterFeeDueReportToHead(payload: FeeDueReportPayload, headName: string): FeeDueReportPayload {
+  const needle = headName.trim();
+  if (!needle) return payload;
+  const groups = payload.groups.filter((group) => feeHeadNameMatches(group.label, needle));
+  const ids = new Set(groups.map((group) => group.id));
+  const rows: FeeDueReportRow[] = [];
+  let no = 1;
+  for (const row of payload.rows) {
+    const cellsByGroupId = Object.fromEntries(
+      Object.entries(row.cellsByGroupId).filter(([id]) => ids.has(id))
+    );
+    const packs = Object.values(cellsByGroupId);
+    if (packs.length === 0) continue;
+    const fee = packs.reduce((sum, cell) => sum + cell.fee, 0);
+    const concession = packs.reduce((sum, cell) => sum + cell.concession, 0);
+    const paid = packs.reduce((sum, cell) => sum + cell.paid, 0);
+    const due = packs.reduce((sum, cell) => sum + cell.due, 0);
+    if (fee === 0 && concession === 0 && paid === 0 && due === 0) continue;
+    rows.push({
+      ...row,
+      no: no++,
+      totalFee: roundMoney(fee),
+      totalDiscount: roundMoney(concession),
+      feesPaid: roundMoney(paid),
+      feesDue: roundMoney(due),
+      previousYearTotalFee: 0,
+      previousYearFeesPaid: 0,
+      previousYearFeesDue: 0,
+      cellsByGroupId,
+    });
+  }
+  return { ...payload, groups, rows };
 }
 
 /** Row 2 headers: `${base} Fee`, `${base} Concession`, … matching common fee-due report layout */

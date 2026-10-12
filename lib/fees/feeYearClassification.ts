@@ -21,6 +21,13 @@ export function extractAcademicYearRange(text: string | null | undefined): Acade
   return { startYear, endYear };
 }
 
+/** Application and admission fees stay off current-year summary totals. */
+export function isApplicationOrAdmissionFeeName(name: string | null | undefined): boolean {
+  const lower = String(name ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!lower) return false;
+  return lower.includes("application fee") || lower.includes("admission fee");
+}
+
 export function isPreviousYearFeeHeadName(
   name: string | null | undefined,
   currentStartYear = currentAcademicYearStartYear()

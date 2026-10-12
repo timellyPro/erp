@@ -63,15 +63,20 @@ if (connectionString) {
   // instances are warm at once (a traffic spike can mean dozens). Keep it just above what
   // one request's Promise.all([...]) fan-out needs (3-6 parallel queries is typical here),
   // not sized like a single long-lived dev server's pool.
+  // Supabase session mode (port 5432) allows only pool_size clients (often 15), so keep
+  // that tiny; override anytime with PRISMA_CONNECTION_LIMIT.
+  const isSessionPooler = !isPgBouncer && /:5432(?:\/|\?|$)/.test(connectionString);
   const poolLimit =
     process.env.PRISMA_CONNECTION_LIMIT ||
     (isPgBouncer
       ? process.env.NODE_ENV === "development"
         ? "20"
         : "5"
-      : "5");
+      : isSessionPooler
+        ? "3"
+        : "5");
   connectionString = withParam(connectionString, "connection_limit", poolLimit);
-  connectionString = withParam(connectionString, "pool_timeout", "30");
+  connectionString = withParam(connectionString, "pool_timeout", "60");
   connectionString = withParam(connectionString, "connect_timeout", "10");
 }
 
@@ -169,6 +174,10 @@ function stableArgsKey(args: unknown): string {
   }
 }
 
+// Mark reads must not be cached. An in-flight findMany can finish after a save
+// and store the pre-save snapshot, so assigned marks vanish until the TTL expires.
+const UNCACHED_MODELS = new Set(["Mark", "MarkComponent"]);
+
 const READ_OPERATIONS = new Set([
   "findFirst",
   "findMany",
@@ -196,6 +205,7 @@ const createPrisma = () => {
         const canCache =
           localCacheEnabled &&
           model &&
+          !UNCACHED_MODELS.has(model) &&
           READ_OPERATIONS.has(operation) &&
           !isDeferredCacheInvalidation();
         const cacheKey = canCache ? `pq:${model}:${operation}:${stableArgsKey(args)}` : null;
@@ -261,7 +271,8 @@ if (
 ) {
   prisma = globalThis.prismaGlobal;
 } else {
-  // Recreate when pool params / URL change (dev HMR otherwise keeps connection_limit=1 forever)
+  // Recreate when pool params / URL change (dev HMR otherwise keeps connection_limit=1 forever).
+  // Disconnect first so the old pool does not sit on top of the new one (session mode max is 15).
   void globalThis.prismaGlobal?.$disconnect().catch(() => {});
   prisma = createPrisma();
 }
@@ -271,12 +282,14 @@ const delegate = prisma as unknown as {
   extraFeeHeadTemplate?: { create?: unknown };
   timetable?: { create?: unknown };
   backupEmailSchedule?: { findFirst?: unknown };
+  examTypeSubject?: { findFirst?: unknown };
 };
 if (
   process.env.NODE_ENV === "development" &&
   (typeof delegate.extraFeeHeadTemplate?.create !== "function" ||
     typeof delegate.timetable?.create !== "function" ||
-    typeof delegate.backupEmailSchedule?.findFirst !== "function")
+    typeof delegate.backupEmailSchedule?.findFirst !== "function" ||
+    typeof delegate.examTypeSubject?.findFirst !== "function")
 ) {
   void prisma.$disconnect().catch(() => {});
   prisma = createPrisma();

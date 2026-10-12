@@ -18,14 +18,41 @@ export function toDateInputValue(value: unknown): string {
   return date.toISOString().slice(0, 10);
 }
 
-export const AVAILABLE_FEATURES_FOR_TEACHERS = [
+/** Aliases stored historically → canonical Permission keys used by toggles / sidebar */
+const MARKS_FEATURE_ALIASES = new Set(["MARKS", "marks", "marks-view", "marks-entry"]);
+const EXAMS_FEATURE_ALIASES = new Set(["EXAMS", "exams"]);
+
+export function normalizeAllowedFeatures(features: string[]): string[] {
+  const out = new Set<string>();
+  for (const raw of features) {
+    const f = String(raw || "").trim();
+    if (!f) continue;
+    if (MARKS_FEATURE_ALIASES.has(f) || MARKS_FEATURE_ALIASES.has(f.toLowerCase())) {
+      out.add(Permission.MARKS);
+      continue;
+    }
+    if (EXAMS_FEATURE_ALIASES.has(f) || EXAMS_FEATURE_ALIASES.has(f.toLowerCase())) {
+      out.add(Permission.EXAMS);
+      continue;
+    }
+    out.add(f);
+  }
+  return [...out];
+}
+
+export const AVAILABLE_FEATURES_FOR_TEACHERS: Array<{
+  key: Permission;
+  label: string;
+  description?: string;
+}> = [
   { key: Permission.DASHBOARD, label: "Dashboard" },
+  // School Admin modules — same as ?tab=exams / ?tab=marks
+  { key: Permission.EXAMS, label: "Exams", description: "School Admin → Exams" },
+  { key: Permission.MARKS, label: "Marks", description: "School Admin → Marks" },
   { key: Permission.ADMISSION, label: "Admission" },
   { key: Permission.CLASSES, label: "Classes" },
   { key: Permission.HOMEWORK, label: "Homework" },
-  { key: Permission.MARKS, label: "Marks" },
   { key: Permission.ATTENDANCE, label: "Attendance" },
-  { key: Permission.EXAMS, label: "Exams & Syllabus" },
   { key: Permission.WORKSHOPS, label: "Workshops & Events" },
   { key: Permission.NEWSFEED, label: "Newsfeed" },
   { key: Permission.CHAT, label: "Parent Chat" },
@@ -52,7 +79,7 @@ export function formDataFromApi(userData: Record<string, unknown>): UserFormData
     password: "",
     confirmPassword: "",
     allowedFeatures: Array.isArray(userData.allowedFeatures)
-      ? (userData.allowedFeatures as string[])
+      ? normalizeAllowedFeatures(userData.allowedFeatures as string[])
       : [],
     teacherId: String(userData.teacherId || ""),
     subjects: Array.isArray(subjects)
@@ -99,6 +126,6 @@ export function listShellFields(user: IUser): Pick<
     email: user.email || "",
     role: (user.role as UserFormData["role"]) || "TEACHER",
     designation: user.designation || "",
-    allowedFeatures: user.allowedFeatures || [],
+    allowedFeatures: normalizeAllowedFeatures(user.allowedFeatures || []),
   };
 }

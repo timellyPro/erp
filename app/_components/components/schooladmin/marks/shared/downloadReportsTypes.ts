@@ -27,6 +27,7 @@ export type ConsolidatedSheet = {
   includeSectionCol?: boolean;
   subjects: string[];
   students: ConsolidatedStudent[];
+  examType?: string;
 };
 
 export type ConsolidatedPayload = {
@@ -54,6 +55,19 @@ export function sheetNameSafe(label: string, used: Set<string>): string {
   }
   used.add(name.toLowerCase());
   return name;
+}
+
+/** The exam types to download: "ALL" alone, or the picked names. */
+export function resolveChosenExamTypes(selected: Set<string>): string[] {
+  const picked = Array.from(selected).filter((name) => name !== "ALL");
+  if (selected.has("ALL") || picked.length === 0) return ["ALL"];
+  return picked;
+}
+
+export function examFileLabel(types: string[]): string {
+  if (types.length === 0 || types.includes("ALL")) return "ALL_EXAMS";
+  if (types.length === 1) return types[0].replace(/\s+/g, "_");
+  return "MULTI_EXAMS";
 }
 
 export function normalizeClassName(name: string): string {

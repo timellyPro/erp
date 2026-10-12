@@ -57,6 +57,7 @@ export async function computeCurrentAndPreviousFeeStats(
         targetSection: true,
         targetStudentId: true,
         residencyScope: true,
+        residencyConversion: true,
       },
     }),
     prisma.class.findMany({
@@ -142,6 +143,7 @@ export async function computeCurrentAndPreviousFeeStats(
     targetSection: e.targetSection,
     targetStudentId: e.targetStudentId,
     residencyScope: e.residencyScope,
+    residencyConversion: e.residencyConversion,
   }));
 
   const students: StudentFeeDueInput[] = fees.map((f) => {

@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useReducer, useRef } from "react";
 import {
+  invalidateExamsPage,
   loadExamsPage,
   peekExamsPage,
   setExamsPageCache,
@@ -11,6 +12,7 @@ import {
 } from "./examsCacheReducer";
 import { useExamTypeActions } from "./useExamTypeActions";
 import { useSubjectActions } from "./useSubjectActions";
+import { useSubjectConfigActions } from "./useSubjectConfigActions";
 
 /**
  * All state, effects, and handlers for ExamsTab (exams.tsx).
@@ -25,7 +27,7 @@ import { useSubjectActions } from "./useSubjectActions";
  */
 export function useExamsTabState() {
   const [cache, dispatch] = useReducer(examsCacheReducer, initialExamsCacheState);
-  const { terms: rawData, classes, examTypes, subjects } = cache;
+  const { terms: rawData, classes, examTypes, subjects, removedByExam } = cache;
 
   const [selectedClassId, setSelectedClassId] = useState<string | null>(null);
   const [selectedTermName, setSelectedTermName] = useState<string>("");
@@ -38,11 +40,23 @@ export function useExamsTabState() {
   const setSubjects = (next: string[]) =>
     dispatch({ type: "SET_SUBJECTS", payload: next });
 
-  const examTypeActions = useExamTypeActions(examTypes, setExamTypes);
-  const subjectActions = useSubjectActions(subjects, setSubjects);
+  const setRemovedByExam = (next: Record<string, string[]>) =>
+    dispatch({ type: "SET_REMOVED_BY_EXAM", payload: next });
 
-  const { setExamTypesLoading, syncMaxDrafts } = examTypeActions;
-  const { setSubjectsLoading } = subjectActions;
+  const examTypeActions = useExamTypeActions(examTypes, setExamTypes);
+  const subjectConfigActions = useSubjectConfigActions(examTypes, setExamTypes, subjects);
+  const subjectActions = useSubjectActions(subjects, setSubjects, {
+    examTypes,
+    setExamTypes,
+    removedByExam,
+    setRemovedByExam,
+    dropDraftsForExamSubject: subjectConfigActions.dropDraftsForExamSubject,
+    dropDraftsForSubject: subjectConfigActions.dropDraftsForSubject,
+    renameDraftsForSubject: subjectConfigActions.renameDraftsForSubject,
+  });
+
+  const { setExamTypesLoading, setExamTypeError, syncMaxDrafts } = examTypeActions;
+  const { setSubjectsLoading, setSubjectError } = subjectActions;
 
   // Keep the fast-tab cache in sync with this hook's single source of
   // truth. Skip the very first run so mounting doesn't clobber a cache
@@ -63,6 +77,7 @@ export function useExamsTabState() {
       classes: unknown[];
       examTypes: typeof examTypes;
       subjects: string[];
+      removedByExam?: Record<string, string[]>;
     }) => {
       const data = payload.terms as TermData[];
       const classData = payload.classes as ClassData[];
@@ -73,6 +88,7 @@ export function useExamsTabState() {
           classes: classData,
           examTypes: payload.examTypes,
           subjects: payload.subjects,
+          removedByExam: payload.removedByExam ?? {},
         },
       });
       syncMaxDrafts(payload.examTypes);
@@ -108,6 +124,10 @@ export function useExamsTabState() {
         applyPayload(payload);
       } catch (e) {
         console.error("Fetch failed", e);
+        invalidateExamsPage();
+        const message = e instanceof Error ? e.message : "Failed to load exams";
+        setExamTypeError(message);
+        setSubjectError(message);
       } finally {
         setLoading(false);
         setExamTypesLoading(false);
@@ -127,6 +147,8 @@ export function useExamsTabState() {
     subjects.length,
     setExamTypesLoading,
     setSubjectsLoading,
+    setExamTypeError,
+    setSubjectError,
   ]);
 
   const filteredDataByClass = useMemo(() => {
@@ -170,6 +192,7 @@ export function useExamsTabState() {
 
   return {
     ...examTypeActions,
+    ...subjectConfigActions,
     ...subjectActions,
     classes,
     selectedClassId,

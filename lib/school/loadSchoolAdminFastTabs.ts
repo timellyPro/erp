@@ -149,6 +149,8 @@ export type ExamsPagePayload = {
   classes: unknown[];
   examTypes: ExamTypeOption[];
   subjects: string[];
+  /** Subjects removed from one exam type. They stay in the catalog. */
+  removedByExam?: Record<string, string[]>;
 };
 
 export type UserMePayload = {
@@ -515,21 +517,81 @@ export async function loadExamsPage(options?: { revalidate?: boolean; signal?: A
     ns.exams,
     "default",
     async () => {
-      const [termsRes, typesRes, subjectsRes] = await Promise.all([
-        fetch("/api/exams/terms", { credentials: "include", cache: "no-store", signal: options?.signal }),
-        fetch("/api/exam-types", { credentials: "include", cache: "no-store", signal: options?.signal }),
-        fetch("/api/exam-subjects", { credentials: "include", cache: "no-store", signal: options?.signal }),
-      ]);
-      const [termsData, typesData, subjectsData] = await Promise.all([
-        jsonOrThrow<{ terms?: unknown[]; classes?: unknown[] }>(termsRes, "Failed to load exams"),
-        jsonOrThrow<{ examTypes?: unknown[] }>(typesRes, "Failed to load exam types"),
-        jsonOrThrow<{ subjects?: string[] }>(subjectsRes, "Failed to load subjects"),
-      ]);
+      // Sequential fetches — avoid starving Prisma's small PgBouncer pool (P2024).
+      const termsRes = await fetch("/api/exams/terms", {
+        credentials: "include",
+        cache: "no-store",
+        signal: options?.signal,
+      });
+      const termsData = await jsonOrThrow<{ terms?: unknown[]; classes?: unknown[] }>(
+        termsRes,
+        "Failed to load exams"
+      );
+
+      const loadTypes = async () => {
+        const typesRes = await fetch("/api/exam-types", {
+          credentials: "include",
+          cache: "no-store",
+          signal: options?.signal,
+        });
+        return jsonOrThrow<{ examTypes?: unknown[] }>(typesRes, "Failed to load exam types");
+      };
+      const loadSubjects = async () => {
+        const subjectsRes = await fetch("/api/exam-subjects", {
+          credentials: "include",
+          cache: "no-store",
+          signal: options?.signal,
+        });
+        return jsonOrThrow<{ subjects?: string[]; removedByExam?: Record<string, string[]> }>(
+          subjectsRes,
+          "Failed to load subjects"
+        );
+      };
+
+      let typesData: { examTypes?: unknown[] } | null = null;
+      let subjectsData: { subjects?: string[]; removedByExam?: Record<string, string[]> } | null = null;
+      let typesError: unknown = null;
+      let subjectsError: unknown = null;
+      try {
+        typesData = await loadTypes();
+      } catch (err) {
+        typesError = err;
+      }
+      try {
+        subjectsData = await loadSubjects();
+      } catch (err) {
+        subjectsError = err;
+      }
+      if (typesError || subjectsError) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (typesError) {
+          try {
+            typesData = await loadTypes();
+            typesError = null;
+          } catch (err) {
+            typesError = err;
+          }
+        }
+        if (subjectsError) {
+          try {
+            subjectsData = await loadSubjects();
+            subjectsError = null;
+          } catch (err) {
+            subjectsError = err;
+          }
+        }
+      }
+      if (typesError && subjectsError) throw typesError;
+
       return {
         terms: Array.isArray(termsData.terms) ? termsData.terms : [],
         classes: Array.isArray(termsData.classes) ? termsData.classes : [],
-        examTypes: normalizeExamTypes(typesData.examTypes),
-        subjects: Array.isArray(subjectsData.subjects) ? subjectsData.subjects : [],
+        examTypes: normalizeExamTypes(typesData?.examTypes),
+        subjects: Array.isArray(subjectsData?.subjects) ? subjectsData.subjects : [],
+        removedByExam:
+          subjectsData?.removedByExam && typeof subjectsData.removedByExam === "object"
+            ? subjectsData.removedByExam
+            : {},
       };
     },
     options

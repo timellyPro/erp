@@ -6,7 +6,7 @@ import { storedDiscountRupeeAmount } from "@/lib/fees/studentFeeHeadDiscount";
 import { roundRupee } from "@/lib/formatRupee";
 import { grossTotalFromBreakdown, netTotalFromBreakdown } from "@/lib/fees/feeBreakdownTotals";
 import type { AdminStudentFeeBreakdownResult } from "@/lib/fees/computeAdminStudentFeeBreakdown";
-import { isPreviousYearFeeHeadName } from "@/lib/fees/feeYearClassification";
+import { isApplicationOrAdmissionFeeName, isPreviousYearFeeHeadName } from "@/lib/fees/feeYearClassification";
 import {
   mergeDiscountApprovals,
   type FeesBreakdownProps as Props,
@@ -43,6 +43,7 @@ export function useFeesBreakdownState({
   const [showModifyFee, setShowModifyFee] = useState(false);
   const [modifyFeeOpening, setModifyFeeOpening] = useState(false);
   const [showAddExtraFee, setShowAddExtraFee] = useState(false);
+  const [residencyAdjustmentNote, setResidencyAdjustmentNote] = useState<string | null>(null);
   const [showAssignFeeHeadsCatalog, setShowAssignFeeHeadsCatalog] = useState(false);
   const headsLoading = feeBreakdownPending && !initialFeeBreakdown?.dueHeads?.length;
   const [feeHeadOptionsForDiscount, setFeeHeadOptionsForDiscount] = useState<FeeHeadOption[]>([]);
@@ -154,11 +155,15 @@ export function useFeesBreakdownState({
     [headCards]
   );
 
+  const currentYearCardHeads = headCards.filter(
+    (h) => !isPreviousYearFeeHeadName(h.label) && !isApplicationOrAdmissionFeeName(h.label)
+  );
+
   const breakdownGrossTotal = useMemo(() => {
     if (headCards.length > 0) {
       return roundRupee(
         headCards
-          .filter((h) => !isPreviousYearFeeHeadName(h.label))
+          .filter((h) => !isPreviousYearFeeHeadName(h.label) && !isApplicationOrAdmissionFeeName(h.label))
           .reduce((s, h) => s + (Number(h.gross ?? h.amount) || 0), 0)
       );
     }
@@ -174,13 +179,15 @@ export function useFeesBreakdownState({
 
   const displayPreDiscountTotal = breakdownGrossTotal;
 
-  /** Prefer breakdown head sum when loaded — stored StudentFee can be stale after bulk extra cleanup. */
+  /** Current Year cards: tuition and other yearly heads, not application or admission fees. */
   const displayTotalAmount =
-    headsTotalAmount != null && headsTotalAmount > 0
-      ? headsTotalAmount
-      : totalFee > 0
-        ? totalFee
-        : 0;
+    headCards.length > 0
+      ? roundRupee(currentYearCardHeads.reduce((s, h) => s + h.amount, 0))
+      : headsTotalAmount != null && headsTotalAmount > 0
+        ? headsTotalAmount
+        : totalFee > 0
+          ? totalFee
+          : 0;
 
   /**
    * Discount rupees must compare gross vs net from the same source.
@@ -188,11 +195,13 @@ export function useFeesBreakdownState({
    * full "approved" concession (e.g. B HETVIKA ₹88,000 with no approval row).
    */
   const netForDiscount =
-    breakdownNetTotal != null && breakdownNetTotal >= 0
-      ? breakdownNetTotal
-      : displayTotalAmount > 0
-        ? displayTotalAmount
-        : totalFee;
+    headCards.length > 0
+      ? displayTotalAmount
+      : breakdownNetTotal != null && breakdownNetTotal >= 0
+        ? breakdownNetTotal
+        : displayTotalAmount > 0
+          ? displayTotalAmount
+          : totalFee;
   const discountAmount =
     typeof discountFixedAmount === "number" && discountFixedAmount > 0
       ? discountFixedAmount
@@ -239,16 +248,57 @@ export function useFeesBreakdownState({
           : null;
   const displayAmountPaid =
     headCards.length > 0
-      ? roundRupee(headCards.filter((h) => !isPreviousYearFeeHeadName(h.label)).reduce((s, h) => s + h.paid, 0))
+      ? roundRupee(currentYearCardHeads.reduce((s, h) => s + h.paid, 0))
       : amountPaid;
   const displayRemainingAmount =
     headCards.length > 0
-      ? roundRupee(headCards.filter((h) => !isPreviousYearFeeHeadName(h.label)).reduce((s, h) => s + h.due, 0))
+      ? roundRupee(currentYearCardHeads.reduce((s, h) => s + h.due, 0))
       : headsRemainingAmount != null && headsRemainingAmount >= 0
         ? roundRupee(headsRemainingAmount)
         : roundRupee(Math.max(0, displayTotalAmount - displayAmountPaid));
   const paidPercentage =
     displayTotalAmount > 0 ? (displayAmountPaid / displayTotalAmount) * 100 : 0;
+
+  // Cards follow fee heads only. Application and admission payments are left out.
+  // Paid uses the collected amount so an extra allocation is not dropped when it exceeds one installment.
+  let academicCollected = 0;
+  const seenPaymentIds = new Set<string>();
+  for (const payment of payments) {
+    const status = String(payment.status || "").toUpperCase();
+    if (status !== "SUCCESS" && status !== "PAID" && status !== "COMPLETED") continue;
+    if (seenPaymentIds.has(payment.id)) continue;
+    seenPaymentIds.add(payment.id);
+    const lines =
+      payment.feeAllocations && payment.feeAllocations.length > 0
+        ? payment.feeAllocations
+        : payment.feeTypeName
+          ? [{ name: payment.feeTypeName, amount: payment.feeTypeAmount ?? payment.amount }]
+          : [{ name: "Fee", amount: payment.amount }];
+    for (const line of lines) {
+      const amount = Number(line.amount) || 0;
+      if (amount <= 0) continue;
+      if (isApplicationOrAdmissionFeeName(line.name) || isPreviousYearFeeHeadName(line.name)) continue;
+      academicCollected += amount;
+    }
+  }
+  const academicPaidForCards =
+    academicCollected > 0 ? roundRupee(academicCollected) : displayAmountPaid;
+  const cardTotalAmount = displayTotalAmount;
+  // Due follows fee heads. A missing receipt row must not invent a pending balance
+  // when every installment is already fully paid.
+  const headSettled =
+    headCards.length > 0
+      ? roundRupee(Math.max(0, displayTotalAmount - displayRemainingAmount))
+      : displayAmountPaid;
+  const cardAmountPaid =
+    headCards.length > 0
+      ? roundRupee(Math.max(academicPaidForCards, headSettled))
+      : academicPaidForCards;
+  const cardRemainingAmount =
+    headCards.length > 0
+      ? displayRemainingAmount
+      : roundRupee(Math.max(0, displayTotalAmount - academicPaidForCards));
+  const cardPaidPercentage = cardTotalAmount > 0 ? (cardAmountPaid / cardTotalAmount) * 100 : 0;
 
   const applyBreakdownData = (data: AdminStudentFeeBreakdownResult) => {
     const dueHeads = Array.isArray(data?.dueHeads) ? data.dueHeads : [];
@@ -279,6 +329,11 @@ export function useFeesBreakdownState({
     );
     const splitHeads = splitFeeHeadsForDisplay(normalized);
     setHeadCards(splitHeads);
+    setResidencyAdjustmentNote(
+      typeof data?.residencyAdjustmentNote === "string" && data.residencyAdjustmentNote.trim()
+        ? data.residencyAdjustmentNote.trim()
+        : null
+    );
     setHeadsTotalAmount(
       roundRupee(
         Number(data?.totalAmount) > 0
@@ -304,9 +359,18 @@ export function useFeesBreakdownState({
   };
 
   useEffect(() => {
-    if (!initialFeeBreakdown?.dueHeads?.length) return;
-    applyBreakdownData(initialFeeBreakdown);
-  }, [initialFeeBreakdown, studentId]);
+    if (initialFeeBreakdown?.dueHeads?.length) {
+      applyBreakdownData(initialFeeBreakdown);
+      return;
+    }
+    // Student switch / pending load — do not keep previous student's head cards.
+    if (feeBreakdownPending || !initialFeeBreakdown) {
+      setHeadCards([]);
+      setHeadsTotalAmount(0);
+      setHeadsRemainingAmount(0);
+      setPreviousYearRemainingAmount(0);
+    }
+  }, [initialFeeBreakdown, studentId, feeBreakdownPending]);
 
   const handleDownloadReceipt = async () => {
     try {
@@ -361,6 +425,11 @@ export function useFeesBreakdownState({
     displayAmountPaid,
     displayRemainingAmount,
     paidPercentage,
+    cardTotalAmount,
+    cardAmountPaid,
+    cardRemainingAmount,
+    cardPaidPercentage,
+    residencyAdjustmentNote,
     previousYearRemainingAmount,
     openModifyFeeModal,
     handleDownloadReceipt,

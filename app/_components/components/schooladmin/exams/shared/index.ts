@@ -5,3 +5,5 @@ export * from "./types";
 export * from "./useExamTypeActions";
 export * from "./useExamsTabState";
 export * from "./useSubjectActions";
+export * from "./useSubjectConfigActions";
+export * from "./ExamTypeSubjectsPanel";

@@ -2,6 +2,7 @@ const mockStudentFindFirst = jest.fn();
 const mockStudentFeeFindUnique = jest.fn();
 const mockStudentFeeUpdate = jest.fn();
 const mockAllocGroupBy = jest.fn();
+const mockPaymentFindMany = jest.fn();
 const mockAllocFindMany = jest.fn();
 const mockApprovalFindMany = jest.fn();
 const mockStructureFindUnique = jest.fn();
@@ -20,6 +21,7 @@ jest.mock("@/lib/db/tenantContext", () => ({
       groupBy: (...a: unknown[]) => mockAllocGroupBy(...a),
       findMany: (...a: unknown[]) => mockAllocFindMany(...a),
     },
+    payment: { findMany: (...a: unknown[]) => mockPaymentFindMany(...a) },
     feeDiscountApproval: { findMany: (...a: unknown[]) => mockApprovalFindMany(...a) },
     classFeeStructure: {
       findUnique: (...a: unknown[]) => mockStructureFindUnique(...a),
@@ -123,6 +125,8 @@ function setup(s: Setup = {}) {
     class: s.noClass ? null : { id: cid, section: "A" },
   });
   mockStudentFeeFindUnique.mockResolvedValue(s.fee === undefined ? record() : s.fee);
+  // The implementation lists the student's successful payment ids first, then groups allocations by them.
+  mockPaymentFindMany.mockResolvedValue([{ id: "pay1" }]);
   mockStructureFindUnique.mockResolvedValue({
     components: s.components ?? [
       { name: "Tuition", amount: 10000 },

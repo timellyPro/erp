@@ -40,7 +40,7 @@ export function useMarksEntryColumns({
       render: (row: StudentRow) => (
         <div className="flex items-center gap-3">
           <img src={row.avatar} alt={row.name} className="w-9 h-9 rounded-full" />
-          <span className="font-medium text-white">{row.name}</span>
+          <span className="whitespace-nowrap font-medium text-white">{row.name}</span>
         </div>
       ),
     },

@@ -112,8 +112,8 @@ describe("POST /api/exam-types", () => {
     mockExamTypeCreate.mockReset();
   });
 
-  it("returns 403 for a non-admin", async () => {
-    mockGetServerSession.mockResolvedValue({ user: { id: "u1", role: "TEACHER", schoolId: "s1" } });
+  it("returns 403 for a role that is neither school admin nor teacher", async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: "u1", role: "STUDENT", schoolId: "s1" } });
     const res = await POST(makeRequest({ name: "Midterm" }));
     expect(res.status).toBe(403);
   });

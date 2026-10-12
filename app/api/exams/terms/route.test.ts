@@ -84,23 +84,16 @@ describe("GET /api/exams/terms", () => {
     expect(res!.status).toBe(403);
   });
 
-  it("flattens terms into exams for a teacher", async () => {
+  it("returns the school's terms and classes for a teacher (same as school admin)", async () => {
     mockGetServerSession.mockResolvedValue({ user: { id: "t1", role: "TEACHER", schoolId: "s1" } });
-    mockExamTermFindMany.mockResolvedValue([
-      {
-        id: "term1",
-        name: "TERM 1",
-        status: "UPCOMING",
-        class: { id: "c1", name: "Grade 5", section: "A" },
-        schedules: [{ id: "sc1", subject: "Math", examDate: new Date("2026-02-01"), startTime: "10:00", durationMin: 90 }],
-        syllabus: [],
-      },
-    ]);
+    mockClassFindMany.mockResolvedValue([{ id: "c1", name: "Grade 5", section: "A" }]);
+    mockExamTermFindMany.mockResolvedValue([{ id: "term1", name: "TERM 1" }]);
     const res = await GET(makeGetRequest());
     expect(res!.status).toBe(200);
     const json = await res!.json();
-    expect(json.exams).toHaveLength(1);
-    expect(json.exams[0].subject).toBe("Math");
+    expect(json.terms).toHaveLength(1);
+    expect(json.classes).toEqual([{ id: "c1", name: "Grade 5", section: "A" }]);
+    expect(json.exams).toBeUndefined();
   });
 
   it("returns 400 for a student with no assigned class", async () => {

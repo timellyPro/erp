@@ -35,6 +35,9 @@ export function StudentFeesPaymentModal({
     error,
     setRowAmount,
     togglePayEntireHead,
+    togglePayAllHeads,
+    allPayableChecked,
+    payableCount,
     total,
     totals,
     continueToPayment,
@@ -48,8 +51,9 @@ export function StudentFeesPaymentModal({
   });
 
   return (
-    <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/70 p-3 sm:p-4 overflow-y-auto">
-      <div className="w-full max-w-7xl rounded-2xl border border-white/10 bg-[#0B1220] p-4 sm:p-5 shadow-xl">
+    <div className="fixed inset-0 z-[130] overflow-y-auto overscroll-y-contain bg-black/70 [-webkit-overflow-scrolling:touch]">
+      <div className="flex min-h-full items-start justify-center p-3 sm:items-center sm:p-4">
+      <div className="my-2 w-max max-w-[calc(100vw-1.5rem)] rounded-2xl border border-white/10 bg-[#0B1220] p-4 sm:p-5 shadow-xl">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <h4 className="text-lg font-semibold text-white">Fees Sheet — {studentName}</h4>
@@ -75,6 +79,9 @@ export function StudentFeesPaymentModal({
               total={total}
               onSetRowAmount={setRowAmount}
               onTogglePayEntireHead={togglePayEntireHead}
+              allPayableChecked={allPayableChecked}
+              payableCount={payableCount}
+              onTogglePayAllHeads={togglePayAllHeads}
             />
 
             <PaymentModeStep
@@ -117,6 +124,7 @@ export function StudentFeesPaymentModal({
             </div>
           </>
         )}
+      </div>
       </div>
     </div>
   );

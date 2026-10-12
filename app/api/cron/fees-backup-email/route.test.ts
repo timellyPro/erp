@@ -62,7 +62,7 @@ describe("GET /api/cron/fees-backup-email", () => {
     const res = await GET(request({ authorization: "Bearer secret123" }));
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json).toEqual({ message: "No enabled backup schedules", sent: 0 });
+    expect(json).toEqual({ message: "No enabled backup schedules", sent: 0, results: [] });
   });
 
   it("skips a schedule that is not yet due and reports it in the results", async () => {

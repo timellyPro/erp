@@ -5,13 +5,20 @@ import { authOptions } from "@/lib/auth/authOptions";
 import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { randomUUID } from "crypto";
 import { logger } from "@/lib/logger";
-import { schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { schoolIdViaAdminRelation, schoolIdViaTeacherClass, schoolIdViaTeacherRelation } from "@/lib/auth/tenant";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 async function resolveSchoolId(session: {
   user: { id: string; schoolId?: string | null; role: string };
 }) {
-  return session.user.schoolId ?? (await schoolIdViaAdminRelation(session.user.id));
+  let schoolId = session.user.schoolId;
+  if (schoolId) return schoolId;
+  if (session.user.role === "TEACHER") {
+    schoolId =
+      (await schoolIdViaTeacherClass(session.user.id)) ??
+      (await schoolIdViaTeacherRelation(session.user.id));
+  }
+  return schoolId ?? (await schoolIdViaAdminRelation(session.user.id));
 }
 
 /** Replace subsections for an exam type. Empty array = single score (no subsections). */
@@ -21,7 +28,7 @@ export async function PUT(req: Request) {
     if (!session) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
-    if (session.user.role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 

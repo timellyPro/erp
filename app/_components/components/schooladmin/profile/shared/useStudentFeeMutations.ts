@@ -34,16 +34,20 @@ export function useStudentFeeMutations({
   setFeeBreakdown,
   setTransactionsReady,
   deletedPaymentIdsRef,
+  selectedIdRef,
 }: {
   setDetail: SetDetail;
   setFeeBreakdown: SetFeeBreakdown;
   setTransactionsReady: (ready: boolean) => void;
   deletedPaymentIdsRef: MutableRefObject<Set<string>>;
+  selectedIdRef: MutableRefObject<string | null>;
 }) {
   const applyDetailsBundle = useCallback(
     (bundle: Awaited<ReturnType<typeof loadStudentDetailsBundle>>) => {
       const { feeBreakdown: breakdown, ...rest } = bundle;
       if (rest?.student) {
+        // Never paint another student's fees/payments onto the current selection.
+        if (selectedIdRef.current && rest.student.id !== selectedIdRef.current) return;
         const payments = (rest.payments ?? []).filter(
           (p) => !deletedPaymentIdsRef.current.has(p.id)
         );
@@ -72,7 +76,7 @@ export function useStudentFeeMutations({
         setTransactionsReady(false);
       }
     },
-    [deletedPaymentIdsRef, setDetail, setFeeBreakdown, setTransactionsReady]
+    [deletedPaymentIdsRef, selectedIdRef, setDetail, setFeeBreakdown, setTransactionsReady]
   );
 
   const refreshFeesForStudent = useCallback(
@@ -149,12 +153,12 @@ export function useStudentFeeMutations({
       });
 
       void fetchFeeBreakdownFast(studentId, { force: true }).then((bd) => {
-        if (!bd) return;
+        if (!bd || selectedIdRef.current !== studentId) return;
         setFeeBreakdown(bd);
         setFeeBreakdownCache(studentId, bd);
       });
     },
-    [deletedPaymentIdsRef, setDetail, setFeeBreakdown]
+    [deletedPaymentIdsRef, selectedIdRef, setDetail, setFeeBreakdown]
   );
 
   return { applyDetailsBundle, refreshFeesForStudent, removePaymentForStudent };
