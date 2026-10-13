@@ -239,3 +239,6 @@ export async function GET(req: Request) {
     return NextResponse.json({ message }, { status: 500 });
   }
 }
+
+// Heavy report/export: raise the serverless timeout above the default.
+export const maxDuration = 60;

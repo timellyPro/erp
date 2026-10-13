@@ -351,3 +351,6 @@ tbody tr:nth-child(odd){background:#fcfdff}
   }
 }
 
+
+// Heavy report/export: raise the serverless timeout above the default.
+export const maxDuration = 60;

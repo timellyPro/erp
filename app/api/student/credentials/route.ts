@@ -190,3 +190,6 @@ export async function GET(req: Request) {
 }
 
 export type { StudentCredentialRow };
+
+// Heavy report/export: raise the serverless timeout above the default.
+export const maxDuration = 60;

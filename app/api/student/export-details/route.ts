@@ -160,3 +160,6 @@ export async function GET(req: Request) {
     );
   }
 }
+
+// Heavy report/export: raise the serverless timeout above the default.
+export const maxDuration = 60;
