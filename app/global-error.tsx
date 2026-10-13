@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import * as Sentry from "@sentry/nextjs";
 
 // Replaces the root layout when it (or the providers in it) throws, so it must
 // render its own <html>/<body> and cannot rely on app CSS or context.
@@ -12,6 +13,7 @@ export default function GlobalError({
   reset: () => void;
 }) {
   useEffect(() => {
+    Sentry.captureException(error);
     console.error("[ui] unhandled root error", error);
   }, [error]);
 

@@ -1,6 +1,14 @@
+import * as Sentry from "@sentry/nextjs";
+
+export const onRequestError = Sentry.captureRequestError;
+
 export async function register() {
   // Edge sets NEXT_RUNTIME=edge. On Node/Turbopack it may be "nodejs" or unset.
-  if (process.env.NEXT_RUNTIME === "edge") return;
+  if (process.env.NEXT_RUNTIME === "edge") {
+    await import("./sentry.edge.config");
+    return;
+  }
+  await import("./sentry.server.config");
   if (!process.env.DATABASE_URL_TENANT) {
     // Tenant-scoped routes (lib/db/tenantContext.ts) throw on first use without this,
     // so surface it at boot rather than as scattered 500s.
