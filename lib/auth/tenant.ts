@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import type { Session } from "next-auth";
 import prisma from "@/lib/db";
 import { authOptions } from "@/lib/auth/authOptions";
+import { setTag } from "@sentry/core";
 
 export type TenantContext =
   | { ok: true; schoolId: string }
@@ -50,6 +51,8 @@ export async function requireSchoolId(session: Session): Promise<TenantContext> 
   const fromToken = typeof user.schoolId === "string" && user.schoolId.trim() ? user.schoolId : null;
   const schoolId = fromToken ?? (await resolveSchoolIdFromDb(user.id));
   if (!schoolId) return { ok: false, status: 400, message: "School not found in session" };
+  // Lets a school's errors be filtered in Sentry (no-op when the SDK is disabled).
+  setTag("schoolId", schoolId);
   return { ok: true, schoolId };
 }
 

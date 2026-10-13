@@ -66,3 +66,17 @@ jobs:
             sleep 10
           done
           echo "Health check failed (last status $code)"; exit 1
+      - name: Playwright smoke tests (read-only)
+        # Authenticated journeys run only if the E2E_* secrets exist in the environment;
+        # otherwise they skip themselves and only the public checks run.
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test
+        env:
+          E2E_BASE_URL: ${{ steps.deploy.outputs.url }}
+          E2E_ADMIN_EMAIL: ${{ secrets.E2E_ADMIN_EMAIL }}
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+          E2E_TEACHER_EMAIL: ${{ secrets.E2E_TEACHER_EMAIL }}
+          E2E_TEACHER_PASSWORD: ${{ secrets.E2E_TEACHER_PASSWORD }}
+          E2E_PARENT_EMAIL: ${{ secrets.E2E_PARENT_EMAIL }}
+          E2E_PARENT_PASSWORD: ${{ secrets.E2E_PARENT_PASSWORD }}

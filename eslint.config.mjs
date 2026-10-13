@@ -45,6 +45,10 @@ const eslintConfig = defineConfig([
     rules: {
       "react-hooks/set-state-in-effect": "off",
       "react-hooks/preserve-manual-memoization": "off",
+      // New React Compiler rules from the eslint-plugin-react-hooks bump flag ~28
+      // existing, working spots. Warn so they stay visible without blocking CI.
+      "react-hooks/purity": "warn",
+      "react-hooks/immutability": "warn",
       "react/no-unescaped-entities": "off",
       "react/no-children-prop": "off",
     },
