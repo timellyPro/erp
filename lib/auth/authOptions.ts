@@ -43,7 +43,9 @@ export const authOptions: NextAuthOptions = {
         const limitResult = await rateLimit(
           loginKey,
           LOGIN_RATE_LIMIT_MAX_ATTEMPTS,
-          LOGIN_RATE_LIMIT_WINDOW_SECONDS
+          LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+          // Redis outage: tighten the per-instance fallback rather than fail open.
+          { onRedisDown: "tight" }
         );
         if (!limitResult.allowed) {
           logger.info("Auth: Rate limit exceeded for email:", credentials.email);

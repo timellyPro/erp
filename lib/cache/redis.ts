@@ -25,6 +25,11 @@ export const redis = redisEnabled
     })
   : null;
 
+/** True when Redis is configured at all (even if the circuit breaker is currently open). */
+export function isRedisConfigured() {
+  return redisEnabled && redis !== null;
+}
+
 export function isRedisEnabled() {
   return redisEnabled && redis !== null && Date.now() >= redisDisabledUntil;
 }

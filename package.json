@@ -13,7 +13,8 @@
     "test:coverage": "jest --coverage",
     "prisma:generate": "powershell -ExecutionPolicy Bypass -File ./scripts/prisma-generate.ps1",
     "backup:db": "node scripts/backup-db.js",
-    "check:tenant-isolation": "tsx scripts/checkTenantIsolation.ts"
+    "check:tenant-isolation": "tsx scripts/checkTenantIsolation.ts",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@next-auth/prisma-adapter": "^1.0.7",
@@ -47,10 +48,11 @@
     "recharts": "^3.7.0",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
     "@tailwindcss/postcss": "^4",
     "@testing-library/dom": "10.4.1",
     "@testing-library/jest-dom": "^6.9.1",

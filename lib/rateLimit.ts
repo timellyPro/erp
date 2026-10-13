@@ -1,4 +1,4 @@
-import { redis, isRedisEnabled } from "@/lib/cache/redis";
+import { redis, isRedisEnabled, isRedisConfigured } from "@/lib/cache/redis";
 import { logger } from "@/lib/logger";
 
 /**
@@ -47,13 +47,31 @@ function inMemoryFallback(key: string, limit: number, windowSeconds: number): Ra
  * (see PRODUCTION_READINESS.md's caching section). It still meaningfully raises the
  * bar over no limiting at all.
  */
+export type RateLimitOptions = {
+  /**
+   * What to do when Redis is configured but down (error or open circuit):
+   * - "open" (default): per-instance in-memory counter with the full limit.
+   * - "tight": per-instance counter with a quarter of the limit (min 3). Use for
+   *   brute-force-sensitive keys (login): total attempts across instances stay
+   *   bounded without locking real users out during a cache outage.
+   */
+  onRedisDown?: "open" | "tight";
+};
+
+function tightLimit(limit: number): number {
+  return Math.max(3, Math.floor(limit / 4));
+}
+
 export async function rateLimit(
   key: string,
   limit: number,
-  windowSeconds: number
+  windowSeconds: number,
+  options: RateLimitOptions = {}
 ): Promise<RateLimitResult> {
+  const downLimit = options.onRedisDown === "tight" ? tightLimit(limit) : limit;
   if (!isRedisEnabled() || !redis) {
-    return inMemoryFallback(key, limit, windowSeconds);
+    // Not configured at all (local dev) is not an outage: keep the normal limit.
+    return inMemoryFallback(key, isRedisConfigured() ? downLimit : limit, windowSeconds);
   }
 
   const redisKey = `ratelimit:${key}`;
@@ -70,7 +88,7 @@ export async function rateLimit(
     return { allowed: true, remaining: Math.max(0, limit - count), resetInSeconds };
   } catch (error) {
     logger.warn("[rateLimit] Redis check failed, failing open.", error);
-    return inMemoryFallback(key, limit, windowSeconds);
+    return inMemoryFallback(key, downLimit, windowSeconds);
   }
 }
 

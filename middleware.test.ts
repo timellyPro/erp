@@ -4,10 +4,15 @@
 jest.mock("@/lib/cache/redis", () => ({
   redis: null,
   isRedisEnabled: () => false,
+  isRedisConfigured: () => false,
+  isRedisConfigured: () => false,
 }));
 
 import { NextRequest } from "next/server";
+import { getToken } from "next-auth/jwt";
 import { middleware } from "./middleware";
+
+jest.mock("next-auth/jwt", () => ({ getToken: jest.fn() }));
 
 function request(path: string, ip = "1.2.3.4") {
   return new NextRequest(`http://localhost${path}`, {
@@ -61,5 +66,38 @@ describe("middleware", () => {
       last = await middleware(request("/", ip));
     }
     expect(last!.status).toBe(200);
+  });
+
+  describe("api request logging", () => {
+    let info: jest.SpyInstance;
+    beforeEach(() => {
+      info = jest.spyOn(console, "info").mockImplementation(() => undefined);
+    });
+    afterEach(() => info.mockRestore());
+
+    it("logs schoolId, userId and role from the JWT", async () => {
+      (getToken as jest.Mock).mockResolvedValue({ schoolId: "sch_1", id: "u1", role: "TEACHER" });
+      await middleware(request("/api/class/list"));
+      const line = JSON.parse(info.mock.calls[0][0]);
+      expect(line).toMatchObject({
+        event: "api_request",
+        path: "/api/class/list",
+        schoolId: "sch_1",
+        userId: "u1",
+        role: "TEACHER",
+      });
+    });
+
+    it("logs schoolId null when there is no token or it cannot be read", async () => {
+      (getToken as jest.Mock).mockRejectedValue(new Error("bad"));
+      await middleware(request("/api/class/list"));
+      expect(JSON.parse(info.mock.calls[0][0]).schoolId).toBeNull();
+    });
+
+    it("does not log health checks or non-API pages", async () => {
+      await middleware(request("/api/health"));
+      await middleware(request("/support"));
+      expect(info).not.toHaveBeenCalled();
+    });
   });
 });
