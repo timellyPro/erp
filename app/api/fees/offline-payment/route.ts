@@ -697,7 +697,7 @@ export async function POST(req: Request) {
             apply: true,
           });
         } catch (err) {
-          console.error("[offline-payment] post-commit integrity failed", {
+          logger.error("[offline-payment] post-commit integrity failed", {
             studentId,
             err,
           });

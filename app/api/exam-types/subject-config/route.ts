@@ -1,3 +1,4 @@
+import { logger } from "@/lib/logger";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/authOptions";
@@ -335,7 +336,7 @@ export async function PUT(req: Request) {
     );
     });
   } catch (e: unknown) {
-    console.error("Exam type subject config PUT:", e);
+    logger.error("Exam type subject config PUT:", e);
     return NextResponse.json(
       { message: e instanceof Error ? e.message : "Internal server error" },
       { status: 500 }

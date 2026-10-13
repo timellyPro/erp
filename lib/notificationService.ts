@@ -1,3 +1,4 @@
+import { logger } from "@/lib/logger";
 import prisma from "@/lib/db";
 import type { NotificationType, Role } from "@prisma/client";
 
@@ -14,7 +15,7 @@ export async function createNotification(
       data: { userId, type, title, message },
     });
   } catch (e) {
-    console.error("Create notification error:", e);
+    logger.error("Create notification error:", e);
   }
 }
 
@@ -30,7 +31,7 @@ export async function createNotificationsForUserIds(
       data: userIds.map((userId) => ({ userId, type, title, message })),
     });
   } catch (e) {
-    console.error("Create notifications error:", e);
+    logger.error("Create notifications error:", e);
   }
 }
 

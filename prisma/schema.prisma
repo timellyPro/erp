@@ -242,8 +242,7 @@ model LeaveRequest {
  * DDL at request time (app/api/teacher/attendance/route.ts's ensureTable()) and did
  * not appear here at all — invisible to `prisma migrate`/`prisma db pull`
  * (PRODUCTION_READINESS.md's schema-drift finding). Formalized as a real model +
- * migration; the route's ensureTable() DDL is left in place as an idempotent
- * safety net for environments where this migration hasn't run yet, not removed.
+ * migration; the route no longer creates the table at runtime.
  */
 model TeacherDailyAttendance {
   id String @id @default(cuid())

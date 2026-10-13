@@ -1,3 +1,4 @@
+import { logger } from "@/lib/logger";
 import { getServerSession } from "next-auth";
 import type { Session } from "next-auth";
 import prisma from "@/lib/db";
@@ -30,7 +31,7 @@ async function resolveSchoolIdFromDb(userId: string): Promise<string | null> {
       null
     );
   } catch (error) {
-    console.error("resolve_school_id_from_db_failed", error instanceof Error ? error.message : error);
+    logger.error("resolve_school_id_from_db_failed", error instanceof Error ? error.message : error);
     return null;
   }
 }
