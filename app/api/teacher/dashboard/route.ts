@@ -27,60 +27,62 @@ export async function GET() {
     // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go
     // through the app_tenant connection, restricted by RLS, not just the
     // `where: { schoolId }` / `where: { userId }` filters below.
-    const [classes, circulars, notifications, unreadCount, appointments] =
-      await withTenantScopedClient(schoolId, (tx) =>
-        Promise.all([
-          accessibleIds.length
-            ? tx.class.findMany({
-                where: { id: { in: accessibleIds }, schoolId },
-                include: { _count: { select: { students: true } } },
-                orderBy: { createdAt: "desc" },
-              })
-            : Promise.resolve([]),
-          tx.circular.findMany({
-            where: { schoolId },
-            include: { issuedBy: { select: { name: true, photoUrl: true } } },
-            orderBy: { createdAt: "desc" },
-            take: 3,
-          }),
-          tx.notification.findMany({
-            where: { userId },
-            orderBy: { createdAt: "desc" },
-            take: 25,
-          }),
-          tx.notification.count({
-            where: { userId, isRead: false },
-          }),
-          tx.appointment.findMany({
-            where: { teacherId: userId },
-            include: {
-              student: {
-                select: {
-                  fatherName: true,
-                  user: { select: { name: true } },
-                },
+    // The events lookup runs in its own transaction (a failure there must not abort the main
+    // one) and concurrently with it: each transaction costs several DB round trips, so
+    // running them back to back doubled the latency.
+    const eventsPromise = withTenantScopedClient(schoolId, (tx) =>
+      tx.event.findMany({
+        where: { schoolId },
+        select: { id: true, title: true, eventDate: true },
+        orderBy: { eventDate: "asc" },
+        take: 4,
+      })
+    ).catch((err): Array<{ id: string; title: string; eventDate: Date | null }> => {
+      logger.warn("Teacher dashboard events fallback:", err);
+      return [];
+    });
+
+    const mainPromise = withTenantScopedClient(schoolId, (tx) =>
+      Promise.all([
+        accessibleIds.length
+          ? tx.class.findMany({
+              where: { id: { in: accessibleIds }, schoolId },
+              include: { _count: { select: { students: true } } },
+              orderBy: { createdAt: "desc" },
+            })
+          : Promise.resolve([]),
+        tx.circular.findMany({
+          where: { schoolId },
+          include: { issuedBy: { select: { name: true, photoUrl: true } } },
+          orderBy: { createdAt: "desc" },
+          take: 3,
+        }),
+        tx.notification.findMany({
+          where: { userId },
+          orderBy: { createdAt: "desc" },
+          take: 25,
+        }),
+        tx.notification.count({
+          where: { userId, isRead: false },
+        }),
+        tx.appointment.findMany({
+          where: { teacherId: userId },
+          include: {
+            student: {
+              select: {
+                fatherName: true,
+                user: { select: { name: true } },
               },
             },
-            orderBy: { createdAt: "desc" },
-            take: 4,
-          }),
-        ])
-      );
-
-    let events: Array<{ id: string; title: string; eventDate: Date | null }> = [];
-    try {
-      events = await withTenantScopedClient(schoolId, (tx) =>
-        tx.event.findMany({
-          where: { schoolId },
-          select: { id: true, title: true, eventDate: true },
-          orderBy: { eventDate: "asc" },
+          },
+          orderBy: { createdAt: "desc" },
           take: 4,
-        })
-      );
-    } catch (err) {
-      logger.warn("Teacher dashboard events fallback:", err);
-      events = [];
-    }
+        }),
+      ])
+    );
+
+    const [[classes, circulars, notifications, unreadCount, appointments], events] =
+      await Promise.all([mainPromise, eventsPromise]);
 
     const totalClasses = classes.length;
     const totalStudents = classes.reduce(
