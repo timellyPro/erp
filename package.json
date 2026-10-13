@@ -20,7 +20,7 @@
     "@next-auth/prisma-adapter": "^1.0.7",
     "@prisma/adapter-pg": "^6.1.0",
     "@prisma/client": "^6.19.3",
-    "@sentry/core": "^10.76.2",
+    "@sentry/core": "^11.6.0",
     "@sentry/nextjs": "^10.76.2",
     "@supabase/supabase-js": "^2.95.3",
     "@upstash/redis": "^1.37.0",
