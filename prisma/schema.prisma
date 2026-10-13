@@ -91,6 +91,9 @@ model User {
   // Teacher-specific fields
   mobile            String? // teacher mobile
   photoUrl          String?
+  // Privacy-policy / parental-consent acknowledgement (see lib/consent.ts)
+  privacyConsentVersion String?
+  privacyConsentAt      DateTime?
   language          String?          @default("English")
   teacherId         String? // e.g. TCH001
   subject           String? // e.g. Mathematics (primary/legacy)

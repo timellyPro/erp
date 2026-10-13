@@ -39,6 +39,7 @@ const ROOT = path.resolve(__dirname, "..");
 
 /** Routes that intentionally query tenant-scoped models across all schools. */
 const ALLOWLIST = new Set<string>([
+  "app/api/consent/route.ts", // own User row only, id from session
   "app/api/auth/[...nextauth]/route.ts",
   "app/api/superadmin/dashboard/route.ts",
   "app/api/superadmin/chairmen/route.ts",

@@ -26,6 +26,7 @@ import {
   peekParentDetailsFromBootstrap,
   warmParentPortalBootstrap,
 } from "@/lib/parent/loadParentPortal";
+import ParentConsentGate from "@/app/_components/components/parent/ParentConsentGate";
 import { Lock } from "lucide-react";
 
 const PARENT_TAB_TITLES: Record<string, string> = {
@@ -220,6 +221,7 @@ function ParentDashboardInner() {
         enableSwitchAccounts
       >
         <div className="relative min-h-[70vh]">
+          <ParentConsentGate />
           <div className={blurBackground}>{renderTabContent()}</div>
 
           {showSubscriptionModal && (
