@@ -44,6 +44,9 @@ function normalizeResidencyType(value: string | null | undefined) {
   return raw;
 }
 
+// Large schools: exports can exceed the default serverless timeout.
+export const maxDuration = 60;
+
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);

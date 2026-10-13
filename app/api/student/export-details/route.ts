@@ -31,6 +31,9 @@ async function resolveSchoolId(session: {
   return schoolId;
 }
 
+// Large schools: exports can exceed the default serverless timeout.
+export const maxDuration = 60;
+
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
