@@ -74,5 +74,6 @@ Promote flow: merge to `main` > staging deploys, migrates and health-checks > te
   pg_restore --no-owner --no-privileges --clean --if-exists -d "<scratch session-pooler url>" t.dump
   DATABASE_URL="<scratch url>" npx tsx scripts/verify-rls-isolation.ts
   ```
-  Then run `npx prisma migrate status` and open the app against it. Record the date of the last successful drill here: _not yet done_.
+  Then run `npx prisma migrate status` and open the app against it. Last drill: **2026-10-13**, local Postgres 17 (dump and restore half only). Dump of production: 2.9 MB in 30 s; restore: 7 s; row counts matched production (School 4, User 1177, Student 1117, Payment 1283, Class 48); 59 tables, 53 RLS policies restored. The 14 restore errors are Supabase-only extensions/event triggers, safe to ignore. The gpg decrypt step has NOT been drilled yet (see below).
+- `BACKUP_DATABASE_URL` must use the pooler user `postgres.<project-ref>` on port 5432. A bare `postgres` user fails with "password authentication failed" (found 2026-10-13).
 - Roles (`app_tenant`) are not in the dump; recreate its password with the `ALTER ROLE` step in section 2 after a restore.
