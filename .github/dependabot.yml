@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # SheetJS is installed from cdn.sheetjs.com (not npm); Dependabot cannot update it.
+      - dependency-name: xlsx
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

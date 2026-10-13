@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { getToken } from "next-auth/jwt";
 import { rateLimit, rateLimitKey } from "@/lib/rateLimit";
 
 // Public, unauthenticated pages (see PRODUCTION_READINESS.md's rate-limiting
@@ -13,6 +14,36 @@ function clientIp(request: NextRequest): string {
   const forwardedFor = request.headers.get("x-forwarded-for");
   if (forwardedFor) return forwardedFor.split(",")[0].trim();
   return request.headers.get("x-real-ip") || "unknown";
+}
+
+// Skipped to keep uptime probes and auth polling from flooding the logs.
+const REQUEST_LOG_SKIP_PREFIXES = ["/api/health", "/api/auth/"];
+
+/**
+ * One structured line per API request carrying the tenant (schoolId) so any log
+ * can be filtered by school. Uses the JWT only (no DB hit); never blocks the request.
+ * Plain console on purpose: this runs on the edge runtime.
+ */
+async function logApiRequest(request: NextRequest, pathname: string) {
+  if (!pathname.startsWith("/api/") || REQUEST_LOG_SKIP_PREFIXES.some((p) => pathname.startsWith(p))) return;
+  let token: Awaited<ReturnType<typeof getToken>> = null;
+  try {
+    token = await getToken({ req: request });
+  } catch {
+    // unreadable token: log as anonymous
+  }
+  console.info(
+    JSON.stringify({
+      level: "info",
+      event: "api_request",
+      time: new Date().toISOString(),
+      method: request.method,
+      path: pathname,
+      schoolId: (token?.schoolId as string | null | undefined) ?? null,
+      userId: (token?.id as string | undefined) ?? null,
+      role: (token?.role as string | undefined) ?? null,
+    })
+  );
 }
 
 export async function middleware(request: NextRequest) {
@@ -34,6 +65,8 @@ export async function middleware(request: NextRequest) {
       });
     }
   }
+
+  await logApiRequest(request, pathname);
 
   const response = NextResponse.next();
 

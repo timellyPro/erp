@@ -51,3 +51,28 @@ Make **staging** and **production** as separate Supabase projects and separate V
 
 ## Still to fill in after first deploy
 First superadmin creation procedure, restore-drill steps, on-call contact, and the real production domain.
+
+## 6. Staging and manual promote (GitHub Actions)
+`.github/workflows/deploy.yml` deploys `main` to **staging** on every push, and deploys **production** only when someone runs it by hand.
+One-time setup:
+1. GitHub > Settings > Environments: create `staging` and `production`. On `production`, add yourself as a **required reviewer** (this is the manual promote gate).
+2. Repository secret `VERCEL_TOKEN` and `VERCEL_ORG_ID`. In **each environment** add `VERCEL_PROJECT_ID` (the staging or production Vercel project) and `DIRECT_URL` (that environment's Supabase direct connection string).
+3. Staging must use its own Supabase project (section 1).
+Promote flow: merge to `main` > staging deploys, migrates and health-checks > test it > Actions > Deploy > Run workflow > target `production`, ref = the commit tested on staging > approve. Rollback: Vercel > Deployments > promote the previous one.
+
+## 7. Operations
+- Dependabot (`.github/dependabot.yml`) opens weekly update PRs. `xlsx` is pinned to the SheetJS CDN build 0.20.3 (patched; the npm copy 0.18.5 is not) and must be bumped by hand.
+- Every `/api/*` request logs one JSON line (`event: "api_request"`) with `schoolId`, `userId`, `role`, method and path. Filter on `schoolId` in your log drain.
+- Status and support: `docs/SUPPORT.md`. Retention: `docs/DATA_RETENTION.md`.
+
+## 8. Backups and restore drill
+- **Nightly dump:** `.github/workflows/db-backup.yml` writes a gpg-encrypted `pg_dump` (30-day retention) as the `db-backup` artifact. Needs secrets `BACKUP_DATABASE_URL` (session pooler, port 5432) and `BACKUP_PASSPHRASE`. The repo is public: never remove the encryption.
+- **Also enable PITR** in Supabase (Project Settings > Add-ons) for minute-level recovery.
+- **Restore** into a scratch Supabase project (never over production without a fresh dump first):
+  ```bash
+  gpg --output t.dump --decrypt timelly-YYYYMMDD-HHMM.dump.gpg
+  pg_restore --no-owner --no-privileges --clean --if-exists -d "<scratch session-pooler url>" t.dump
+  DATABASE_URL="<scratch url>" npx tsx scripts/verify-rls-isolation.ts
+  ```
+  Then run `npx prisma migrate status` and open the app against it. Record the date of the last successful drill here: _not yet done_.
+- Roles (`app_tenant`) are not in the dump; recreate its password with the `ALTER ROLE` step in section 2 after a restore.

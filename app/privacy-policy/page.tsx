@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   robots: { index: true, follow: true },
 };
 
-const LAST_UPDATED = "7 October 2026";
+const LAST_UPDATED = "13 October 2026";
 
 export default function PrivacyPolicyPage() {
   return (
@@ -178,16 +178,31 @@ export default function PrivacyPolicyPage() {
               review, correct, or ask for deletion of a student&apos;s information.
               The school can update or remove records in Timelly, or ask us to help.
             </p>
+            <p>
+              Because students are children, we ask the parent or guardian to confirm
+              they have read this policy and consent to it the first time they open the
+              parent portal, and again whenever the policy changes materially. We record
+              which version you accepted and when.
+            </p>
           </Section>
 
           <Section title="6. How long we keep information">
             <p>
               We keep school and student records for as long as the school uses
               Timelly and as needed for fee receipts, academic history, and legal
-              duties. If a school closes its account or asks us to delete data, we
-              delete or de-identify it unless we must keep specific records (for
-              example payment receipts) for accounting or legal reasons.
+              duties. Specific periods:
             </p>
+            <ul>
+              <li>Active school accounts: records are kept while the school is a customer.</li>
+              <li>Fee and payment records: 8 years, for accounting and tax obligations.</li>
+              <li>Application logs: up to 30 days. Error-tracking data: up to 90 days.</li>
+              <li>Backups: up to 35 days, after which deleted data is gone from backups too.</li>
+              <li>
+                School closure: on request we export the school&apos;s data to it, then
+                delete or de-identify the rest within 90 days, except payment receipts
+                we must keep for accounting or legal reasons.
+              </li>
+            </ul>
           </Section>
 
           <Section title="7. Security">

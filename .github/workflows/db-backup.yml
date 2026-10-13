@@ -1,0 +1,54 @@
+# Nightly encrypted Postgres dump, stored off the app host as a workflow artifact.
+# The repo is PUBLIC, so the dump is encrypted with gpg before upload; never upload it plain.
+# Required repo secrets:
+#   BACKUP_DATABASE_URL  = Supabase *session pooler* URL (port 5432, NOT 6543), with ?sslmode=require
+#   BACKUP_PASSPHRASE    = long random string; store a copy in your password manager (needed to restore)
+# GitHub emails the repo admins when a scheduled run fails.
+name: DB backup
+
+on:
+  schedule:
+    - cron: "30 20 * * *" # 02:00 IST
+  workflow_dispatch:
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Install matching pg_dump
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo tee /etc/apt/trusted.gpg.d/pgdg.asc >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+
+      - name: Dump and encrypt
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          if [ -z "$BACKUP_DATABASE_URL" ] || [ -z "$BACKUP_PASSPHRASE" ]; then
+            echo "Missing BACKUP_DATABASE_URL or BACKUP_PASSPHRASE secrets"
+            exit 1
+          fi
+          f="timelly-$(date -u +%Y%m%d-%H%M).dump"
+          /usr/lib/postgresql/17/bin/pg_dump "$BACKUP_DATABASE_URL" \
+            --format=custom --no-owner --no-privileges \
+            --exclude-schema='auth' --exclude-schema='storage' --exclude-schema='realtime' \
+            --exclude-schema='vault' --exclude-schema='extensions' --exclude-schema='graphql*' \
+            --exclude-schema='pgsodium*' --exclude-schema='supabase_*' \
+            -f "$f"
+          # a dump under 10 KB means something went wrong (empty DB / permissions)
+          [ "$(stat -c%s "$f")" -gt 10240 ] || { echo "Dump suspiciously small"; exit 1; }
+          printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
+            --passphrase-fd 0 --symmetric --cipher-algo AES256 -o "$f.gpg" "$f"
+          rm "$f"
+          ls -l
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: db-backup
+          path: "*.dump.gpg"
+          retention-days: 30
+          if-no-files-found: error
