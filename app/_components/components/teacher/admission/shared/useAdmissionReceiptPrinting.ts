@@ -137,12 +137,18 @@ export function useAdmissionReceiptPrinting() {
       const iframeDoc = iframe.contentWindow?.document;
       if (iframeDoc) {
         iframeDoc.open();
-        // Load the HTML and Tailwind CSS, wait a second for CSS to apply, then trigger print
+        // Reuse the app's own compiled stylesheets (the page CSP blocks third-party scripts such
+        // as the Tailwind CDN), wait a second for CSS to apply, then trigger print.
+        const appStyles = Array.from(
+          document.querySelectorAll('link[rel="stylesheet"], style')
+        )
+          .map((el) => el.outerHTML)
+          .join("\n");
         iframeDoc.write(`
           <html>
             <head>
               <title>Fee Receipt</title>
-              <script src="https://cdn.tailwindcss.com"></script>
+              ${appStyles}
               <style>
                 @page { margin: 0; }
                 body { margin: 1cm; }
