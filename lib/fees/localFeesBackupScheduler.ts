@@ -1,3 +1,4 @@
+import { logger } from "@/lib/logger";
 import { runFeesBackupCron } from "@/lib/fees/runFeesBackupCron";
 
 const INTERVAL_MS = 2 * 60 * 1000; // every 2 minutes
@@ -27,7 +28,7 @@ export function startLocalFeesBackupScheduler() {
         results: result.results,
       });
     } catch (err) {
-      console.error("[fees-backup-scheduler] failed", err);
+      logger.error("[fees-backup-scheduler] failed", err);
     }
   };
 

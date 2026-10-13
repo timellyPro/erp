@@ -253,14 +253,14 @@ export const authOptions: NextAuthOptions = {
           typeof token._lastSuccessfulSyncAt === "number" ? token._lastSuccessfulSyncAt : 0;
         const staleSinceLastSuccess = Date.now() - lastSuccess;
         if (staleSinceLastSuccess > MAX_STALE_SESSION_MS) {
-          console.error(
+          logger.error(
             "jwt_db_sync_stale_ceiling_exceeded",
             `staleMs=${staleSinceLastSuccess}`
           );
           throw new Error("session_stale_ceiling_exceeded");
         }
 
-        console.error("jwt_db_sync_failed", error instanceof Error ? error.message : error);
+        logger.error("jwt_db_sync_failed", error instanceof Error ? error.message : error);
       }
     }
 

@@ -1,3 +1,5 @@
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/authOptions";
@@ -203,9 +205,9 @@ export async function POST(req: Request, context: RouteParams) {
         { status: 400 }
       );
     }
-    console.error("Residency conversion error:", error);
+    logger.error("Residency conversion error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Could not convert residency" },
+      { message: toClientErrorMessage(error, "Could not convert residency") },
       { status: 500 }
     );
   }

@@ -1,3 +1,4 @@
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/authOptions";
@@ -183,12 +184,6 @@ export async function GET() {
     return NextResponse.json({ newsFeeds }, { status: 200 });
   } catch (error: unknown) {
     logger.error("List news feeds error:", error);
-    const msg =
-      error instanceof Error
-        ? error.message
-        : typeof (error as { message?: string })?.message === "string"
-          ? (error as { message: string }).message
-          : "Internal server error";
-    return NextResponse.json({ message: msg }, { status: 500 });
+    return NextResponse.json({ message: toClientErrorMessage(error) }, { status: 500 });
   }
 }

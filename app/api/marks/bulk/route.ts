@@ -1,3 +1,5 @@
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/authOptions";
@@ -667,9 +669,9 @@ export async function POST(req: Request) {
     );
     });
   } catch (error: unknown) {
-    console.error("Bulk marks save error:", error);
+    logger.error("Bulk marks save error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error) },
       { status: 500 }
     );
   }

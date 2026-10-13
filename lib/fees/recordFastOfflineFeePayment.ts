@@ -1,3 +1,4 @@
+import { logger } from "@/lib/logger";
 import prisma from "@/lib/db";
 import { after } from "next/server";
 import { Prisma } from "@prisma/client";
@@ -460,7 +461,7 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
           apply: true,
         });
       } catch (err) {
-        console.error("[offline-payment] post-commit integrity failed", {
+        logger.error("[offline-payment] post-commit integrity failed", {
           studentId,
           err,
         });
