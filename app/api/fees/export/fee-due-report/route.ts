@@ -16,9 +16,6 @@ import { studentStatusFilter } from "@/lib/students/studentStatus";
 import { logger } from "@/lib/logger";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
-// Large schools: exports can exceed the default serverless timeout.
-export const maxDuration = 60;
-
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {

@@ -119,9 +119,6 @@ async function loadCredentialsCached(
   return payload;
 }
 
-// Large schools: exports can exceed the default serverless timeout.
-export const maxDuration = 60;
-
 export async function GET(req: Request) {
   try {
     const auth = await assertAdminSession();
