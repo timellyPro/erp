@@ -4,7 +4,7 @@ import Link from "next/link";
 export const metadata: Metadata = {
   title: "Privacy Policy | Timelly",
   description:
-    "How Timelly collects, uses, and shares personal information for the school management app at app.timely.in.",
+    "How Timelly collects, uses, and shares personal information for the school management app at app.timelly.in.",
   robots: { index: true, follow: true },
 };
 
@@ -25,7 +25,7 @@ export default function PrivacyPolicyPage() {
             />
             <div>
               <p className="text-sm font-semibold text-zinc-500">Timelly</p>
-              <p className="text-xs text-zinc-400">app.timely.in</p>
+              <p className="text-xs text-zinc-400">app.timelly.in</p>
             </div>
           </div>
           <h1 className="mt-6 text-3xl font-bold tracking-tight text-zinc-950">
@@ -36,10 +36,10 @@ export default function PrivacyPolicyPage() {
             This policy explains how Timelly (&quot;we&quot;, &quot;us&quot;) handles personal
             information when you use the Timelly school management app and website at{" "}
             <a
-              href="https://app.timely.in"
+              href="https://app.timelly.in"
               className="font-medium text-violet-700 underline underline-offset-2"
             >
-              https://app.timely.in
+              https://app.timelly.in
             </a>
             , including the Android app published on Google Play. It applies to parents,
             students, teachers, and school staff who use Timelly.
@@ -242,7 +242,7 @@ export default function PrivacyPolicyPage() {
             <p>
               If we change this policy, we will post the new version at{" "}
               <Link href="/privacy-policy" className="font-medium text-violet-700 underline underline-offset-2">
-                https://app.timely.in/privacy-policy
+                https://app.timelly.in/privacy-policy
               </Link>{" "}
               and update the date at the top. Continued use of Timelly after the
               update means the revised policy applies.
@@ -267,10 +267,10 @@ export default function PrivacyPolicyPage() {
               <br />
               Website:{" "}
               <a
-                href="https://app.timely.in"
+                href="https://app.timelly.in"
                 className="font-medium text-violet-700 underline underline-offset-2"
               >
-                https://app.timely.in
+                https://app.timelly.in
               </a>
             </p>
           </Section>

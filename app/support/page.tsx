@@ -46,6 +46,10 @@ export default function SupportPage() {
               <Link className="text-violet-700 underline" href="/privacy-policy">
                 Privacy Policy
               </Link>
+              . Use of the service is governed by the{" "}
+              <Link className="text-violet-700 underline" href="/terms">
+                Terms of Service
+              </Link>
               .
             </dd>
           </div>

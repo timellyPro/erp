@@ -34,6 +34,7 @@ export default function InstallAppBanner() {
     pathname === "/download" ||
     pathname === "/qr" ||
     pathname === "/privacy-policy" ||
+    pathname === "/terms" ||
     !canInstall ||
     dismissed
   ) {
