@@ -21,7 +21,7 @@
     "@prisma/adapter-pg": "^6.1.0",
     "@prisma/client": "^6.19.3",
     "@sentry/core": "^10.76.2",
-    "@sentry/nextjs": "^10.76.2",
+    "@sentry/nextjs": "^11.6.0",
     "@supabase/supabase-js": "^2.117.3",
     "@upstash/redis": "^1.39.0",
     "axios": "^1.13.5",
