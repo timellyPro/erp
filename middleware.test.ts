@@ -5,7 +5,6 @@ jest.mock("@/lib/cache/redis", () => ({
   redis: null,
   isRedisEnabled: () => false,
   isRedisConfigured: () => false,
-  isRedisConfigured: () => false,
 }));
 
 import { NextRequest } from "next/server";
