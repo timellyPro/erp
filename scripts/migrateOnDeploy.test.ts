@@ -35,3 +35,22 @@ describe("migrate-on-deploy", () => {
     expect(r.out).toContain("no DIRECT_URL or DATABASE_URL");
   });
 });
+
+describe("toSessionUrl", () => {
+  const { toSessionUrl } = require("./migrate-on-deploy.js") as { toSessionUrl: (u: string) => string };
+
+  it("rewrites a transaction-pooler URL to the session port and drops pgbouncer=true", () => {
+    expect(toSessionUrl("postgresql://u:p@h:6543/postgres?pgbouncer=true&connect_timeout=30&pool_timeout=30")).toBe(
+      "postgresql://u:p@h:5432/postgres?connect_timeout=30&pool_timeout=30"
+    );
+    expect(toSessionUrl("postgresql://u:p@h:6543/postgres?sslmode=require&pgbouncer=true")).toBe(
+      "postgresql://u:p@h:5432/postgres?sslmode=require"
+    );
+    expect(toSessionUrl("postgresql://u:p@h:6543/postgres?pgbouncer=true")).toBe("postgresql://u:p@h:5432/postgres");
+  });
+
+  it("leaves a session/direct URL unchanged", () => {
+    const u = "postgresql://u:p@h:5432/postgres?sslmode=require&connect_timeout=30";
+    expect(toSessionUrl(u)).toBe(u);
+  });
+});
