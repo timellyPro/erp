@@ -24,7 +24,7 @@ Make **staging** and **production** as separate Supabase projects and separate V
    ```sql
    ALTER ROLE app_tenant WITH PASSWORD '<newly generated secret>';
    ```
-   Then `DATABASE_URL_TENANT` = `postgresql://app_tenant.<project-ref>:<password>@<pooler-host>:5432/postgres?sslmode=require&connect_timeout=30&pool_timeout=30`
+   Then `DATABASE_URL_TENANT` = `postgresql://app_tenant.<project-ref>:<password>@<pooler-host>:6543/postgres?sslmode=require&pgbouncer=true&connect_timeout=30&pool_timeout=30` (**transaction pooler, port 6543**: the session pooler on 5432 allows only about 15 clients in total across all Vercel instances; a 20-teacher load test on staging failed 40% of requests on 5432 and passed 100% on 6543, see section 9)
    (see `docs/SECURITY_REVIEW.md` section 3 and its connection-string notes).
 5. Run `npx tsx scripts/verify-rls-isolation.ts` against the new database.
 
@@ -77,3 +77,9 @@ Promote flow: merge to `main` > staging deploys, migrates and health-checks > te
   Then run `npx prisma migrate status` and open the app against it. Last drill: **2026-10-13**, local Postgres 17 (dump and restore half only). Dump of production: 2.9 MB in 30 s; restore: 7 s; row counts matched production (School 4, User 1177, Student 1117, Payment 1283, Class 48); 59 tables, 53 RLS policies restored. The 14 restore errors are Supabase-only extensions/event triggers, safe to ignore. The gpg decrypt step has NOT been drilled yet (see below).
 - `BACKUP_DATABASE_URL` must use the pooler user `postgres.<project-ref>` on port 5432. A bare `postgres` user fails with "password authentication failed" (found 2026-10-13).
 - Roles (`app_tenant`) are not in the dump; recreate its password with the `ALTER ROLE` step in section 2 after a restore.
+
+## 9. Load-test results (staging, 2026-10-14)
+Staging uses its own Supabase project and seeded fake data (`scripts/seedStaging.ts`: 2 schools, 30 teachers, 240 students). `loadtest/staging-peak.js` logs in as each teacher separately and reads `/api/teacher/dashboard`.
+- `DATABASE_URL_TENANT` on **port 5432** (session pooler): 10 teachers 100% ok; 20 teachers 60% ok; 30 teachers 14% ok (503/500, the pooler client cap).
+- `DATABASE_URL_TENANT` on **port 6543** (transaction pooler, `pgbouncer=true`): 20 teachers 100% ok (p95 0.33 s); 30 teachers for 3 minutes 3142/3142 ok (p95 0.31 s).
+- Migrations: a database built from `prisma migrate deploy` now matches production (see migrations `20260923042000_*` and `20261014000000_*`); previously it failed at `enable_rls_public_tables`.

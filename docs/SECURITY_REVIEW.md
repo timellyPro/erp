@@ -280,7 +280,7 @@ and in the deployment environment:
 
     DATABASE_URL        ...:6543/postgres?pgbouncer=true&connect_timeout=30&pool_timeout=30
     DIRECT_URL          ...:5432/postgres?sslmode=require&connect_timeout=30&pool_timeout=30
-    DATABASE_URL_TENANT ...:5432/postgres?sslmode=require&connect_timeout=30&pool_timeout=30
+    DATABASE_URL_TENANT ...:6543/postgres?sslmode=require&pgbouncer=true&connect_timeout=30&pool_timeout=30
 
 Restart the server after changing them. In a deployment region close to the database the handshake is
 much faster, so this is a safety margin there rather than a fix.
