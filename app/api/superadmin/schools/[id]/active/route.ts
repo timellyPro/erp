@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 /**
  * Set school active/deactive. When deactive, the school is paused (all working tabs blocked).
@@ -18,7 +21,8 @@ export async function PATCH(
     if (session.user.role !== "SUPERADMIN") return NextResponse.json({ message: "Forbidden" }, { status: 403 });
 
     const { id } = await params;
-    const body = await req.json();
+    const parsedBody = z.object({ isActive: z.boolean().optional() }).safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
     const isActive = typeof body.isActive === "boolean" ? body.isActive : undefined;
     if (isActive === undefined) {
       return NextResponse.json({ message: "isActive (boolean) is required" }, { status: 400 });
@@ -31,13 +35,18 @@ export async function PATCH(
     if (!existing) {
       return NextResponse.json({ message: "School not found" }, { status: 404 });
     }
-    return NextResponse.json({
-      school: { id: existing.id, name: existing.name, isActive },
-    }, { status: 200 });
+
+    const updated = await prisma.school.update({
+      where: { id },
+      data: { isActive },
+      select: { id: true, name: true, isActive: true },
+    });
+
+    return NextResponse.json({ school: updated }, { status: 200 });
   } catch (e: unknown) {
-    console.error("Superadmin school active PATCH:", e);
+    logger.error("Superadmin school active PATCH:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e) },
       { status: 500 }
     );
   }

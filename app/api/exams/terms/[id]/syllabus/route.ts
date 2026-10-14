@@ -1,30 +1,23 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { logger } from "@/lib/logger";
+import { schoolIdViaTeacherClass, schoolIdViaTeacherRelation, schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 async function resolveSchoolId(session: { user: { id: string; schoolId?: string | null; role: string } }) {
   let schoolId = session.user.schoolId;
   if (!schoolId && session.user.role === "TEACHER") {
-    const teacherClass = await prisma.class.findFirst({
-      where: { teacherId: session.user.id },
-      select: { schoolId: true },
-    });
-    schoolId = teacherClass?.schoolId ?? null;
+    schoolId = await schoolIdViaTeacherClass(session.user.id);
     if (!schoolId) {
-      const teacherSchool = await prisma.school.findFirst({
-        where: { teachers: { some: { id: session.user.id } } },
-        select: { id: true },
-      });
-      schoolId = teacherSchool?.id ?? null;
+      schoolId = await schoolIdViaTeacherRelation(session.user.id);
     }
   }
   if (!schoolId) {
-    const school = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = school?.id ?? null;
+    schoolId = await schoolIdViaAdminRelation(session.user.id);
   }
   return schoolId;
 }
@@ -44,22 +37,29 @@ export async function GET(
     if (!schoolId) return NextResponse.json({ message: "School not found" }, { status: 400 });
 
     const { id } = await params;
-    const term = await prisma.examTerm.findFirst({
-      where: { id, schoolId },
-      select: { id: true },
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go
+    // through the app_tenant connection, restricted by RLS, not just the
+    // `where: { schoolId }` filter above.
+    const { term, syllabus } = await withTenantScopedClient(schoolId, async (tx) => {
+      const t = await tx.examTerm.findFirst({
+        where: { id, schoolId },
+        select: { id: true },
+      });
+      if (!t) return { term: null, syllabus: [] };
+
+      const s = await tx.syllabusTracking.findMany({
+        where: { termId: id },
+        orderBy: { subject: "asc" },
+      });
+      return { term: t, syllabus: s };
     });
     if (!term) return NextResponse.json({ message: "Exam term not found" }, { status: 404 });
 
-    const syllabus = await prisma.syllabusTracking.findMany({
-      where: { termId: id },
-      orderBy: { subject: "asc" },
-    });
-
     return NextResponse.json({ syllabus }, { status: 200 });
   } catch (e: unknown) {
-    console.error("Exams syllabus GET:", e);
+    logger.error("Exams syllabus GET:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }
@@ -78,6 +78,7 @@ export async function POST(
 
     const schoolId = await resolveSchoolId(session);
     if (!schoolId) return NextResponse.json({ message: "School not found" }, { status: 400 });
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { id } = await params;
     const term = await prisma.examTerm.findFirst({
@@ -86,7 +87,11 @@ export async function POST(
     });
     if (!term) return NextResponse.json({ message: "Exam term not found" }, { status: 404 });
 
-    const body = await req.json();
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
 
     const subject = typeof body.subject === "string" ? body.subject.trim() : "";
     const completedPercentRaw = Number(body.completedPercent ?? 0);
@@ -121,10 +126,11 @@ export async function POST(
     });
 
     return NextResponse.json({ record }, { status: 201 });
+    });
   } catch (e: unknown) {
-    console.error("Exams syllabus POST:", e);
+    logger.error("Exams syllabus POST:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

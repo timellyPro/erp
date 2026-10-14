@@ -1,30 +1,22 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { logger } from "@/lib/logger";
+import { schoolIdViaTeacherClass, schoolIdViaTeacherRelation, schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 async function resolveSchoolId(session: { user: { id: string; schoolId?: string | null; role: string } }) {
   let schoolId = session.user.schoolId;
   if (!schoolId && session.user.role === "TEACHER") {
-    const teacherClass = await prisma.class.findFirst({
-      where: { teacherId: session.user.id },
-      select: { schoolId: true },
-    });
-    schoolId = teacherClass?.schoolId ?? null;
+    schoolId = await schoolIdViaTeacherClass(session.user.id);
     if (!schoolId) {
-      const teacherSchool = await prisma.school.findFirst({
-        where: { teachers: { some: { id: session.user.id } } },
-        select: { id: true },
-      });
-      schoolId = teacherSchool?.id ?? null;
+      schoolId = await schoolIdViaTeacherRelation(session.user.id);
     }
   }
   if (!schoolId) {
-    const school = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = school?.id ?? null;
+    schoolId = await schoolIdViaAdminRelation(session.user.id);
   }
   return schoolId;
 }
@@ -42,6 +34,7 @@ export async function POST(
 
     const schoolId = await resolveSchoolId(session);
     if (!schoolId) return NextResponse.json({ message: "School not found" }, { status: 400 });
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { id: termId } = await params;
     const term = await prisma.examTerm.findFirst({
@@ -50,7 +43,11 @@ export async function POST(
     });
     if (!term) return NextResponse.json({ message: "Exam term not found" }, { status: 404 });
 
-    const body = await req.json();
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
     const subject = typeof body.subject === "string" ? body.subject.trim() : "";
     const unitName = typeof body.unitName === "string" ? body.unitName.trim() : "";
     const order = Number(body.order);
@@ -83,8 +80,9 @@ export async function POST(
     });
 
     return NextResponse.json({ unit }, { status: 201 });
+    });
   } catch (e: unknown) {
-    console.error("Exams syllabus units POST:", e);
+    logger.error("Exams syllabus units POST:", e);
     const err = e as { code?: string };
     if (err?.code === "P2021") {
       return NextResponse.json(
@@ -93,7 +91,7 @@ export async function POST(
       );
     }
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { createNotification } from "@/lib/notificationService";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function POST(
   req: Request,
@@ -32,7 +35,7 @@ export async function POST(
           const { supabaseAdmin, SUPABASE_BUCKET } = await import("@/lib/supabase");
           
           if (supabaseAdmin) {
-            const ext = file.name.split(".").pop() || "pdf";
+            const _ext = file.name.split(".").pop() || "pdf";
             const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_").slice(0, 80);
             const path = `certificates/${Date.now()}-${safeName}`;
             
@@ -46,7 +49,7 @@ export async function POST(
               });
             
             if (uploadError) {
-              console.error("File upload error:", uploadError);
+              logger.error("File upload error:", uploadError);
               return NextResponse.json(
                 { message: uploadError.message || "File upload failed" },
                 { status: 500 }
@@ -68,16 +71,16 @@ export async function POST(
           documentUrl = documentUrlInput;
         }
       } catch (formError) {
-        console.error("FormData parsing error:", formError);
+        logger.error("FormData parsing error:", formError);
         // Continue without document if FormData parsing fails
       }
     } else {
       // Handle JSON body
-      try {
-        const body = await req.json();
-        documentUrl = body?.documentUrl || body?.tcDocumentUrl;
-      } catch {
-        // empty or invalid body
+      const parsedBody = z
+        .object({ documentUrl: z.string().optional(), tcDocumentUrl: z.string().optional() })
+        .safeParse(await req.json().catch(() => null));
+      if (parsedBody.success) {
+        documentUrl = parsedBody.data.documentUrl || parsedBody.data.tcDocumentUrl;
       }
     }
 
@@ -95,6 +98,7 @@ export async function POST(
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     // Verify certificate request belongs to school
     const certificateRequest = await prisma.transferCertificate.findFirst({
@@ -103,7 +107,21 @@ export async function POST(
         schoolId: schoolId,
       },
       include: {
-        student: true,
+        student: {
+          select: {
+            id: true,
+            userId: true,
+            schoolId: true,
+            classId: true,
+            fatherName: true,
+            aadhaarNo: true,
+            phoneNo: true,
+            rollNo: true,
+            dob: true,
+            address: true,
+            createdAt: true,
+          },
+        },
       },
     });
 
@@ -123,7 +141,7 @@ export async function POST(
 
     // Check if this is a Transfer Certificate
     // certificateType field may not exist in schema yet, so we check safely
-    const certificateType = (certificateRequest as any).certificateType;
+    const certificateType = (certificateRequest as { certificateType?: string | null }).certificateType;
     const isTransferCertificate = certificateType === "TRANSFER" || certificateType === null || certificateType === undefined;
 
     // Use transaction to approve certificate request
@@ -142,6 +160,8 @@ export async function POST(
       // Only perform TC-specific actions (remove from class, save to history) for Transfer Certificates
       if (isTransferCertificate) {
         // Save student data to history
+        // Json columns need JSON-serializable values - dates become ISO strings
+        // rather than Date instances (Prisma.InputJsonValue excludes Date).
         const studentData = {
           id: certificateRequest.student.id,
           userId: certificateRequest.student.userId,
@@ -151,16 +171,22 @@ export async function POST(
           aadhaarNo: certificateRequest.student.aadhaarNo,
           phoneNo: certificateRequest.student.phoneNo,
           rollNo: certificateRequest.student.rollNo,
-          dob: certificateRequest.student.dob,
+          dob: certificateRequest.student.dob ? certificateRequest.student.dob.toISOString() : null,
           address: certificateRequest.student.address,
-          createdAt: certificateRequest.student.createdAt,
+          createdAt: certificateRequest.student.createdAt.toISOString(),
         };
 
-        await tx.studentHistory.create({
-          data: {
+        await tx.studentHistory.upsert({
+          where: { originalStudentId: certificateRequest.student.id },
+          create: {
             originalStudentId: certificateRequest.student.id,
             schoolId: schoolId,
-            studentData: studentData as any,
+            studentData,
+            deactivatedBy: session.user.id,
+            reason: `Transfer Certificate approved - ${certificateRequest.reason || "No reason provided"}`,
+          },
+          update: {
+            studentData,
             deactivatedBy: session.user.id,
             reason: `Transfer Certificate approved - ${certificateRequest.reason || "No reason provided"}`,
           },
@@ -205,10 +231,11 @@ export async function POST(
       },
       { status: 200 }
     );
-  } catch (error: any) {
-    console.error("Approve certificate request error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Approve certificate request error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

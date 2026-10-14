@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 type RouteContext = { params: Promise<{ id: string }> | { params: { id: string } } };
 
@@ -35,9 +38,22 @@ export async function PUT(req: Request, context: RouteContext) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found in session" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
-    const body = await req.json();
-    const { title, description, subject, classId, dueDate, assignedDate, file: fileUrl } = body;
+    const updateHomeworkBodySchema = z.object({
+      title: z.string().optional(),
+      description: z.string().optional(),
+      subject: z.string().optional(),
+      classId: z.string().optional(),
+      dueDate: z.string().optional().nullable(),
+      assignedDate: z.string().optional().nullable(),
+      file: z.string().optional().nullable(),
+    });
+    const parsedBody = updateHomeworkBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const { title, description, subject, classId, dueDate, assignedDate, file: fileUrl } = parsedBody.data;
 
     const existing = await prisma.homework.findFirst({
       where: { id, schoolId },
@@ -89,10 +105,11 @@ export async function PUT(req: Request, context: RouteContext) {
     });
 
     return NextResponse.json(homework, { status: 200 });
+    });
   } catch (e: unknown) {
-    console.error("Homework update error:", e);
+    logger.error("Homework update error:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }
@@ -112,6 +129,7 @@ export async function DELETE(req: Request, context: RouteContext) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found in session" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const existing = await prisma.homework.findFirst({
       where: { id, schoolId },
@@ -122,10 +140,11 @@ export async function DELETE(req: Request, context: RouteContext) {
 
     await prisma.homework.delete({ where: { id } });
     return NextResponse.json({ message: "Homework deleted" }, { status: 200 });
+    });
   } catch (e: unknown) {
-    console.error("Homework delete error:", e);
+    logger.error("Homework delete error:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 /**
  * Superadmin dashboard – single API returning all dashboard data.
@@ -18,48 +20,42 @@ export async function GET() {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
-    const [
-      totalSchools,
-      totalStudents,
-      schoolsList,
-      recentPayments,
-      totalTeachers,
-    ] = await Promise.all([
-      prisma.school.count(),
-      prisma.student.count(),
-      prisma.school.findMany({
-        take: 20,
-        orderBy: { createdAt: "desc" },
-        select: {
-          id: true,
-          name: true,
-          location: true,
-          admins: {
-            take: 1,
-            orderBy: { name: "asc" },
-            select: { photoUrl: true },
-          },
-          _count: { select: { students: true, teachers: true, classes: true } },
+    // Run sequentially so a tiny PgBouncer pool (connection_limit 1–5) is not exhausted
+    // by Promise.all while individual queries are slow (often 5–20s).
+    const totalSchools = await prisma.school.count();
+    const totalStudents = await prisma.student.count();
+    const schoolsList = await prisma.school.findMany({
+      take: 20,
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        name: true,
+        location: true,
+        admins: {
+          take: 1,
+          orderBy: { name: "asc" },
+          select: { photoUrl: true },
         },
-      }),
-      prisma.payment.findMany({
-        take: 15,
-        orderBy: { createdAt: "desc" },
-        where: { status: "SUCCESS" },
-        select: {
-          id: true,
-          amount: true,
-          createdAt: true,
-          student: {
-            select: {
-              user: { select: { name: true } },
-              school: { select: { id: true, name: true } },
-            },
+        _count: { select: { students: true, teachers: true, classes: true } },
+      },
+    });
+    const recentPayments = await prisma.payment.findMany({
+      take: 15,
+      orderBy: { createdAt: "desc" },
+      where: { status: "SUCCESS" },
+      select: {
+        id: true,
+        amount: true,
+        createdAt: true,
+        student: {
+          select: {
+            user: { select: { name: true } },
+            school: { select: { id: true, name: true } },
           },
         },
-      }),
-      prisma.user.count({ where: { role: "TEACHER" } }),
-    ]);
+      },
+    });
+    const totalTeachers = await prisma.user.count({ where: { role: "TEACHER" } });
 
     const schools = schoolsList.map((s) => ({
       id: s.id,
@@ -95,7 +91,7 @@ export async function GET() {
 
     return NextResponse.json(payload, { status: 200 });
   } catch (e: unknown) {
-    console.error("Superadmin dashboard:", e);
+    logger.error("Superadmin dashboard:", e);
     
     // Handle database connection errors
     const err = e as { code?: string; message?: string; name?: string };
@@ -114,7 +110,7 @@ export async function GET() {
     }
     
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

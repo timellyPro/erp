@@ -1,0 +1,82 @@
+name: Deploy
+
+# Staging: every push to main (after CI passes on the PR) is deployed to the staging
+# Vercel project automatically.
+# Production: manual only. Run "Deploy" from the Actions tab, choose target=production.
+# Put a required reviewer on the "production" GitHub Environment so the promote step
+# needs an explicit approval. Setup steps: docs/DEPLOY.md section 6.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Where to deploy
+        type: choice
+        options: [staging, production]
+        default: staging
+      ref:
+        description: Git ref to deploy (defaults to main). For production, use a ref already verified on staging.
+        default: main
+
+concurrency:
+  group: deploy-${{ github.event.inputs.target || 'staging' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.target || 'staging' }}
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      # Project IDs differ per environment; set them as environment-level secrets.
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm i -g vercel@latest
+      - name: Pull Vercel environment
+        run: vercel pull --yes --environment=${{ (github.event.inputs.target || 'staging') == 'production' && 'production' || 'preview' }} --token="$VERCEL_TOKEN"
+      - name: Apply database migrations
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.DIRECT_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+      - name: Build
+        run: vercel build ${{ (github.event.inputs.target || 'staging') == 'production' && '--prod' || '' }} --token="$VERCEL_TOKEN"
+      - name: Deploy
+        id: deploy
+        run: |
+          url=$(vercel deploy --prebuilt ${{ (github.event.inputs.target || 'staging') == 'production' && '--prod' || '' }} --token="$VERCEL_TOKEN")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Deployed to $url" >> "$GITHUB_STEP_SUMMARY"
+      - name: Smoke test /api/health
+        run: |
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "${{ steps.deploy.outputs.url }}/api/health" || true)
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          echo "Health check failed (last status $code)"; exit 1
+      - name: Playwright smoke tests (read-only)
+        # Authenticated journeys run only if the E2E_* secrets exist in the environment;
+        # otherwise they skip themselves and only the public checks run.
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test
+        env:
+          E2E_BASE_URL: ${{ steps.deploy.outputs.url }}
+          E2E_ADMIN_EMAIL: ${{ secrets.E2E_ADMIN_EMAIL }}
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+          E2E_TEACHER_EMAIL: ${{ secrets.E2E_TEACHER_EMAIL }}
+          E2E_TEACHER_PASSWORD: ${{ secrets.E2E_TEACHER_PASSWORD }}
+          E2E_PARENT_EMAIL: ${{ secrets.E2E_PARENT_EMAIL }}
+          E2E_PARENT_PASSWORD: ${{ secrets.E2E_PARENT_PASSWORD }}

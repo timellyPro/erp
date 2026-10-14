@@ -10,15 +10,23 @@ jest.mock("next-auth", () => ({
   getServerSession: (...args: unknown[]) => mockGetServerSession(...args),
 }));
 
-jest.mock("@/lib/authOptions", () => ({}));
+jest.mock("@/lib/auth/authOptions", () => ({}));
 
-jest.mock("@/lib/db", () => ({
-  __esModule: true,
-  default: {
-    school: {
-      findUnique: (...args: unknown[]) => mockFindUnique(...args),
-    },
-  },
+const mockWithTenantScopedClient = jest.fn(
+  async (_schoolId: string, fn: (tx: unknown) => unknown) =>
+    fn({
+      school: { findUnique: (...args: unknown[]) => mockFindUnique(...args) },
+    })
+);
+
+jest.mock("@/lib/db/tenantClient", () => ({
+  withTenantScopedClient: (...args: Parameters<typeof mockWithTenantScopedClient>) =>
+    mockWithTenantScopedClient(...args),
+}));
+
+jest.mock("@/lib/cache/tenantCache", () => ({
+  swrGet: jest.fn().mockResolvedValue(null),
+  swrSet: jest.fn().mockResolvedValue(undefined),
 }));
 
 describe("GET /api/school/mine", () => {
@@ -70,6 +78,15 @@ describe("GET /api/school/mine", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.school).toEqual(schoolData);
-    expect(mockFindUnique).toHaveBeenCalledWith({ where: { id: "s1" } });
+    expect(mockFindUnique).toHaveBeenCalledWith({
+      where: { id: "s1" },
+      include: {
+        admins: {
+          where: { role: "SCHOOLADMIN", photoUrl: { not: null } },
+          select: { photoUrl: true },
+          take: 1,
+        },
+      },
+    });
   });
 });

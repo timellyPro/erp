@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
-import prisma from "@/lib/db";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import type { Prisma } from "@prisma/client";
+import { invalidateFeeListServerCaches } from "@/lib/fees/feeListServerCache";
 
 export const runtime = "nodejs";
 
@@ -78,24 +79,30 @@ export async function POST(req: Request) {
   const extraHeaderName = process.env.HYPERPG_WEBHOOK_HEADER_NAME?.trim() || "";
   const extraHeaderValue = process.env.HYPERPG_WEBHOOK_HEADER_VALUE?.trim() || "";
 
-  if (expectedUser && expectedPass) {
-    const auth = req.headers.get("authorization") || "";
-    if (!auth.toLowerCase().startsWith("basic ")) {
-      return unauthorized("Missing Basic Authorization header");
-    }
-    const b64 = auth.slice(6).trim();
-    let decoded = "";
-    try {
-      decoded = Buffer.from(b64, "base64").toString("utf8");
-    } catch {
-      return unauthorized("Invalid Basic Authorization header");
-    }
-    const idx = decoded.indexOf(":");
-    const user = idx >= 0 ? decoded.slice(0, idx) : decoded;
-    const pass = idx >= 0 ? decoded.slice(idx + 1) : "";
-    if (!timingSafeEqualStr(user, expectedUser) || !timingSafeEqualStr(pass, expectedPass)) {
-      return unauthorized("Invalid webhook credentials");
-    }
+  // Fail closed: credentials must be configured, or every request is rejected.
+  // (Previously this check was skipped entirely when the env vars were unset,
+  // which would silently accept unauthenticated webhook calls if the
+  // deployment ever lost HYPERPG_WEBHOOK_USERNAME/PASSWORD.)
+  if (!expectedUser || !expectedPass) {
+    return unauthorized("Webhook credentials are not configured");
+  }
+
+  const auth = req.headers.get("authorization") || "";
+  if (!auth.toLowerCase().startsWith("basic ")) {
+    return unauthorized("Missing Basic Authorization header");
+  }
+  const b64 = auth.slice(6).trim();
+  let decoded = "";
+  try {
+    decoded = Buffer.from(b64, "base64").toString("utf8");
+  } catch {
+    return unauthorized("Invalid Basic Authorization header");
+  }
+  const idx = decoded.indexOf(":");
+  const user = idx >= 0 ? decoded.slice(0, idx) : decoded;
+  const pass = idx >= 0 ? decoded.slice(idx + 1) : "";
+  if (!timingSafeEqualStr(user, expectedUser) || !timingSafeEqualStr(pass, expectedPass)) {
+    return unauthorized("Invalid webhook credentials");
   }
 
   if (extraHeaderName && extraHeaderValue) {
@@ -169,6 +176,7 @@ export async function POST(req: Request) {
       status: true,
       amount: true,
       eventRegistrationId: true,
+      student: { select: { schoolId: true } },
     },
   });
 
@@ -178,7 +186,7 @@ export async function POST(req: Request) {
   }
 
   // Apply updates and side-effects only on status transition.
-  await prisma.$transaction(async (tx) => {
+  await runInTenantScope(payment.student.schoolId, () => prisma.$transaction(async (tx) => {
     const before = await tx.payment.findUnique({
       where: { id: payment.id },
       select: { status: true },
@@ -232,7 +240,9 @@ export async function POST(req: Request) {
         data: { paymentStatus: "FAILED" },
       });
     }
-  });
+  }));
+
+  invalidateFeeListServerCaches(payment.student.schoolId);
 
   return NextResponse.json({ ok: true, stored: true, updated: true }, { status: 200 });
 }

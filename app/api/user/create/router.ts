@@ -1,9 +1,11 @@
 import { NextResponse, NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "../../../../lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "../../../../lib/db";
 import bcrypt from "bcryptjs";
-import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/schoolEmail";
+import { emailLocalPartFromFullName, normalizeEmailDomain, schoolDomainFromName } from "@/lib/school/schoolEmail";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function POST(req: NextRequest) {
   try {
@@ -11,7 +13,6 @@ export async function POST(req: NextRequest) {
     if (!session) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
-
 
     // Check if user has permission to create users
     const requesterRole = session.user.role as string;
@@ -47,7 +48,13 @@ export async function POST(req: NextRequest) {
     const local = emailLocalPartFromFullName(String(name));
     let finalEmail = emailTrimmed && emailRegex.test(emailTrimmed) ? emailTrimmed : `${local}@${schoolDomain}`;
     let counter = 1;
-    while (await prisma.user.findUnique({ where: { email: finalEmail }, select: { id: true } })) {
+    const createSchoolId = session.user.schoolId as string;
+    while (
+      await prisma.user.findUnique({
+        where: { schoolId_email: { schoolId: createSchoolId, email: finalEmail } },
+        select: { id: true },
+      })
+    ) {
       finalEmail = `${local}.${counter}@${schoolDomain}`;
       counter++;
       if (counter > 1000) {
@@ -113,10 +120,10 @@ export async function POST(req: NextRequest) {
       },
       { status: 201 }
     );
-  } catch (error: any) {
-    console.error("User creation error:", error);
+  } catch (error: unknown) {
+    logger.error("User creation error:", error);
     return NextResponse.json(
-      { message: error.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

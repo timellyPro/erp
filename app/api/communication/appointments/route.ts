@@ -1,38 +1,33 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInOptionalTenantScope } from "@/lib/db/tenantContext";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import type { Prisma } from "@prisma/client";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
+import {
+  schoolIdViaStudentId,
+  schoolIdViaTeacherClass,
+  schoolIdViaTeacherRelation,
+  schoolIdViaAdminRelation,
+} from "@/lib/auth/tenant";
 
 async function resolveSchoolId(session: { user: { id: string; schoolId?: string | null; role: string; studentId?: string | null } }) {
   if (session.user.schoolId) return session.user.schoolId;
 
   if (session.user.role === "STUDENT" && session.user.studentId) {
-    const student = await prisma.student.findUnique({
-      where: { id: session.user.studentId },
-      select: { schoolId: true },
-    });
-    return student?.schoolId ?? null;
+    return schoolIdViaStudentId(session.user.studentId);
   }
 
   if (session.user.role === "TEACHER") {
-    const teacherClass = await prisma.class.findFirst({
-      where: { teacherId: session.user.id },
-      select: { schoolId: true },
-    });
-    if (teacherClass?.schoolId) return teacherClass.schoolId;
-
-    const teacherSchool = await prisma.school.findFirst({
-      where: { teachers: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    return teacherSchool?.id ?? null;
+    const viaClass = await schoolIdViaTeacherClass(session.user.id);
+    if (viaClass) return viaClass;
+    return schoolIdViaTeacherRelation(session.user.id);
   }
 
-  const adminSchool = await prisma.school.findFirst({
-    where: { admins: { some: { id: session.user.id } } },
-    select: { id: true },
-  });
-  return adminSchool?.id ?? null;
+  return schoolIdViaAdminRelation(session.user.id);
 }
 
 // GET: list appointments for current user (student or teacher)
@@ -51,7 +46,7 @@ export async function GET() {
       return NextResponse.json({ message: "School not found in session" }, { status: 400 });
     }
 
-    let where: any = {};
+    let where: Prisma.AppointmentWhereInput = {};
 
   if (role === "STUDENT") {
     if (!session.user.studentId) {
@@ -70,38 +65,43 @@ export async function GET() {
     );
   }
     where.schoolId = schoolId;
-    const appointments = await prisma.appointment.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      include: {
-        student: {
-          select: {
-            id: true,
-            fatherName: true,
-            user: { select: { name: true, photoUrl: true } },
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): read goes
+    // through the app_tenant connection, restricted by RLS, not just the
+    // `where.schoolId` filter above.
+    const appointments = await withTenantScopedClient(schoolId, (tx) =>
+      tx.appointment.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        include: {
+          student: {
+            select: {
+              id: true,
+              fatherName: true,
+              user: { select: { name: true, photoUrl: true } },
+            },
+          },
+          teacher: {
+            select: {
+              id: true,
+              name: true,
+              photoUrl: true,
+              subject: true,
+            },
+          },
+          messages: {
+            take: 1,
+            orderBy: { createdAt: "desc" as const },
+            select: { content: true },
           },
         },
-        teacher: {
-          select: {
-            id: true,
-            name: true,
-            photoUrl: true,
-            subject: true,
-          },
-        },
-        messages: {
-          take: 1,
-          orderBy: { createdAt: "desc" as const },
-          select: { content: true },
-        },
-      },
-    });
+      })
+    );
 
     return NextResponse.json({ appointments });
-  } catch (error: any) {
-    console.error("List appointments error:", error);
+  } catch (error: unknown) {
+    logger.error("List appointments error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }
@@ -123,7 +123,17 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { teacherId, scheduledAt, note } = await req.json();
+    return await runInOptionalTenantScope(session.user.schoolId, async () => {
+    const createAppointmentBodySchema = z.object({
+      teacherId: z.string().optional(),
+      scheduledAt: z.string().optional().nullable(),
+      note: z.string().optional().nullable(),
+    });
+    const parsedBody = createAppointmentBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "teacherId is required" }, { status: 400 });
+    }
+    const { teacherId, scheduledAt, note } = parsedBody.data;
 
     if (!teacherId) {
       return NextResponse.json(
@@ -182,10 +192,11 @@ export async function POST(req: Request) {
       { message: "Appointment requested", appointment },
       { status: 201 }
     );
-  } catch (error: any) {
-    console.error("Create appointment error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Create appointment error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

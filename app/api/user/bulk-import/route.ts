@@ -1,10 +1,14 @@
 import { NextResponse, NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "../../../../lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "../../../../lib/db";
 import bcrypt from "bcryptjs";
+import { Role } from "@prisma/client";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
+import { runInOptionalTenantScope } from "@/lib/db/tenantContext";
 
-const VALID_ROLES = ["SUPERADMIN", "SCHOOLADMIN", "TEACHER", "STUDENT"];
+const VALID_ROLES: readonly Role[] = ["SUPERADMIN", "SCHOOLADMIN", "TEACHER", "STUDENT"];
 
 // Simple CSV parser
 function parseCSV(content: string): Record<string, string>[] {
@@ -84,7 +88,8 @@ export async function POST(req: NextRequest) {
         }
 
         // Validate role
-        if (!VALID_ROLES.includes(role.toUpperCase())) {
+        const normalizedRole = role.toUpperCase();
+        if (!(VALID_ROLES as readonly string[]).includes(normalizedRole)) {
           errors.push(
             `Row ${rowNum}: Invalid role. Must be one of: ${VALID_ROLES.join(", ")}`
           );
@@ -100,9 +105,10 @@ export async function POST(req: NextRequest) {
         }
 
         // Check if email already exists
-        const existingUser = await prisma.user.findUnique({
-          where: { email },
-        });
+        const bulkSchoolId = session.user.schoolId as string;
+        const existingUser = await runInOptionalTenantScope(session.user.schoolId, () => prisma.user.findUnique({
+          where: { schoolId_email: { schoolId: bulkSchoolId, email } },
+        }));
 
         if (existingUser) {
           errors.push(`Row ${rowNum}: Email already exists`);
@@ -114,22 +120,22 @@ export async function POST(req: NextRequest) {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Create user
-        await prisma.user.create({
+        await runInOptionalTenantScope(session.user.schoolId, () => prisma.user.create({
           data: {
             name,
             email,
             password: hashedPassword,
-            role: role.toUpperCase() as any,
+            role: normalizedRole as Role,
             schoolId: session.user.schoolId,
             ...(designation && { subject: designation }),
             allowedFeatures: [],
           },
-        });
+        }));
 
         successful++;
-      } catch (error: any) {
+      } catch (error: unknown) {
         errors.push(
-          `Row ${rowNum}: ${error.message || "Unknown error"}`
+          `Row ${rowNum}: ${getErrorMessage(error) || "Unknown error"}`
         );
         failed++;
       }
@@ -141,10 +147,10 @@ export async function POST(req: NextRequest) {
       total: rows.length,
       errors: errors.slice(0, 20), // Return first 20 errors
     });
-  } catch (error: any) {
-    console.error("Bulk import error:", error);
+  } catch (error: unknown) {
+    logger.error("Bulk import error:", error);
     return NextResponse.json(
-      { message: error.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

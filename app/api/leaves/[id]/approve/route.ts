@@ -1,13 +1,21 @@
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { z } from "zod";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInOptionalTenantScope } from "@/lib/db/tenantContext";
 import { getServerSession } from "next-auth";
 import { createNotification } from "@/lib/notificationService";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 interface Params {
   id: string;
 }
 
 type ApproveType = "FULL" | "CONDITIONAL";
+
+const approveLeaveBodySchema = z.object({
+  type: z.unknown(),
+  remarks: z.string().optional(),
+});
 
 export async function PATCH(
   req: Request,
@@ -25,6 +33,7 @@ export async function PATCH(
 
     // 1️⃣ Auth check
     const session = await getServerSession(authOptions);
+    return await runInOptionalTenantScope(session?.user?.schoolId, async () => {
     if (!session?.user?.id) {
       return new Response(
         JSON.stringify({ error: "Unauthorized" }),
@@ -41,8 +50,14 @@ export async function PATCH(
     }
 
     // 2️⃣ Parse body
-    const { type, remarks }: { type: ApproveType; remarks?: string } =
-      await req.json();
+    const parsedBody = approveLeaveBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return new Response(
+        JSON.stringify({ error: "Invalid approval type" }),
+        { status: 400 }
+      );
+    }
+    const { type, remarks } = parsedBody.data as { type: ApproveType; remarks?: string };
 
     if (!["FULL", "CONDITIONAL"].includes(type)) {
       return new Response(
@@ -110,8 +125,10 @@ export async function PATCH(
     createNotification(
       updatedLeave.teacherId,
       "LEAVE",
-      "Leave approved",
-      type === "CONDITIONAL" && remarks ? `Your leave was conditionally approved: ${remarks}` : "Your leave request has been approved"
+      "Teacher leave approved",
+      type === "CONDITIONAL" && remarks
+        ? `Your teacher leave was conditionally approved: ${remarks}`
+        : "Your teacher leave request has been approved"
     ).catch(() => {});
 
     // 5️⃣ Success
@@ -119,11 +136,12 @@ export async function PATCH(
       status: 200
     });
 
-  } catch (error: any) {
-    console.error("Leave approval failed:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Leave approval failed:", error);
     return new Response(
       JSON.stringify({
-        error: error.message || "Something went wrong"
+        error: getErrorMessage(error) || "Something went wrong"
       }),
       { status: 500 }
     );

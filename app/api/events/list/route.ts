@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import {
+  parentPortalSwrRead,
+  parentPortalSwrWrite,
+  PARENT_LIST_TTL,
+} from "@/lib/parent/parentPortalSwr";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function GET(req: Request) {
   try {
@@ -14,7 +22,8 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const classId = searchParams.get("classId");
     const teacherId = searchParams.get("teacherId");
-    const scope = searchParams.get("scope"); // "teacher" = only events created/assigned to current teacher
+    const scope = searchParams.get("scope");
+    const bypassCache = searchParams.get("refresh") === "1";
 
     let schoolId = session.user.schoolId;
     if (!schoolId && session.user.studentId) {
@@ -45,12 +54,8 @@ export async function GET(req: Request) {
       );
     }
 
-    const where: any = {
-      schoolId: schoolId,
-    };
+    const where: Record<string, unknown> = { schoolId };
 
-    // Show all workshops for everyone (teachers, admins, parents, students)
-    // Optional filters: classId, teacherId, scope=teacher
     if (scope === "teacher" && session.user.role === "TEACHER") {
       where.teacherId = session.user.id;
     } else if (teacherId) {
@@ -59,64 +64,105 @@ export async function GET(req: Request) {
     if (classId) {
       where.classId = classId;
     }
-    const events = await prisma.event.findMany({
-      where,
-      include: {
-        class: {
-          select: { id: true, name: true, section: true },
-        },
-        teacher: {
-          select: { id: true, name: true, email: true },
-        },
-        _count: {
-          select: { registrations: true },
-        },
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-    });
-    // For students, also include registration status and workshop certificate
-    if (session.user.studentId) {
-      const workshopCerts = await prisma.certificate.findMany({
-        where: {
-          studentId: session.user.studentId!,
-          title: { endsWith: " - Participation" },
-        },
-        select: { title: true },
+
+    if (session.user.studentId && !bypassCache) {
+      const serverKey = `parent:${session.user.studentId}:events:all`;
+      const hit = await parentPortalSwrRead<{ events: unknown[] }>({
+        schoolId,
+        namespace: "api",
+        resource: "parent:events:list",
+        params: { studentId: session.user.studentId },
+        serverKey,
+        ttl: PARENT_LIST_TTL,
       });
+      if (hit.value) {
+        return NextResponse.json(hit.value, { status: 200 });
+      }
+    }
+
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go through
+    // the app_tenant connection, restricted by RLS (Event directly;
+    // EventRegistration/Certificate via their own studentId -> Student
+    // subquery policies), not just this route's own `where` filters.
+    const { events, registrations, workshopCerts } = await withTenantScopedClient(schoolId, async (tx) => {
+      const events = await tx.event.findMany({
+        where,
+        include: {
+          class: {
+            select: { id: true, name: true, section: true },
+          },
+          teacher: {
+            select: { id: true, name: true, email: true },
+          },
+          _count: {
+            select: { registrations: true },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        take: session.user.studentId ? 50 : undefined,
+      });
+
+      if (!session.user.studentId) {
+        return { events, registrations: [], workshopCerts: [] };
+      }
+
+      const studentId = session.user.studentId;
+      const eventIds = events.map((e) => e.id);
+
+      const [registrations, workshopCerts] = await Promise.all([
+        tx.eventRegistration.findMany({
+          where: { studentId, eventId: { in: eventIds } },
+        }),
+        tx.certificate.findMany({
+          where: {
+            studentId,
+            title: { endsWith: " - Participation" },
+          },
+          select: { title: true },
+        }),
+      ]);
+
+      return { events, registrations, workshopCerts };
+    });
+
+    if (session.user.studentId) {
+      const studentId = session.user.studentId;
+
+      const regByEvent = new Map(registrations.map((r) => [r.eventId, r]));
       const eventTitlesWithCert = new Set(
         workshopCerts.map((c) => c.title.replace(/ - Participation$/, ""))
       );
 
-      const eventsWithRegistration = await Promise.all(
-        events.map(async (event) => {
-          const registration = await prisma.eventRegistration.findUnique({
-            where: {
-              eventId_studentId: {
-                eventId: event.id,
-                studentId: session.user.studentId!,
-              },
-            },
-          });
+      const eventsWithRegistration = events.map((event) => {
+        const registration = regByEvent.get(event.id);
+        return {
+          ...event,
+          isRegistered: !!registration,
+          registrationStatus: registration?.paymentStatus || null,
+          hasCertificate: eventTitlesWithCert.has(event.title),
+        };
+      });
 
-          return {
-            ...event,
-            isRegistered: !!registration,
-            registrationStatus: registration?.paymentStatus || null,
-            hasCertificate: eventTitlesWithCert.has(event.title),
-          };
-        })
-      );
-
-      return NextResponse.json({ events: eventsWithRegistration }, { status: 200 });
+      const payload = { events: eventsWithRegistration };
+      if (!bypassCache) {
+        await parentPortalSwrWrite({
+          schoolId,
+          namespace: "api",
+          resource: "parent:events:list",
+          params: { studentId },
+          serverKey: `parent:${studentId}:events:all`,
+          ttl: PARENT_LIST_TTL,
+          value: payload,
+        });
+      }
+      return NextResponse.json(payload, { status: 200 });
     }
 
     return NextResponse.json({ events }, { status: 200 });
-  } catch (error: any) {
-    console.error("List events error:", error);
+  } catch (error: unknown) {
+    logger.error("List events error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

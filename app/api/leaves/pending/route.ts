@@ -1,5 +1,5 @@
-import { authOptions } from "@/lib/authOptions"
-import prisma from "@/lib/db"
+import { authOptions } from "@/lib/auth/authOptions"
+import { withTenantScopedClient } from "@/lib/db/tenantClient"
 import { getServerSession } from "next-auth"
 
 export async function GET() {
@@ -11,23 +11,29 @@ export async function GET() {
     if (!session.user.schoolId) {
       return Response.json({ error: "School not found in session" }, { status: 400 })
     }
-    const leaves = await prisma.leaveRequest.findMany({
-      where: {
-        schoolId: session.user.schoolId,
-        status: "PENDING"
-      },
-      include: {
-        teacher: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            mobile: true
+    const schoolId = session.user.schoolId
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go through
+    // the app_tenant connection, restricted by RLS, not just this route's own
+    // `where: { schoolId }` filter.
+    const leaves = await withTenantScopedClient(schoolId, (tx) =>
+      tx.leaveRequest.findMany({
+        where: {
+          schoolId,
+          status: "PENDING"
+        },
+        include: {
+          teacher: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              mobile: true
+            }
           }
-        }
-      },
-      orderBy: { createdAt: "asc" }
-    })
+        },
+        orderBy: { createdAt: "asc" }
+      })
+    )
     return Response.json(leaves)
   } catch {
     return Response.json({ error: "Internal error" }, { status: 500 })

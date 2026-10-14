@@ -1,0 +1,11 @@
+{
+  "regions": [
+    "bom1"
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/fees-backup-email",
+      "schedule": "*/15 * * * *"
+    }
+  ]
+}

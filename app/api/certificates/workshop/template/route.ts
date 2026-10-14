@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function POST(req: Request) {
   try {
@@ -11,7 +14,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const { eventTitle, imageUrl } = await req.json();
+    const workshopTemplateBodySchema = z.object({
+      eventTitle: z.string().optional(),
+      imageUrl: z.string().optional(),
+    });
+    const parsedBody = workshopTemplateBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json(
+        { message: "Event title and certificate image URL are required" },
+        { status: 400 }
+      );
+    }
+    const { eventTitle, imageUrl } = parsedBody.data;
 
     if (!eventTitle || !imageUrl) {
       return NextResponse.json(
@@ -34,6 +48,7 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const template = await prisma.certificateTemplate.create({
       data: {
@@ -50,10 +65,11 @@ export async function POST(req: Request) {
       { message: "Workshop certificate template created", template },
       { status: 201 }
     );
+    });
   } catch (error: unknown) {
-    console.error("Create workshop template error:", error);
+    logger.error("Create workshop template error:", error);
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

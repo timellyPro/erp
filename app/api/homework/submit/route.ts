@@ -1,11 +1,16 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInOptionalTenantScope } from "@/lib/db/tenantContext";
+import { invalidateParentPortalCaches } from "@/lib/parent/invalidateParentPortalCaches";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
+    return await runInOptionalTenantScope(session?.user?.schoolId, async () => {
 
     if (!session) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
@@ -18,7 +23,16 @@ export async function POST(req: Request) {
       );
     }
 
-    const { homeworkId, content, fileUrl } = await req.json();
+    const submitHomeworkBodySchema = z.object({
+      homeworkId: z.string().optional(),
+      content: z.string().optional().nullable(),
+      fileUrl: z.string().optional().nullable(),
+    });
+    const parsedBody = submitHomeworkBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Homework ID is required" }, { status: 400 });
+    }
+    const { homeworkId, content, fileUrl } = parsedBody.data;
 
     if (!homeworkId) {
       return NextResponse.json(
@@ -34,11 +48,12 @@ export async function POST(req: Request) {
       );
     }
 
-    // Verify homework exists and student is in the class
     const homework = await prisma.homework.findUnique({
       where: { id: homeworkId },
-      include: {
-        class: true,
+      select: {
+        id: true,
+        classId: true,
+        class: { select: { schoolId: true } },
       },
     });
 
@@ -79,9 +94,9 @@ export async function POST(req: Request) {
       );
     }
 
+    let submission;
     if (existingSubmission) {
-      // Update existing submission
-      const updated = await prisma.homeworkSubmission.update({
+      submission = await prisma.homeworkSubmission.update({
         where: { id: existingSubmission.id },
         data: {
           content: content || null,
@@ -89,31 +104,37 @@ export async function POST(req: Request) {
           submittedAt: new Date(),
         },
       });
-
-      return NextResponse.json(
-        { message: "Homework submission updated successfully", submission: updated },
-        { status: 200 }
-      );
+    } else {
+      submission = await prisma.homeworkSubmission.create({
+        data: {
+          homeworkId,
+          studentId: session.user.studentId,
+          content: content || null,
+          fileUrl: fileUrl || null,
+        },
+      });
     }
 
-    // Create new submission
-    const submission = await prisma.homeworkSubmission.create({
-      data: {
-        homeworkId,
-        studentId: session.user.studentId,
-        content: content || null,
-        fileUrl: fileUrl || null,
-      },
-    });
+    const schoolId = student.schoolId ?? homework.class?.schoolId;
+    if (schoolId) {
+      invalidateParentPortalCaches({ schoolId, studentId: session.user.studentId });
+    }
 
     return NextResponse.json(
-      { message: "Homework submitted successfully", submission },
-      { status: 201 }
+      {
+        message: existingSubmission
+          ? "Homework submission updated successfully"
+          : "Homework submitted successfully",
+        submission,
+        homeworkId,
+      },
+      { status: existingSubmission ? 200 : 201 }
     );
-  } catch (error: any) {
-    console.error("Submit homework error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Submit homework error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

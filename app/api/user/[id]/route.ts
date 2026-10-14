@@ -1,10 +1,36 @@
 import { NextResponse, NextRequest } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "../../../../lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "../../../../lib/db";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
 import bcrypt from "bcryptjs";
+import { purgeSchoolDashboardServerCacheMatching } from "@/lib/school/schoolDashboardServerCache";
+import { sanitizeTeachingClassIds } from "@/lib/teacher/teacherClassAccess";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
+import { runInOptionalTenantScope } from "@/lib/db/tenantContext";
 
 type Params = Promise<{ id: string }>;
+
+const updateUserBodySchema = z.object({
+  name: z.string().optional().nullable(),
+  email: z.string().optional().nullable(),
+  role: z.string().optional().nullable(),
+  designation: z.string().optional().nullable(),
+  password: z.string().optional().nullable(),
+  allowedFeatures: z.array(z.string()).optional().nullable(),
+  teacherId: z.union([z.string(), z.number()]).optional().nullable(),
+  subjects: z.array(z.unknown()).optional().nullable(),
+  assignedClassIds: z.array(z.unknown()).optional().nullable(),
+  qualification: z.union([z.string(), z.number()]).optional().nullable(),
+  experience: z.union([z.string(), z.number()]).optional().nullable(),
+  joiningDate: z.string().optional().nullable(),
+  teacherStatus: z.string().optional().nullable(),
+  mobile: z.union([z.string(), z.number()]).optional().nullable(),
+  address: z.string().optional().nullable(),
+  photoUrl: z.string().optional().nullable(),
+});
 
 // GET /api/user/[id] - Fetch single user
 export async function GET(req: NextRequest, { params }: { params: Params }) {
@@ -16,28 +42,37 @@ export async function GET(req: NextRequest, { params }: { params: Params }) {
 
     const { id } = await params;
 
-    const user = await prisma.user.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        subject: true,
-        subjects: true,
-        schoolId: true,
-        allowedFeatures: true,
-        createdAt: true,
-        teacherId: true,
-        qualification: true,
-        experience: true,
-        joiningDate: true,
-        teacherStatus: true,
-        mobile: true,
-        address: true,
-        assignedClasses: { select: { id: true, name: true, section: true } },
-      },
-    });
+    const selectFields = {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      subject: true,
+      subjects: true,
+      schoolId: true,
+      allowedFeatures: true,
+      createdAt: true,
+      teacherId: true,
+      qualification: true,
+      experience: true,
+      joiningDate: true,
+      teacherStatus: true,
+      mobile: true,
+      address: true,
+      teachingClassIds: true,
+      assignedClasses: { select: { id: true, name: true, section: true } },
+    } as const;
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): when the
+    // caller's own schoolId is known, the read goes through the app_tenant
+    // connection, restricted by RLS, not just the post-fetch
+    // `user.schoolId !== session.user.schoolId` check below. Falls back to
+    // the plain client only when session.user.schoolId itself is missing
+    // (that case already 403s below regardless of which client fetched it).
+    const user = session.user.schoolId
+      ? await withTenantScopedClient(session.user.schoolId, (tx) =>
+          tx.user.findUnique({ where: { id }, select: selectFields })
+        )
+      : await prisma.user.findUnique({ where: { id }, select: selectFields });
 
     if (!user) {
       return NextResponse.json({ message: "User not found" }, { status: 404 });
@@ -51,17 +86,19 @@ export async function GET(req: NextRequest, { params }: { params: Params }) {
       );
     }
 
-    const assignedClassIds = "assignedClasses" in user
-      ? (user.assignedClasses as { id: string }[]).map((c) => c.id)
+    const assignedClassIds = Array.isArray(user.teachingClassIds)
+      ? user.teachingClassIds.filter((id) => typeof id === "string" && id.trim())
       : [];
-    const { assignedClasses, ...rest } = user;
+    const { assignedClasses, teachingClassIds, ...rest } = user;
     return NextResponse.json({
       ...rest,
+      teachingClassIds,
       designation: user.subject,
       assignedClassIds,
+      assignedClasses,
     });
-  } catch (error: any) {
-    console.error("User fetch error:", error);
+  } catch (error: unknown) {
+    logger.error("User fetch error:", error);
     return NextResponse.json(
       { message: "Internal server error" },
       { status: 500 }
@@ -78,7 +115,11 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
     }
 
     const { id } = await params;
-    const body = await req.json();
+    const rawBody = await req.json().catch(() => null);
+    const parsedBody = updateUserBodySchema.safeParse(rawBody);
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
     const {
       name,
       email,
@@ -96,10 +137,11 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
       mobile,
       address,
       photoUrl,
-    } = body;
+    } = parsedBody.data;
 
-    console.log(`[PUT] /api/user/${id} called by ${session.user?.id} (role=${session.user?.role})`);
+    logger.info(`[PUT] /api/user/${id} called by ${session.user?.id} (role=${session.user?.role})`);
 
+    return await runInOptionalTenantScope(session.user.schoolId, async () => {
     // Check if user exists and belongs to same school
     const user = await prisma.user.findUnique({
       where: { id },
@@ -107,7 +149,7 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
     });
 
     if (!user) {
-      console.warn(`User not found for id=${id}`);
+      logger.warn(`User not found for id=${id}`);
       return NextResponse.json({ message: "User not found" }, { status: 404 });
     }
 
@@ -121,7 +163,7 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
     // Check if new email is unique (if changing email)
     if (email && email !== user.email) {
       const existingUser = await prisma.user.findUnique({
-        where: { email },
+        where: { schoolId_email: { schoolId: user.schoolId!, email } },
       });
       if (existingUser) {
         return NextResponse.json(
@@ -130,6 +172,8 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
         );
       }
     }
+
+    const schoolId = (user.schoolId || session.user.schoolId) as string;
 
     const updateData: Record<string, unknown> = {};
     if (name !== undefined) updateData.name = name;
@@ -148,6 +192,13 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
         const arr = Array.isArray(subjects) && subjects.every((s: unknown) => typeof s === "string") ? (subjects as string[]).filter(Boolean) : [];
         updateData.subjects = arr;
         if (arr[0]) updateData.subject = arr[0];
+      }
+      if (assignedClassIds !== undefined) {
+        // Teaching assignments (marks/homework) — do NOT overwrite Class.teacherId (class teacher).
+        updateData.teachingClassIds = await sanitizeTeachingClassIds(
+          assignedClassIds,
+          schoolId
+        );
       }
       if (qualification !== undefined) updateData.qualification = qualification && String(qualification).trim() ? String(qualification).trim() : null;
       if (experience !== undefined) updateData.experience = experience && String(experience).trim() ? String(experience).trim() : null;
@@ -173,8 +224,6 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
       updateData.photoUrl = photoUrl && String(photoUrl).trim() ? String(photoUrl).trim() : null;
     }
 
-    const schoolId = session.user.schoolId as string;
-
     const updatedUser = await prisma.user.update({
       where: { id },
       data: updateData,
@@ -187,6 +236,7 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
         subjects: true,
         allowedFeatures: true,
         teacherId: true,
+        teachingClassIds: true,
         qualification: true,
         experience: true,
         joiningDate: true,
@@ -196,22 +246,9 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
         photoUrl: true,
       },
     });
-
-    // Update assigned classes for teachers
-    if (user.role === "TEACHER" && schoolId && Array.isArray(assignedClassIds)) {
-      const classIds = assignedClassIds.filter((c: unknown) => typeof c === "string") as string[];
-      // Unassign this teacher from all classes they currently have
-      await prisma.class.updateMany({
-        where: { teacherId: id },
-        data: { teacherId: null },
-      });
-      // Assign to new set of classes (only in same school)
-      if (classIds.length > 0) {
-        await prisma.class.updateMany({
-          where: { id: { in: classIds }, schoolId },
-          data: { teacherId: id },
-        });
-      }
+    if (user.role === "TEACHER") {
+      purgeSchoolDashboardServerCacheMatching(`teacher:list:${schoolId}`);
+      purgeSchoolDashboardServerCacheMatching(`class:list:lite:${schoolId}`);
     }
 
     return NextResponse.json({
@@ -219,12 +256,14 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
       user: {
         ...updatedUser,
         designation: updatedUser.subject,
+        assignedClassIds: updatedUser.teachingClassIds ?? [],
       },
     });
-  } catch (error: any) {
-    console.error("User update error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("User update error:", error);
     return NextResponse.json(
-      { message: error.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }
@@ -251,6 +290,7 @@ export async function DELETE(
 
     const { id } = await params;
 
+    return await runInOptionalTenantScope(session.user.schoolId, async () => {
     // Check if user exists and belongs to same school
     const user = await prisma.user.findUnique({
       where: { id },
@@ -279,14 +319,19 @@ export async function DELETE(
     await prisma.user.delete({
       where: { id },
     });
+    if (user.role === "TEACHER" && user.schoolId) {
+      purgeSchoolDashboardServerCacheMatching(`teacher:list:${user.schoolId}`);
+      purgeSchoolDashboardServerCacheMatching(`class:list:lite:${user.schoolId}`);
+    }
 
     return NextResponse.json({
       message: "User deleted successfully",
     });
-  } catch (error: any) {
-    console.error("User deletion error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("User deletion error:", error);
     return NextResponse.json(
-      { message: error.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

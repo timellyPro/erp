@@ -1,7 +1,11 @@
 import { NextResponse, NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
+import { schoolIdViaAdminRelation, schoolIdViaStudentId } from "@/lib/auth/tenant";
 
 type Params = Promise<{ id: string }>;
 
@@ -11,21 +15,12 @@ const resolveSchoolId = async (session: {
   let schoolId = session.user.schoolId ?? null;
 
   if (!schoolId) {
-    // Try school from admin relation
-    const adminSchool = await prisma.school.findFirst({
-      where: { admins: { some: { id: session.user.id } } },
-      select: { id: true },
-    });
-    schoolId = adminSchool?.id ?? null;
+    schoolId = await schoolIdViaAdminRelation(session.user.id);
 
     // For students: get school from student record
     const studentId = (session.user as { studentId?: string }).studentId;
     if (!schoolId && studentId) {
-      const student = await prisma.student.findUnique({
-        where: { id: studentId },
-        select: { schoolId: true },
-      });
-      schoolId = student?.schoolId ?? null;
+      schoolId = await schoolIdViaStudentId(studentId);
     }
 
     if (schoolId) {
@@ -57,7 +52,9 @@ export async function GET(req: NextRequest, { params }: { params: Params }) {
 
     const { id } = await params;
 
-    const teacher = await prisma.user.findUnique({
+    // Real DB-level tenant isolation: read runs on the RLS-restricted connection.
+    const teacher = await withTenantScopedClient(schoolId, (tx) =>
+      tx.user.findUnique({
       where: { id },
       select: {
         id: true,
@@ -77,7 +74,8 @@ export async function GET(req: NextRequest, { params }: { params: Params }) {
         schoolId: true,
         assignedClasses: { select: { id: true, name: true, section: true } },
       },
-    });
+    })
+    );
 
     if (!teacher || teacher.role !== "TEACHER") {
       return NextResponse.json({ message: "Teacher not found" }, { status: 404 });
@@ -98,10 +96,10 @@ export async function GET(req: NextRequest, { params }: { params: Params }) {
       },
       { status: 200 }
     );
-  } catch (error: any) {
-    console.error("Teacher fetch error:", error);
+  } catch (error: unknown) {
+    logger.error("Teacher fetch error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

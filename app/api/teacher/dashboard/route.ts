@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { getTeacherAccessibleClassIds } from "@/lib/teacher/teacherClassAccess";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function GET() {
   try {
@@ -19,47 +22,67 @@ export async function GET() {
       );
     }
 
-    const [classes, circulars, notifications, unreadCount, appointments] =
-      await Promise.all([
-        prisma.class.findMany({
-          where: { teacherId: userId },
-          include: { _count: { select: { students: true } } },
-          orderBy: { createdAt: "desc" },
-        }),
-        prisma.circular.findMany({
+    const accessibleIds = await getTeacherAccessibleClassIds(userId, schoolId);
+
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go
+    // through the app_tenant connection, restricted by RLS, not just the
+    // `where: { schoolId }` / `where: { userId }` filters below.
+    // The events lookup runs in its own transaction (a failure there must not abort the main
+    // one) and concurrently with it: each transaction costs several DB round trips, so
+    // running them back to back doubled the latency.
+    const eventsPromise = withTenantScopedClient(schoolId, (tx) =>
+      tx.event.findMany({
+        where: { schoolId },
+        select: { id: true, title: true, eventDate: true },
+        orderBy: { eventDate: "asc" },
+        take: 4,
+      })
+    ).catch((err): Array<{ id: string; title: string; eventDate: Date | null }> => {
+      logger.warn("Teacher dashboard events fallback:", err);
+      return [];
+    });
+
+    const mainPromise = withTenantScopedClient(schoolId, (tx) =>
+      Promise.all([
+        accessibleIds.length
+          ? tx.class.findMany({
+              where: { id: { in: accessibleIds }, schoolId },
+              include: { _count: { select: { students: true } } },
+              orderBy: { createdAt: "desc" },
+            })
+          : Promise.resolve([]),
+        tx.circular.findMany({
           where: { schoolId },
           include: { issuedBy: { select: { name: true, photoUrl: true } } },
           orderBy: { createdAt: "desc" },
           take: 3,
         }),
-        prisma.notification.findMany({
+        tx.notification.findMany({
           where: { userId },
           orderBy: { createdAt: "desc" },
-          take: 4,
+          take: 25,
         }),
-        prisma.notification.count({
+        tx.notification.count({
           where: { userId, isRead: false },
         }),
-        prisma.appointment.findMany({
+        tx.appointment.findMany({
           where: { teacherId: userId },
-          include: { student: { include: { user: true } } },
+          include: {
+            student: {
+              select: {
+                fatherName: true,
+                user: { select: { name: true } },
+              },
+            },
+          },
           orderBy: { createdAt: "desc" },
           take: 4,
         }),
-      ]);
+      ])
+    );
 
-    let events: Array<{ id: string; title: string; eventDate: Date | null }> = [];
-    try {
-      events = await prisma.event.findMany({
-        where: { schoolId },
-        select: { id: true, title: true, eventDate: true },
-        orderBy: { eventDate: "asc" },
-        take: 4,
-      });
-    } catch (err) {
-      console.warn("Teacher dashboard events fallback:", err);
-      events = [];
-    }
+    const [[classes, circulars, notifications, unreadCount, appointments], events] =
+      await Promise.all([mainPromise, eventsPromise]);
 
     const totalClasses = classes.length;
     const totalStudents = classes.reduce(
@@ -118,7 +141,7 @@ export async function GET() {
       { status: 200 }
     );
   } catch (error: unknown) {
-    console.error("Teacher dashboard error:", error);
+    logger.error("Teacher dashboard error:", error);
     
     // Handle database connection errors
     const err = error as { code?: string; message?: string; name?: string };
@@ -137,7 +160,7 @@ export async function GET() {
     }
     
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

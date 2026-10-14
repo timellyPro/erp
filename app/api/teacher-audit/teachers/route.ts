@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
+
+const SCORE_BASELINE = 50;
 
 function clampScore(score: number) {
   return Math.max(0, Math.min(100, score));
@@ -27,7 +32,9 @@ export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "SCHOOLADMIN") {
+    const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
+    const hasFeature = session.user.role === "TEACHER" && session.user.allowedFeatures?.includes("TEACHER_AUDIT");
+    if (!isAdmin && !hasFeature) {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
@@ -47,67 +54,78 @@ export async function GET(req: Request) {
 
     const yearRange = academicYear ? academicYearRange(academicYear) : null;
 
-    const teachers = await prisma.user.findMany({
-      where: {
-        schoolId,
-        role: "TEACHER",
-        ...(q
-          ? {
-              OR: [
-                { name: { contains: q, mode: "insensitive" } },
-                { email: { contains: q, mode: "insensitive" } },
-                { teacherId: { contains: q, mode: "insensitive" } },
-                { subject: { contains: q, mode: "insensitive" } },
-              ],
-            }
-          : {}),
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        photoUrl: true,
-        teacherId: true,
-        subject: true,
-      },
-      orderBy: { name: "asc" },
-      take: 50,
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go
+    // through the app_tenant connection, restricted by RLS, not just the
+    // `where: { schoolId }` filter above.
+    const { teachers, scores } = await withTenantScopedClient(schoolId, async (tx) => {
+      const teacherRows = await tx.user.findMany({
+        where: {
+          schoolId,
+          role: "TEACHER",
+          ...(q
+            ? {
+                OR: [
+                  { name: { contains: q, mode: "insensitive" } },
+                  { email: { contains: q, mode: "insensitive" } },
+                  { teacherId: { contains: q, mode: "insensitive" } },
+                  { subject: { contains: q, mode: "insensitive" } },
+                  { subjects: { has: q } },
+                ],
+              }
+            : {}),
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          photoUrl: true,
+          teacherId: true,
+          subject: true,
+        },
+        orderBy: { name: "asc" },
+        take: 50,
+      });
+
+      const teacherIds = teacherRows.map((t) => t.id);
+      const scoreRows =
+        teacherIds.length > 0
+          ? await tx.teacherAuditRecord.groupBy({
+              by: ["teacherId"],
+              where: {
+                teacherId: { in: teacherIds },
+                ...(yearRange ? { createdAt: { gte: yearRange.start, lte: yearRange.end } } : {}),
+              },
+              _sum: { scoreImpact: true },
+              _count: { _all: true },
+            })
+          : [];
+      return { teachers: teacherRows, scores: scoreRows };
     });
 
-    // Compute performance scores (baseline 50 + sum impacts, clamped 0..100)
-    // Optionally filter by academic year
-    const scores = await Promise.all(
-      teachers.map(async (t) => {
-        const where = yearRange
-          ? { teacherId: t.id, createdAt: { gte: yearRange.start, lte: yearRange.end } }
-          : { teacherId: t.id };
-        const agg = await prisma.teacherAuditRecord.aggregate({
-          where,
-          _sum: { scoreImpact: true },
-          _count: { _all: true },
-        });
-        const impact = agg._sum.scoreImpact ?? 0;
-        const score = clampScore(impact);
-        return { teacherId: t.id, score, recordCount: agg._count._all };
-      })
+    const scoreMap = new Map(
+      scores.map((s) => [
+        s.teacherId,
+        {
+          score: clampScore(SCORE_BASELINE + (s._sum.scoreImpact ?? 0)),
+          recordCount: s._count._all,
+        },
+      ])
     );
-
-    const scoreMap = new Map(scores.map((s) => [s.teacherId, s]));
 
     return NextResponse.json(
       {
         teachers: teachers.map((t) => ({
           ...t,
-          performanceScore: scoreMap.get(t.id)?.score ?? 0,
+          performanceScore: scoreMap.get(t.id)?.score ?? SCORE_BASELINE,
           recordCount: scoreMap.get(t.id)?.recordCount ?? 0,
         })),
       },
       { status: 200 }
     );
   } catch (e: unknown) {
-    console.error("Teacher audit teachers GET:", e);
+    logger.error("Teacher audit teachers GET:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

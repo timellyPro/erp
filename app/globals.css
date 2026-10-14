@@ -147,3 +147,84 @@ textarea::placeholder {
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: rgba(180, 240, 61, 0.5);
 }
+
+/*
+ * Number inputs: hide steppers and avoid Tailwind/layer order overriding earlier rules.
+ * For currency fields, prefer type="text" inputMode="decimal" where spinners still appear.
+ */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  margin: 0 !important;
+  display: none !important;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield !important;
+  appearance: textfield !important;
+}
+
+/* Dashboard loader — minimal luxury animations */
+@keyframes dashboard-loader-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes dashboard-loader-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+}
+
+@keyframes dashboard-loader-shimmer {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(420%);
+  }
+}
+
+@keyframes dashboard-loader-fade {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  15%,
+  85% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.dashboard-loader-ring-spin {
+  animation: dashboard-loader-spin 2.4s cubic-bezier(0.45, 0.05, 0.25, 0.95) infinite;
+}
+
+.dashboard-loader-ring-inner {
+  animation: dashboard-loader-pulse 3s ease-in-out infinite;
+}
+
+.dashboard-loader-core {
+  animation: dashboard-loader-pulse 3s ease-in-out infinite 0.4s;
+}
+
+.dashboard-loader-shimmer {
+  animation: dashboard-loader-shimmer 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.dashboard-loader-fade {
+  animation: dashboard-loader-fade 2.2s ease-in-out;
+}

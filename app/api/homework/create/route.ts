@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { createNotificationsForUserIds } from "@/lib/notificationService";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function POST(req: Request) {
   try {
@@ -12,7 +15,23 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const { title, description, subject, classId, dueDate, assignedDate, file: fileUrl } = await req.json();
+    const createHomeworkBodySchema = z.object({
+      title: z.string().optional(),
+      description: z.string().optional(),
+      subject: z.string().optional(),
+      classId: z.string().optional(),
+      dueDate: z.string().optional().nullable(),
+      assignedDate: z.string().optional().nullable(),
+      file: z.string().optional().nullable(),
+    });
+    const parsedBody = createHomeworkBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json(
+        { message: "Title, description, subject, and class are required" },
+        { status: 400 }
+      );
+    }
+    const { title, description, subject, classId, dueDate, assignedDate, file: fileUrl } = parsedBody.data;
 
     if (!title || !description || !subject || !classId ) {
       return NextResponse.json(
@@ -35,6 +54,7 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     // Verify class belongs to school
     const classData = await prisma.class.findFirst({
@@ -94,10 +114,11 @@ export async function POST(req: Request) {
       { message: "Homework created successfully", homework },
       { status: 201 }
     );
-  } catch (error: any) {
-    console.error("Create homework error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Create homework error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

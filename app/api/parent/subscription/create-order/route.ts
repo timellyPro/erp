@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { logger } from "@/lib/logger";
+import { rateLimit, rateLimitKey } from "@/lib/rateLimit";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 const hyperpgBaseUrl = process.env.HYPERPG_BASE_URL || "https://sandbox.hyperpg.in";
 const globalHyperpgMerchantId = process.env.HYPERPG_MERCHANT_ID;
@@ -21,10 +25,27 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const orderLimit = await rateLimit(
+    rateLimitKey("parent-subscription-create-order", session.user.studentId),
+    20,
+    10 * 60
+  );
+  if (!orderLimit.allowed) {
+    return NextResponse.json(
+      { error: `Too many payment attempts. Please try again in ${Math.ceil(orderLimit.resetInSeconds / 60)} minute(s).` },
+      { status: 429 }
+    );
+  }
+
   try {
-    const body = await req.json().catch(() => ({}));
+    const createOrderBodySchema = z.object({
+      amount: z.union([z.number(), z.string()]).optional(),
+      return_path: z.string().optional(),
+    });
+    const parsedBody = createOrderBodySchema.safeParse(await req.json().catch(() => ({})));
+    const body = parsedBody.success ? parsedBody.data : {};
     const requestedAmount = typeof body.amount === "number" ? body.amount : undefined;
-    const returnPath = (body.return_path as string) || "/frontend/pages/parent?tab=profile";
+    const returnPath = body.return_path || "/parent?tab=profile";
 
     const student = await prisma.student.findUnique({
       where: { id: session.user.studentId },
@@ -83,8 +104,8 @@ export async function POST(req: Request) {
       process.env.NEXTAUTH_URL ||
       "http://localhost:3000";
     const path = returnPath.startsWith("/") ? returnPath : `/${returnPath}`;
-    const pathOnly = path.split("?")[0].replace(/\/$/, "") || "/frontend/pages/parent?tab=profile";
-    const returnUrl = `${baseUrl.replace(/\/$/, "")}${pathOnly}`;
+    const pathOnly = path.split("?")[0].replace(/\/$/, "") || "/parent?tab=profile";
+    const _returnUrl = `${baseUrl.replace(/\/$/, "")}${pathOnly}`;
 
     const nameParts = (student.user?.name || student.fatherName || "Parent")
       .trim()
@@ -146,7 +167,7 @@ export async function POST(req: Request) {
 
     const errText = await res.text();
     if (!res.ok) {
-      console.error("HyperPG subscription session error:", res.status, errText);
+      logger.error("HyperPG subscription session error:", res.status, errText);
       let details = errText.slice(0, 500);
       try {
         const j = JSON.parse(errText) as Record<string, unknown>;
@@ -188,9 +209,9 @@ export async function POST(req: Request) {
       );
     }
 
-    await prisma.payment.create({
+    await runInTenantScope(student.schoolId, () => prisma.payment.create({
       data: {
-        studentId: session.user.studentId,
+        studentId: student.id,
         amount: amountNumber,
         gateway: "HYPERPG",
         hyperpgOrderId: data.id || null,
@@ -198,7 +219,7 @@ export async function POST(req: Request) {
         transactionId: orderId,
         purpose: "PARENT_SUBSCRIPTION",
       },
-    });
+    }));
 
     return NextResponse.json({
       gateway: "HYPERPG",
@@ -209,11 +230,11 @@ export async function POST(req: Request) {
       payment_url: paymentUrl,
     });
   } catch (err: unknown) {
-    console.error("Parent subscription order error:", err);
+    logger.error("Parent subscription order error:", err);
     return NextResponse.json(
       {
         error: "Failed to create subscription order",
-        details: err instanceof Error ? err.message : "Unknown error",
+        details: toClientErrorMessage(err, "Unknown error"),
       },
       { status: 500 }
     );

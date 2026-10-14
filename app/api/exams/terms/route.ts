@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
 import { ExamTermStatus } from "@prisma/client";
+import { logger } from "@/lib/logger";
+import { schoolIdViaTeacherClass, schoolIdViaTeacherRelation, schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 async function resolveSchoolId(session: {
   user: { id: string; schoolId?: string | null; role: string };
@@ -11,47 +16,18 @@ async function resolveSchoolId(session: {
 
   if (!schoolId) {
     if (session.user.role === "TEACHER") {
-      const teacherClass = await prisma.class.findFirst({
-        where: { teacherId: session.user.id },
-        select: { schoolId: true },
-      });
-      schoolId = teacherClass?.schoolId ?? null;
-
+      schoolId = await schoolIdViaTeacherClass(session.user.id);
       if (!schoolId) {
-        const teacherSchool = await prisma.school.findFirst({
-          where: { teachers: { some: { id: session.user.id } } },
-          select: { id: true },
-        });
-        schoolId = teacherSchool?.id ?? null;
+        schoolId = await schoolIdViaTeacherRelation(session.user.id);
       }
     }
 
     if (!schoolId) {
-      const school = await prisma.school.findFirst({
-        where: { admins: { some: { id: session.user.id } } },
-        select: { id: true },
-      });
-      schoolId = school?.id ?? null;
+      schoolId = await schoolIdViaAdminRelation(session.user.id);
     }
   }
 
   return schoolId;
-}
-
-function formatExamDate(d: Date): string {
-  const date = new Date(d);
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function formatDuration(minutes: number): string {
-  if (minutes >= 60) {
-    const h = Math.floor(minutes / 60);
-    return h === 1 ? "1 Hour" : `${h} Hours`;
-  }
-  return `${minutes} Mins`;
 }
 
 export async function GET(req: Request) {
@@ -73,124 +49,84 @@ export async function GET(req: Request) {
     const classIdParam = searchParams.get("classId");
     const status = searchParams.get("status");
 
-    /* ======================================================
-       TEACHER – OLD LOGIC (UNCHANGED)
-    ====================================================== */
-    if (role === "TEACHER") {
-      const terms = await prisma.examTerm.findMany({
-        where: {
-          schoolId,
-          ...(classIdParam ? { classId: classIdParam } : {}),
-          ...(status ? { status: status as ExamTermStatus } : {}),
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go
+    // through the app_tenant connection, restricted by RLS, not just the
+    // `where: { schoolId }` filters in each branch below.
+    const result = await withTenantScopedClient(schoolId, async (tx) => {
+      const termInclude = {
+        class: { include: { teacher: { select: { name: true } } } },
+        schedules: { orderBy: { examDate: "asc" as const } },
+        syllabus: {
+          orderBy: { subject: "asc" as const },
+          include: { units: { orderBy: { order: "asc" as const } } },
         },
-        include: {
-          class: { select: { id: true, name: true, section: true } },
-          schedules: { orderBy: { examDate: "asc" } },
-          syllabus: { orderBy: { subject: "asc" }, include: { units: { orderBy: { order: "asc" } } } },
-        },
-        orderBy: { createdAt: "desc" },
-      });
+        sections: { orderBy: { order: "asc" as const } },
+      };
 
-      const exams: any[] = [];
+      /* ======================================================
+         STUDENT
+      ====================================================== */
+      if (role === "STUDENT") {
+        const student = await tx.student.findUnique({
+          where: { userId: session.user.id },
+          select: { classId: true },
+        });
 
-      for (const term of terms) {
-        const classInfo = term.class
-          ? { id: term.class.id, name: term.class.name, section: term.class.section ?? "" }
-          : { id: "", name: "", section: "" };
-
-        for (const s of term.schedules) {
-          const tracking = term.syllabus.find((sy: { subject: any; }) => sy.subject === s.subject);
-          const syllabus = tracking
-            ? tracking.units.length > 0
-              ? tracking.units.map((u: { completedPercent: any; }) => ({ completedPercent: u.completedPercent }))
-              : [{ completedPercent: tracking.completedPercent }]
-            : [];
-
-          exams.push({
-            id: s.id,
-            termId: term.id,
-            name: term.name,
-            status: term.status,
-            subject: s.subject,
-            class: classInfo,
-            date: formatExamDate(s.examDate),
-            time: s.startTime,
-            duration: formatDuration(s.durationMin),
-            syllabus,
-          });
+        if (!student?.classId) {
+          return { kind: "studentNoClass" as const };
         }
+
+        const terms = await tx.examTerm.findMany({
+          where: {
+            schoolId,
+            classId: student.classId,
+            ...(status ? { status: status as ExamTermStatus } : {}),
+          },
+          include: termInclude,
+          orderBy: { createdAt: "desc" },
+        });
+
+        return { kind: "student" as const, terms };
       }
 
-      return NextResponse.json({ exams }, { status: 200 });
-    }
-
-    /* ======================================================
-       STUDENT
-    ====================================================== */
-    if (role === "STUDENT") {
-      const student = await prisma.student.findUnique({
-        where: { userId: session.user.id },
-        select: { classId: true },
-      });
-
-      if (!student?.classId) {
-        return NextResponse.json({ message: "Student class not assigned" }, { status: 400 });
-      }
-
-      const terms = await prisma.examTerm.findMany({
-        where: {
-          schoolId,
-          classId: student.classId,
-          ...(status ? { status: status as ExamTermStatus } : {}),
-        },
-        include: {
-          class: { include: { teacher: { select: { name: true } } } },
-          schedules: { orderBy: { examDate: "asc" } },
-          syllabus: { orderBy: { subject: "asc" }, include: { units: { orderBy: { order: "asc" } } } },
-        },
-        orderBy: { createdAt: "desc" },
-      });
-
-      return NextResponse.json({ terms }, { status: 200 });
-    }
-
-    /* ======================================================
-       SCHOOL ADMIN – UPDATED
-    ====================================================== */
-    if (role === "SCHOOLADMIN") {
-      const classes = await prisma.class.findMany({
+      /* ======================================================
+         SCHOOL ADMIN / TEACHER – full school terms + classes
+         (Teacher portal uses the same Exams UI as school admin.)
+      ====================================================== */
+      const classes = await tx.class.findMany({
         where: { schoolId },
         select: { id: true, name: true, section: true },
         orderBy: { name: "asc" },
       });
 
-      const terms = await prisma.examTerm.findMany({
+      const terms = await tx.examTerm.findMany({
         where: {
           schoolId,
           ...(classIdParam ? { classId: classIdParam } : {}),
           ...(status ? { status: status as ExamTermStatus } : {}),
         },
-        include: {
-          class: { include: { teacher: { select: { name: true } } } },
-          schedules: { orderBy: { examDate: "asc" } },
-          syllabus: { orderBy: { subject: "asc" }, include: { units: { orderBy: { order: "asc" } } } },
-        },
+        include: termInclude,
         orderBy: { createdAt: "desc" },
       });
 
-      return NextResponse.json({ terms, classes }, { status: 200 });
-    }
+      return { kind: "schooladmin" as const, terms, classes };
+    });
 
+    if (result.kind === "studentNoClass") {
+      return NextResponse.json({ message: "Student class not assigned" }, { status: 400 });
+    }
+    if (result.kind === "student") {
+      return NextResponse.json({ terms: result.terms }, { status: 200 });
+    }
+    return NextResponse.json({ terms: result.terms, classes: result.classes }, { status: 200 });
   } catch (e: unknown) {
-    console.error("Exams terms GET:", e);
+    logger.error("Exams terms GET:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }
 }
-
-
 
 /* ======================================================
    POST – UNCHANGED
@@ -210,7 +146,11 @@ export async function POST(req: Request) {
     if (!schoolId)
       return NextResponse.json({ message: "School not found" }, { status: 400 });
 
-    const body = await req.json();
+    const parsedBody = z.record(z.string(), z.unknown()).safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const body = parsedBody.data;
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const description =
       typeof body.description === "string" ? body.description.trim() : null;
@@ -224,6 +164,7 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const term = await prisma.examTerm.create({
       data: { name, description, classId, status, schoolId },
@@ -233,10 +174,11 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({ term }, { status: 201 });
+    });
   } catch (e: unknown) {
-    console.error("Exams terms POST:", e);
+    logger.error("Exams terms POST:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

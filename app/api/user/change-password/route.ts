@@ -1,24 +1,34 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInOptionalTenantScope } from "@/lib/db/tenantContext";
 import bcrypt from "bcryptjs";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
+
+const changePasswordBodySchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(1),
+});
 
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
+    return await runInOptionalTenantScope(session?.user?.schoolId, async () => {
     if (!session) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const { currentPassword, newPassword } = await req.json();
-
-    if (!currentPassword || !newPassword) {
+    const rawBody = await req.json().catch(() => null);
+    const parsedBody = changePasswordBodySchema.safeParse(rawBody);
+    if (!parsedBody.success) {
       return NextResponse.json(
         { message: "currentPassword and newPassword are required" },
         { status: 400 }
       );
     }
+    const { currentPassword, newPassword } = parsedBody.data;
 
     const user = await prisma.user.findUnique({
       where: { id: session.user.id },
@@ -42,10 +52,11 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({ message: "Password updated" }, { status: 200 });
+    });
   } catch (e: unknown) {
-    console.error("User change-password POST:", e);
+    logger.error("User change-password POST:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

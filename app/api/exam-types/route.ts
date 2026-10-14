@@ -1,10 +1,35 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
 import { randomUUID } from "crypto";
+import { logger } from "@/lib/logger";
+import { schoolIdViaTeacherClass, schoolIdViaTeacherRelation, schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 const DEFAULT_EXAM_TYPES = ["TERM 1", "TERM 2", "FINAL"];
+
+export type ExamTypeSectionPayload = {
+  id: string;
+  name: string;
+  maxMarks: number;
+  order: number;
+};
+
+export type ExamTypeSubjectPayload = {
+  subject: string;
+  maxMarks: number | null;
+  sections: ExamTypeSectionPayload[];
+};
+
+export type ExamTypePayload = {
+  name: string;
+  maxMarks: number | null;
+  sections: ExamTypeSectionPayload[];
+  subjectConfigs: ExamTypeSubjectPayload[];
+};
 
 async function resolveSchoolId(session: {
   user: { id: string; schoolId?: string | null; role: string };
@@ -13,34 +38,52 @@ async function resolveSchoolId(session: {
 
   if (!schoolId) {
     if (session.user.role === "TEACHER") {
-      const teacherClass = await prisma.class.findFirst({
-        where: { teacherId: session.user.id },
-        select: { schoolId: true },
-      });
-      schoolId = teacherClass?.schoolId ?? null;
-
+      schoolId = await schoolIdViaTeacherClass(session.user.id);
       if (!schoolId) {
-        const teacherSchool = await prisma.school.findFirst({
-          where: { teachers: { some: { id: session.user.id } } },
-          select: { id: true },
-        });
-        schoolId = teacherSchool?.id ?? null;
+        schoolId = await schoolIdViaTeacherRelation(session.user.id);
       }
     }
 
     if (!schoolId) {
-      const school = await prisma.school.findFirst({
-        where: { admins: { some: { id: session.user.id } } },
-        select: { id: true },
-      });
-      schoolId = school?.id ?? null;
+      schoolId = await schoolIdViaAdminRelation(session.user.id);
     }
   }
 
   return schoolId;
 }
 
-export async function GET(req: Request) {
+function parseMaxMarks(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error("maxMarks must be a positive number");
+  }
+  return n;
+}
+
+export async function ensureExamTypeRow(
+  schoolId: string,
+  name: string,
+  maxMarks?: number | null
+) {
+  const existing = await prisma.examType.findFirst({
+    where: { schoolId, name },
+    select: { id: true, maxMarks: true },
+  });
+  if (existing) return existing;
+  return prisma.examType.create({
+    data: {
+      id: randomUUID(),
+      name,
+      schoolId,
+      maxMarks: maxMarks ?? null,
+    },
+    select: { id: true, maxMarks: true },
+  });
+}
+
+export async function GET() {
   try {
     const session = await getServerSession(authOptions);
     if (!session) {
@@ -57,26 +100,123 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
 
-    const customTypes = await prisma.$queryRaw<
-      Array<{ name: string | null }>
-    >`
-      SELECT "name" FROM "ExamType" WHERE "schoolId" = ${schoolId}
-    `;
-
-    const names = new Set<string>();
-    DEFAULT_EXAM_TYPES.forEach((n) => names.add(n));
-    customTypes.forEach((t) => {
-      if (t.name) names.add(t.name.trim().toUpperCase());
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go
+    // through the app_tenant connection, restricted by RLS, not just the
+    // `where: { schoolId }` filters above.
+    const [customTypes, fromMarks] = await withTenantScopedClient(schoolId, async (tx) => {
+      const types = await tx.examType.findMany({
+        where: { schoolId },
+        select: {
+          name: true,
+          maxMarks: true,
+          sections: {
+            orderBy: { order: "asc" },
+            select: { id: true, name: true, maxMarks: true, order: true },
+          },
+        },
+      });
+      const marks = await tx.mark.findMany({
+        where: {
+          class: { schoolId },
+          examType: { not: null },
+        },
+        select: { examType: true },
+        distinct: ["examType"],
+        take: 200,
+      });
+      return [types, marks] as const;
     });
 
-    return NextResponse.json(
-      { examTypes: Array.from(names).sort() },
-      { status: 200 }
+    const subjectConfigsByExam = new Map<string, ExamTypeSubjectPayload[]>();
+    try {
+      // Separate scope on purpose: a failed statement aborts a Postgres transaction,
+      // and this lookup is best-effort (the page still works without per-subject config).
+      const subjectRows = await withTenantScopedClient(schoolId, (tx) =>
+        tx.$queryRaw<
+          Array<{
+            examTypeName: string;
+            subject: string;
+            maxMarks: number | null;
+            sectionId: string | null;
+            sectionName: string | null;
+            sectionMax: number | null;
+            sectionOrder: number | null;
+          }>
+        >`
+          SELECT et.name AS "examTypeName",
+                 s.subject AS "subject",
+                 s."maxMarks" AS "maxMarks",
+                 sec.id AS "sectionId",
+                 sec.name AS "sectionName",
+                 sec."maxMarks" AS "sectionMax",
+                 sec."order" AS "sectionOrder"
+          FROM "ExamTypeSubject" s
+          INNER JOIN "ExamType" et ON et.id = s."examTypeId"
+          LEFT JOIN "ExamTypeSubjectSection" sec ON sec."examTypeSubjectId" = s.id
+          WHERE et."schoolId" = ${schoolId}
+          ORDER BY et.name ASC, s.subject ASC, sec."order" ASC
+        `
+      );
+      for (const row of subjectRows) {
+        const examName = row.examTypeName.trim().toUpperCase();
+        const subject = row.subject.trim().toUpperCase();
+        if (!examName || !subject) continue;
+        const list = subjectConfigsByExam.get(examName) ?? [];
+        let config = list.find((c) => c.subject === subject);
+        if (!config) {
+          config = {
+            subject,
+            maxMarks: row.maxMarks,
+            sections: [],
+          };
+          list.push(config);
+          subjectConfigsByExam.set(examName, list);
+        }
+        if (row.sectionId && row.sectionName && row.sectionMax != null) {
+          config.sections.push({
+            id: row.sectionId,
+            name: row.sectionName,
+            maxMarks: Number(row.sectionMax),
+            order: row.sectionOrder ?? config.sections.length,
+          });
+        }
+      }
+    } catch (err) {
+      logger.error("Exam type subject configs:", err);
+    }
+
+    const byName = new Map<string, ExamTypePayload>();
+    DEFAULT_EXAM_TYPES.forEach((n) =>
+      byName.set(n, { name: n, maxMarks: null, sections: [], subjectConfigs: [] })
     );
+    customTypes.forEach((t) => {
+      const name = t.name.trim().toUpperCase();
+      if (!name) return;
+      byName.set(name, {
+        name,
+        maxMarks: t.maxMarks ?? null,
+        sections: t.sections,
+        subjectConfigs: subjectConfigsByExam.get(name) ?? [],
+      });
+    });
+    fromMarks.forEach((t) => {
+      if (!t.examType) return;
+      const name = t.examType.trim().toUpperCase();
+      if (!name) return;
+      if (!byName.has(name)) {
+        byName.set(name, { name, maxMarks: null, sections: [], subjectConfigs: [] });
+      }
+    });
+
+    const examTypes: ExamTypePayload[] = Array.from(byName.values()).sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
+
+    return NextResponse.json({ examTypes }, { status: 200 });
   } catch (e: unknown) {
-    console.error("Exam types GET:", e);
+    logger.error("Exam types GET:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }
@@ -89,8 +229,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const role = session.user.role;
-    if (role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
@@ -98,8 +237,12 @@ export async function POST(req: Request) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async () => {
 
-    const body = await req.json();
+    const parsedBody = z
+      .object({ name: z.string().optional(), maxMarks: z.union([z.number(), z.string(), z.null()]).optional() })
+      .safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
     const name =
       typeof body.name === "string" ? body.name.trim().toUpperCase() : "";
 
@@ -110,13 +253,23 @@ export async function POST(req: Request) {
       );
     }
 
-    const existing = await prisma.$queryRaw<Array<{ name: string }>>`
-      SELECT "name" FROM "ExamType"
-      WHERE "schoolId" = ${schoolId} AND UPPER("name") = ${name}
-      LIMIT 1
-    `;
+    let maxMarks: number | null = null;
+    try {
+      const parsed = parseMaxMarks(body.maxMarks);
+      if (parsed !== undefined) maxMarks = parsed;
+    } catch (err) {
+      return NextResponse.json(
+        { message: toClientErrorMessage(err, "Invalid maxMarks") },
+        { status: 400 }
+      );
+    }
 
-    if (existing.length > 0) {
+    const existing = await prisma.examType.findFirst({
+      where: { schoolId, name },
+      select: { id: true },
+    });
+
+    if (existing) {
       return NextResponse.json(
         { message: "This exam type name already exists" },
         { status: 409 }
@@ -124,18 +277,122 @@ export async function POST(req: Request) {
     }
 
     const id = randomUUID();
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO "ExamType" ("id", "name", "schoolId", "createdAt") VALUES ($1, $2, $3, NOW())`,
-      id,
-      name,
-      schoolId
-    );
+    const examType = await prisma.examType.create({
+      data: { id, name, schoolId, maxMarks },
+      select: {
+        id: true,
+        name: true,
+        schoolId: true,
+        maxMarks: true,
+        sections: {
+          orderBy: { order: "asc" },
+          select: { id: true, name: true, maxMarks: true, order: true },
+        },
+      },
+    });
 
-    return NextResponse.json({ examType: { id, name, schoolId } }, { status: 201 });
+    return NextResponse.json({ examType }, { status: 201 });
+    });
   } catch (e: unknown) {
-    console.error("Exam types POST:", e);
+    logger.error("Exam types POST:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PATCH(req: Request) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+    }
+
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
+      return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+    }
+
+    const schoolId = await resolveSchoolId(session);
+    if (!schoolId) {
+      return NextResponse.json({ message: "School not found" }, { status: 400 });
+    }
+    return await runInTenantScope(schoolId, async () => {
+
+    const parsedBody = z
+      .object({ name: z.string().optional(), maxMarks: z.union([z.number(), z.string(), z.null()]).optional() })
+      .safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
+    const name =
+      typeof body.name === "string" ? body.name.trim().toUpperCase() : "";
+
+    if (!name) {
+      return NextResponse.json(
+        { message: "Exam type name is required" },
+        { status: 400 }
+      );
+    }
+
+    let maxMarks: number | null;
+    try {
+      const parsed = parseMaxMarks(body.maxMarks);
+      if (parsed === undefined) {
+        return NextResponse.json(
+          { message: "maxMarks is required" },
+          { status: 400 }
+        );
+      }
+      maxMarks = parsed;
+    } catch (err) {
+      return NextResponse.json(
+        { message: toClientErrorMessage(err, "Invalid maxMarks") },
+        { status: 400 }
+      );
+    }
+
+    const existing = await prisma.examType.findFirst({
+      where: { schoolId, name },
+      select: { id: true },
+    });
+
+    let examType;
+    if (existing) {
+      examType = await prisma.examType.update({
+        where: { id: existing.id },
+        data: { maxMarks },
+        select: {
+          id: true,
+          name: true,
+          schoolId: true,
+          maxMarks: true,
+          sections: {
+            orderBy: { order: "asc" },
+            select: { id: true, name: true, maxMarks: true, order: true },
+          },
+        },
+      });
+    } else {
+      examType = await prisma.examType.create({
+        data: { id: randomUUID(), name, schoolId, maxMarks },
+        select: {
+          id: true,
+          name: true,
+          schoolId: true,
+          maxMarks: true,
+          sections: {
+            orderBy: { order: "asc" },
+            select: { id: true, name: true, maxMarks: true, order: true },
+          },
+        },
+      });
+    }
+
+    return NextResponse.json({ examType }, { status: 200 });
+    });
+  } catch (e: unknown) {
+    logger.error("Exam types PATCH:", e);
+    return NextResponse.json(
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }
@@ -148,8 +405,7 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const role = session.user.role;
-    if (role !== "SCHOOLADMIN") {
+    if (session.user.role !== "SCHOOLADMIN" && session.user.role !== "TEACHER") {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
@@ -157,6 +413,7 @@ export async function DELETE(req: Request) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     const { searchParams } = new URL(req.url);
     const nameParam = searchParams.get("name");
@@ -170,12 +427,10 @@ export async function DELETE(req: Request) {
       );
     }
 
-    // Ensure there will still be at least one exam type available (including defaults/terms)
-    const customTypes = await prisma.$queryRaw<
-      Array<{ name: string | null }>
-    >`
-      SELECT "name" FROM "ExamType" WHERE "schoolId" = ${schoolId}
-    `;
+    const customTypes = await prisma.examType.findMany({
+      where: { schoolId },
+      select: { name: true },
+    });
 
     const currentNames = new Set<string>();
     customTypes.forEach((t) => {
@@ -189,7 +444,6 @@ export async function DELETE(req: Request) {
       );
     }
 
-    // Protect built-in defaults from deletion
     if (DEFAULT_EXAM_TYPES.includes(name)) {
       return NextResponse.json(
         { message: "Default exam types cannot be deleted" },
@@ -197,12 +451,8 @@ export async function DELETE(req: Request) {
       );
     }
 
-    // Delete only custom exam types; default/term-based types are virtual
     const deleted = await prisma.examType.deleteMany({
-      where: {
-        schoolId,
-        name,
-      },
+      where: { schoolId, name },
     });
 
     if (deleted.count === 0) {
@@ -213,12 +463,12 @@ export async function DELETE(req: Request) {
     }
 
     return NextResponse.json({ success: true }, { status: 200 });
+    });
   } catch (e: unknown) {
-    console.error("Exam types DELETE:", e);
+    logger.error("Exam types DELETE:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }
 }
-

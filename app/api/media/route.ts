@@ -1,5 +1,34 @@
 import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth/authOptions";
 import { supabaseAdmin, SUPABASE_BUCKET } from "@/lib/supabase";
+import { isValidInternalSecret } from "@/lib/internalSecret";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
+
+/**
+ * Internal server-to-server callers (e.g. serverPdfLogo.ts during PDF generation)
+ * have no browser session cookie to forward. They authenticate instead with a
+ * shared secret (see lib/internalSecret.ts) that never leaves the server.
+ */
+function isInternalCaller(req: Request): boolean {
+  return isValidInternalSecret(req.headers.get("x-internal-secret"));
+}
+
+/**
+ * Uploads are stored under `schools/<schoolId>/...` (see app/api/upload). A
+ * session may not read another school's prefix. Legacy unprefixed and `global/`
+ * paths stay readable so existing logos/avatars keep working.
+ */
+function isPathAllowedForSession(
+  path: string,
+  user: { role?: string | null; schoolId?: string | null }
+): boolean {
+  const segments = path.split("/");
+  if (segments.some((s) => s === ".." || s === ".")) return false;
+  if (segments[0] !== "schools") return true;
+  if (user.role === "SUPERADMIN") return true;
+  return !!user.schoolId && segments[1] === String(user.schoolId);
+}
 
 function parseSupabaseStorageUrl(url: string): { bucket: string; path: string } | null {
   // Expected formats:
@@ -25,6 +54,15 @@ function parseSupabaseStorageUrl(url: string): { bucket: string; path: string } 
 
 export async function GET(req: Request) {
   try {
+    let sessionUser: { role?: string | null; schoolId?: string | null } | null = null;
+    if (!isInternalCaller(req)) {
+      const session = await getServerSession(authOptions);
+      if (!session) {
+        return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+      }
+      sessionUser = (session.user ?? {}) as { role?: string | null; schoolId?: string | null };
+    }
+
     if (!supabaseAdmin) {
       return NextResponse.json({ message: "Media proxy not configured" }, { status: 503 });
     }
@@ -56,6 +94,10 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: "Bucket not allowed" }, { status: 403 });
     }
 
+    if (sessionUser && !isPathAllowedForSession(path, sessionUser)) {
+      return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+    }
+
     const { data, error } = await supabaseAdmin.storage.from(bucket).download(path);
     if (error || !data) {
       return NextResponse.json({ message: error?.message ?? "File not found" }, { status: 404 });
@@ -73,7 +115,7 @@ export async function GET(req: Request) {
     });
   } catch (e: unknown) {
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

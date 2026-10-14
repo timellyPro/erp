@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInOptionalTenantScope } from "@/lib/db/tenantContext";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 // GET messages for an appointment
 export async function GET(req: Request) {
@@ -50,10 +53,10 @@ export async function GET(req: Request) {
     });
 
     return NextResponse.json({ messages });
-  } catch (error: any) {
-    console.error("List messages error:", error);
+  } catch (error: unknown) {
+    logger.error("List messages error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }
@@ -68,7 +71,19 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { appointmentId, content } = await req.json();
+    return await runInOptionalTenantScope(session.user.schoolId, async () => {
+    const createMessageBodySchema = z.object({
+      appointmentId: z.string().optional(),
+      content: z.string().optional(),
+    });
+    const parsedBody = createMessageBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json(
+        { message: "appointmentId and content are required" },
+        { status: 400 }
+      );
+    }
+    const { appointmentId, content } = parsedBody.data;
 
     if (!appointmentId || !content) {
       return NextResponse.json(
@@ -120,13 +135,13 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json(message, { status: 201 });
-  } catch (error: any) {
-    console.error("Create message error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Create message error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }
 }
-
 

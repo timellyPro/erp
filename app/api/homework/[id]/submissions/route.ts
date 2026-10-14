@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import type { PrismaClient } from "@prisma/client";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
+
+type TenantTx = Omit<PrismaClient, "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends">;
 
 type RouteContext = { params: Promise<{ id: string }> | { params: { id: string } } };
 
@@ -22,57 +28,77 @@ export async function GET(req: Request, context: RouteContext) {
       return NextResponse.json({ message: "Homework ID required" }, { status: 400 });
     }
 
-    const homework = await prisma.homework.findUnique({
-      where: { id: homeworkId },
-      select: {
-        id: true,
-        title: true,
-        subject: true,
-        classId: true,
-        schoolId: true,
-        teacherId: true,
-      },
-    });
+    const currentUser = session.user;
+    async function loadHomeworkAndSubmissions(client: TenantTx) {
+      const homework = await client.homework.findUnique({
+        where: { id: homeworkId },
+        select: {
+          id: true,
+          title: true,
+          subject: true,
+          classId: true,
+          schoolId: true,
+          teacherId: true,
+        },
+      });
+      if (!homework) return { kind: "notFound" as const };
 
-    if (!homework) {
-      return NextResponse.json({ message: "Homework not found" }, { status: 404 });
-    }
+      const role = currentUser.role as string;
+      const isSchoolAdmin = role === "SCHOOLADMIN" || role === "SUPERADMIN";
 
-    const role = session.user.role as string;
-    const isSchoolAdmin = role === "SCHOOLADMIN" || role === "SUPERADMIN";
-
-    if (!isSchoolAdmin && role === "TEACHER") {
-      if (homework.teacherId !== session.user.id) {
-        const classBelongs = await prisma.class.findFirst({
-          where: { id: homework.classId, teacherId: session.user.id },
-        });
-        if (!classBelongs) {
-          return NextResponse.json({ message: "You can only view submissions for your own homework" }, { status: 403 });
+      if (!isSchoolAdmin && role === "TEACHER") {
+        if (homework.teacherId !== currentUser.id) {
+          const classBelongs = await client.class.findFirst({
+            where: { id: homework.classId, teacherId: currentUser.id },
+          });
+          if (!classBelongs) return { kind: "notOwnHomework" as const };
         }
+      } else if (!isSchoolAdmin && role !== "TEACHER") {
+        return { kind: "forbidden" as const };
       }
-    } else if (!isSchoolAdmin && role !== "TEACHER") {
-      return NextResponse.json({ message: "Forbidden" }, { status: 403 });
-    }
 
-    if (homework.schoolId && session.user.schoolId && homework.schoolId !== session.user.schoolId) {
-      return NextResponse.json({ message: "Homework not found" }, { status: 404 });
-    }
+      if (homework.schoolId && currentUser.schoolId && homework.schoolId !== currentUser.schoolId) {
+        return { kind: "notFound" as const };
+      }
 
-    const submissions = await prisma.homeworkSubmission.findMany({
-      where: { homeworkId },
-      include: {
-        student: {
-          select: {
-            id: true,
-            admissionNumber: true,
-            fatherName: true,
-            rollNo: true,
-            user: { select: { name: true } },
+      const submissions = await client.homeworkSubmission.findMany({
+        where: { homeworkId },
+        include: {
+          student: {
+            select: {
+              id: true,
+              admissionNumber: true,
+              fatherName: true,
+              rollNo: true,
+              user: { select: { name: true } },
+            },
           },
         },
-      },
-      orderBy: { submittedAt: "desc" },
-    });
+        orderBy: { submittedAt: "desc" },
+      });
+
+      return { kind: "ok" as const, homework, submissions };
+    }
+
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): when the
+    // caller's own schoolId is known, reads go through the app_tenant
+    // connection, restricted by RLS, not just the post-fetch schoolId
+    // check above. Falls back to the plain client only when
+    // session.user.schoolId itself is missing.
+    const result = session.user.schoolId
+      ? await withTenantScopedClient(session.user.schoolId, loadHomeworkAndSubmissions)
+      : await loadHomeworkAndSubmissions(prisma as unknown as TenantTx);
+
+    if (result.kind === "notFound") {
+      return NextResponse.json({ message: "Homework not found" }, { status: 404 });
+    }
+    if (result.kind === "forbidden") {
+      return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+    }
+    if (result.kind === "notOwnHomework") {
+      return NextResponse.json({ message: "You can only view submissions for your own homework" }, { status: 403 });
+    }
+    const { homework, submissions } = result;
 
     const list = submissions.map((s) => ({
       id: s.id,
@@ -90,9 +116,9 @@ export async function GET(req: Request, context: RouteContext) {
       submissions: list,
     });
   } catch (e: unknown) {
-    console.error("Homework submissions error:", e);
+    logger.error("Homework submissions error:", e);
     return NextResponse.json(
-      { message: e instanceof Error ? e.message : "Internal server error" },
+      { message: toClientErrorMessage(e, "Internal server error") },
       { status: 500 }
     );
   }

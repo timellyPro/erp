@@ -14,6 +14,7 @@ export const FEATURES = [
   { id: "events", label: "Events", description: "Workshops and events" },
   { id: "exams", label: "Exams & Syllabus", description: "Exams and syllabus tracking" },
   { id: "homework", label: "Homework", description: "Create and manage homework" },
+  { id: "timetable", label: "Timetable", description: "View and manage class timetable" },
   { id: "newsfeed", label: "News Feed", description: "School news and updates" },
   { id: "communication", label: "Communication", description: "Appointments and messages" },
   { id: "leaves", label: "Leaves Management", description: "Apply and view leave requests" },
@@ -24,8 +25,9 @@ export const FEATURES = [
   { id: "school", label: "School Details", description: "School information" },
   { id: "payments", label: "Payments & Fees", description: "Fees and payments" },
   { id: "tc", label: "Transfer Certificate", description: "TC requests and approval" },
-  { id: "profile", label: "Profile", description: "View and edit the profile" },
-  
+  { id: "student-details", label: "Student Details", description: "View student details" },
+  { id: "teacher-leaves", label: "Teacher Leaves", description: "Manage teacher leaves" },
+  { id: "teacher-audit", label: "Teacher Audit", description: "Audit teacher performance" },
 ] as const;
 
 export type FeatureId = (typeof FEATURES)[number]["id"];
@@ -43,6 +45,7 @@ export function getDefaultFeaturesForRole(role: "TEACHER" | "SCHOOLADMIN"): Feat
     "attendance-mark",
     "attendance-view",
     "homework",
+    "timetable",
     "newsfeed",
     "events",
     "exams",

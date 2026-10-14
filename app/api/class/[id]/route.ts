@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
+import { activeStudentWhere } from "@/lib/students/studentStatus";
+import { purgeSchoolDashboardServerCacheMatching } from "@/lib/school/schoolDashboardServerCache";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function GET(
   req: Request,
@@ -15,9 +22,9 @@ export async function GET(
     }
 
     const { id } = await params;
-    const schoolId = session.user.schoolId;
     const classId = id;
 
+    const schoolId = await resolveFeesSchoolId({ user: session.user });
     if (!schoolId) {
       return NextResponse.json(
         { message: "School not found in session" },
@@ -25,32 +32,38 @@ export async function GET(
       );
     }
 
-    const classData = await prisma.class.findFirst({
-      where: {
-        id: classId,
-        schoolId: schoolId,
-      },
-      include: {
-        teacher: {
-          select: { id: true, name: true, email: true },
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): read goes
+    // through the app_tenant connection, restricted by RLS, not just the
+    // `where: { schoolId }` filter above.
+    const classData = await withTenantScopedClient(schoolId, (tx) =>
+      tx.class.findFirst({
+        where: {
+          id: classId,
+          schoolId: schoolId,
         },
-        students: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                photoUrl: true  
+        include: {
+          teacher: {
+            select: { id: true, name: true, email: true },
+          },
+          students: {
+            where: activeStudentWhere,
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                  photoUrl: true
+                },
               },
             },
           },
+          school: {
+            select: { id: true, name: true },
+          },
         },
-        school: {
-          select: { id: true, name: true },
-        },
-      },
-    });
+      })
+    );
 
     if (!classData) {
       return NextResponse.json(
@@ -60,10 +73,10 @@ export async function GET(
     }
 
     return NextResponse.json({ class: classData }, { status: 200 });
-  } catch (error: any) {
-    console.error("Get class error:", error);
+  } catch (error: unknown) {
+    logger.error("Get class error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }
@@ -83,7 +96,16 @@ export async function PUT(
     const { id } = await params;
     const schoolId = session.user.schoolId;
     const classId = id;
-    const { name, section, teacherId } = await req.json();
+    const updateClassBodySchema = z.object({
+      name: z.string().optional(),
+      section: z.string().optional().nullable(),
+      teacherId: z.string().optional().nullable(),
+    });
+    const parsedBody = updateClassBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
+    const { name, section, teacherId } = parsedBody.data;
 
     if (!schoolId) {
       return NextResponse.json(
@@ -91,6 +113,7 @@ export async function PUT(
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     // Verify class belongs to the school
     const existingClass = await prisma.class.findFirst({
@@ -141,15 +164,17 @@ export async function PUT(
         },
       },
     });
+    purgeSchoolDashboardServerCacheMatching(`class:list:lite:${schoolId}`);
 
     return NextResponse.json(
       { message: "Class updated successfully", class: updatedClass },
       { status: 200 }
     );
-  } catch (error: any) {
-    console.error("Update class error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Update class error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }
@@ -176,6 +201,7 @@ export async function DELETE(
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     // Verify class belongs to the school
     const existingClass = await prisma.class.findFirst({
@@ -211,15 +237,17 @@ export async function DELETE(
     await prisma.class.delete({
       where: { id: classId },
     });
+    purgeSchoolDashboardServerCacheMatching(`class:list:lite:${schoolId}`);
 
     return NextResponse.json(
       { message: "Class deleted successfully" },
       { status: 200 }
     );
-  } catch (error: any) {
-    console.error("Delete class error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Delete class error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import { activeStudentWhere } from "@/lib/students/studentStatus";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function GET(req: Request) {
   try {
@@ -29,49 +33,70 @@ export async function GET(req: Request) {
       );
     }
 
-    const where: any = {
+    const where: {
+      schoolId: string;
+      classId?: string;
+      status: string;
+    } = {
       schoolId: schoolId,
+      ...activeStudentWhere,
     };
 
-    if (classId) {
-      // Verify class belongs to school
-      const classData = await prisma.class.findFirst({
-        where: {
-          id: classId,
-          schoolId: schoolId,
-        },
-      });
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go
+    // through the app_tenant connection, restricted by RLS, not just the
+    // `where: { schoolId }` filters above.
+    const students = await withTenantScopedClient(schoolId, async (tx) => {
+      if (classId) {
+        // Verify class belongs to school
+        const classData = await tx.class.findFirst({
+          where: {
+            id: classId,
+            schoolId: schoolId,
+          },
+        });
 
-      if (!classData) {
-        return NextResponse.json(
-          { message: "Class not found or doesn't belong to your school" },
-          { status: 404 }
-        );
+        if (!classData) {
+          return null;
+        }
+
+        where.classId = classId;
       }
 
-      where.classId = classId;
-    }
-
-    const students = await prisma.student.findMany({
-      where,
-      include: {
-        user: {
-          select: { id: true, name: true, email: true, photoUrl: true },
+      return tx.student.findMany({
+        where,
+        include: {
+          user: {
+            select: { id: true, name: true, email: true, photoUrl: true },
+          },
+          class: {
+            select: { id: true, name: true, section: true },
+          },
+          application: {
+            select: {
+              id: true,
+              createdAt: true,
+              admissionNo: true,
+              fedenaNo: true,
+              workflowStatus: true,
+            },
+          },
         },
-        class: {
-          select: { id: true, name: true, section: true },
-        },
-      },
-      orderBy: {
-        createdAt: "asc",
-      },
+        orderBy: [{ user: { name: "asc" } }, { id: "asc" }],
+      });
     });
 
+    if (classId && students === null) {
+      return NextResponse.json(
+        { message: "Class not found or doesn't belong to your school" },
+        { status: 404 }
+      );
+    }
+
     return NextResponse.json({ students }, { status: 200 });
-  } catch (error: any) {
-    console.error("Get class students error:", error);
+  } catch (error: unknown) {
+    logger.error("Get class students error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

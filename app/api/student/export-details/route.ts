@@ -1,0 +1,165 @@
+import { NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
+import * as XLSX from "xlsx";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import {
+  buildStudentDetailsExportWorkbook,
+  studentToDetailsExportRow,
+} from "@/lib/students/studentDetailsExport";
+import { resolveStudentDisplayClass } from "@/lib/students/resolveStudentDisplayClass";
+import { logger } from "@/lib/logger";
+import { schoolIdViaAdminRelation } from "@/lib/auth/tenant";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
+
+const MAX_EXPORT = 5000;
+
+async function resolveSchoolId(session: {
+  user: { id: string; schoolId?: string | null };
+}): Promise<string | null> {
+  let schoolId = session.user.schoolId ?? null;
+  if (!schoolId) {
+    schoolId = await schoolIdViaAdminRelation(session.user.id);
+    if (schoolId) {
+      await prisma.user.update({
+        where: { id: session.user.id },
+        data: { schoolId },
+      });
+    }
+  }
+  return schoolId;
+}
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+    }
+
+    const schoolId = await resolveSchoolId(session);
+    if (!schoolId) {
+      return NextResponse.json(
+        { message: "School not found in session" },
+        { status: 400 }
+      );
+    }
+
+    if (session.user.schoolIsActive === false) {
+      return NextResponse.json({ message: "School is paused" }, { status: 403 });
+    }
+
+    return await runInTenantScope(schoolId, async () => {
+    const { searchParams } = new URL(req.url);
+    const classId = searchParams.get("classId")?.trim() || "";
+    const className = searchParams.get("className")?.trim() || "";
+    const section = searchParams.get("section")?.trim() || "";
+    const status = searchParams.get("status")?.trim() || "";
+
+    const where: Prisma.StudentWhereInput = { schoolId };
+
+    if (status.toLowerCase() === "active") {
+      where.status = "Active";
+    } else if (status.toLowerCase() === "inactive") {
+      where.status = "Inactive";
+    }
+
+    if (classId) {
+      const classData = await prisma.class.findFirst({
+        where: { id: classId, schoolId },
+        select: { id: true },
+      });
+      if (!classData) {
+        return NextResponse.json(
+          { message: "Class not found or doesn't belong to your school" },
+          { status: 404 }
+        );
+      }
+      where.classId = classId;
+    } else if (className) {
+      where.class = {
+        schoolId,
+        name: className,
+        ...(section ? { section } : {}),
+      };
+    }
+
+    const students = await prisma.student.findMany({
+      where,
+      take: MAX_EXPORT,
+      include: {
+        user: { select: { name: true, email: true } },
+        class: { select: { name: true, section: true } },
+        application: {
+          select: {
+            createdAt: true,
+            nationality: true,
+            languagesAtHome: true,
+            religion: true,
+            caste: true,
+            parentPhone: true,
+            emergencyMotherNo: true,
+            parentEmail: true,
+            motherName: true,
+            houseNo: true,
+            street: true,
+            city: true,
+            town: true,
+            state: true,
+            pinCode: true,
+            class: { select: { name: true, section: true } },
+          },
+        },
+      },
+      orderBy: [{ user: { name: "asc" } }],
+    });
+
+    const rows = students.map((s, i) => {
+      const resolvedClass = resolveStudentDisplayClass(s.class, s.application?.class ?? null);
+      return studentToDetailsExportRow(
+        {
+          ...s,
+          class: resolvedClass
+            ? {
+                name: resolvedClass.name ?? null,
+                section: resolvedClass.section ?? null,
+              }
+            : null,
+        },
+        i + 1
+      );
+    });
+
+    const wb = buildStudentDetailsExportWorkbook(rows);
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+    const body = new Uint8Array(buf);
+
+    const filename =
+      status.toLowerCase() === "inactive"
+        ? "Inactive-students-report.xlsx"
+        : "Student-details-report.xlsx";
+    return new NextResponse(body, {
+      status: 200,
+      headers: {
+        "Content-Type":
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Cache-Control": "no-store",
+      },
+    });
+    });
+  } catch (error: unknown) {
+    logger.error("Student details export error:", error);
+    return NextResponse.json(
+      {
+        message:
+          toClientErrorMessage(error, "Internal server error"),
+      },
+      { status: 500 }
+    );
+  }
+}
+
+// Heavy report/export: raise the serverless timeout above the default.
+export const maxDuration = 60;

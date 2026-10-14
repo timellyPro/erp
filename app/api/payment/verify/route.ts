@@ -1,8 +1,20 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { createNotification } from "@/lib/notificationService";
+import { logger } from "@/lib/logger";
+import { invalidateFeeListServerCaches } from "@/lib/fees/feeListServerCache";
+import { rateLimit, rateLimitKey } from "@/lib/rateLimit";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
+
+const verifyPaymentBodySchema = z.object({
+  gateway: z.string().optional().nullable(),
+  order_id: z.string().optional().nullable(),
+  amount: z.union([z.number(), z.string()]).optional().nullable(),
+});
 
 const hyperpgBaseUrl = process.env.HYPERPG_BASE_URL || "https://sandbox.hyperpg.in";
 const globalHyperpgMerchantId = process.env.HYPERPG_MERCHANT_ID;
@@ -23,14 +35,32 @@ export async function POST(req: Request) {
     );
   }
 
+  // Higher ceiling than order creation since a client may legitimately poll
+  // verify a few times while waiting on the gateway callback.
+  const verifyLimit = await rateLimit(
+    rateLimitKey("payment-verify", session.user.studentId),
+    30,
+    10 * 60
+  );
+  if (!verifyLimit.allowed) {
+    return NextResponse.json(
+      { message: `Too many requests. Please try again in ${Math.ceil(verifyLimit.resetInSeconds / 60)} minute(s).` },
+      { status: 429 }
+    );
+  }
+
   try {
     const studentId = session.user.studentId;
-    const body = await req.json();
+    const rawBody = await req.json().catch(() => ({}));
+    const parsedBody = verifyPaymentBodySchema.safeParse(rawBody);
+    if (!parsedBody.success) {
+      return NextResponse.json({ message: "Invalid request body" }, { status: 400 });
+    }
     const {
       gateway: gw,
       order_id: orderId,
       amount,
-    } = body;
+    } = parsedBody.data;
 
     const gateway = gw || "HYPERPG";
 
@@ -98,7 +128,7 @@ export async function POST(req: Request) {
 
     if (!statusRes.ok) {
       const errText = await statusRes.text();
-      console.error("HyperPG order status error:", statusRes.status, errText);
+      logger.error("HyperPG order status error:", statusRes.status, errText);
       return NextResponse.json(
         { message: "Could not verify order status with payment gateway" },
         { status: 502 }
@@ -129,19 +159,20 @@ export async function POST(req: Request) {
 
     const hyperpgId = orderStatus.id || null;
 
-    // Find existing Payment by transactionId (our orderId) or hyperpgOrderId
+    // Find existing Payment by transactionId (our orderId), hyperpgOrderId, or gateway txn id
     const existing = await prisma.payment.findFirst({
       where: {
         studentId,
         OR: [
           { transactionId: orderId },
           ...(hyperpgId ? [{ hyperpgOrderId: hyperpgId }] : []),
+          ...(orderStatus.txn_id ? [{ hyperpgTxnId: String(orderStatus.txn_id) }] : []),
         ],
       },
     });
 
     if (existing) {
-      const payment = await prisma.$transaction(async (tx) => {
+      const payment = await runInTenantScope(student.schoolId, () => prisma.$transaction(async (tx) => {
         const before = await tx.payment.findUnique({
           where: { id: existing.id },
           select: { status: true, amount: true, studentId: true, eventRegistrationId: true },
@@ -186,7 +217,9 @@ export async function POST(req: Request) {
         }
 
         return updated;
-      });
+      }));
+
+      invalidateFeeListServerCaches(student.schoolId);
 
       // If workshop payment, return eventRegistration status
       if (existing.eventRegistrationId) {
@@ -217,69 +250,92 @@ export async function POST(req: Request) {
       );
     }
 
-    // No pre-created Payment (legacy fee flow)
-    const fee = await prisma.studentFee.findUnique({
-      where: { studentId },
-    });
+    // No pre-created Payment (legacy fee flow). The create + fee update run in one
+    // transaction, and a unique index on (transactionId) for HYPERPG payments
+    // (see migration 20260927010000) backstops the check-then-act race between two
+    // concurrent verify calls for the same order_id: whichever loses the race gets
+    // a unique-violation instead of double-crediting the student's fee balance.
+    let legacyResult: { payment: Awaited<ReturnType<typeof prisma.payment.create>>; fee: unknown; raced: boolean };
+    try {
+      legacyResult = await runInTenantScope(student.schoolId, () => prisma.$transaction(async (tx) => {
+        const fee = await tx.studentFee.findUnique({ where: { studentId } });
+        if (!fee) {
+          throw new Error("__FEE_NOT_FOUND__");
+        }
 
-    if (!fee) {
-      return NextResponse.json(
-        { message: "Fee details not found for this student" },
-        { status: 404 }
-      );
+        const newAmountPaid = fee.amountPaid + amountNum;
+        const newRemaining = Math.max(fee.finalFee - newAmountPaid, 0);
+
+        const payment = await tx.payment.create({
+          data: {
+            studentId,
+            amount: amountNum,
+            gateway: "HYPERPG",
+            transactionId: orderId,
+            hyperpgOrderId: orderStatus.id || null,
+            hyperpgTxnId: orderStatus.txn_id || null,
+            hyperpgStatus: typeof orderStatus.status === "string" ? orderStatus.status : null,
+            hyperpgStatusId: typeof orderStatus.status_id === "number" ? orderStatus.status_id : null,
+            hyperpgRefunded: typeof orderStatus.refunded === "boolean" ? orderStatus.refunded : false,
+            hyperpgAmountRefunded: typeof orderStatus.amount_refunded === "number" ? orderStatus.amount_refunded : 0,
+            hyperpgEffectiveAmount: typeof orderStatus.effective_amount === "number" ? orderStatus.effective_amount : null,
+            hyperpgLastUpdatedAt: new Date(),
+            status: "SUCCESS",
+          },
+        });
+
+        const updatedFee = await tx.studentFee.update({
+          where: { studentId },
+          data: { amountPaid: newAmountPaid, remainingFee: newRemaining },
+        });
+
+        return { payment, fee: updatedFee, raced: false };
+      }));
+    } catch (txError: unknown) {
+      if (txError instanceof Error && txError.message === "__FEE_NOT_FOUND__") {
+        return NextResponse.json(
+          { message: "Fee details not found for this student" },
+          { status: 404 }
+        );
+      }
+      const isOrderIdRace =
+        txError instanceof Prisma.PrismaClientKnownRequestError && txError.code === "P2002";
+      if (!isOrderIdRace) throw txError;
+
+      // The other request already created (and possibly credited) this Payment.
+      // Return its current state instead of failing or crediting a second time.
+      const racedPayment = await prisma.payment.findFirst({ where: { studentId, transactionId: orderId } });
+      const racedFee = await prisma.studentFee.findUnique({ where: { studentId } });
+      if (!racedPayment) throw txError;
+      legacyResult = { payment: racedPayment, fee: racedFee, raced: true };
     }
 
-    const newAmountPaid = fee.amountPaid + amountNum;
-    const newRemaining = Math.max(fee.finalFee - newAmountPaid, 0);
-
-    const payment = await prisma.payment.create({
-      data: {
-        studentId,
-        amount: amountNum,
-        gateway: "HYPERPG",
-        hyperpgOrderId: orderStatus.id || null,
-        hyperpgTxnId: orderStatus.txn_id || null,
-        hyperpgStatus: typeof orderStatus.status === "string" ? orderStatus.status : null,
-        hyperpgStatusId: typeof orderStatus.status_id === "number" ? orderStatus.status_id : null,
-        hyperpgRefunded: typeof orderStatus.refunded === "boolean" ? orderStatus.refunded : false,
-        hyperpgAmountRefunded: typeof orderStatus.amount_refunded === "number" ? orderStatus.amount_refunded : 0,
-        hyperpgEffectiveAmount: typeof orderStatus.effective_amount === "number" ? orderStatus.effective_amount : null,
-        hyperpgLastUpdatedAt: new Date(),
-        status: "SUCCESS",
-      },
-    });
-
-    const updatedFee = await prisma.studentFee.update({
-      where: { studentId },
-      data: {
-        amountPaid: newAmountPaid,
-        remainingFee: newRemaining,
-      },
-    });
-
-    const studentUser = await prisma.student.findUnique({
-      where: { id: studentId },
-      select: { userId: true },
-    });
-    if (studentUser?.userId) {
-      createNotification(
-        studentUser.userId,
-        "FEES",
-        "Payment received",
-        `₹${amountNum.toLocaleString()} payment received successfully`
-      ).catch(() => {});
+    if (!legacyResult.raced) {
+      const studentUser = await prisma.student.findUnique({
+        where: { id: studentId },
+        select: { userId: true },
+      });
+      if (studentUser?.userId) {
+        createNotification(
+          studentUser.userId,
+          "FEES",
+          "Payment received",
+          `₹${amountNum.toLocaleString()} payment received successfully`
+        ).catch(() => {});
+      }
+      invalidateFeeListServerCaches(student.schoolId);
     }
 
     return NextResponse.json(
-      { payment, fee: updatedFee },
+      { payment: legacyResult.payment, fee: legacyResult.fee },
       { status: 200 }
     );
   } catch (error: unknown) {
-    console.error("Verify payment error:", error);
+    logger.error("Verify payment error:", error);
     return NextResponse.json(
       {
         message:
-          error instanceof Error ? error.message : "Internal server error",
+          toClientErrorMessage(error, "Internal server error"),
       },
       { status: 500 }
     );

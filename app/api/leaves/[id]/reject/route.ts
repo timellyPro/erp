@@ -1,7 +1,9 @@
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInOptionalTenantScope } from "@/lib/db/tenantContext";
 import { getServerSession } from "next-auth";
 import { createNotification } from "@/lib/notificationService";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 interface Params {
   id: string;
@@ -12,6 +14,7 @@ export async function PATCH(req: Request, { params }: { params: Params | Promise
     const { id } = await params;
 
     const session = await getServerSession(authOptions);
+    return await runInOptionalTenantScope(session?.user?.schoolId, async () => {
     if (!session?.user?.id) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
     }
@@ -48,14 +51,15 @@ export async function PATCH(req: Request, { params }: { params: Params | Promise
     createNotification(
       leave.teacherId,
       "LEAVE",
-      "Leave rejected",
-      "Your leave request was rejected"
+      "Teacher leave rejected",
+      "Your teacher leave request was rejected"
     ).catch(() => {});
 
     return new Response(JSON.stringify(leave), { status: 200 });
 
-  } catch (err: any) {
-    console.error("Approve leave failed:", err);
-    return new Response(JSON.stringify({ error: err.message || "Unable to approve leave" }), { status: 500 });
+    });
+  } catch (err: unknown) {
+    logger.error("Approve leave failed:", err);
+    return new Response(JSON.stringify({ error: getErrorMessage(err) || "Unable to approve leave" }), { status: 500 });
   }
 }

@@ -1,7 +1,23 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
+import {
+  extraFeeAppliesToStudent,
+  parseExtraFeeResidencyScopeBody,
+  suggestedResidencyScopeForExtraFeeName,
+} from "@/lib/fees/extraFeeResidencyScope";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
+import { createExtraFeeRows, migrateUnsplitLumpExtraFees, type ExtraFeeCreatePayload } from "@/lib/fees/extraFeeInstallmentDb";
+import { isUnsplitLumpExtraFee } from "@/lib/fees/extraFeeInstallments";
+import {
+  getSchoolDashboardServerCached,
+  setSchoolDashboardServerCached,
+} from "@/lib/school/schoolDashboardServerCache";
+import { invalidateAssignCatalogServerCache } from "@/lib/fees/assignCatalogServerCache";
+import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
+import { logger } from "@/lib/logger";
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -12,6 +28,20 @@ async function getSchoolId(session: { user: { id: string; schoolId?: string | nu
     });
     schoolId = adminSchool?.id ?? null;
   }
+  if (!schoolId) {
+    const teacherClass = await prisma.class.findFirst({
+      where: { teacherId: session.user.id },
+      select: { schoolId: true },
+    });
+    schoolId = teacherClass?.schoolId ?? null;
+  }
+  if (!schoolId) {
+    const teacherSchool = await prisma.school.findFirst({
+      where: { teachers: { some: { id: session.user.id } } },
+      select: { id: true },
+    });
+    schoolId = teacherSchool?.id ?? null;
+  }
   return schoolId;
 }
 
@@ -20,8 +50,11 @@ export async function GET(req: Request) {
   if (!session?.user) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
-  const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
-  if (!isAdmin) {
+  const canManageFees =
+    session.user.role === "SCHOOLADMIN" ||
+    session.user.role === "SUPERADMIN" ||
+    session.user.role === "TEACHER";
+  if (!canManageFees) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
 
@@ -31,15 +64,63 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
 
-    const extraFees = await prisma.extraFee.findMany({
+    return await runInTenantScope(schoolId, async () => {
+    const { searchParams } = new URL(req.url);
+    const runMaintenance = searchParams.get("maintenance") === "1";
+
+    if (!runMaintenance) {
+      const memKey = `fees:extra:${schoolId}`;
+      const cached = getSchoolDashboardServerCached<{ extraFees: unknown[] }>(memKey);
+      if (cached) {
+        return NextResponse.json(cached, { status: 200 });
+      }
+    }
+
+    let extraFees = await prisma.extraFee.findMany({
       where: { schoolId },
       orderBy: { createdAt: "desc" },
     });
-    return NextResponse.json({ extraFees });
-  } catch (error: any) {
-    console.error("Extra fees GET error:", error);
+
+    if (runMaintenance) {
+      const lumps = extraFees.filter((ef) =>
+        isUnsplitLumpExtraFee({
+          name: ef.name,
+          splitIntoTwoInstallments: Boolean(ef.splitIntoTwoInstallments),
+        })
+      );
+      if (lumps.length > 0) {
+        await migrateUnsplitLumpExtraFees(
+          prisma,
+          lumps.map((ef) => ({
+            id: ef.id,
+            schoolId: ef.schoolId,
+            name: ef.name,
+            amount: ef.amount,
+            targetType: ef.targetType,
+            targetClassId: ef.targetClassId,
+            targetSection: ef.targetSection,
+            targetStudentId: ef.targetStudentId,
+            residencyScope: ef.residencyScope,
+            splitIntoTwoInstallments: Boolean(ef.splitIntoTwoInstallments),
+          }))
+        );
+        extraFees = await prisma.extraFee.findMany({
+          where: { schoolId },
+          orderBy: { createdAt: "desc" },
+        });
+      }
+    }
+
+    const payload = { extraFees };
+    if (!runMaintenance) {
+      setSchoolDashboardServerCached(`fees:extra:${schoolId}`, payload, 30_000);
+    }
+    return NextResponse.json(payload);
+    });
+  } catch (error: unknown) {
+    logger.error("Extra fees GET error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }
@@ -50,8 +131,11 @@ export async function POST(req: Request) {
   if (!session?.user) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
-  const isAdmin = session.user.role === "SCHOOLADMIN" || session.user.role === "SUPERADMIN";
-  if (!isAdmin) {
+  const canManageFees =
+    session.user.role === "SCHOOLADMIN" ||
+    session.user.role === "SUPERADMIN" ||
+    session.user.role === "TEACHER";
+  if (!canManageFees) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
 
@@ -60,9 +144,34 @@ export async function POST(req: Request) {
     if (!schoolId) {
       return NextResponse.json({ message: "School not found" }, { status: 400 });
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
-    const body = await req.json();
+    const createExtraFeeBodySchema = z.object({
+      name: z.string().optional(),
+      amount: z.number().optional(),
+      targetType: z.string().optional(),
+      targetClassId: z.string().optional().nullable(),
+      targetSection: z.string().optional().nullable(),
+      targetStudentId: z.string().optional().nullable(),
+      splitIntoTwoInstallments: z.boolean().optional(),
+      residencyScope: z.unknown().optional(),
+    });
+    const parsedBody = createExtraFeeBodySchema.safeParse(await req.json().catch(() => null));
+    const body = parsedBody.success ? parsedBody.data : {};
     const { name, amount, targetType, targetClassId, targetSection, targetStudentId } = body;
+    const splitIntoTwoInstallments = Boolean(body.splitIntoTwoInstallments);
+    const parsedScope = parseExtraFeeResidencyScopeBody(body.residencyScope);
+    if (parsedScope === null) {
+      return NextResponse.json(
+        { message: "residencyScope must be ALL, HOSTELLER, or DAY_SCHOLAR when provided" },
+        { status: 400 }
+      );
+    }
+    let residencyScope = parsedScope;
+    const suggested = suggestedResidencyScopeForExtraFeeName(String(name).trim());
+    if (parsedScope === "ALL" && suggested !== "ALL") {
+      residencyScope = suggested;
+    }
 
     if (!name || typeof amount !== "number" || amount <= 0 || !targetType) {
       return NextResponse.json(
@@ -89,57 +198,68 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "targetStudentId required when targetType is STUDENT" }, { status: 400 });
     }
 
-    const extraFee = await prisma.$transaction(async (tx) => {
-      const created = await tx.extraFee.create({
-        data: {
-          schoolId,
-          name: String(name).trim(),
-          amount: Number(amount),
-          targetType,
-          targetClassId: targetClassId || null,
-          targetSection: targetSection || null,
-          targetStudentId: targetStudentId || null,
-        },
-      });
+    const payload: ExtraFeeCreatePayload = {
+      schoolId,
+      name: String(name).trim(),
+      amount: Number(amount),
+      targetType,
+      targetClassId: targetClassId || null,
+      targetSection: targetSection || null,
+      targetStudentId: targetStudentId || null,
+      residencyScope,
+      splitIntoTwoInstallments,
+    };
 
-      const studentWhere =
-        targetType === "SCHOOL"
-          ? { schoolId }
-          : targetType === "SECTION" && targetClassId && targetSection
-            ? { schoolId, classId: targetClassId, class: { section: targetSection } }
-            : targetType === "CLASS" && targetClassId
-              ? { schoolId, classId: targetClassId }
-              : targetType === "STUDENT" && targetStudentId
-                ? { schoolId, id: targetStudentId }
-                : null;
-
-      if (studentWhere) {
-        const students = await tx.student.findMany({
-          where: studentWhere,
-          select: { id: true },
-        });
-        for (const s of students) {
-          const fee = await tx.studentFee.findUnique({ where: { studentId: s.id } });
-          if (fee) {
-            await tx.studentFee.update({
-              where: { studentId: s.id },
-              data: {
-                totalFee: fee.totalFee + amount,
-                finalFee: fee.finalFee + amount,
-                remainingFee: fee.remainingFee + amount,
-              },
-            });
-          }
-        }
-      }
-      return created;
+    const { ids, totalAmount } = await createExtraFeeRows(prisma, payload);
+    const extraFee = await prisma.extraFee.findFirst({
+      where: { id: ids[0] },
     });
 
-    return NextResponse.json({ extraFee }, { status: 201 });
-  } catch (error: any) {
-    console.error("Extra fee POST error:", error);
+    const studentWhere =
+      targetType === "SCHOOL"
+        ? { schoolId }
+        : targetType === "SECTION" && targetClassId && targetSection
+          ? { schoolId, classId: targetClassId, class: { section: targetSection } }
+          : targetType === "CLASS" && targetClassId
+            ? { schoolId, classId: targetClassId }
+            : targetType === "STUDENT" && targetStudentId
+              ? { schoolId, id: targetStudentId }
+              : null;
+
+    if (studentWhere) {
+      const students = await prisma.student.findMany({
+        where: studentWhere,
+        select: { id: true, residencyType: true },
+      });
+      const eligibleStudentIds = students
+        .filter((s) =>
+          extraFeeAppliesToStudent({ name: String(name).trim(), residencyScope }, s.residencyType)
+        )
+        .map((s) => s.id);
+
+      if (eligibleStudentIds.length > 0) {
+        await prisma.studentFee.updateMany({
+          where: { studentId: { in: eligibleStudentIds } },
+          data: {
+            totalFee: { increment: totalAmount },
+            finalFee: { increment: totalAmount },
+            remainingFee: { increment: totalAmount },
+          },
+        });
+      }
+    }
+
+    invalidateAssignCatalogServerCache(schoolId);
+    if (targetType === "STUDENT" && targetStudentId) {
+      invalidateStudentFeeReadCaches({ studentId: String(targetStudentId), schoolId });
+    }
+
+    return NextResponse.json({ extraFee, extraFeeIds: ids }, { status: 201 });
+    });
+  } catch (error: unknown) {
+    logger.error("Extra fee POST error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

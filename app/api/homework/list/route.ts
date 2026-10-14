@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
+import {
+  parentPortalSwrRead,
+  parentPortalSwrWrite,
+  PARENT_LIST_TTL,
+} from "@/lib/parent/parentPortalSwr";
+import { logger } from "@/lib/logger";
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function GET(req: Request) {
   try {
@@ -14,6 +22,7 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const classId = searchParams.get("classId");
     const subject = searchParams.get("subject");
+    const bypassCache = searchParams.get("refresh") === "1";
 
     let schoolId = session.user.schoolId;
     if (!schoolId) {
@@ -23,6 +32,13 @@ export async function GET(req: Request) {
       });
       schoolId = teacherClass?.schoolId ?? null;
     }
+    if (!schoolId && session.user.studentId) {
+      const st = await prisma.student.findUnique({
+        where: { id: session.user.studentId },
+        select: { schoolId: true },
+      });
+      schoolId = st?.schoolId ?? null;
+    }
     if (!schoolId) {
       return NextResponse.json(
         { message: "School not found in session" },
@@ -30,24 +46,41 @@ export async function GET(req: Request) {
       );
     }
 
-    const where: any = {
-      schoolId: schoolId,
-    };
+    const where: Record<string, unknown> = { schoolId };
 
-    // Filter by class if provided
     if (classId) {
       where.classId = classId;
     }
 
-    // For students: show homework for their class only
     if (session.user.studentId) {
       const student = await prisma.student.findUnique({
         where: { id: session.user.studentId },
         select: { classId: true },
       });
 
-      if (student && student.classId) {
+      if (student?.classId) {
         where.classId = student.classId;
+      }
+
+      const cacheParams = {
+        studentId: session.user.studentId,
+        subject: subject ?? null,
+        classId: where.classId ?? null,
+      };
+      const serverKey = `parent:${session.user.studentId}:homework:${subject ?? "all"}`;
+
+      if (!bypassCache) {
+        const hit = await parentPortalSwrRead<{ homeworks: unknown[] }>({
+          schoolId,
+          namespace: "api",
+          resource: "parent:homework:list",
+          params: cacheParams,
+          serverKey,
+          ttl: PARENT_LIST_TTL,
+        });
+        if (hit.value) {
+          return NextResponse.json(hit.value, { status: 200 });
+        }
       }
     }
 
@@ -55,58 +88,83 @@ export async function GET(req: Request) {
       where.subject = subject;
     }
 
-    const homeworks = await prisma.homework.findMany({
-      where,
-      include: {
-        class: {
-          select: {
-            id: true,
-            name: true,
-            section: true,
-            _count: { select: { students: true } },
-          },
-        },
-        teacher: {
-          select: { id: true, name: true, email: true },
-        },
-        _count: {
-          select: { submissions: true },
-        },
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-    });
-
-    // For students, also include submission status
-    if (session.user.studentId) {
-      const homeworksWithSubmission = await Promise.all(
-        homeworks.map(async (homework) => {
-          const submission = await prisma.homeworkSubmission.findUnique({
-            where: {
-              homeworkId_studentId: {
-                homeworkId: homework.id,
-                studentId: session.user.studentId!,
-              },
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): reads go through
+    // the app_tenant connection, restricted by RLS (Homework directly, and its
+    // nested `submissions` via HomeworkSubmission's own studentId -> Student
+    // subquery policy), not just this route's own `where: { schoolId }` filter.
+    const homeworks = await withTenantScopedClient(schoolId, (tx) =>
+      tx.homework.findMany({
+        where,
+        include: {
+          class: {
+            select: {
+              id: true,
+              name: true,
+              section: true,
+              _count: { select: { students: true } },
             },
-          });
+          },
+          teacher: {
+            select: { id: true, name: true, email: true },
+          },
+          _count: {
+            select: { submissions: true },
+          },
+          ...(session.user.studentId
+            ? {
+                submissions: {
+                  where: { studentId: session.user.studentId },
+                  take: 1,
+                },
+              }
+            : {}),
+        },
+        orderBy: { createdAt: "desc" },
+        take: session.user.studentId ? 100 : undefined,
+      })
+    );
 
-          return {
-            ...homework,
-            hasSubmitted: !!submission,
-            submission: submission || null,
-          };
-        })
-      );
+    if (session.user.studentId) {
+      const homeworksWithSubmission = homeworks.map((homework) => {
+        const submission =
+          "submissions" in homework && Array.isArray(homework.submissions)
+            ? homework.submissions[0] ?? null
+            : null;
+        const { submissions: _subs, ...rest } = homework as typeof homework & {
+          submissions?: Array<{ id: string; content?: string | null; fileUrl?: string | null; submittedAt?: Date }>;
+        };
+        return {
+          ...rest,
+          hasSubmitted: !!submission,
+          submission: submission || null,
+        };
+      });
 
-      return NextResponse.json({ homeworks: homeworksWithSubmission }, { status: 200 });
+      const payload = { homeworks: homeworksWithSubmission };
+      const serverKey = `parent:${session.user.studentId}:homework:${subject ?? "all"}`;
+      if (!bypassCache) {
+        await parentPortalSwrWrite({
+          schoolId,
+          namespace: "api",
+          resource: "parent:homework:list",
+          params: {
+            studentId: session.user.studentId,
+            subject: subject ?? null,
+            classId: where.classId ?? null,
+          },
+          serverKey,
+          ttl: PARENT_LIST_TTL,
+          value: payload,
+        });
+      }
+      return NextResponse.json(payload, { status: 200 });
     }
 
     return NextResponse.json({ homeworks }, { status: 200 });
-  } catch (error: any) {
-    console.error("List homeworks error:", error);
+  } catch (error: unknown) {
+    logger.error("List homeworks error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: toClientErrorMessage(error, "Internal server error") },
       { status: 500 }
     );
   }

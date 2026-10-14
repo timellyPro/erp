@@ -1,11 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ROUTES } from "@/app/frontend/constants/routes";
-import Spinner from "./frontend/components/common/Spinner";
-import LoginForm from "./frontend/auth/LoginForm";
+import { ROUTES } from "@/app/_components/constants/routes";
+import { shouldForceSuperAdminRelogin } from "@/lib/auth/superAdminBrowserSession";
+import Spinner from "./_components/components/common/Spinner";
+import LoginForm from "./_components/auth/LoginForm";
 
 export default function Home() {
   const router = useRouter();
@@ -16,9 +18,14 @@ export default function Home() {
     // Only redirect if we have a confirmed authenticated status with a valid role
     // Never redirect to /unauthorized from home page
     if (status === "authenticated" && session?.user?.role && !hasRedirected) {
+      if (session.user.role === "SUPERADMIN" && shouldForceSuperAdminRelogin()) {
+        return;
+      }
+
       const roleRoutes: Record<string, string> = {
         SUPERADMIN: ROUTES.SUPERADMIN,
         SCHOOLADMIN: ROUTES.SCHOOLADMIN,
+        CHAIRMAN: ROUTES.CHAIRMAN,
         STUDENT: ROUTES.PARENT,
         TEACHER: ROUTES.TEACHER,
       };
@@ -71,8 +78,15 @@ export default function Home() {
 
   // Show login form for everyone else (unauthenticated or authenticated without valid role)
   return (
-    <div className="min-h-screen flex items-center justify-center px-6">
+    <div className="min-h-screen flex flex-col items-center justify-center px-6">
       <LoginForm />
+      <p className="mt-6 text-xs text-zinc-400">
+        <Link href="/terms" className="underline">Terms</Link>
+        {" · "}
+        <Link href="/privacy-policy" className="underline">Privacy</Link>
+        {" · "}
+        <Link href="/support" className="underline">Support</Link>
+      </p>
     </div>
   );
 }

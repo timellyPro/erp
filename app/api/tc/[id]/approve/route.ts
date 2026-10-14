@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import prisma from "@/lib/db";
+import { authOptions } from "@/lib/auth/authOptions";
+import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { createNotification } from "@/lib/notificationService";
+import { logger } from "@/lib/logger";
+import { getErrorMessage } from "@/lib/errors/errorInfo";
 
 export async function POST(
   req: Request,
@@ -17,11 +20,11 @@ export async function POST(
 
     const { id } = await params;
     let tcDocumentUrl: string | undefined;
-    try {
-      const body = await req.json();
-      tcDocumentUrl = body?.tcDocumentUrl;
-    } catch {
-      // empty or invalid body
+    const parsedBody = z.object({ tcDocumentUrl: z.string().optional() }).safeParse(
+      await req.json().catch(() => null)
+    );
+    if (parsedBody.success) {
+      tcDocumentUrl = parsedBody.data.tcDocumentUrl;
     }
 
     let schoolId = session.user.schoolId;
@@ -38,6 +41,7 @@ export async function POST(
         { status: 400 }
       );
     }
+    return await runInTenantScope(schoolId, async (schoolId) => {
 
     // Verify TC belongs to school
     const tc = await prisma.transferCertificate.findFirst({
@@ -46,7 +50,21 @@ export async function POST(
         schoolId: schoolId,
       },
       include: {
-        student: true,
+        student: {
+          select: {
+            id: true,
+            userId: true,
+            schoolId: true,
+            classId: true,
+            fatherName: true,
+            aadhaarNo: true,
+            phoneNo: true,
+            rollNo: true,
+            dob: true,
+            address: true,
+            createdAt: true,
+          },
+        },
       },
     });
 
@@ -77,7 +95,9 @@ export async function POST(
         },
       });
 
-      // Save student data to history
+      // Save student data to history. Json columns need JSON-serializable
+      // values - dates become ISO strings rather than Date instances
+      // (Prisma.InputJsonValue excludes Date).
       const studentData = {
         id: tc.student.id,
         userId: tc.student.userId,
@@ -87,16 +107,16 @@ export async function POST(
         aadhaarNo: tc.student.aadhaarNo,
         phoneNo: tc.student.phoneNo,
         rollNo: tc.student.rollNo,
-        dob: tc.student.dob,
+        dob: tc.student.dob ? tc.student.dob.toISOString() : null,
         address: tc.student.address,
-        createdAt: tc.student.createdAt,
+        createdAt: tc.student.createdAt.toISOString(),
       };
 
       await tx.studentHistory.create({
         data: {
           originalStudentId: tc.student.id,
           schoolId: schoolId,
-          studentData: studentData as any,
+          studentData,
           deactivatedBy: session.user.id,
           reason: `Transfer Certificate approved - ${tc.reason || "No reason provided"}`,
         },
@@ -138,10 +158,11 @@ export async function POST(
       },
       { status: 200 }
     );
-  } catch (error: any) {
-    console.error("Approve TC error:", error);
+    });
+  } catch (error: unknown) {
+    logger.error("Approve TC error:", error);
     return NextResponse.json(
-      { message: error?.message || "Internal server error" },
+      { message: getErrorMessage(error) || "Internal server error" },
       { status: 500 }
     );
   }

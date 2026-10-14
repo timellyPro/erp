@@ -1,8 +1,16 @@
+import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "@/lib/auth/authOptions";
 import prisma from "@/lib/db";
+import { withTenantScopedClient } from "@/lib/db/tenantClient";
 import { purgeExpiredNewsFeeds } from "@/lib/newsfeedRetention";
+import { logger } from "@/lib/logger";
+
+type TenantTx = Parameters<Parameters<typeof withTenantScopedClient>[1]>[0];
+
+const NEWSFEED_PURGE_INTERVAL_MS = 5 * 60 * 1000;
+let lastPurgeStartedAt = 0;
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
   let schoolId = session.user.schoolId;
@@ -70,8 +78,8 @@ function mapFeedsToResponse(
 }
 
 /** List news feeds using raw SQL (works even if Prisma delegate is missing) */
-async function listViaRawSql(schoolId: string, userId: string) {
-  const feeds = await prisma.$queryRawUnsafe<FeedRow[]>(
+async function listViaRawSql(tx: TenantTx, schoolId: string, userId: string) {
+  const feeds = await tx.$queryRawUnsafe<FeedRow[]>(
     `SELECT nf.id, nf.title, nf.description, nf.photo, nf.photos, nf.likes, nf."schoolId", nf."createdById",
             nf."createdAt", nf."updatedAt",
             u.id as "creatorId", u.name as "creatorName", u.email as "creatorEmail"
@@ -86,7 +94,7 @@ async function listViaRawSql(schoolId: string, userId: string) {
   let likedSet = new Set<string>();
   if (feedIds.length > 0) {
     const placeholders = feedIds.map((_, i) => `$${i + 2}`).join(", ");
-    const likeRows = await prisma.$queryRawUnsafe<LikeRow[]>(
+    const likeRows = await tx.$queryRawUnsafe<LikeRow[]>(
       `SELECT "newsFeedId" FROM "NewsFeedLike" WHERE "userId" = $1 AND "newsFeedId" IN (${placeholders})`,
       userId,
       ...feedIds
@@ -105,8 +113,6 @@ export async function GET() {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    await purgeExpiredNewsFeeds();
-
     const schoolId = await getSchoolId(session);
 
     if (!schoolId) {
@@ -114,65 +120,70 @@ export async function GET() {
     }
 
     const userId = session.user.id;
-
-    try {
-      const feeds = await prisma.newsFeed.findMany({
-        where: { schoolId },
-        include: {
-          createdBy: {
-            select: { id: true, name: true, email: true , photoUrl: true},
-          },
-        },
-        orderBy: { createdAt: "desc" },
+    const now = Date.now();
+    if (now - lastPurgeStartedAt > NEWSFEED_PURGE_INTERVAL_MS) {
+      lastPurgeStartedAt = now;
+      void purgeExpiredNewsFeeds().catch((error) => {
+        logger.warn("News feed retention cleanup failed:", error);
       });
-
-      const feedIds = feeds.map((f) => f.id);
-      const myLikes =
-        feedIds.length > 0
-          ? await prisma.newsFeedLike.findMany({
-              where: { userId, newsFeedId: { in: feedIds } },
-              select: { newsFeedId: true },
-            })
-          : [];
-      const likedSet = new Set(myLikes.map((l) => l.newsFeedId));
-
-      const newsFeeds = feeds.map((f) => {
-        const fAny = f as { photos?: string[] };
-        const photos = Array.isArray(fAny.photos) && fAny.photos.length > 0 ? fAny.photos : f.photo ? [f.photo] : [];
-        return {
-        id: f.id,
-        title: f.title,
-        description: f.description,
-        photo: f.photo ?? photos[0] ?? null,
-        photos,
-        mediaUrl: f.photo ?? photos[0] ?? null,
-        mediaType: (f.photo || photos.length) ? "PHOTO" : null,
-        likes: f.likes ?? 0,
-        schoolId: f.schoolId,
-        createdById: f.createdById,
-        createdBy: f.createdBy
-          ? { id: f.createdBy.id, name: f.createdBy.name, email: f.createdBy.email, photoUrl: f.createdBy.photoUrl }
-          : { id: f.createdById, name: null, email: null, photoUrl: null },
-        createdAt: f.createdAt.toISOString(),
-        updatedAt: f.updatedAt.toISOString(),
-        likedByMe: likedSet.has(f.id),
-      };
-      });
-
-      return NextResponse.json({ newsFeeds }, { status: 200 });
-    } catch (prismaErr) {
-      console.warn("News feed list via Prisma failed, trying raw SQL:", prismaErr);
-      const newsFeeds = await listViaRawSql(schoolId, userId);
-      return NextResponse.json({ newsFeeds }, { status: 200 });
     }
+
+    // Real DB-level tenant isolation (docs/SECURITY_REVIEW.md): both the normal
+    // and raw-SQL-fallback paths read through the app_tenant connection,
+    // restricted by RLS, not just this route's own `where`/`$1` filters.
+    const newsFeeds = await withTenantScopedClient(schoolId, async (tx) => {
+      try {
+        const feeds = await tx.newsFeed.findMany({
+          where: { schoolId },
+          include: {
+            createdBy: {
+              select: { id: true, name: true, email: true, photoUrl: true },
+            },
+          },
+          orderBy: { createdAt: "desc" },
+        });
+
+        const feedIds = feeds.map((f) => f.id);
+        const myLikes =
+          feedIds.length > 0
+            ? await tx.newsFeedLike.findMany({
+                where: { userId, newsFeedId: { in: feedIds } },
+                select: { newsFeedId: true },
+              })
+            : [];
+        const likedSet = new Set(myLikes.map((l) => l.newsFeedId));
+
+        return feeds.map((f) => {
+          const fAny = f as { photos?: string[] };
+          const photos = Array.isArray(fAny.photos) && fAny.photos.length > 0 ? fAny.photos : f.photo ? [f.photo] : [];
+          return {
+            id: f.id,
+            title: f.title,
+            description: f.description,
+            photo: f.photo ?? photos[0] ?? null,
+            photos,
+            mediaUrl: f.photo ?? photos[0] ?? null,
+            mediaType: (f.photo || photos.length) ? "PHOTO" : null,
+            likes: f.likes ?? 0,
+            schoolId: f.schoolId,
+            createdById: f.createdById,
+            createdBy: f.createdBy
+              ? { id: f.createdBy.id, name: f.createdBy.name, email: f.createdBy.email, photoUrl: f.createdBy.photoUrl }
+              : { id: f.createdById, name: null, email: null, photoUrl: null },
+            createdAt: f.createdAt.toISOString(),
+            updatedAt: f.updatedAt.toISOString(),
+            likedByMe: likedSet.has(f.id),
+          };
+        });
+      } catch (prismaErr) {
+        logger.warn("News feed list via Prisma failed, trying raw SQL:", prismaErr);
+        return listViaRawSql(tx, schoolId, userId);
+      }
+    });
+
+    return NextResponse.json({ newsFeeds }, { status: 200 });
   } catch (error: unknown) {
-    console.error("List news feeds error:", error);
-    const msg =
-      error instanceof Error
-        ? error.message
-        : typeof (error as { message?: string })?.message === "string"
-          ? (error as { message: string }).message
-          : "Internal server error";
-    return NextResponse.json({ message: msg }, { status: 500 });
+    logger.error("List news feeds error:", error);
+    return NextResponse.json({ message: toClientErrorMessage(error) }, { status: 500 });
   }
 }

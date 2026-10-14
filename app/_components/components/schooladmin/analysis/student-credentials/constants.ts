@@ -1,0 +1,1 @@
+export const CREDENTIALS_PAGE_SIZE = 15;
