@@ -1,7 +1,7 @@
 # Production Readiness Report — Timelly
 
 **Date:** 2026-10-14
-**Rating: 9.5 / 10 — ready for a real launch, added school by school.**
+**Rating: 9.5 / 10 — ready for a real launch, added school by school.** (Lowered from 9.9 during this audit: the unapplied-migration finding above was a real, previously unnoticed production gap. It is fixed, and the automation that prevents a repeat is in this change.)
 **Scope:** the deployed system (production `app.timelly.in`, staging `timelly-staging.vercel.app`), the repository at `main` (`e2aa6fd`), the Supabase databases, backups and CI.
 **Method:** everything below was run or measured, not assumed. Where something was *not* tested it says so.
 
@@ -30,7 +30,8 @@ The code, database, security and recovery work is finished and verified. What ke
 4. **Production was missing 28 indexes** that `schema.prisma` declares (payments by student/status, appointments, homework, leave requests, …). Added by an idempotent migration, verified to leave no index differences from the schema.
 5. **The backup passphrase was not recorded anywhere,** so backups would have been undecryptable in an emergency. Regenerated, saved in the password manager, GitHub secret updated. Backups created before 2026-10-13 20:20 UTC cannot be decrypted.
 6. **CSP allowed inline scripts.** Replaced by a per-request nonce (`middleware.ts`, `lib/security/csp.ts`). The admission-receipt print iframe used an inline script and now prints from the parent window.
-7. **Process notes:** two live session tokens were pasted into a chat during testing; `NEXTAUTH_SECRET` was rotated and the sessions invalidated.
+7. **A migration shipped with its code but never reached production.** `20261013000000_user_privacy_consent` (two `User` columns used by the consent feature) was merged on 2026-10-13 but not applied, because nothing ran migrations on deploy. Until it was applied (2026-10-14), 25 `User` reads/writes that return every column (user, teacher and student create/update, password change, bulk imports) would have failed on production. The first `migrate status` check against production also showed three of this round's migrations pending. All four were applied by hand on 2026-10-14 (idempotent versions; verified on throwaway databases first) and deploys now apply migrations automatically (`docs/DEPLOY.md` §11). The migration was made idempotent (`ADD COLUMN IF NOT EXISTS`) so it could not fail a deploy if the columns already existed.
+8. **Process notes:** two live session tokens were pasted into a chat during testing; `NEXTAUTH_SECRET` was rotated and the sessions invalidated.
 
 ## 4. Load-test results (staging, fake data)
 `loadtest/staging-peak.js` logs in as each seeded teacher separately and reads `/api/teacher/dashboard`. `scripts/seedStaging.ts` creates 2 schools, 30 teachers and 240 students and refuses to run against the production project.
