@@ -46,7 +46,7 @@ jobs:
           rm "$f"
           ls -l
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: db-backup
           path: "*.dump.gpg"
