@@ -51,7 +51,7 @@ Downloaded the `db-backup` artifact, decrypted it with the real passphrase (gpg,
 - **Scheduled jobs loop over every school** within a 60 s limit (fees backup email, payment reconcile). Untested beyond today's data; watch their results after about 10 schools.
 - **Third-party quotas** (SMTP, Upstash Redis, Sentry, Vercel plan) have not been checked against 10 schools.
 - **No track record.** The nightly backup artifacts, error rates and uptime need weeks of real use to be trusted.
-- **Migrations are NOT applied automatically.** The Vercel build runs only `prisma generate && next build`. The one place that ran `prisma migrate deploy` is the GitHub "Deploy" workflow, which is unused (it failed on missing secrets). Every migration must therefore be applied by hand to each database before the code that needs it ships: `DATABASE_URL=<direct url> npx prisma migrate deploy`, then check `npx prisma migrate status`. Until this is automated, a merged migration is not a deployed migration.
+- **Migrations now run on production deploys** (`scripts/migrate-on-deploy.js`, `docs/DEPLOY.md` §11), only for `VERCEL_ENV=production`, never for previews. Before this change they did not run at all (the build was `prisma generate && next build` and the only `migrate deploy` was in the unused GitHub "Deploy" workflow), so migrations merged before it must be confirmed applied: run `npx prisma migrate status` against each database. The GitHub "Deploy" workflow itself remains unused.
 - **Online-payment (HyperPG) code is dormant.** There is no payment gateway. The webhook rejects every request without its credentials and the other routes require a login, so it is inert but still present (pay buttons/pages, refunds, reconcile cron, credentials card).
 - **Schema notes:** `User.passwordEncrypted` / `passwordEncryptedPrev` exist in a freshly built database but not in production (production removed them) and are unused. `SystemSubscription` is a platform table not modelled in Prisma.
 - **Pages are no longer statically prerendered** (a nonce needs a fresh render per request).
@@ -60,7 +60,7 @@ Downloaded the `db-backup` artifact, decrypted it with the real passphrase (gpg,
 - Add schools one at a time; check Sentry and `/api/health` after each.
 - Daily for the first week: Sentry errors, `/api/health` monitor.
 - Confirm a new `db-backup` artifact appears every night; keep `BACKUP_PASSPHRASE` in the password manager.
-- Apply migrations **by hand** (they do not run on deploy): staging first, then production, before promoting code that needs them (`docs/DEPLOY.md` §5). After each, run `npx prisma migrate status` against that database and confirm "Database schema is up to date".
+- Migrations apply automatically on production deploys (`docs/DEPLOY.md` §11). Merge to `main`, let staging apply and verify it, then promote. Keep migrations backward compatible with the running code, and confirm the Vercel Build Command is not overridden.
 - After any change to the tenant connection string, re-run the load test on staging at 20+ simultaneous users.
 - Rotate `NEXTAUTH_SECRET` / `CRON_SECRET` by changing them in Vercel and redeploying (rotating `NEXTAUTH_SECRET` logs everyone out).
 
