@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
 import { rateLimit, rateLimitKey } from "@/lib/rateLimit";
+import { buildCsp, generateNonce } from "@/lib/security/csp";
 
 // Public, unauthenticated pages (see PRODUCTION_READINESS.md's rate-limiting
 // finding): no session gates these, so they're the ones most exposed to
@@ -68,7 +69,21 @@ export async function middleware(request: NextRequest) {
 
   await logApiRequest(request, pathname);
 
-  const response = NextResponse.next();
+  // Page requests get a per-request CSP nonce (API responses are JSON/downloads: no CSP needed).
+  // The policy must also be on the *request* headers so Next.js can read the nonce from it and
+  // stamp it onto its own scripts.
+  let response: NextResponse;
+  if (pathname.startsWith("/api/")) {
+    response = NextResponse.next();
+  } else {
+    const nonce = generateNonce();
+    const csp = buildCsp(nonce, process.env.NODE_ENV !== "production");
+    const requestHeaders = new Headers(request.headers);
+    requestHeaders.set("x-nonce", nonce);
+    requestHeaders.set("Content-Security-Policy", csp);
+    response = NextResponse.next({ request: { headers: requestHeaders } });
+    response.headers.set("Content-Security-Policy", csp);
+  }
 
   // Per-user responses must not be cached by the browser (e.g. parent portal bell).
   const skipApiCache =
@@ -93,5 +108,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|sw\\.js$|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
 };

@@ -5,6 +5,9 @@ import { AuthProvider } from "@/app/_components/context/AuthContext";
 import { GlobalBackground } from "./_components/components/common/GlobalBackground";
 import PwaRegister from "./_components/components/common/PwaRegister";
 import InstallAppBanner from "./_components/components/common/InstallAppBanner";
+// A nonce-based CSP needs a fresh nonce on every request, so pages cannot be prerendered statically.
+export const dynamic = "force-dynamic";
+
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",

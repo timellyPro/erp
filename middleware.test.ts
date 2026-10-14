@@ -20,6 +20,21 @@ function request(path: string, ip = "1.2.3.4") {
 }
 
 describe("middleware", () => {
+  it("sets a nonce-based CSP on page requests, with a fresh nonce each time", async () => {
+    const a = await middleware(request("/teacher"));
+    const b = await middleware(request("/teacher"));
+    const cspA = a.headers.get("Content-Security-Policy")!;
+    const cspB = b.headers.get("Content-Security-Policy")!;
+    expect(cspA).toMatch(/script-src 'self' 'nonce-[^']+' 'strict-dynamic'/);
+    expect(cspA).not.toContain("script-src 'self' 'unsafe-inline'");
+    expect(cspA).not.toBe(cspB);
+  });
+
+  it("does not set a CSP on API responses", async () => {
+    const res = await middleware(request("/api/fees/summary"));
+    expect(res.headers.get("Content-Security-Policy")).toBeNull();
+  });
+
   it("sets a private Cache-Control header on GET /api/* (excluding auth/notifications)", async () => {
     const res = await middleware(request("/api/fees/summary"));
     expect(res.headers.get("Cache-Control")).toBe(

@@ -8,6 +8,7 @@ const nextConfig: NextConfig = {
   // AbortError — but noisy to debug against. No effect on production builds either way.
   reactStrictMode: false,
   poweredByHeader: false,
+  // Content-Security-Policy is set per request (with a nonce) in middleware.ts.
   async headers() {
     return [
       {
@@ -18,22 +19,6 @@ const nextConfig: NextConfig = {
           { key: "X-Frame-Options", value: "SAMEORIGIN" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()" },
-          {
-            key: "Content-Security-Policy",
-            value: [
-              "default-src 'self'",
-              "base-uri 'self'",
-              "object-src 'none'",
-              "frame-ancestors 'self'",
-              "form-action 'self'",
-              "img-src 'self' data: blob: https:",
-              "font-src 'self' data: https:",
-              "style-src 'self' 'unsafe-inline'",
-              "script-src 'self' 'unsafe-inline'" + (process.env.NODE_ENV === "production" ? "" : " 'unsafe-eval'"),
-              "connect-src 'self' https: wss:",
-              "worker-src 'self' blob:",
-            ].join("; "),
-          },
         ],
       },
     ];
