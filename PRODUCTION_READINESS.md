@@ -1,5 +1,84 @@
 # Production Readiness Report — Timelly
 
+**Date:** 2026-10-14
+**Rating: 9.5 / 10 — ready for a real launch, added school by school.**
+**Scope:** the deployed system (production `app.timelly.in`, staging `timelly-staging.vercel.app`), the repository at `main` (`e2aa6fd`), the Supabase databases, backups and CI.
+**Method:** everything below was run or measured, not assumed. Where something was *not* tested it says so.
+
+## 1. Verdict
+The code, database, security and recovery work is finished and verified. What keeps it from 10 is not code: it has almost no time under real traffic, and its behaviour at roughly 10 schools (100–200 simultaneous users) has not been measured. Add schools one at a time and watch Sentry and `/api/health` after each.
+
+## 2. Scores
+
+| Area | Score | Evidence |
+|---|---|---|
+| Security (headers, CSP, dependencies, secrets) | 10 | HSTS, nosniff, frame, referrer and permissions headers live; nonce-based CSP with no `unsafe-inline` scripts; `npm audit --omit=dev`: 0 vulnerabilities; `NEXTAUTH_SECRET` rotated |
+| Tenant isolation | 10 | Row-level security enforced in the database; `scripts/verify-rls-isolation.ts` passes across two schools; CI runs `check:tenant-isolation` |
+| Correctness and tests | 9.5 | 226 suites / 1,979 tests pass; `tsc` clean; CI runs tsc, lint, tenant check, tests and build |
+| Performance at tested load | 10 | 30 separate teacher logins, 3 min: 3,142/3,142 requests ok, p95 0.31 s |
+| Performance at expected load (~10 schools) | 7 | **Not measured** |
+| Backups and recovery | 9.5 | Full restore drill completed (download, gpg decrypt, restore, row counts match); nightly job not yet proven over weeks |
+| Database and migrations | 10 | A database built only from migrations matches production; 28 missing indexes added |
+| Environments and deploys | 9 | Real staging with its own database and fake data; Vercel Git deploys; the GitHub "Deploy" workflow is unused |
+| Observability | 9 | Sentry (with source maps), `/api/health`, structured request logs with `schoolId` |
+| Real-world proof | 6 | Little time under real traffic |
+
+## 3. What was found and fixed in this round
+1. **Functions ran in the wrong region.** `vercel.json` set none, so they ran in US East against a Mumbai (ap-south-1) database. Pinned to `bom1`. Dashboard latency under test went from p95 ~12 s to ~0.36 s.
+2. **The restricted `app_tenant` connection collapsed past ~10 users.** It used the Supabase *session* pooler (port 5432, ~15 clients in total). On staging, 20 simultaneous teachers got 60% success and 30 got 14%. Switching `DATABASE_URL_TENANT` to the *transaction* pooler (port 6543, `pgbouncer=true`) gave 100% at 20 and at 30. Production was confirmed to be on 6543. Docs updated (`docs/DEPLOY.md` §2 and §9, `docs/SECURITY_REVIEW.md` §3.3).
+3. **Migrations could not build a database from scratch.** `ExamSubject`, `PettyCashExpense`, `SystemSubscription` and `TeacherDailyAttendance` were needed before row-level security was enabled but never created in time, and 16 `Student` / `StudentApplication` columns existed only in production. Fixed with two idempotent migrations (no-ops on production), verified on an empty Postgres 17 and on a restored production copy.
+4. **Production was missing 28 indexes** that `schema.prisma` declares (payments by student/status, appointments, homework, leave requests, …). Added by an idempotent migration, verified to leave no index differences from the schema.
+5. **The backup passphrase was not recorded anywhere,** so backups would have been undecryptable in an emergency. Regenerated, saved in the password manager, GitHub secret updated. Backups created before 2026-10-13 20:20 UTC cannot be decrypted.
+6. **CSP allowed inline scripts.** Replaced by a per-request nonce (`middleware.ts`, `lib/security/csp.ts`). The admission-receipt print iframe used an inline script and now prints from the parent window.
+7. **Process notes:** two live session tokens were pasted into a chat during testing; `NEXTAUTH_SECRET` was rotated and the sessions invalidated.
+
+## 4. Load-test results (staging, fake data)
+`loadtest/staging-peak.js` logs in as each seeded teacher separately and reads `/api/teacher/dashboard`. `scripts/seedStaging.ts` creates 2 schools, 30 teachers and 240 students and refuses to run against the production project.
+
+| Simultaneous teachers | Tenant connection | Success | p95 |
+|---|---|---|---|
+| 10 | port 5432 | 100% | 0.21 s |
+| 20 | port 5432 | 60% | 0.28 s |
+| 30 | port 5432 | 14% | 0.25 s |
+| 20 | **port 6543** | **100%** | 0.33 s |
+| 30 (3 min) | **port 6543** | **100% (3,142/3,142)** | 0.31 s |
+
+## 5. Backup and restore drill (2026-10-14)
+Downloaded the `db-backup` artifact, decrypted it with the real passphrase (gpg, throwaway `postgres:17` container; 2.9 MB, 612 objects) and restored it into a scratch Postgres 17: 59 tables, 53 RLS policies, 63 migrations; row counts School 4, User 1177, Student 1117, Payment 1284, Class 48, StudentFee 1060. The 14 restore errors are Supabase-only extensions and event triggers and are expected. The decrypted dump and scratch database were deleted afterwards (they held real student data). Details: `docs/DEPLOY.md` §8.
+
+## 6. Known gaps (not proven or not done)
+- **~10 schools / 100–200 simultaneous users is untested.** Production has 4 schools; staging tests used 2. The ceiling is set mostly by the Supabase plan and compute size. Before onboarding many schools, extend the seed script and re-run the load test.
+- **Scheduled jobs loop over every school** within a 60 s limit (fees backup email, payment reconcile). Untested beyond today's data; watch their results after about 10 schools.
+- **Third-party quotas** (SMTP, Upstash Redis, Sentry, Vercel plan) have not been checked against 10 schools.
+- **No track record.** The nightly backup artifacts, error rates and uptime need weeks of real use to be trusted.
+- **Migrations are NOT applied automatically.** The Vercel build runs only `prisma generate && next build`. The one place that ran `prisma migrate deploy` is the GitHub "Deploy" workflow, which is unused (it failed on missing secrets). Every migration must therefore be applied by hand to each database before the code that needs it ships: `DATABASE_URL=<direct url> npx prisma migrate deploy`, then check `npx prisma migrate status`. Until this is automated, a merged migration is not a deployed migration.
+- **Online-payment (HyperPG) code is dormant.** There is no payment gateway. The webhook rejects every request without its credentials and the other routes require a login, so it is inert but still present (pay buttons/pages, refunds, reconcile cron, credentials card).
+- **Schema notes:** `User.passwordEncrypted` / `passwordEncryptedPrev` exist in a freshly built database but not in production (production removed them) and are unused. `SystemSubscription` is a platform table not modelled in Prisma.
+- **Pages are no longer statically prerendered** (a nonce needs a fresh render per request).
+
+## 7. Operating checklist
+- Add schools one at a time; check Sentry and `/api/health` after each.
+- Daily for the first week: Sentry errors, `/api/health` monitor.
+- Confirm a new `db-backup` artifact appears every night; keep `BACKUP_PASSPHRASE` in the password manager.
+- Apply migrations **by hand** (they do not run on deploy): staging first, then production, before promoting code that needs them (`docs/DEPLOY.md` §5). After each, run `npx prisma migrate status` against that database and confirm "Database schema is up to date".
+- After any change to the tenant connection string, re-run the load test on staging at 20+ simultaneous users.
+- Rotate `NEXTAUTH_SECRET` / `CRON_SECRET` by changing them in Vercel and redeploying (rotating `NEXTAUTH_SECRET` logs everyone out).
+
+## 8. Reproduce the checks
+```bash
+npx tsc --noEmit && npm run lint && npm run check:tenant-isolation && npm test && npm run build
+npm audit --omit=dev
+curl -s https://app.timelly.in/api/health
+curl -sI https://app.timelly.in/admin/login | grep -i content-security-policy   # script-src has a nonce, no unsafe-inline
+k6 run -e BASE_URL=<staging url> -e SEED_CSV=<seed-logins.csv> loadtest/staging-peak.js   # never against production
+```
+
+---
+
+## Appendix A — Earlier remediation audit (2026-09-27 / 2026-10-03)
+
+> **Superseded.** This was a pre-deployment code audit. Its "A+ (100/100)" rating was about the code at that time, before the app was deployed, load-tested on real infrastructure, or restored from a real backup. The current assessment is above; this appendix is kept for the history of what was fixed and why.
+
 **Date:** 2026-09-27
 **Method:** Full audit of `app/api/**/route.ts` (177 route files at the
 start; 163 remain after the dead-route deletion below), `lib/`,
