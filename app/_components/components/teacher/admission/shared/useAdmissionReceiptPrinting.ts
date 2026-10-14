@@ -156,16 +156,15 @@ export function useAdmissionReceiptPrinting() {
             </head>
             <body>
               ${html}
-              <script>
-                setTimeout(() => {
-                  window.focus();
-                  window.print();
-                }, 1500);
-              </script>
             </body>
           </html>
         `);
         iframeDoc.close();
+        // Print from the parent (an inline <script> in the iframe would be blocked by the CSP).
+        setTimeout(() => {
+          iframe.contentWindow?.focus();
+          iframe.contentWindow?.print();
+        }, 1500);
       }
 
       // Cleanup iframe after printing dialog has most likely closed

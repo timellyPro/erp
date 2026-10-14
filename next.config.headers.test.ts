@@ -16,12 +16,10 @@ describe("security headers", () => {
       "X-Frame-Options",
       "Referrer-Policy",
       "Permissions-Policy",
-      "Content-Security-Policy",
     ]) {
       expect(keys).toContain(k);
     }
-    const csp = all!.headers.find((h) => h.key === "Content-Security-Policy")!.value;
-    expect(csp).toContain("object-src 'none'");
-    expect(csp).toContain("frame-ancestors 'self'");
+    // The CSP is per request (nonce) and lives in middleware.ts, so it must not also be static here.
+    expect(keys).not.toContain("Content-Security-Policy");
   });
 });
