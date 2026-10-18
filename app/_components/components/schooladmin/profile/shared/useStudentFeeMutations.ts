@@ -12,6 +12,7 @@ import {
   invalidateFeeBreakdownCache,
   setFeeBreakdownCache,
 } from "@/lib/fees/feeBreakdownClientCache";
+import { invalidateSchoolFeeClientCaches } from "@/lib/fees/invalidateSchoolFeeClientCaches";
 import type { FeeDeleteSuccess, FeePaymentSuccess, StudentDetail } from "./types";
 import {
   computeUpdatedFeeAfterDelete,
@@ -81,6 +82,7 @@ export function useStudentFeeMutations({
 
   const refreshFeesForStudent = useCallback(
     async (studentId: string, paymentResult?: FeePaymentSuccess) => {
+      invalidateSchoolFeeClientCaches();
       if (paymentResult) {
         setTransactionsReady(true);
         setDetail((prev) => {
@@ -122,6 +124,7 @@ export function useStudentFeeMutations({
   const removePaymentForStudent = useCallback(
     (studentId: string, deleteResult: FeeDeleteSuccess) => {
       deletedPaymentIdsRef.current.add(deleteResult.paymentId);
+      invalidateSchoolFeeClientCaches();
       invalidateStudentDetailsBundleCache(studentId);
       invalidateFeeBreakdownCache(studentId);
 

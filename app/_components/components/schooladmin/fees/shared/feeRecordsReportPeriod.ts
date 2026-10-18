@@ -99,6 +99,8 @@ export const buildReportTxQueryParams = (state: ReportPeriodState) => {
   return new URLSearchParams({
     limit: "10000",
     forFeeReport: "1",
+    // Exports must never be built from the server's 60s report cache.
+    refresh: "1",
     from,
     to,
   });

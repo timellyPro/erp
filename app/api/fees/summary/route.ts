@@ -6,13 +6,14 @@ import { computeCurrentAndPreviousFeeStats } from "@/lib/fees/computeFeeSummaryS
 import { loadFeeSummaryPage } from "@/lib/fees/loadFeeSummaryPage";
 import { withRequestTiming } from "@/lib/cache/requestTiming";
 import { tenantCacheKey, swrGet, swrSet } from "@/lib/cache/tenantCache";
-import {
-  getSchoolDashboardServerCached,
-  setSchoolDashboardServerCached,
-} from "@/lib/school/schoolDashboardServerCache";
 import { getErrorMessage } from "@/lib/errors/errorInfo";
 import { logger } from "@/lib/logger";
-import { FEE_LIST_SERVER_CACHE_TTL_MS } from "@/lib/fees/feeListServerCache";
+import {
+  FEE_LIST_SERVER_CACHE_TTL_MS,
+  getFeeCacheVersion,
+  getFeeCached,
+  setFeeCached,
+} from "@/lib/fees/feeListServerCache";
 import { runInTenantScope } from "@/lib/db/tenantContext";
 
 export async function GET(req: Request) {
@@ -47,14 +48,15 @@ export async function GET(req: Request) {
         // Cursor pagination (by studentFee.studentId which is unique).
         const { searchParams } = new URL(req.url);
         const statsOnly = searchParams.get("statsOnly") === "1";
+        const feeVersion = await getFeeCacheVersion(schoolId);
 
         if (statsOnly) {
           const memKey = `fees:summary:stats:active:${schoolId}`;
-          const memCached = getSchoolDashboardServerCached<{
+          const memCached = getFeeCached<{
             fees: unknown[];
             stats: unknown;
             nextCursor: null;
-          }>(memKey);
+          }>(memKey, feeVersion);
           if (memCached) {
             return NextResponse.json(memCached, { status: 200 });
           }
@@ -62,7 +64,7 @@ export async function GET(req: Request) {
           const stats = await computeCurrentAndPreviousFeeStats(schoolId);
 
           const payload = { fees: [] as unknown[], stats, nextCursor: null };
-          setSchoolDashboardServerCached(memKey, payload, FEE_LIST_SERVER_CACHE_TTL_MS);
+          setFeeCached(memKey, payload, FEE_LIST_SERVER_CACHE_TTL_MS, feeVersion);
           return NextResponse.json(payload, { status: 200 });
         }
 
@@ -72,7 +74,7 @@ export async function GET(req: Request) {
         const cursor = searchParams.get("cursor")?.trim() || null;
 
         const memPageKey = `fees:summary:page:active:${schoolId}:${take}:${cursor ?? "0"}`;
-        const memPage = getSchoolDashboardServerCached(memPageKey);
+        const memPage = getFeeCached(memPageKey, feeVersion);
         if (memPage) {
           return NextResponse.json(memPage, { status: 200 });
         }
@@ -85,7 +87,7 @@ export async function GET(req: Request) {
         }
 
         const payload = await loadFeeSummaryPage(schoolId, take, cursor);
-        setSchoolDashboardServerCached(memPageKey, payload, 15_000);
+        setFeeCached(memPageKey, payload, 15_000, feeVersion);
         await swrSet(
           cacheKey,
           { value: payload, freshUntil: now + 5_000, staleUntil: now + 60_000 },

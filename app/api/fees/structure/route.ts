@@ -7,10 +7,7 @@ import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
 import { saveClassFeeStructureAndSyncStudents } from "@/lib/fees/classFeeStructureApply";
 import { finalFeeFromStructureAndExtras, sumExtraFeesForStudent } from "@/lib/fees/studentTuitionFromStructure";
 import { invalidateSchoolFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
-import {
-  getSchoolDashboardServerCached,
-  setSchoolDashboardServerCached,
-} from "@/lib/school/schoolDashboardServerCache";
+import { getFeeCacheVersion, getFeeCached, setFeeCached } from "@/lib/fees/feeListServerCache";
 import { getErrorMessage } from "@/lib/errors/errorInfo";
 import { logger } from "@/lib/logger";
 
@@ -35,9 +32,10 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const classId = searchParams.get("classId");
 
+    const feeVersion = await getFeeCacheVersion(schoolId);
     if (!classId) {
       const memKey = `fees:structure:${schoolId}`;
-      const cached = getSchoolDashboardServerCached<{ structures: unknown[] }>(memKey);
+      const cached = getFeeCached<{ structures: unknown[] }>(memKey, feeVersion);
       if (cached) {
         return NextResponse.json(cached, { status: 200 });
       }
@@ -53,7 +51,7 @@ export async function GET(req: Request) {
 
     const payload = { structures };
     if (!classId) {
-      setSchoolDashboardServerCached(`fees:structure:${schoolId}`, payload, 45_000);
+      setFeeCached(`fees:structure:${schoolId}`, payload, 45_000, feeVersion);
     }
     return NextResponse.json(payload);
     });

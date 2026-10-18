@@ -36,10 +36,17 @@ describe("middleware", () => {
   });
 
   it("sets a private Cache-Control header on GET /api/* (excluding auth/notifications)", async () => {
-    const res = await middleware(request("/api/fees/summary"));
+    const res = await middleware(request("/api/class/list"));
     expect(res.headers.get("Cache-Control")).toBe(
       "private, max-age=60, stale-while-revalidate=300"
     );
+  });
+
+  it("never lets the browser cache GET /api/fees/* (stale paid/due amounts)", async () => {
+    for (const path of ["/api/fees/summary", "/api/fees/transactions", "/api/fees/records"]) {
+      const res = await middleware(request(path));
+      expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+    }
   });
 
   it("does not set Cache-Control for /api/auth/*", async () => {

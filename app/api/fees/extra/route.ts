@@ -11,10 +11,7 @@ import {
 import { getErrorMessage } from "@/lib/errors/errorInfo";
 import { createExtraFeeRows, migrateUnsplitLumpExtraFees, type ExtraFeeCreatePayload } from "@/lib/fees/extraFeeInstallmentDb";
 import { isUnsplitLumpExtraFee } from "@/lib/fees/extraFeeInstallments";
-import {
-  getSchoolDashboardServerCached,
-  setSchoolDashboardServerCached,
-} from "@/lib/school/schoolDashboardServerCache";
+import { getFeeCacheVersion, getFeeCached, setFeeCached } from "@/lib/fees/feeListServerCache";
 import { invalidateAssignCatalogServerCache } from "@/lib/fees/assignCatalogServerCache";
 import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
 import { logger } from "@/lib/logger";
@@ -68,9 +65,10 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const runMaintenance = searchParams.get("maintenance") === "1";
 
+    const feeVersion = await getFeeCacheVersion(schoolId);
     if (!runMaintenance) {
       const memKey = `fees:extra:${schoolId}`;
-      const cached = getSchoolDashboardServerCached<{ extraFees: unknown[] }>(memKey);
+      const cached = getFeeCached<{ extraFees: unknown[] }>(memKey, feeVersion);
       if (cached) {
         return NextResponse.json(cached, { status: 200 });
       }
@@ -113,7 +111,7 @@ export async function GET(req: Request) {
 
     const payload = { extraFees };
     if (!runMaintenance) {
-      setSchoolDashboardServerCached(`fees:extra:${schoolId}`, payload, 30_000);
+      setFeeCached(`fees:extra:${schoolId}`, payload, 30_000, feeVersion);
     }
     return NextResponse.json(payload);
     });

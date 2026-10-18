@@ -14,6 +14,7 @@ const mockGetServerSession = jest.fn();
 const mockResolveFeesSchoolId = jest.fn();
 const mockClassFindMany = jest.fn();
 const mockSaveClassFeeStructureAndSyncStudents = jest.fn();
+const mockInvalidateSchoolFeeReadCaches = jest.fn();
 
 jest.mock("next-auth", () => ({
   getServerSession: (...args: unknown[]) => mockGetServerSession(...args),
@@ -28,6 +29,10 @@ jest.mock("@/lib/fees/resolveFeesSchoolId", () => ({
 jest.mock("@/lib/fees/classFeeStructureApply", () => ({
   saveClassFeeStructureAndSyncStudents: (...args: unknown[]) =>
     mockSaveClassFeeStructureAndSyncStudents(...args),
+}));
+
+jest.mock("@/lib/fees/studentFeeReadCache", () => ({
+  invalidateSchoolFeeReadCaches: (...args: unknown[]) => mockInvalidateSchoolFeeReadCaches(...args),
 }));
 
 jest.mock("@/lib/db", () => ({
@@ -78,6 +83,7 @@ describe("POST /api/fees/structure/bulk", () => {
     mockResolveFeesSchoolId.mockReset();
     mockClassFindMany.mockReset().mockResolvedValue(classes);
     mockSaveClassFeeStructureAndSyncStudents.mockReset().mockResolvedValue({ structure: {} });
+    mockInvalidateSchoolFeeReadCaches.mockReset();
   });
 
   it("returns 401 when no session", async () => {
@@ -184,6 +190,25 @@ describe("POST /api/fees/structure/bulk", () => {
         { name: "Lab", amount: 200 },
       ],
     });
+  });
+
+  it("clears the school's fee read caches after students' fees were rewritten", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    await POST(
+      requestWithRows([{ ClassName: "5", Section: "A", ComponentName: "Tuition", Amount: 1000 }])
+    );
+    expect(mockInvalidateSchoolFeeReadCaches).toHaveBeenCalledWith("s1");
+  });
+
+  it("does not clear caches when nothing was updated", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    mockSaveClassFeeStructureAndSyncStudents.mockRejectedValue(new Error("DB exploded"));
+    await POST(
+      requestWithRows([{ ClassName: "5", Section: "A", ComponentName: "Tuition", Amount: 1000 }])
+    );
+    expect(mockInvalidateSchoolFeeReadCaches).not.toHaveBeenCalled();
   });
 
   it("records a failure entry when saving a class's structure throws", async () => {

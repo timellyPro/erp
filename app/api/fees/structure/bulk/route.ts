@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth/authOptions";
 import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
 import { saveClassFeeStructureAndSyncStudents } from "@/lib/fees/classFeeStructureApply";
+import { invalidateSchoolFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
 import { logger } from "@/lib/logger";
 import { getErrorMessage } from "@/lib/errors/errorInfo";
 
@@ -155,6 +156,12 @@ export async function POST(req: Request) {
           message: `${classes.find((c) => c.id === classId)?.name ?? classId}: ${getErrorMessage(e) || "Save failed"}`,
         });
       }
+    }
+
+    // Students' stored fees were rewritten for every updated class (even if other rows failed),
+    // so drop the fee list/summary/breakdown caches or they keep showing the old amounts.
+    if (updated.length > 0) {
+      invalidateSchoolFeeReadCaches(schoolId);
     }
 
     if (updated.length === 0 && failed.length === 0) {
