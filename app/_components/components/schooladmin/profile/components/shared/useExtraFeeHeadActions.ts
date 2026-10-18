@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { HeadCard } from "./feesBreakdownHelpers";
+import { invalidateSchoolFeeClientCaches } from "@/lib/fees/invalidateSchoolFeeClientCaches";
 
 export function useExtraFeeHeadActions({ onFeeModified }: { onFeeModified?: () => void }) {
   const [editExtra, setEditExtra] = useState<{
@@ -40,6 +41,7 @@ export function useExtraFeeHeadActions({ onFeeModified }: { onFeeModified?: () =
         alert(typeof data.message === "string" ? data.message : "Delete failed");
         return;
       }
+      invalidateSchoolFeeClientCaches();
       onFeeModified?.();
     } catch {
       alert("Delete failed");

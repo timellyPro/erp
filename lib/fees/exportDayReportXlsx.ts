@@ -11,12 +11,13 @@ export async function exportDayReportXlsx(fromYmd: string, toYmd = fromYmd): Pro
   const qs = new URLSearchParams({
     limit: "10000",
     forFeeReport: "1",
+    refresh: "1",
     from: fromYmd,
     to: toYmd,
   });
 
   const [txRes, schoolRes] = await Promise.all([
-    fetch(`/api/fees/transactions?${qs.toString()}`, { credentials: "include" }),
+    fetch(`/api/fees/transactions?${qs.toString()}`, { credentials: "include", cache: "no-store" }),
     fetch("/api/school/mine", { credentials: "include", cache: "no-store" }),
   ]);
 

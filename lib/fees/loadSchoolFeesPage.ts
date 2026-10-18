@@ -42,15 +42,31 @@ async function fetchSummary(statsOnly: boolean, signal?: AbortSignal) {
   };
 }
 
-async function fetchFeeRecords(signal?: AbortSignal): Promise<FeeRecord[]> {
-  const res = await fetch("/api/fees/records?take=5000", {
-    credentials: "include",
-    cache: "no-store",
-    signal,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { message?: string }).message || "Failed to load fee records");
-  return (Array.isArray(data.fees) ? data.fees : []) as FeeRecord[];
+/** Max pages of 5,000 followed when listing fee records (50,000 students). */
+const FEE_RECORDS_MAX_PAGES = 10;
+
+/**
+ * Follows `nextCursor` so a school with more than 5,000 students is not silently cut off at the
+ * first page (the records table and every export built from it would otherwise omit the rest).
+ */
+export async function fetchFeeRecords(signal?: AbortSignal): Promise<FeeRecord[]> {
+  const all: FeeRecord[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < FEE_RECORDS_MAX_PAGES; page++) {
+    const qs = new URLSearchParams({ take: "5000" });
+    if (cursor) qs.set("cursor", cursor);
+    const res = await fetch(`/api/fees/records?${qs.toString()}`, {
+      credentials: "include",
+      cache: "no-store",
+      signal,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data as { message?: string }).message || "Failed to load fee records");
+    all.push(...((Array.isArray(data.fees) ? data.fees : []) as FeeRecord[]));
+    cursor = typeof data.nextCursor === "string" && data.nextCursor ? data.nextCursor : null;
+    if (!cursor) return all;
+  }
+  throw new Error("Too many fee records to load at once. Narrow the class or section and try again.");
 }
 
 async function fetchClasses(signal?: AbortSignal): Promise<Class[]> {

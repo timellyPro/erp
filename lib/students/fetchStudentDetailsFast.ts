@@ -1,6 +1,7 @@
 import type { AdminStudentFeeBreakdownResult } from "@/lib/fees/computeAdminStudentFeeBreakdown";
 import type { StudentDetailsTabExtras, StudentDetailsTabPayload } from "@/lib/students/buildStudentDetailsTabPayload";
 import { invalidateStudentDetailsCoreCache } from "@/lib/students/studentDetailsCoreCache";
+import { invalidateSchoolFeeClientCaches } from "@/lib/fees/invalidateSchoolFeeClientCaches";
 import {
   fetchFeeBreakdownFast,
   getFeeBreakdownCached,
@@ -300,6 +301,7 @@ export async function refreshStudentFeesAfterMutation(
     optimisticPendingId?: string;
   }
 ): Promise<StudentDetailsFastBundle | null> {
+  invalidateSchoolFeeClientCaches();
   const inflightKey = `fees-refresh:${studentId}`;
   const running = refreshFeesInflight.get(inflightKey);
   if (running) {

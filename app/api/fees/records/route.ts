@@ -3,14 +3,15 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/authOptions";
 import { withTenantScopedClient } from "@/lib/db/tenantClient";
 import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
-import {
-  getSchoolDashboardServerCached,
-  setSchoolDashboardServerCached,
-} from "@/lib/school/schoolDashboardServerCache";
 import { roundRupee } from "@/lib/formatRupee";
 import { storedDiscountRupeeAmount } from "@/lib/fees/studentFeeHeadDiscount";
 import { logger } from "@/lib/logger";
-import { FEE_LIST_SERVER_CACHE_TTL_MS } from "@/lib/fees/feeListServerCache";
+import {
+  FEE_LIST_SERVER_CACHE_TTL_MS,
+  getFeeCacheVersion,
+  getFeeCached,
+  setFeeCached,
+} from "@/lib/fees/feeListServerCache";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 /**
@@ -37,10 +38,12 @@ export async function GET(req: Request) {
     const takeRaw = Number(searchParams.get("take")) || 5000;
     const take = Math.min(10000, Math.max(1, Number.isFinite(takeRaw) ? takeRaw : 5000));
     const cursor = searchParams.get("cursor")?.trim() || null;
+    const refresh = searchParams.get("refresh") === "1";
 
     const memKey = `fees:records:v3:${schoolId}:${take}:${cursor ?? "0"}`;
-    const cached = getSchoolDashboardServerCached<{ fees: unknown[]; nextCursor: string | null }>(memKey);
-    if (cached) {
+    const feeVersion = await getFeeCacheVersion(schoolId);
+    const cached = getFeeCached<{ fees: unknown[]; nextCursor: string | null }>(memKey, feeVersion);
+    if (cached && !refresh) {
       return NextResponse.json(cached, { status: 200 });
     }
 
@@ -99,7 +102,7 @@ export async function GET(req: Request) {
     });
 
     const payload = { fees, nextCursor };
-    setSchoolDashboardServerCached(memKey, payload, FEE_LIST_SERVER_CACHE_TTL_MS);
+    setFeeCached(memKey, payload, FEE_LIST_SERVER_CACHE_TTL_MS, feeVersion);
     return NextResponse.json(payload, { status: 200 });
   } catch (error: unknown) {
     logger.error("Fee records list error:", error);

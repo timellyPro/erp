@@ -235,10 +235,11 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
           <button
             type="button"
             onClick={() => void exportFinalTemplate()}
-            className="inline-flex h-[42px] w-full items-center justify-center gap-2 self-end rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-300 hover:bg-amber-500/20 sm:h-auto sm:min-h-[42px]"
+            disabled={feeDueExporting}
+            className="inline-flex h-[42px] w-full items-center justify-center gap-2 self-end rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-300 hover:bg-amber-500/20 disabled:opacity-50 sm:h-auto sm:min-h-[42px]"
           >
             <Download size={16} />
-            Export Fee Report
+            {feeDueExporting ? "Preparing…" : "Export Fee Report"}
           </button>
         </div>
       </div>
@@ -299,7 +300,8 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
         <button
           type="button"
           onClick={() => void exportAllClasses()}
-          className="inline-flex items-center justify-center gap-2 rounded-xl border border-lime-500/40 bg-lime-500/10 px-3 py-2 text-sm text-lime-300 hover:bg-lime-500/20"
+          disabled={feeDueExporting}
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-lime-500/40 bg-lime-500/10 px-3 py-2 text-sm text-lime-300 hover:bg-lime-500/20 disabled:opacity-50"
         >
           <Download size={16} />
           Export All Classes
@@ -307,7 +309,8 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
         <button
           type="button"
           onClick={() => void exportSelectedClass()}
-          className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm text-blue-300 hover:bg-blue-500/20"
+          disabled={feeDueExporting}
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm text-blue-300 hover:bg-blue-500/20 disabled:opacity-50"
         >
           <Download size={16} />
           Export Class-wise

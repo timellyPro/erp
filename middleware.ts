@@ -78,7 +78,14 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith("/api/marks") ||
     pathname.startsWith("/api/exam-types");
 
-  if (
+  // Fee data is financial and changes on every payment/edit. A browser-side max-age or
+  // stale-while-revalidate window lets a fee card, due report or export show pre-payment
+  // values, so these responses must always revalidate with the server.
+  const isFeesApi = pathname === "/api/fees" || pathname.startsWith("/api/fees/");
+
+  if (request.method === "GET" && isFeesApi) {
+    response.headers.set("Cache-Control", "private, no-store");
+  } else if (
     request.method === "GET" &&
     pathname.startsWith("/api/") &&
     !skipApiCache

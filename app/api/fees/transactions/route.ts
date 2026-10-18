@@ -3,10 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/authOptions";
 import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
-import {
-  getSchoolDashboardServerCached,
-  setSchoolDashboardServerCached,
-} from "@/lib/school/schoolDashboardServerCache";
+import { getFeeCacheVersion, getFeeCached, setFeeCached } from "@/lib/fees/feeListServerCache";
 import { loadFeeReportTransactions } from "@/lib/fees/loadDayFeeCollectionTransactions";
 import { buildFeeHeadAmountsByPaymentId, dominantFeeHead, feeHeadLinesFromMap } from "@/lib/fees/paymentFeeHeadLines";
 import { logger } from "@/lib/logger";
@@ -46,9 +43,11 @@ export async function GET(req: Request) {
     /** Fee-report exports need a high cap; default list views stay small. */
     const limit = Math.min(Math.max(rawLimit, 1), forFeeReport ? 25000 : 200);
 
+    const feeVersion = await getFeeCacheVersion(schoolId);
+
     if (forFeeReport && reportFrom) {
       const cacheKey = `fees:report:${schoolId}:${reportFrom}:${reportTo}:${collectedByUserId ?? ""}`;
-      const cached = getSchoolDashboardServerCached<{ transactions: unknown[] }>(cacheKey);
+      const cached = getFeeCached<{ transactions: unknown[] }>(cacheKey, feeVersion);
       if (!refresh && cached) {
         return NextResponse.json(cached, { status: 200 });
       }
@@ -60,13 +59,13 @@ export async function GET(req: Request) {
         collectedByUserId ? { collectedByUserId } : undefined
       );
       const payload = { transactions };
-      setSchoolDashboardServerCached(cacheKey, payload, 60_000);
+      setFeeCached(cacheKey, payload, 60_000, feeVersion);
       return NextResponse.json(payload, { status: 200 });
     }
 
     if (!refresh && !forFeeReport && !studentId && !collectedByUserId) {
       const memKey = `fees:transactions:${schoolId}:${limit}`;
-      const cached = getSchoolDashboardServerCached<{ transactions: unknown[] }>(memKey);
+      const cached = getFeeCached<{ transactions: unknown[] }>(memKey, feeVersion);
       if (cached && Array.isArray(cached.transactions) && cached.transactions.length > 0) {
         return NextResponse.json(cached, { status: 200 });
       }
@@ -195,7 +194,7 @@ export async function GET(req: Request) {
 
     const payload = { transactions };
     if (!studentId && !collectedByUserId && transactions.length > 0) {
-      setSchoolDashboardServerCached(`fees:transactions:${schoolId}:${limit}`, payload, 20_000);
+      setFeeCached(`fees:transactions:${schoolId}:${limit}`, payload, 20_000, feeVersion);
     }
     return NextResponse.json(payload, { status: 200 });
     });
