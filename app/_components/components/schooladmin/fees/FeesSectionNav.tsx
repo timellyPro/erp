@@ -15,6 +15,8 @@ const FEES_SECTIONS: { slug: string; label: string }[] = [
   { slug: "fee-structure", label: "Global Fee Breakdown Configuration" },
   { slug: "extra-fees-catalog", label: "Listed Extra Fees" },
   { slug: "transactions", label: "Transactions & Refunds" },
+  { slug: "receipt-lookup", label: "Receipt Lookup & History" },
+  { slug: "bulk-fee-edit", label: "Bulk Fee Edit" },
 ];
 
 type FeesSectionNavProps = {

@@ -5,10 +5,11 @@ import { authOptions } from "@/lib/auth/authOptions";
 import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
 import { saveClassFeeStructureAndSyncStudents } from "@/lib/fees/classFeeStructureApply";
-import { finalFeeFromStructureAndExtras, sumExtraFeesForStudent } from "@/lib/fees/studentTuitionFromStructure";
+import { storedFinalFee, sumExtraFeesForStudent } from "@/lib/fees/studentTuitionFromStructure";
 import { invalidateSchoolFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
 import { getFeeCacheVersion, getFeeCached, setFeeCached } from "@/lib/fees/feeListServerCache";
 import { getErrorMessage } from "@/lib/errors/errorInfo";
+import { roundRupee } from "@/lib/formatRupee";
 import { logger } from "@/lib/logger";
 
 export async function GET(req: Request) {
@@ -196,13 +197,13 @@ export async function DELETE(req: Request) {
             residencyType: student.residencyType ?? "Day Scholar",
           });
 
-          const newFinalFee = finalFeeFromStructureAndExtras(0, extraTotal, fee.discountPercent);
-          const newRemainingFee = Math.max(0, newFinalFee - fee.amountPaid);
+          const newFinalFee = storedFinalFee({ base: 0, extrasTotal: extraTotal }, fee.discountPercent, fee);
+          const newRemainingFee = Math.max(0, roundRupee(newFinalFee - fee.amountPaid));
 
           await prisma.studentFee.update({
             where: { studentId: student.id },
             data: {
-              totalFee: extraTotal,
+              totalFee: roundRupee(extraTotal),
               finalFee: newFinalFee,
               remainingFee: newRemainingFee,
             },

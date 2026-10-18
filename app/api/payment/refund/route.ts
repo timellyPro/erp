@@ -7,6 +7,7 @@ import { createNotification } from "@/lib/notificationService";
 import { logger } from "@/lib/logger";
 import { invalidateFeeListServerCaches } from "@/lib/fees/feeListServerCache";
 import { FEE_MUTATION_TX } from "@/lib/fees/prismaFeeMutationTx";
+import { auditActorFromSession, paymentAuditSnapshot, recordPaymentAudit } from "@/lib/fees/paymentAudit";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 /** Thrown from inside the locked transaction to map back to a 4xx response, not a 500. */
@@ -283,6 +284,17 @@ export async function POST(req: Request) {
       await tx.studentFee.update({
         where: { studentId: payment.studentId },
         data: { amountPaid: newAmountPaid, remainingFee: newRemaining },
+      });
+
+      await recordPaymentAudit(tx, {
+        schoolId: payment.student.schoolId,
+        paymentId,
+        studentId: payment.studentId,
+        action: "REFUND",
+        actor: auditActorFromSession(session),
+        summary: `Refunded ${amount} of ${payment.amount}${reasonVal ? ` (${reasonVal})` : ""}`,
+        before: paymentAuditSnapshot(payment),
+        after: { refundId, refundAmount: amount, reason: reasonVal, alreadyRefundedBefore: alreadyRefunded },
       });
     }, FEE_MUTATION_TX));
 

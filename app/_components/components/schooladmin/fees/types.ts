@@ -25,6 +25,9 @@ export interface FeeSummary {
   previousYearTotalFee?: number;
   previousYearCollected?: number;
   previousYearDue?: number;
+  /** Paid against fee heads the student no longer owes; not part of totalCollected. */
+  unplacedPayments?: number;
+  unplacedStudents?: number;
 }
 
 export interface FeeRecord {

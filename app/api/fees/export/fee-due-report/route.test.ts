@@ -126,6 +126,24 @@ describe("GET /api/fees/export/fee-due-report", () => {
     expect(buf.toString()).toBe("fake-xlsx-bytes");
   });
 
+  it("includes school-wide fees by default so totals match the fee card and summary", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    await GET(request());
+    expect(mockBuildFeeDueReportPayload.mock.calls[0][0].includeSchoolWideExtras).toBe(true);
+  });
+
+  it("lets a caller opt out of school-wide fees with schoolWideExtras=0 (or false)", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    await GET(request("?schoolWideExtras=0"));
+    expect(mockBuildFeeDueReportPayload.mock.calls[0][0].includeSchoolWideExtras).toBe(false);
+    await GET(request("?schoolWideExtras=false"));
+    expect(mockBuildFeeDueReportPayload.mock.calls[1][0].includeSchoolWideExtras).toBe(false);
+    await GET(request("?schoolWideExtras=1"));
+    expect(mockBuildFeeDueReportPayload.mock.calls[2][0].includeSchoolWideExtras).toBe(true);
+  });
+
   it("filters the student query by classId and status when provided", async () => {
     mockGetServerSession.mockResolvedValue(adminSession);
     mockResolveFeesSchoolId.mockResolvedValue("s1");

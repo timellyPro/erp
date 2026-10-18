@@ -7,6 +7,7 @@ Mirrors section 6 of the public Privacy Policy (`app/privacy-policy/page.tsx`). 
 |---|---|---|
 | Active school: students, staff, academics, attendance | While the school is a customer | See school closure |
 | Fee and payment records | 8 years | Delete / de-identify |
+| Payment audit log (`PaymentAuditLog`: who created, edited, deleted or refunded a payment) | 8 years, same as payments. Holds ids, amounts and references only, no personal details | Removed with the school; see docs/PAYMENT_AUDIT.md |
 | Transfer certificates, academic history of leavers | School's statutory period | School decides; personal details removable on request |
 | Application logs (Vercel log drain) | 30 days | Auto-expire in log provider |
 | Error tracking (Sentry) | 90 days | Auto-expire in Sentry project settings |

@@ -2,6 +2,7 @@ import prisma from "@/lib/db";
 import { FEE_MUTATION_TX } from "@/lib/fees/prismaFeeMutationTx";
 import { reconcileStudentFeeTotalsFromPayments } from "@/lib/fees/reconcileStudentFeeFromPayments";
 import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
+import { paymentAuditSnapshot, recordPaymentAudit, type PaymentAuditActor } from "@/lib/fees/paymentAudit";
 
 function isSuccessPaymentStatus(status: string): boolean {
   const u = status.toUpperCase();
@@ -28,7 +29,8 @@ export type DeleteFeePaymentResult = {
 export async function deleteFastFeePayment(
   paymentId: string,
   schoolId: string,
-  expectedStudentId?: string
+  expectedStudentId?: string,
+  actor?: PaymentAuditActor
 ): Promise<DeleteFeePaymentResult> {
   const payment = await prisma.payment.findFirst({
     where: {
@@ -41,6 +43,10 @@ export async function deleteFastFeePayment(
       amount: true,
       status: true,
       purpose: true,
+      gateway: true,
+      transactionId: true,
+      createdAt: true,
+      collectedByName: true,
       eventRegistrationId: true,
       student: { select: { schoolId: true } },
     },
@@ -73,6 +79,29 @@ export async function deleteFastFeePayment(
 
   await prisma.$transaction(
     async (tx) => {
+      // Snapshot first: the payment and its allocations are gone after the delete, and the audit
+      // row is the only record of what was removed and by whom. Same transaction, so a delete can
+      // never commit without it.
+      const allocations = await tx.paymentFeeAllocation.findMany({
+        where: { paymentId: payment.id },
+        select: {
+          headType: true,
+          componentName: true,
+          componentIndex: true,
+          extraFeeId: true,
+          allocationType: true,
+          allocatedAmount: true,
+        },
+      });
+      await recordPaymentAudit(tx, {
+        schoolId,
+        paymentId: payment.id,
+        studentId: payment.studentId,
+        action: "DELETE",
+        actor,
+        summary: `Deleted payment of ${payment.amount}${payment.transactionId ? ` (ref ${payment.transactionId})` : ""}`,
+        before: paymentAuditSnapshot(payment, allocations),
+      });
       await tx.payment.delete({ where: { id: payment.id } });
     },
     FEE_MUTATION_TX

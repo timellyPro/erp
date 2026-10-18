@@ -1,3 +1,4 @@
+import { formatReceiptNo } from "@/lib/fees/receiptNumber";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import { canonicalExtraFeeBaseName } from "@/lib/fees/extraFeeInstallments";
@@ -19,6 +20,8 @@ export type DayReportSchool = {
 
 export type DayReportTx = {
   id: string;
+  /** Stored per-school receipt number; absent for admission-desk rows and for payments that predate numbering. */
+  receiptNo?: number | null;
   amount?: number;
   gateway?: string;
   createdAt: string;
@@ -361,7 +364,7 @@ function addToCollectionMatrix(
 }
 
 export type DayReportDetailRow = {
-  receiptNo: number;
+  receiptNo: string;
   admissionNo: string;
   date: string;
   studentName: string;
@@ -396,25 +399,14 @@ export function buildDayReportSummaryModel(transactions: DayReportTx[]): DayRepo
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
   );
 
-  const receiptByPaymentId = new Map<string, number>();
-  let receiptCounter = 0;
-  const getReceiptNo = (paymentId: string) => {
-    let r = receiptByPaymentId.get(paymentId);
-    if (r === undefined) {
-      receiptCounter += 1;
-      r = receiptCounter;
-      receiptByPaymentId.set(paymentId, r);
-    }
-    return r;
-  };
-
   const collectionMatrix = new Map<CollectionAccountLabel, CollectionModeTotals>();
   const otherAccountRows = new Map<string, CollectionModeTotals>();
   const detailRows: DayReportDetailRow[] = [];
   const collectorTotalsRaw = new Map<string, { name: string; total: number; nameVotes: Map<string, number> }>();
 
   for (const tx of sorted) {
-    const rec = getReceiptNo(tx.id);
+    // The number printed on the receipt, the same in every report, searchable in Receipt Lookup.
+    const rec = formatReceiptNo(tx.receiptNo);
     const gateway = tx.gateway;
     const collectorLabel = resolvePaymentCollectorLabel(tx);
     const allocations = allocationsForTx(tx);

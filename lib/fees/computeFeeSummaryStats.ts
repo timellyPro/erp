@@ -18,6 +18,13 @@ export type CurrentPreviousFeeSummaryStats = {
   previousYearTotalFee: number;
   previousYearCollected: number;
   previousYearDue: number;
+  /**
+   * Rupees paid against a fee head the student does not owe under the current rules (a fee removed, a
+   * residency change, a payment above a head's due). Counted in the stored paid amount but not placed on
+   * any head, so Total collected plus this is what was actually received.
+   */
+  unplacedPayments: number;
+  unplacedStudents: number;
   pending: number;
   paid: number;
 };
@@ -25,6 +32,15 @@ export type CurrentPreviousFeeSummaryStats = {
 export async function computeCurrentAndPreviousFeeStats(
   schoolId: string
 ): Promise<CurrentPreviousFeeSummaryStats> {
+  return (await loadFeeSummaryRows(schoolId)).stats;
+}
+
+/** The per-student rows behind the Summary cards, plus the cards. Used by the stats and by diagnostics. */
+export async function loadFeeSummaryRows(schoolId: string): Promise<{
+  stats: CurrentPreviousFeeSummaryStats;
+  rows: ReturnType<typeof buildFeeDueReportPayload>["rows"];
+  netPaidByStudentHead: Map<string, number>;
+}> {
   const [fees, structuresRaw, extraFeesRaw, classesMeta] = await Promise.all([
     prisma.studentFee.findMany({
       where: { student: { schoolId, ...activeStudentWhere } },
@@ -182,6 +198,22 @@ export async function computeCurrentAndPreviousFeeStats(
   const totalDiscount = roundRupee(payload.rows.reduce((sum, row) => sum + row.totalDiscount, 0));
   const totalCollected = roundRupee(payload.rows.reduce((sum, row) => sum + row.feesPaid, 0));
   const totalDue = roundRupee(payload.rows.reduce((sum, row) => sum + row.feesDue, 0));
+  // Per student: what the payments say was paid (net of refunds) minus what landed on a fee head.
+  const allocatedByStudent = new Map<string, number>();
+  for (const [key, v] of netPaidByStudentHead) {
+    const sid = key.slice(0, key.indexOf("|"));
+    allocatedByStudent.set(sid, (allocatedByStudent.get(sid) ?? 0) + v);
+  }
+  let unplacedPayments = 0;
+  let unplacedStudents = 0;
+  for (const row of payload.rows) {
+    const counted = (row.feesPaid ?? 0) + (row.previousYearFeesPaid ?? 0);
+    const unplaced = (allocatedByStudent.get(row.studentId) ?? 0) - counted;
+    if (unplaced > 1) {
+      unplacedPayments += unplaced;
+      unplacedStudents += 1;
+    }
+  }
   const previousYearTotalFee = roundRupee(
     payload.rows.reduce((sum, row) => sum + (row.previousYearTotalFee ?? 0), 0)
   );
@@ -193,15 +225,21 @@ export async function computeCurrentAndPreviousFeeStats(
   );
 
   return {
-    totalStudents: payload.rows.length,
-    totalFee,
-    totalCollected,
-    totalDue,
-    totalDiscount,
-    previousYearTotalFee,
-    previousYearCollected,
-    previousYearDue,
-    pending: payload.rows.filter((row) => row.feesDue > 0.01).length,
-    paid: payload.rows.filter((row) => row.feesDue <= 0.01).length,
+    rows: payload.rows,
+    netPaidByStudentHead,
+    stats: {
+      totalStudents: payload.rows.length,
+      totalFee,
+      totalCollected,
+      totalDue,
+      totalDiscount,
+      previousYearTotalFee,
+      previousYearCollected,
+      previousYearDue,
+      unplacedPayments: roundRupee(unplacedPayments),
+      unplacedStudents,
+      pending: payload.rows.filter((row) => row.feesDue > 0.01).length,
+      paid: payload.rows.filter((row) => row.feesDue <= 0.01).length,
+    },
   };
 }

@@ -157,29 +157,44 @@ export async function POST(req: Request, context: RouteParams) {
   }
 
   try {
-    const preview = await applyStudentResidencyConversion(prisma, {
-      schoolId,
-      studentId: id,
-      classId: student.classId,
-      section: student.class?.section ?? null,
-      fromResidency,
-      toResidency,
-      transportKey: typeof body.transportKey === "string" ? body.transportKey : null,
-    });
+    const convertedOn =
+      typeof body.convertedOn === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.convertedOn.trim())
+        ? body.convertedOn.trim()
+        : undefined;
 
-    const fee = await prisma.studentFee.findUnique({
-      where: { studentId: id },
-      select: { discountPercent: true, amountPaid: true },
-    });
-    await upsertStudentFeeFromStructure(prisma, {
-      schoolId,
-      studentId: id,
-      classId: student.classId,
-      section: student.class?.section ?? null,
-      discountPercent: fee?.discountPercent ?? 0,
-      amountPaid: fee?.amountPaid ?? 0,
-      residencyType: toResidency,
-    });
+    // The fee rows, residency periods, residency type AND the recalculated stored fee all commit
+    // together. The recalculation reads the extra fees back inside the same transaction, so it sees
+    // the rows just written (no stale cache) and a failure rolls the whole conversion back.
+    const preview = await applyStudentResidencyConversion(
+      prisma,
+      {
+        schoolId,
+        studentId: id,
+        classId: student.classId,
+        section: student.class?.section ?? null,
+        fromResidency,
+        toResidency,
+        transportKey: typeof body.transportKey === "string" ? body.transportKey : null,
+        convertedOn,
+      },
+      {
+        afterWrite: async (tx) => {
+          const fee = await tx.studentFee.findUnique({
+            where: { studentId: id },
+            select: { discountPercent: true, amountPaid: true },
+          });
+          await upsertStudentFeeFromStructure(tx, {
+            schoolId,
+            studentId: id,
+            classId: student.classId,
+            section: student.class?.section ?? null,
+            discountPercent: fee?.discountPercent ?? 0,
+            amountPaid: fee?.amountPaid ?? 0,
+            residencyType: toResidency,
+          });
+        },
+      }
+    );
     invalidateStudentFeeReadCaches({ studentId: id, schoolId });
     invalidateStudentListCaches(schoolId);
     await computeAdminStudentFeeBreakdown(schoolId, id, {

@@ -5,7 +5,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/authOptions";
 import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { hashStudentPasswordFromDob } from "@/lib/students/studentDefaultPassword";
-import { invalidateTenant } from "@/lib/cache/tenantCache";
+import { invalidateStudentListCaches } from "@/lib/students/invalidateStudentListCaches";
 import { logger } from "@/lib/logger";
 import { schoolIdViaAdminRelation } from "@/lib/auth/tenant";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
@@ -16,6 +16,8 @@ const resetCredentialsBodySchema = z.object({
   classId: z.string().optional(),
   className: z.string().optional(),
   section: z.string().optional(),
+  /** Reset only these students (admission-desk fix for one login); the class filters are then ignored. */
+  studentIds: z.array(z.string().min(1)).max(100).optional(),
 });
 
 async function resolveSchoolId(session: {
@@ -99,7 +101,11 @@ export async function POST(req: Request) {
       }
     }
 
-    const where = buildWhere(schoolId, classId, className, section);
+    const studentIds = [...new Set((body.studentIds ?? []).map((s) => s.trim()).filter(Boolean))];
+    const where: Prisma.StudentWhereInput =
+      studentIds.length > 0
+        ? { schoolId, status: "Active", id: { in: studentIds } }
+        : buildWhere(schoolId, classId, className, section);
 
     const students = await prisma.student.findMany({
       where,
@@ -125,7 +131,7 @@ export async function POST(req: Request) {
       }
     }
 
-    await invalidateTenant(schoolId);
+    invalidateStudentListCaches(schoolId);
 
     return NextResponse.json(
       {

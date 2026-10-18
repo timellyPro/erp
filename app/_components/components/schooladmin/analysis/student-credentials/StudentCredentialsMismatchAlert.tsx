@@ -14,7 +14,7 @@ export default function StudentCredentialsMismatchAlert({ mismatchCount }: Props
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
       <p>
         <strong>{mismatchCount}</strong> student{mismatchCount === 1 ? "" : "s"}{" "}
-        have a password that does not match their DOB. Use{" "}
+        cannot show a password (changed, missing, or no date of birth). Use{" "}
         <strong>Reset to DOB password</strong>, then share the updated list.
       </p>
     </div>

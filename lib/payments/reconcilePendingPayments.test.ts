@@ -3,6 +3,11 @@
  */
 import { reconcilePendingPayments } from "@/lib/payments/reconcilePendingPayments";
 
+jest.mock("@/lib/fees/receiptNumber", () => ({
+  ...jest.requireActual("@/lib/fees/receiptNumber"),
+  ensureReceiptNo: jest.fn().mockResolvedValue(1),
+}));
+
 jest.mock("@/lib/db/tenantContext", () => ({
   runInTenantScope: (_id: string, fn: () => unknown) => fn(),
   tenantDb: new Proxy({}, { get: (_t, p) => (jest.requireMock("@/lib/db").default as Record<string | symbol, unknown>)[p] }),
@@ -15,9 +20,11 @@ const mockUpdateMany = jest.fn();
 const mockFeeFind = jest.fn();
 const mockFeeUpdate = jest.fn();
 const mockRegUpdate = jest.fn();
+const mockAuditCreate = jest.fn();
 
 jest.mock("@/lib/db", () => {
   const tx = {
+    paymentAuditLog: { create: (...a: unknown[]) => mockAuditCreate(...a) },
     payment: { updateMany: (...a: unknown[]) => mockUpdateMany(...a) },
     studentFee: {
       findUnique: (...a: unknown[]) => mockFeeFind(...a),
@@ -127,6 +134,55 @@ describe("reconcilePendingPayments", () => {
       where: { id: "er1" },
       data: { paymentStatus: "PAID", paymentId: "p1" },
     });
+    expect(mockFeeUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe("reconcilePendingPayments audit trail", () => {
+  beforeEach(() => {
+    mockAuditCreate.mockReset().mockResolvedValue({});
+  });
+
+  it("records who flipped a payment to SUCCESS (the job, not a person), in the same transaction", async () => {
+    gateway(200, { status: "CHARGED", amount: 500, id: "o1", txn_id: "t1" });
+    await reconcilePendingPayments();
+    expect(mockAuditCreate).toHaveBeenCalledTimes(1);
+    expect(mockAuditCreate.mock.calls[0][0].data).toMatchObject({
+      schoolId: "sch1",
+      paymentId: "p1",
+      studentId: "s1",
+      action: "STATUS",
+      actorName: "Payment reconcile job",
+      actorRole: "SYSTEM",
+    });
+    expect(mockAuditCreate.mock.calls[0][0].data.summary).toMatch(/PENDING -> SUCCESS/);
+  });
+
+  it("records a FAILED flip", async () => {
+    gateway(200, { status: "AUTHORIZATION_FAILED" });
+    await reconcilePendingPayments();
+    expect(mockAuditCreate.mock.calls[0][0].data).toMatchObject({ action: "STATUS", paymentId: "p1" });
+    expect(mockAuditCreate.mock.calls[0][0].data.summary).toMatch(/PENDING -> FAILED/);
+  });
+
+  it("writes nothing when another path already flipped the row, or on an amount mismatch", async () => {
+    gateway(200, { status: "CHARGED", amount: 500 });
+    mockUpdateMany.mockResolvedValue({ count: 0 });
+    await reconcilePendingPayments();
+    expect(mockAuditCreate).not.toHaveBeenCalled();
+
+    gateway(200, { status: "CHARGED", amount: 999 });
+    mockUpdateMany.mockResolvedValue({ count: 1 });
+    await reconcilePendingPayments();
+    expect(mockAuditCreate).not.toHaveBeenCalled();
+  });
+
+  it("does not credit the fee when the history row cannot be written (the transaction rolls back)", async () => {
+    gateway(200, { status: "CHARGED", amount: 500, id: "o1" });
+    mockAuditCreate.mockRejectedValue(new Error("audit down"));
+    const r = await reconcilePendingPayments();
+    expect(r.errors).toBe(1);
+    expect(r.succeeded).toBe(0);
     expect(mockFeeUpdate).not.toHaveBeenCalled();
   });
 });

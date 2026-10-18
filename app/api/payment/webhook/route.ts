@@ -3,6 +3,9 @@ import crypto from "crypto";
 import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import type { Prisma } from "@prisma/client";
 import { invalidateFeeListServerCaches } from "@/lib/fees/feeListServerCache";
+import { recordPaymentAudit, type PaymentAuditActor } from "@/lib/fees/paymentAudit";
+import { logger } from "@/lib/logger";
+import { ensureReceiptNo } from "@/lib/fees/receiptNumber";
 
 export const runtime = "nodejs";
 
@@ -20,6 +23,14 @@ function timingSafeEqualStr(a: string, b: string) {
   const bBuf = Buffer.from(b, "utf8");
   if (aBuf.length !== bBuf.length) return false;
   return crypto.timingSafeEqual(aBuf, bBuf);
+}
+
+/** Shown as the actor on history rows written by gateway callbacks. */
+const GATEWAY_ACTOR: PaymentAuditActor = { userId: null, name: "Payment gateway (HyperPG)", role: "SYSTEM" };
+
+/** Prisma unique-constraint violation (P2002), duck-typed so tests need no Prisma error class. */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "P2002";
 }
 
 function unauthorized(message: string) {
@@ -139,8 +150,12 @@ export async function POST(req: Request) {
   const hyperpgAmountRefunded = order && typeof order.amount_refunded === "number" ? order.amount_refunded : null;
   const hyperpgEffectiveAmount = order && typeof order.effective_amount === "number" ? order.effective_amount : null;
 
+  // Store the event first (audit + de-duplication).
+  //
+  // Only a unique-id collision means "we have seen this event". Any other failure (database
+  // down, table missing) must NOT be acknowledged: the gateway would stop retrying and the
+  // payment status would never be updated.
   try {
-    // Idempotency: if we've already stored this event id, just ack it.
     await prisma.paymentWebhookEvent.create({
       data: {
         id: eventId,
@@ -150,100 +165,179 @@ export async function POST(req: Request) {
         payload: payload as unknown as Prisma.InputJsonValue,
       },
     });
-  } catch {
-    // Prisma unique violation or table not migrated yet — either way, ack.
-    return NextResponse.json({ ok: true, duplicate: true }, { status: 200 });
+  } catch (error: unknown) {
+    if (!isUniqueViolation(error)) {
+      logger.error("[payment-webhook] could not store event", error);
+      return NextResponse.json({ ok: false, message: "Could not store webhook event" }, { status: 500 });
+    }
+    // Seen before. If it was fully processed, acknowledge. If the first attempt stored the event
+    // but failed before applying it, process it again: applying a status is idempotent (side
+    // effects run only on a real status transition).
+    let seen: { processedAt: Date | null } | null;
+    try {
+      seen = await prisma.paymentWebhookEvent.findUnique({
+        where: { id: eventId },
+        select: { processedAt: true },
+      });
+    } catch (lookupError: unknown) {
+      logger.error("[payment-webhook] could not read stored event", lookupError);
+      return NextResponse.json({ ok: false, message: "Could not read webhook event" }, { status: 500 });
+    }
+    if (seen?.processedAt) {
+      return NextResponse.json({ ok: true, duplicate: true }, { status: 200 });
+    }
   }
 
+  const markProcessed = async () => {
+    try {
+      await prisma.paymentWebhookEvent.update({ where: { id: eventId }, data: { processedAt: new Date() } });
+    } catch (error: unknown) {
+      // The work is done; a retry would re-apply it harmlessly. Do not fail the response.
+      logger.warn("[payment-webhook] could not mark event processed", error);
+    }
+  };
+
   if (!orderId && !hyperpgOrderId) {
+    await markProcessed();
     return NextResponse.json({ ok: true, stored: true, updated: false, reason: "No order identifiers" }, { status: 200 });
   }
 
-  const internalStatus = deriveInternalPaymentStatus(hyperpgStatus);
+  try {
+    const internalStatus = deriveInternalPaymentStatus(hyperpgStatus);
 
-  // Update Payment row if we can find it.
-  // We prefer matching by our `transactionId` (HyperPG order_id) first.
-  const payment = await prisma.payment.findFirst({
-    where: {
-      OR: [
-        ...(orderId ? [{ transactionId: orderId }, { hyperpgOrderId: orderId }] : []),
-        ...(hyperpgOrderId ? [{ hyperpgOrderId }] : []),
-      ],
-    },
-    select: {
-      id: true,
-      studentId: true,
-      status: true,
-      amount: true,
-      eventRegistrationId: true,
-      student: { select: { schoolId: true } },
-    },
-  });
-
-  if (!payment) {
-    // Order may not exist in our DB (or came from a different system). Ack anyway.
-    return NextResponse.json({ ok: true, stored: true, updated: false, reason: "Payment not found" }, { status: 200 });
-  }
-
-  // Apply updates and side-effects only on status transition.
-  await runInTenantScope(payment.student.schoolId, () => prisma.$transaction(async (tx) => {
-    const before = await tx.payment.findUnique({
-      where: { id: payment.id },
-      select: { status: true },
-    });
-
-    const nextStatus = internalStatus as "PENDING" | "SUCCESS" | "FAILED";
-    const isTransitionToSuccess = before?.status !== "SUCCESS" && nextStatus === "SUCCESS";
-    const isTransitionToFailed = before?.status !== "FAILED" && nextStatus === "FAILED";
-
-    await tx.payment.update({
-      where: { id: payment.id },
-      data: {
-        status: nextStatus,
-        hyperpgOrderId: hyperpgOrderId ?? undefined,
-        hyperpgTxnId: hyperpgTxnId ?? undefined,
-        hyperpgStatus: hyperpgStatus ?? undefined,
-        hyperpgStatusId: hyperpgStatusId ?? undefined,
-        ...(hyperpgRefunded !== null ? { hyperpgRefunded } : {}),
-        ...(hyperpgAmountRefunded !== null ? { hyperpgAmountRefunded } : {}),
-        ...(hyperpgEffectiveAmount !== null ? { hyperpgEffectiveAmount } : {}),
-        hyperpgLastUpdatedAt: new Date(),
+    // Update Payment row if we can find it.
+    // We prefer matching by our `transactionId` (HyperPG order_id) first.
+    const payment = await prisma.payment.findFirst({
+      where: {
+        OR: [
+          ...(orderId ? [{ transactionId: orderId }, { hyperpgOrderId: orderId }] : []),
+          ...(hyperpgOrderId ? [{ hyperpgOrderId }] : []),
+        ],
+      },
+      select: {
+        id: true,
+        studentId: true,
+        status: true,
+        amount: true,
+        eventRegistrationId: true,
+        student: { select: { schoolId: true } },
       },
     });
 
-    if (isTransitionToSuccess) {
-      if (payment.eventRegistrationId) {
-        await tx.eventRegistration.update({
-          where: { id: payment.eventRegistrationId },
-          data: { paymentStatus: "PAID", paymentId: payment.id },
+    if (!payment) {
+      // Not ours (or already gone). A retry cannot change that, and the reconcile-payments cron
+      // settles any pending payment of ours by polling the gateway, so acknowledge.
+      await markProcessed();
+      return NextResponse.json({ ok: true, stored: true, updated: false, reason: "Payment not found" }, { status: 200 });
+    }
+
+    const schoolId = payment.student.schoolId;
+    const reportedAmount =
+      order && typeof order.amount === "number" && Number.isFinite(order.amount) ? order.amount : null;
+
+    // Apply updates and side-effects only on status transition.
+    const outcome = await runInTenantScope(schoolId, () => prisma.$transaction(async (tx) => {
+      const before = await tx.payment.findUnique({
+        where: { id: payment.id },
+        select: { status: true },
+      });
+
+      const nextStatus = internalStatus as "PENDING" | "SUCCESS" | "FAILED";
+      const isTransitionToSuccess = before?.status !== "SUCCESS" && nextStatus === "SUCCESS";
+      const isTransitionToFailed = before?.status !== "FAILED" && nextStatus === "FAILED";
+
+      // Never credit a different amount than the one we asked the gateway to collect. Leave the
+      // payment untouched and raise an ALERT in its history for a person to resolve.
+      if (isTransitionToSuccess && reportedAmount !== null && Math.abs(reportedAmount - payment.amount) > 0.01) {
+        await recordPaymentAudit(tx, {
+          schoolId,
+          paymentId: payment.id,
+          studentId: payment.studentId,
+          action: "ALERT",
+          actor: GATEWAY_ACTOR,
+          summary: `Gateway reports ${reportedAmount} but this payment is ${payment.amount}; left unchanged for review`,
+          before: { status: before?.status ?? null, amount: payment.amount },
+          after: { gatewayAmount: reportedAmount, gatewayStatus: hyperpgStatus, eventId },
         });
-      } else {
-        const fee = await tx.studentFee.findUnique({
-          where: { studentId: payment.studentId },
-          select: { amountPaid: true, finalFee: true },
+        return { held: true as const };
+      }
+
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: {
+          status: nextStatus,
+          hyperpgOrderId: hyperpgOrderId ?? undefined,
+          hyperpgTxnId: hyperpgTxnId ?? undefined,
+          hyperpgStatus: hyperpgStatus ?? undefined,
+          hyperpgStatusId: hyperpgStatusId ?? undefined,
+          ...(hyperpgRefunded !== null ? { hyperpgRefunded } : {}),
+          ...(hyperpgAmountRefunded !== null ? { hyperpgAmountRefunded } : {}),
+          ...(hyperpgEffectiveAmount !== null ? { hyperpgEffectiveAmount } : {}),
+          hyperpgLastUpdatedAt: new Date(),
+        },
+      });
+
+      if (before?.status !== nextStatus) {
+        await recordPaymentAudit(tx, {
+          schoolId,
+          paymentId: payment.id,
+          studentId: payment.studentId,
+          action: "STATUS",
+          actor: GATEWAY_ACTOR,
+          summary: `Status ${before?.status ?? "unknown"} -> ${nextStatus} (gateway: ${hyperpgStatus ?? "n/a"})`,
+          before: { status: before?.status ?? null },
+          after: { status: nextStatus, gatewayStatus: hyperpgStatus, eventId },
         });
-        if (fee) {
-          const newAmountPaid = fee.amountPaid + payment.amount;
-          const newRemaining = Math.max(fee.finalFee - newAmountPaid, 0);
-          await tx.studentFee.update({
-            where: { studentId: payment.studentId },
-            data: { amountPaid: newAmountPaid, remainingFee: newRemaining },
+      }
+
+      if (isTransitionToSuccess) {
+        await ensureReceiptNo(tx, schoolId, payment.id);
+        if (payment.eventRegistrationId) {
+          await tx.eventRegistration.update({
+            where: { id: payment.eventRegistrationId },
+            data: { paymentStatus: "PAID", paymentId: payment.id },
           });
+        } else {
+          const fee = await tx.studentFee.findUnique({
+            where: { studentId: payment.studentId },
+            select: { amountPaid: true, finalFee: true },
+          });
+          if (fee) {
+            const newAmountPaid = fee.amountPaid + payment.amount;
+            const newRemaining = Math.max(fee.finalFee - newAmountPaid, 0);
+            await tx.studentFee.update({
+              where: { studentId: payment.studentId },
+              data: { amountPaid: newAmountPaid, remainingFee: newRemaining },
+            });
+          }
         }
       }
+
+      // If it transitions to failed and is a workshop payment, mark registration as failed.
+      if (isTransitionToFailed && payment.eventRegistrationId) {
+        await tx.eventRegistration.update({
+          where: { id: payment.eventRegistrationId },
+          data: { paymentStatus: "FAILED" },
+        });
+      }
+
+      return { held: false as const };
+    }));
+
+    await markProcessed();
+
+    if (outcome.held) {
+      return NextResponse.json(
+        { ok: true, stored: true, updated: false, reason: "Amount mismatch: held for review" },
+        { status: 200 }
+      );
     }
 
-    // If it transitions to failed and is a workshop payment, mark registration as failed.
-    if (isTransitionToFailed && payment.eventRegistrationId) {
-      await tx.eventRegistration.update({
-        where: { id: payment.eventRegistrationId },
-        data: { paymentStatus: "FAILED" },
-      });
-    }
-  }));
-
-  invalidateFeeListServerCaches(payment.student.schoolId);
-
-  return NextResponse.json({ ok: true, stored: true, updated: true }, { status: 200 });
+    invalidateFeeListServerCaches(schoolId);
+    return NextResponse.json({ ok: true, stored: true, updated: true }, { status: 200 });
+  } catch (error: unknown) {
+    // The event stays unprocessed (processedAt is null), so the gateway's retry applies it.
+    logger.error("[payment-webhook] processing failed", error);
+    return NextResponse.json({ ok: false, message: "Webhook processing failed; will retry" }, { status: 500 });
+  }
 }
-

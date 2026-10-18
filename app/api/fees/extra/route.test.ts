@@ -15,6 +15,7 @@ const mockClassFindFirst = jest.fn();
 const mockExtraFeeFindMany = jest.fn();
 const mockExtraFeeFindFirst = jest.fn();
 const mockStudentFindMany = jest.fn();
+const mockFeeAuditCreate = jest.fn().mockResolvedValue({});
 const mockStudentFeeUpdateMany = jest.fn();
 const mockCreateExtraFeeRows = jest.fn();
 const mockMigrateUnsplitLumpExtraFees = jest.fn();
@@ -51,6 +52,7 @@ jest.mock("@/lib/db", () => ({
     },
     student: { findMany: (...args: unknown[]) => mockStudentFindMany(...args) },
     studentFee: { updateMany: (...args: unknown[]) => mockStudentFeeUpdateMany(...args) },
+    feeAuditLog: { create: (...args: unknown[]) => mockFeeAuditCreate(...args) },
   },
 }));
 
@@ -213,6 +215,15 @@ describe("POST /api/fees/extra", () => {
     expect(res.status).toBe(201);
     const json = await res.json();
     expect(json.extraFeeIds).toEqual(["ef1"]);
+    expect(mockFeeAuditCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        schoolId: "s1",
+        entityType: "EXTRA_FEE",
+        entityId: "ef1",
+        action: "CREATE",
+        actorUserId: "u1",
+      }),
+    });
 
     expect(mockCreateExtraFeeRows).toHaveBeenCalledWith(
       expect.anything(),

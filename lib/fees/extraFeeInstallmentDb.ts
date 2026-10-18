@@ -226,8 +226,26 @@ export async function updateInstallmentPairTotal(
   }, FEE_MUTATION_TX);
 }
 
+/**
+ * Keep the name snapshot on payment allocations in step with a rename. Display uses the live ExtraFee
+ * name while the row exists, so the snapshot only matters if the row is later deleted or merged; without
+ * this it would then show the pre-rename label.
+ */
+export async function refreshAllocationNameSnapshot(
+  db: Pick<typeof prisma, "paymentFeeAllocation">,
+  extraFeeId: string,
+  name: string
+) {
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  await db.paymentFeeAllocation.updateMany({
+    where: { extraFeeId, headType: "EXTRA_FEE" },
+    data: { componentName: trimmed },
+  });
+}
+
 export async function updateInstallmentPairNames(
-  db: Pick<typeof prisma, "$transaction" | "extraFee">,
+  db: Pick<typeof prisma, "$transaction" | "extraFee" | "paymentFeeAllocation">,
   firstId: string,
   secondId: string,
   baseName: string
@@ -242,6 +260,8 @@ export async function updateInstallmentPairNames(
       where: { id: secondId },
       data: { name: n2, splitIntoTwoInstallments: false },
     });
+    await refreshAllocationNameSnapshot(tx, firstId, n1);
+    await refreshAllocationNameSnapshot(tx, secondId, n2);
   }, FEE_MUTATION_TX);
 }
 
@@ -283,6 +303,8 @@ export type PatchExtraFeeInstallmentResult = {
   splitApplied: boolean;
   migrated: boolean;
   studentFeeDelta: number;
+  /** Combined amount of the fee (all its rows) before this edit; after = before + studentFeeDelta. */
+  totalBefore: number;
 };
 
 /**
@@ -414,10 +436,18 @@ export async function patchExtraFeeWithInstallmentSupport(
       splitApplied: true,
       migrated: false,
       studentFeeDelta,
+      totalBefore: prevTotal,
     };
   }
 
-  if (shouldMigrateLumpToInstallmentsOnPatch(extraFee, wantsSplit)) {
+  /**
+   * A Mess/Hostel lump counts as "should be two rows" by name alone. Splitting replaces its row ids, so
+   * only do it when the admin asked for a split or is changing the amount, not for a rename or an
+   * unchanged save (which used to swap the ids and could leave screens holding the old one).
+   */
+  const amountChanging =
+    combinedTotal !== null && Math.abs(combinedTotal - extraFee.amount) > 0.001;
+  if (shouldMigrateLumpToInstallmentsOnPatch(extraFee, wantsSplit) && (wantsSplit || amountChanging)) {
     const migrateAmount =
       combinedTotal ??
       (typeof body.amount === "number" && body.amount > 0 ? body.amount : null);
@@ -457,6 +487,7 @@ export async function patchExtraFeeWithInstallmentSupport(
       splitApplied: true,
       migrated: true,
       studentFeeDelta,
+      totalBefore: extraFee.amount,
     };
   }
 
@@ -481,6 +512,9 @@ export async function patchExtraFeeWithInstallmentSupport(
   }
 
   const updated = await db.extraFee.update({ where: { id: extraFee.id }, data: updates });
+  if (typeof updates.name === "string" && updates.name !== extraFee.name) {
+    await refreshAllocationNameSnapshot(db, extraFee.id, updates.name);
+  }
   logExtraFeeInstallment("PATCH → single row saved", { feeId: extraFee.id, updates });
   const studentFeeDelta =
     typeof updates.amount === "number" ? (updates.amount as number) - extraFee.amount : 0;
@@ -490,6 +524,7 @@ export async function patchExtraFeeWithInstallmentSupport(
     splitApplied: false,
     migrated: false,
     studentFeeDelta,
+    totalBefore: extraFee.amount,
   };
 }
 

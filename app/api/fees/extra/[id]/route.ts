@@ -8,10 +8,14 @@ import { extraFeeAppliesToStudent } from "@/lib/fees/extraFeeResidencyScope";
 import { snapshotExtraFeeNameOnAllocations } from "@/lib/fees/backfillPaymentAllocationComponentNames";
 import { patchExtraFeeWithInstallmentSupport } from "@/lib/fees/extraFeeInstallmentDb";
 import { invalidateSchoolFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
-import { Prisma } from "@prisma/client";
+import { applyStudentFeeDelta } from "@/lib/fees/applyStoredFeeDelta";
+import { auditActorFromSession } from "@/lib/fees/paymentAudit";
+import {
+  describeExtraFeeChange,
+  extraFeeAuditSnapshot,
+  recordFeeAudit,
+} from "@/lib/fees/feeAudit";
 import { logger } from "@/lib/logger";
-
-const STUDENT_FEE_UPDATE_CHUNK = 200;
 
 const patchExtraFeeBodySchema = z.object({
   name: z.string().optional(),
@@ -39,23 +43,6 @@ function getStudentWhere(
   if (targetType === "STUDENT" && targetStudentId)
     return { schoolId, id: targetStudentId };
   return null;
-}
-
-async function applyStudentFeeDelta(studentIds: string[], delta: number) {
-  if (studentIds.length === 0 || delta === 0) return;
-  for (let i = 0; i < studentIds.length; i += STUDENT_FEE_UPDATE_CHUNK) {
-    const ids = studentIds.slice(i, i + STUDENT_FEE_UPDATE_CHUNK);
-    await prisma.$executeRaw(
-      Prisma.sql`
-        UPDATE "StudentFee"
-        SET
-          "totalFee" = "totalFee" + ${delta},
-          "finalFee" = "finalFee" + ${delta},
-          "remainingFee" = GREATEST(0, "remainingFee" + ${delta})
-        WHERE "studentId" IN (${Prisma.join(ids)})
-      `
-    );
-  }
 }
 
 async function eligibleStudentIdsForExtra(
@@ -123,6 +110,12 @@ export async function PATCH(
         { status: 404 }
       );
     }
+    if (!isAdmin && extraFee.targetType !== "STUDENT") {
+      return NextResponse.json(
+        { message: "Only a school admin can change a school, class or section fee" },
+        { status: 403 }
+      );
+    }
 
     const parsedBody = patchExtraFeeBodySchema.safeParse(await req.json().catch(() => null));
     const body = parsedBody.success ? parsedBody.data : {};
@@ -137,6 +130,10 @@ export async function PATCH(
     logger.info("Request body:", body);
     logger.info("====================================\n");
 
+    // A rename can move a fee into or out of the Mess/Hostel residency rules, which changes who owes it.
+    const eligibleBefore =
+      body.name !== undefined ? await eligibleStudentIdsForExtra(extraFee, schoolId) : null;
+
     const result = await patchExtraFeeWithInstallmentSupport(prisma, extraFee, {
       name: body.name,
       amount: body.amount,
@@ -149,7 +146,27 @@ export async function PATCH(
       return NextResponse.json({ extraFee });
     }
 
-    if (result.studentFeeDelta !== 0) {
+    const totalAfter = result.totalBefore + result.studentFeeDelta;
+    if (eligibleBefore) {
+      const eligibleAfter = await eligibleStudentIdsForExtra(
+        { ...extraFee, name: result.extraFee.name },
+        schoolId
+      );
+      const before = new Set(eligibleBefore);
+      const after = new Set(eligibleAfter);
+      await applyStudentFeeDelta(
+        eligibleAfter.filter((id) => before.has(id)),
+        result.studentFeeDelta
+      );
+      await applyStudentFeeDelta(
+        eligibleAfter.filter((id) => !before.has(id)),
+        totalAfter
+      );
+      await applyStudentFeeDelta(
+        eligibleBefore.filter((id) => !after.has(id)),
+        -result.totalBefore
+      );
+    } else if (result.studentFeeDelta !== 0) {
       const eligibleIds = await eligibleStudentIdsForExtra(extraFee, schoolId);
       await applyStudentFeeDelta(eligibleIds, result.studentFeeDelta);
       logger.info("[ExtraFee Installments] Student fee totals adjusted:", {
@@ -168,6 +185,23 @@ export async function PATCH(
       logger.info("✓ Both installment rows were updated together.");
     }
     logger.info("============================================\n");
+
+    const totalAfterEdit = result.totalBefore + result.studentFeeDelta;
+    const summary =
+      describeExtraFeeChange(
+        { name: extraFee.name, amount: result.totalBefore },
+        { name: result.extraFee.name, amount: totalAfterEdit }
+      ) ?? "Saved with no change to name or amount";
+    await recordFeeAudit(prisma, {
+      schoolId,
+      entityType: "EXTRA_FEE",
+      entityId: extraFee.id,
+      action: "UPDATE",
+      actor: auditActorFromSession(session),
+      summary: result.migrated ? `${summary}; split into 1st and 2nd installment rows` : summary,
+      before: extraFeeAuditSnapshot(extraFee),
+      after: extraFeeAuditSnapshot(result.extraFee),
+    });
 
     await invalidateSchoolFeeReadCaches(schoolId);
 
@@ -220,11 +254,26 @@ export async function DELETE(
         { status: 404 }
       );
     }
+    if (!isAdmin && extraFee.targetType !== "STUDENT") {
+      return NextResponse.json(
+        { message: "Only a school admin can change a school, class or section fee" },
+        { status: 403 }
+      );
+    }
 
     const eligibleIds = await eligibleStudentIdsForExtra(extraFee, schoolId);
     await applyStudentFeeDelta(eligibleIds, -extraFee.amount);
     await snapshotExtraFeeNameOnAllocations(prisma, id, extraFee.name);
     await prisma.extraFee.delete({ where: { id } });
+    await recordFeeAudit(prisma, {
+      schoolId,
+      entityType: "EXTRA_FEE",
+      entityId: id,
+      action: "DELETE",
+      actor: auditActorFromSession(session),
+      summary: `Deleted "${extraFee.name}" (${extraFee.amount})`,
+      before: extraFeeAuditSnapshot(extraFee),
+    });
 
     await invalidateSchoolFeeReadCaches(schoolId);
     return NextResponse.json({ success: true });

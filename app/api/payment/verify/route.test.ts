@@ -6,6 +6,11 @@ import { POST } from "@/app/api/payment/verify/route";
 // Rate limiting has its own dedicated tests (lib/rateLimit.test.ts). Mocked here
 // so this suite doesn't exercise real Upstash Redis (this repo's .env carries a
 // live Upstash instance) and isn't affected by call-count state across test runs.
+jest.mock("@/lib/fees/receiptNumber", () => ({
+  ...jest.requireActual("@/lib/fees/receiptNumber"),
+  ensureReceiptNo: jest.fn().mockResolvedValue(1),
+}));
+
 jest.mock("@/lib/rateLimit", () => ({
   rateLimit: jest.fn().mockResolvedValue({ allowed: true, remaining: 29, resetInSeconds: 600 }),
   rateLimitKey: (...parts: string[]) => parts.join(":"),
@@ -193,6 +198,7 @@ describe("POST /api/payment/verify", () => {
     mockStudentFeeFindUnique.mockResolvedValue(null);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => unknown) =>
       cb({
+        paymentAuditLog: { create: jest.fn().mockResolvedValue({}) },
         studentFee: {
           findUnique: (...args: unknown[]) => mockStudentFeeFindUnique(...args),
           update: (...args: unknown[]) => mockStudentFeeUpdate(...args),
@@ -221,6 +227,7 @@ describe("POST /api/payment/verify", () => {
     mockStudentFeeUpdate.mockResolvedValue({ amountPaid: 500, remainingFee: 500 });
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => unknown) =>
       cb({
+        paymentAuditLog: { create: jest.fn().mockResolvedValue({}) },
         studentFee: {
           findUnique: (...args: unknown[]) => mockStudentFeeFindUnique(...args),
           update: (...args: unknown[]) => mockStudentFeeUpdate(...args),
@@ -269,6 +276,7 @@ describe("POST /api/payment/verify", () => {
     });
 
     const txMock = {
+      paymentAuditLog: { create: jest.fn().mockResolvedValue({}) },
       payment: {
         findUnique: jest.fn().mockResolvedValue({
           status: "PENDING",
@@ -302,6 +310,12 @@ describe("POST /api/payment/verify", () => {
       data: { amountPaid: 500, remainingFee: 500 },
     });
     expect(txMock.eventRegistration.update).not.toHaveBeenCalled();
+    expect(txMock.paymentAuditLog.create).toHaveBeenCalledTimes(1);
+    expect(txMock.paymentAuditLog.create.mock.calls[0][0].data).toMatchObject({
+      action: "STATUS",
+      paymentId: "pay1",
+      actorRole: "SYSTEM",
+    });
   });
 
   it("marks the linked event registration as PAID instead of touching studentFee", async () => {
@@ -318,6 +332,7 @@ describe("POST /api/payment/verify", () => {
     });
 
     const txMock = {
+      paymentAuditLog: { create: jest.fn().mockResolvedValue({}) },
       payment: {
         findUnique: jest.fn().mockResolvedValue({
           status: "PENDING",

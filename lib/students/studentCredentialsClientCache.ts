@@ -2,7 +2,7 @@ import type { StudentCredentialsPayload } from "@/lib/students/computeStudentCre
 
 const MEMORY_TTL_MS = 90_000;
 const SESSION_TTL_MS = 30 * 60 * 1000;
-const SESSION_KEY = "erp:student-credentials:v1";
+const SESSION_KEY = "erp:student-credentials:v2";
 
 const memory = new Map<string, { expiresAt: number; value: StudentCredentialsPayload }>();
 const inflight = new Map<string, Promise<StudentCredentialsPayload>>();

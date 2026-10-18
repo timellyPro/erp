@@ -5,10 +5,12 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/authOptions";
 import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { createNotification } from "@/lib/notificationService";
+import { recordPaymentAudit, type PaymentAuditActor } from "@/lib/fees/paymentAudit";
 import { logger } from "@/lib/logger";
 import { invalidateFeeListServerCaches } from "@/lib/fees/feeListServerCache";
 import { rateLimit, rateLimitKey } from "@/lib/rateLimit";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
+import { ensureReceiptNo } from "@/lib/fees/receiptNumber";
 
 const verifyPaymentBodySchema = z.object({
   gateway: z.string().optional().nullable(),
@@ -20,6 +22,9 @@ const hyperpgBaseUrl = process.env.HYPERPG_BASE_URL || "https://sandbox.hyperpg.
 const globalHyperpgMerchantId = process.env.HYPERPG_MERCHANT_ID;
 const globalHyperpgApiKey = process.env.HYPERPG_API_KEY;
 const hyperpgAuthStyle = process.env.HYPERPG_AUTH_STYLE || "api_key";
+
+/** Shown as the actor on history rows written when a customer returns from the gateway. */
+const VERIFY_ACTOR: PaymentAuditActor = { userId: null, name: "Payment verification (customer return)", role: "SYSTEM" };
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -195,6 +200,17 @@ export async function POST(req: Request) {
 
         const transitioned = before?.status !== "SUCCESS";
         if (transitioned) {
+          await ensureReceiptNo(tx, student.schoolId, existing.id);
+          await recordPaymentAudit(tx, {
+            schoolId: student.schoolId,
+            paymentId: existing.id,
+            studentId: before?.studentId ?? studentId,
+            action: "STATUS",
+            actor: VERIFY_ACTOR,
+            summary: `Status ${before?.status ?? "unknown"} -> SUCCESS (confirmed with the gateway)`,
+            before: { status: before?.status ?? null },
+            after: { status: "SUCCESS", gatewayStatus: typeof orderStatus.status === "string" ? orderStatus.status : null },
+          });
           if (before?.eventRegistrationId) {
             await tx.eventRegistration.update({
               where: { id: before.eventRegistrationId },
@@ -287,6 +303,24 @@ export async function POST(req: Request) {
         const updatedFee = await tx.studentFee.update({
           where: { studentId },
           data: { amountPaid: newAmountPaid, remainingFee: newRemaining },
+        });
+
+        await ensureReceiptNo(tx, student.schoolId, payment.id);
+        await recordPaymentAudit(tx, {
+          schoolId: student.schoolId,
+          paymentId: payment.id,
+          studentId,
+          action: "CREATE",
+          actor: VERIFY_ACTOR,
+          summary: `Recorded online payment of ${amountNum} (order ${orderId}) after the gateway confirmed it`,
+          after: {
+            id: payment.id,
+            studentId,
+            amount: amountNum,
+            status: "SUCCESS",
+            gateway: "HYPERPG",
+            transactionId: orderId,
+          },
         });
 
         return { payment, fee: updatedFee, raced: false };

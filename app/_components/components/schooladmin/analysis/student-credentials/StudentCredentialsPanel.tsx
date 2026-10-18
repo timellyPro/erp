@@ -22,6 +22,12 @@ export default function StudentCredentialsPanel() {
         onDownload={(format) => void page.handleDownload(format)}
       />
 
+      {page.truncated ? (
+        <p className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 sm:text-sm">
+          Only the first 5,000 students are shown. Pick a class or section to see the rest.
+        </p>
+      ) : null}
+
       {!page.initialLoading ? (
         <StudentCredentialsMismatchAlert mismatchCount={page.mismatchCount} />
       ) : null}
@@ -47,6 +53,9 @@ export default function StudentCredentialsPanel() {
           page={page.pageSafe}
           totalPages={page.totalPages}
           onPageChange={page.setPage}
+          onResetOne={(row) => void page.handleResetOne(row)}
+          resettingId={page.resettingId}
+          busy={page.resetting}
         />
       )}
     </div>

@@ -14,6 +14,7 @@ const mockResolveFeesSchoolId = jest.fn();
 const mockExtraFeeFindFirst = jest.fn();
 const mockExtraFeeDelete = jest.fn();
 const mockStudentFindMany = jest.fn();
+const mockFeeAuditCreate = jest.fn().mockResolvedValue({});
 const mockExecuteRaw = jest.fn();
 const mockPatchExtraFeeWithInstallmentSupport = jest.fn();
 const mockSnapshotExtraFeeNameOnAllocations = jest.fn();
@@ -52,6 +53,7 @@ jest.mock("@/lib/db", () => ({
     },
     student: { findMany: (...args: unknown[]) => mockStudentFindMany(...args) },
     $executeRaw: (...args: unknown[]) => mockExecuteRaw(...args),
+    feeAuditLog: { create: (...args: unknown[]) => mockFeeAuditCreate(...args) },
   },
 }));
 
@@ -102,6 +104,25 @@ describe("PATCH /api/fees/extra/[id]", () => {
     expect(res.status).toBe(403);
   });
 
+  it("returns 403 when a teacher edits a school-wide fee", async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: "t1", role: "TEACHER", schoolId: "s1" } });
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    mockExtraFeeFindFirst.mockResolvedValue(existingExtraFee);
+    const res = await PATCH(patchRequest({ amount: 600 }), ctx);
+    expect(res.status).toBe(403);
+    expect(mockPatchExtraFeeWithInstallmentSupport).not.toHaveBeenCalled();
+  });
+
+  it("lets a teacher edit a fee assigned to a single student", async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: "t1", role: "TEACHER", schoolId: "s1" } });
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    const own = { ...existingExtraFee, targetType: "STUDENT", targetStudentId: "stu1" };
+    mockExtraFeeFindFirst.mockResolvedValue(own);
+    mockPatchExtraFeeWithInstallmentSupport.mockResolvedValue("no_changes");
+    const res = await PATCH(patchRequest({ amount: 500 }), ctx);
+    expect(res.status).toBe(200);
+  });
+
   it("returns 400 when schoolId cannot be resolved", async () => {
     mockGetServerSession.mockResolvedValue(adminSession);
     mockResolveFeesSchoolId.mockResolvedValue(null);
@@ -140,17 +161,28 @@ describe("PATCH /api/fees/extra/[id]", () => {
       { id: "stu2", residencyType: "Hosteller" },
     ]);
     mockPatchExtraFeeWithInstallmentSupport.mockResolvedValue({
-      extraFee: { id: "ef1", amount: 700 },
+      extraFee: { ...existingExtraFee, amount: 700 },
       extraFeeIds: ["ef1"],
       splitApplied: false,
       migrated: false,
       studentFeeDelta: 200,
+      totalBefore: 500,
     });
 
     const res = await PATCH(patchRequest({ amount: 700 }), ctx);
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.extraFee.amount).toBe(700);
+    expect(mockFeeAuditCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        entityType: "EXTRA_FEE",
+        entityId: "ef1",
+        action: "UPDATE",
+        actorUserId: "u1",
+        actorRole: "SCHOOLADMIN",
+        summary: "Amount 500 -> 700",
+      }),
+    });
     expect(mockExecuteRaw).toHaveBeenCalledTimes(1);
     expect(mockInvalidateSchoolFeeReadCaches).toHaveBeenCalledWith("s1");
   });
@@ -160,18 +192,70 @@ describe("PATCH /api/fees/extra/[id]", () => {
     mockResolveFeesSchoolId.mockResolvedValue("s1");
     mockExtraFeeFindFirst.mockResolvedValue(existingExtraFee);
     mockPatchExtraFeeWithInstallmentSupport.mockResolvedValue({
-      extraFee: { id: "ef1", name: "Renamed" },
+      extraFee: { ...existingExtraFee, name: "Renamed" },
       extraFeeIds: ["ef1"],
       splitApplied: false,
       migrated: false,
       studentFeeDelta: 0,
+      totalBefore: 500,
     });
+    mockStudentFindMany.mockResolvedValue([{ id: "stu1", residencyType: "Day Scholar" }]);
 
     const res = await PATCH(patchRequest({ name: "Renamed" }), ctx);
     expect(res.status).toBe(200);
-    expect(mockStudentFindMany).not.toHaveBeenCalled();
     expect(mockExecuteRaw).not.toHaveBeenCalled();
     expect(mockInvalidateSchoolFeeReadCaches).toHaveBeenCalledWith("s1");
+  });
+
+  it("charges hostellers when a rename takes a fee out of the Mess rules, and still skips day scholars", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    mockExtraFeeFindFirst.mockResolvedValue({ ...existingExtraFee, name: "Mess Fee", amount: 1000 });
+    mockStudentFindMany.mockResolvedValue([
+      { id: "day", residencyType: "Day Scholar" },
+      { id: "host", residencyType: "Hosteller" },
+    ]);
+    mockPatchExtraFeeWithInstallmentSupport.mockResolvedValue({
+      extraFee: { ...existingExtraFee, name: "Meals" },
+      extraFeeIds: ["ef1"],
+      splitApplied: false,
+      migrated: false,
+      studentFeeDelta: 0,
+      totalBefore: 1000,
+    });
+
+    const res = await PATCH(patchRequest({ name: "Meals" }), ctx);
+    expect(res.status).toBe(200);
+    // Only the hosteller newly owes it: one update, for that student.
+    expect(mockExecuteRaw).toHaveBeenCalledTimes(1);
+    const sql = mockExecuteRaw.mock.calls[0]![0] as { values: unknown[] };
+    expect(sql.values).toContain(1000);
+    expect(sql.values).toContain("host");
+    expect(sql.values).not.toContain("day");
+  });
+
+  it("removes the fee from students who no longer owe it after a rename", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    mockExtraFeeFindFirst.mockResolvedValue({ ...existingExtraFee, name: "Meals", amount: 1000 });
+    mockStudentFindMany.mockResolvedValue([
+      { id: "day", residencyType: "Day Scholar" },
+      { id: "host", residencyType: "Hosteller" },
+    ]);
+    mockPatchExtraFeeWithInstallmentSupport.mockResolvedValue({
+      extraFee: { ...existingExtraFee, name: "Mess Fee" },
+      extraFeeIds: ["ef1"],
+      splitApplied: false,
+      migrated: false,
+      studentFeeDelta: 0,
+      totalBefore: 1000,
+    });
+
+    await PATCH(patchRequest({ name: "Mess Fee" }), ctx);
+    expect(mockExecuteRaw).toHaveBeenCalledTimes(1);
+    const sql = mockExecuteRaw.mock.calls[0]![0] as { values: unknown[] };
+    expect(sql.values).toContain(-1000);
+    expect(sql.values).toContain("host");
   });
 });
 
@@ -197,6 +281,24 @@ describe("DELETE /api/fees/extra/[id]", () => {
     mockGetServerSession.mockResolvedValue({ user: { id: "u1", role: "STUDENT" } });
     const res = await DELETE(deleteRequest(), ctx);
     expect(res.status).toBe(403);
+  });
+
+  it("returns 403 when a teacher deletes a school-wide fee", async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: "t1", role: "TEACHER", schoolId: "s1" } });
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    mockExtraFeeFindFirst.mockResolvedValue(existingExtraFee);
+    const res = await DELETE(deleteRequest(), ctx);
+    expect(res.status).toBe(403);
+    expect(mockExtraFeeDelete).not.toHaveBeenCalled();
+  });
+
+  it("does not delete the fee when the audit row cannot be written", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    mockExtraFeeFindFirst.mockResolvedValue(existingExtraFee);
+    mockFeeAuditCreate.mockRejectedValueOnce(new Error("audit down"));
+    const res = await DELETE(deleteRequest(), ctx);
+    expect(res.status).toBe(500);
   });
 
   it("returns 404 when the extra fee is not found in the school", async () => {
@@ -225,6 +327,14 @@ describe("DELETE /api/fees/extra/[id]", () => {
       "Sports Fee"
     );
     expect(mockExtraFeeDelete).toHaveBeenCalledWith({ where: { id: "ef1" } });
+    expect(mockFeeAuditCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        entityId: "ef1",
+        action: "DELETE",
+        actorUserId: "u1",
+        summary: 'Deleted "Sports Fee" (500)',
+      }),
+    });
     expect(mockInvalidateSchoolFeeReadCaches).toHaveBeenCalledWith("s1");
   });
 });

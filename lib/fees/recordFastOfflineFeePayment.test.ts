@@ -1,6 +1,11 @@
 const mockStudentFindUnique = jest.fn();
 const mockExtraFeeFindMany = jest.fn();
 const mockTransaction = jest.fn();
+jest.mock("@/lib/fees/receiptNumber", () => ({
+  ...jest.requireActual("@/lib/fees/receiptNumber"),
+  ensureReceiptNo: jest.fn().mockResolvedValue(1),
+}));
+
 jest.mock("@/lib/db", () => ({
   __esModule: true,
   default: {
@@ -42,6 +47,7 @@ import {
 /** In-memory fake of the Prisma transaction client used inside $transaction. */
 const tx = {
   payment: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
+  paymentAuditLog: { create: jest.fn() },
   paymentFeeAllocation: { findMany: jest.fn(), createMany: jest.fn() },
   extraFee: { findMany: jest.fn() },
   studentFee: { updateMany: jest.fn() },
@@ -86,6 +92,7 @@ beforeEach(() => {
   tx.payment.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: "pay1", ...data }));
   tx.paymentFeeAllocation.createMany.mockResolvedValue({ count: 2 });
   tx.studentFee.updateMany.mockResolvedValue({ count: 1 });
+  tx.paymentAuditLog.create.mockResolvedValue({});
   mockReconcile.mockResolvedValue({
     after: { amountPaid: 3000, remainingFee: 2000, finalFee: 5000, totalFee: 5000 },
   });
@@ -440,5 +447,49 @@ describe("canUseFastOfflineFeePayment", () => {
     expect(canUseFastOfflineFeePayment(baseHeads, alloc)).toBe(true);
     expect(canUseFastOfflineFeePayment([], alloc)).toBe(false);
     expect(canUseFastOfflineFeePayment(baseHeads, [])).toBe(false);
+  });
+});
+
+describe("recordFastOfflineFeePayment audit trail", () => {
+  it("writes a CREATE audit row, in the same transaction, with the collector and the head split", async () => {
+    await recordFastOfflineFeePayment(
+      input({ collectedByUserId: "u9", collectedByName: "Clerk", collectedByRole: "TEACHER", refNo: "UTR-77" })
+    );
+
+    expect(tx.paymentAuditLog.create).toHaveBeenCalledTimes(1);
+    const data = tx.paymentAuditLog.create.mock.calls[0][0].data;
+    expect(data).toMatchObject({
+      schoolId: "sch1",
+      paymentId: "pay1",
+      studentId: "st1",
+      action: "CREATE",
+      actorUserId: "u9",
+      actorName: "Clerk",
+      actorRole: "TEACHER",
+    });
+    expect(data.summary).toMatch(/Recorded payment of 2000 \(OFFLINE_CASH, ref UTR-77\)/);
+    expect(data.after).toMatchObject({ id: "pay1", amount: 2000, transactionId: "UTR-77", allocationCount: 2 });
+    expect(data.before).toBeUndefined();
+  });
+
+  it("records the change even when the collector is unknown", async () => {
+    await recordFastOfflineFeePayment(input());
+    expect(tx.paymentAuditLog.create.mock.calls[0][0].data).toMatchObject({ actorUserId: null, actorName: null });
+  });
+
+  it("fails the whole payment when the audit row cannot be written", async () => {
+    tx.paymentAuditLog.create.mockRejectedValue(new Error("audit down"));
+    await expect(recordFastOfflineFeePayment(input())).rejects.toThrow("audit down");
+    // the transaction callback rejected, so nothing was committed and no caches were touched
+    expect(mockReconcile).not.toHaveBeenCalled();
+  });
+
+  it("writes no audit row for a replayed (idempotent) request", async () => {
+    tx.payment.findUnique.mockResolvedValue({ id: "pay1", amount: 2000, gateway: "OFFLINE_CASH", clientRequestId: "attempt-1" });
+    tx.paymentFeeAllocation.findMany.mockResolvedValue([
+      { headType: "BASE_COMPONENT", componentIndex: 0, extraFeeId: null, componentName: "Tuition", allocatedAmount: 1500 },
+    ]);
+    await recordFastOfflineFeePayment(input({ clientRequestId: "attempt-1" }));
+    expect(tx.paymentAuditLog.create).not.toHaveBeenCalled();
   });
 });

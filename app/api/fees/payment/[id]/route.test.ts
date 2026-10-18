@@ -62,7 +62,7 @@ const patchRequest = (body: unknown) =>
 const deleteRequest = (query = "") =>
   new Request(`http://localhost/api/fees/payment/pay1${query}`, { method: "DELETE" });
 
-const adminSession = { user: { id: "u1", role: "SCHOOLADMIN", schoolId: "s1" } };
+const adminSession = { user: { id: "u1", name: "Asha Admin", role: "SCHOOLADMIN", schoolId: "s1" } };
 
 const feePayment = {
   id: "pay1",
@@ -71,6 +71,10 @@ const feePayment = {
   status: "SUCCESS",
   purpose: "FEES",
   eventRegistrationId: null,
+  gateway: "OFFLINE_CASH",
+  transactionId: "UTR1",
+  createdAt: new Date("2026-10-01T12:00:00.000Z"),
+  collectedByName: "Front desk",
   student: {
     id: "stu1",
     fee: { amountPaid: 500, finalFee: 1000, remainingFee: 500 },
@@ -218,6 +222,7 @@ describe("PATCH /api/fees/payment/[id]", () => {
       },
       payment: { update: jest.fn().mockResolvedValue({}) },
       studentFee: { update: jest.fn().mockResolvedValue({}) },
+      paymentAuditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => unknown) => cb(txMock));
 
@@ -239,6 +244,39 @@ describe("PATCH /api/fees/payment/[id]", () => {
       data: { amountPaid: 700, remainingFee: 300 },
     });
     expect(mockInvalidateStudentFeeReadCaches).toHaveBeenCalledWith({ studentId: "stu1", schoolId: "s1" });
+
+    // who changed what, written in the same transaction
+    const audit = txMock.paymentAuditLog.create.mock.calls[0][0].data;
+    expect(audit).toMatchObject({
+      schoolId: "s1",
+      paymentId: "pay1",
+      studentId: "stu1",
+      action: "UPDATE",
+      actorUserId: "u1",
+      actorName: "Asha Admin",
+      actorRole: "SCHOOLADMIN",
+      summary: "Amount 500 -> 700",
+    });
+    expect(audit.before.amount).toBe(500);
+    expect(audit.after.amount).toBe(700);
+    expect(audit.before.allocations[0].amount).toBe(500);
+    expect(audit.after.allocations[0].amount).toBe(700);
+  });
+
+  it("rolls back the whole edit when the audit row cannot be written", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    mockPaymentFindFirst.mockResolvedValue(feePayment);
+    const txMock = {
+      paymentFeeAllocation: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
+      payment: { update: jest.fn().mockResolvedValue({}) },
+      studentFee: { update: jest.fn().mockResolvedValue({}) },
+      paymentAuditLog: { create: jest.fn().mockRejectedValue(new Error("audit down")) },
+    };
+    mockTransaction.mockImplementation(async (cb: (tx: unknown) => unknown) => cb(txMock));
+    const res = await PATCH(patchRequest({ amount: 700 }), ctx);
+    expect(res.status).toBe(500);
+    expect(mockInvalidateStudentFeeReadCaches).not.toHaveBeenCalled();
   });
 
   it("updates metadata only (transactionId/gateway) without touching the student fee", async () => {
@@ -246,15 +284,41 @@ describe("PATCH /api/fees/payment/[id]", () => {
     mockResolveFeesSchoolId.mockResolvedValue("s1");
     mockPaymentFindFirst.mockResolvedValue(feePayment);
     mockPaymentFindUnique.mockResolvedValue({ id: "pay1", transactionId: "NEWTXN" });
+    const txMock = {
+      payment: { update: jest.fn().mockResolvedValue({}) },
+      studentFee: { update: jest.fn() },
+      paymentAuditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    mockTransaction.mockImplementation(async (cb: (tx: unknown) => unknown) => cb(txMock));
 
     const res = await PATCH(patchRequest({ transactionId: "NEWTXN", gateway: "cash" }), ctx);
     expect(res.status).toBe(200);
-    expect(mockPaymentUpdate).toHaveBeenCalledWith({
+    expect(txMock.payment.update).toHaveBeenCalledWith({
       where: { id: "pay1" },
       data: { transactionId: "NEWTXN", gateway: "OFFLINE_CASH" },
     });
-    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(txMock.studentFee.update).not.toHaveBeenCalled();
+    expect(txMock.paymentAuditLog.create.mock.calls[0][0].data).toMatchObject({
+      action: "UPDATE",
+      actorName: "Asha Admin",
+      summary: "Reference UTR1 -> NEWTXN",
+    });
     expect(mockInvalidateStudentFeeReadCaches).toHaveBeenCalledWith({ studentId: "stu1", schoolId: "s1" });
+  });
+
+  it("does not write an audit row when a metadata edit changes nothing", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    mockPaymentFindFirst.mockResolvedValue(feePayment);
+    mockPaymentFindUnique.mockResolvedValue({ id: "pay1" });
+    const txMock = {
+      payment: { update: jest.fn().mockResolvedValue({}) },
+      paymentAuditLog: { create: jest.fn() },
+    };
+    mockTransaction.mockImplementation(async (cb: (tx: unknown) => unknown) => cb(txMock));
+    const res = await PATCH(patchRequest({ transactionId: "UTR1" }), ctx);
+    expect(res.status).toBe(200);
+    expect(txMock.paymentAuditLog.create).not.toHaveBeenCalled();
   });
 });
 
@@ -291,7 +355,11 @@ describe("DELETE /api/fees/payment/[id]", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json).toEqual({ success: true, reversedAmount: 500 });
-    expect(mockDeleteFastFeePayment).toHaveBeenCalledWith("pay1", "s1", "stu1");
+    expect(mockDeleteFastFeePayment).toHaveBeenCalledWith("pay1", "s1", "stu1", {
+      userId: "u1",
+      name: "Asha Admin",
+      role: "SCHOOLADMIN",
+    });
   });
 
   it("maps a 'not found' helper error to 404", async () => {

@@ -78,6 +78,7 @@ async function loadFeeReportTransactionsInRange(
       where: paymentWhere,
       select: {
         id: true,
+        receiptNo: true,
         amount: true,
         gateway: true,
         transactionId: true,
@@ -185,6 +186,7 @@ async function loadFeeReportTransactionsInRange(
       id: p.id,
       amount: p.amount,
       gateway: p.gateway,
+      receiptNo: p.receiptNo,
       createdAt: p.createdAt.toISOString(),
       transactionId: p.transactionId,
       hyperpgTxnId: p.hyperpgTxnId,

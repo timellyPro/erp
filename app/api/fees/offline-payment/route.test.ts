@@ -3,6 +3,11 @@
  */
 import { POST } from "@/app/api/fees/offline-payment/route";
 
+jest.mock("@/lib/fees/receiptNumber", () => ({
+  ...jest.requireActual("@/lib/fees/receiptNumber"),
+  ensureReceiptNo: jest.fn().mockResolvedValue(1),
+}));
+
 jest.mock("@/lib/db/tenantContext", () => ({
   runInTenantScope: (schoolId: string, fn: (id: string) => unknown) => fn(schoolId),
   runInOptionalTenantScope: (_schoolId: unknown, fn: () => unknown) => fn(),
@@ -129,6 +134,7 @@ const studentWithOneComponent = {
 
 function txMockFor(overrides: Record<string, unknown> = {}) {
   const tx = {
+    paymentAuditLog: { create: jest.fn().mockResolvedValue({}) },
     payment: {
       create: jest.fn().mockResolvedValue({ id: "pay1", amount: 500 }),
       update: jest.fn(),
@@ -357,6 +363,17 @@ describe("POST /api/fees/offline-payment", () => {
       expect(mockReconcileStudentFeeIntegrity).toHaveBeenCalledWith("s1", "stu1", {
         repairAllocations: true,
         apply: true,
+      });
+
+      // the same transaction wrote who recorded it
+      expect(tx.paymentAuditLog.create).toHaveBeenCalledTimes(1);
+      expect(tx.paymentAuditLog.create.mock.calls[0][0].data).toMatchObject({
+        schoolId: "s1",
+        paymentId: "pay1",
+        studentId: "stu1",
+        action: "CREATE",
+        actorUserId: "u1",
+        actorName: "Admin One",
       });
     });
 

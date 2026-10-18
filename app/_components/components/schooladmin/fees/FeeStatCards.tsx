@@ -14,6 +14,8 @@ export default function FeeStatCards({ stats }: FeeStatCardsProps) {
   const collected = stats?.totalCollected ?? 0;
   const due = stats?.totalDue ?? 0;
   const previousYearDue = stats?.previousYearDue ?? 0;
+  const unplaced = stats?.unplacedPayments ?? 0;
+  const unplacedStudents = stats?.unplacedStudents ?? 0;
 
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-6 sm:gap-4">
@@ -43,6 +45,11 @@ export default function FeeStatCards({ stats }: FeeStatCardsProps) {
           ₹{formatRupee(collected)}
         </div>
         <p className="mt-1 text-[11px] text-gray-500">Recorded fee payments</p>
+        {unplaced > 0 ? (
+          <p className="mt-1 text-[11px] text-amber-300/90">
+            + ₹{formatRupee(unplaced)} paid on fees {unplacedStudents} student{unplacedStudents === 1 ? "" : "s"} no longer owe
+          </p>
+        ) : null}
       </div>
       <div className="rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur">
         <div className="mb-1 flex items-center gap-2 text-sm text-gray-400">Total due</div>

@@ -67,6 +67,7 @@ export async function GET(req: Request) {
 
     const receipt = {
       paymentId: payment.id,
+      receiptNo: payment.receiptNo ?? null,
       orderId: payment.transactionId || orderId,
       transactionId: payment.hyperpgTxnId || payment.transactionId || payment.id,
       amount: payment.amount,

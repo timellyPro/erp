@@ -17,7 +17,9 @@ import { FEE_MUTATION_TX } from "@/lib/fees/prismaFeeMutationTx";
 import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
 import { computeAdminStudentFeeBreakdown } from "@/lib/fees/computeAdminStudentFeeBreakdown";
 import { reconcileStudentFeeIntegrity } from "@/lib/fees/reconcileStudentFeeIntegrity";
+import { paymentAuditSnapshot, recordPaymentAudit } from "@/lib/fees/paymentAudit";
 import { roundRupee } from "@/lib/formatRupee";
+import { ensureReceiptNo } from "@/lib/fees/receiptNumber";
 
 export type OfflineSelectedHead =
   | { headType: "BASE_COMPONENT"; componentIndex: number; componentName?: string }
@@ -41,6 +43,8 @@ type FastOfflinePaymentInput = {
   explicitAllocations: OfflineExplicitAllocation[];
   collectedByUserId?: string;
   collectedByName?: string;
+  /** Role of the staff member, for the audit trail only. */
+  collectedByRole?: string | null;
   clientRequestId?: string | null;
 };
 
@@ -89,6 +93,7 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
     explicitAllocations,
     collectedByUserId,
     collectedByName,
+    collectedByRole,
     clientRequestId: rawClientRequestId,
   } = input;
   const clientRequestId =
@@ -144,6 +149,11 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
   }
 
   const fee = student.fee;
+  const auditActor = {
+    userId: collectedByUserId ?? null,
+    name: collectedByName ?? null,
+    role: collectedByRole ?? null,
+  };
 
   // Light due-map only — no migrate/reconcile writes before the payment commit.
   // Client Fees Sheet already computed heads; DB write is the critical path.
@@ -356,6 +366,20 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
             throw new Error("Fee record was updated concurrently");
           }
 
+          await recordPaymentAudit(tx, {
+            schoolId,
+            paymentId: existing.id,
+            studentId,
+            action: "UPDATE",
+            actor: auditActor,
+            summary: `Added ${plan.appendTotal} of fee heads to existing reference ${txId} (amount ${existing.amount} -> ${updatedPayment.amount})`,
+            before: paymentAuditSnapshot(existing, existingRows.map((a) => ({ ...a, allocationType: "PAYMENT" }))),
+            after: paymentAuditSnapshot(
+              updatedPayment,
+              appendRows.map(({ a, data }) => ({ ...data, allocatedAmount: deltaByKey.get(a.key)! }))
+            ),
+          });
+
           return {
             payment: updatedPayment,
             idempotent: false as const,
@@ -384,6 +408,8 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
         },
       });
 
+      await ensureReceiptNo(tx, schoolId, payment.id);
+
       if (paymentAllocationsData.length > 0) {
         await tx.paymentFeeAllocation.createMany({
           data: paymentAllocationsData.map((d) => ({
@@ -410,6 +436,16 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
       if (feeUpdate.count !== 1) {
         throw new Error("Fee record was updated concurrently");
       }
+
+      await recordPaymentAudit(tx, {
+        schoolId,
+        paymentId: payment.id,
+        studentId,
+        action: "CREATE",
+        actor: auditActor,
+        summary: `Recorded payment of ${amount} (${offlineGateway}${txId ? `, ref ${txId}` : ""})`,
+        after: paymentAuditSnapshot(payment, paymentAllocationsData),
+      });
 
       return { payment, idempotent: false as const, feeAllocations: null as null };
     },

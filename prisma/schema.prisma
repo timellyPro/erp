@@ -314,6 +314,10 @@ model School {
   timetables              Timetable[]
   backupEmailSchedules    BackupEmailSchedule[]
   teacherDailyAttendances TeacherDailyAttendance[]
+  paymentAuditLogs        PaymentAuditLog[]
+  feeAuditLogs            FeeAuditLog[]
+  receiptCounter          ReceiptCounter?
+  feeBulkEdits            FeeBulkEdit[]
 }
 
 model BackupEmailSchedule {
@@ -1392,6 +1396,10 @@ model Payment {
 
   transactionId String? // Our order_id (TMLxxx) for lookups
 
+  /// Stable per-school receipt number (1, 2, 3...), assigned once when a fee payment succeeds.
+  /// Never reused: a deleted payment leaves a gap. Authority is "ReceiptCounter"; see lib/fees/receiptNumber.ts.
+  receiptNo Int?
+
   // Per-submit-attempt idempotency key from the client (offline/manual entry form).
   // Distinct from transactionId (the business reference/UTR shown in reports):
   // this exists purely to collapse a double-click or a retried request into one
@@ -1416,6 +1424,7 @@ model Payment {
   @@index([studentId, createdAt])
   @@index([studentId, status, createdAt])
   @@index([studentId, purpose, status, createdAt])
+  @@index([receiptNo])
   @@index([collectedByUserId])
   @@index([collectedByUserId, createdAt])
 }
@@ -1501,6 +1510,109 @@ model PaymentWebhookEvent {
 
   receivedAt DateTime @default(now())
   payload    Json
+
+  /// Set once the event has been applied. A retry of an event that was stored but never processed
+  /// (crash or error mid-way) is processed again instead of being acknowledged and dropped.
+  processedAt DateTime?
+}
+
+/// Append-only history of who created, changed, deleted or refunded a payment.
+/// paymentId is deliberately NOT a foreign key: the payment row can be deleted and this log must
+/// survive it. Snapshots hold ids, amounts and references only (no student personal data).
+/// app_tenant has SELECT/INSERT only (see the migration), so the app cannot rewrite history.
+model PaymentAuditLog {
+  id String @id @default(cuid())
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  paymentId String
+  studentId String
+
+  /// CREATE | UPDATE | DELETE | REFUND | STATUS (gateway webhook) | ALERT (needs human review)
+  action String
+
+  actorUserId String?
+  actorName   String?
+  actorRole   String?
+
+  /// One human-readable line, e.g. "Amount 5000 -> 4500".
+  summary String?
+  before  Json?
+  after   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([schoolId, createdAt])
+  @@index([schoolId, paymentId, createdAt])
+  @@index([schoolId, studentId, createdAt])
+}
+
+/// Append-only history of fee-setup changes (who created, edited or deleted an extra fee).
+/// entityId is not a foreign key on purpose, so a deleted fee keeps its history.
+model FeeAuditLog {
+  id String @id @default(cuid())
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  /// EXTRA_FEE
+  entityType String
+  entityId   String
+
+  /// CREATE | UPDATE | DELETE
+  action String
+
+  actorUserId String?
+  actorName   String?
+  actorRole   String?
+
+  /// One human-readable line, e.g. "Amount 500 -> 700".
+  summary String?
+  before  Json?
+  after   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([schoolId, createdAt])
+  @@index([schoolId, entityType, entityId, createdAt])
+}
+
+/// One bulk "set a fee head's amount" run, with enough detail to undo it as a whole.
+model FeeBulkEdit {
+  id String @id @default(cuid())
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  headName String
+  amount   Float
+
+  /// APPLIED | UNDONE
+  status String @default("APPLIED")
+
+  actorUserId String?
+  actorName   String?
+  actorRole   String?
+
+  /// Per student: { studentId, action: CREATE|UPDATE, createdIds[], updated: [{ id, previousAmount }], previousTotal, delta }
+  changes Json
+
+  studentCount Int
+  totalDelta   Float
+
+  createdAt   DateTime  @default(now())
+  undoneAt    DateTime?
+  undoneByName String?
+
+  @@index([schoolId, createdAt])
+}
+
+/// Last receipt number issued per school (one row per school).
+model ReceiptCounter {
+  schoolId String @id
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  lastNo   Int    @default(0)
 }
 
 model Refund {
