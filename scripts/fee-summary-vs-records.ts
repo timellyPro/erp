@@ -29,12 +29,17 @@ async function main() {
   ]);
 
   const sum = (f: (r: (typeof fees)[number]) => number) => fees.reduce((s, r) => s + f(r), 0);
+  // The Records list stores current-year and previous-year dues together; the Summary splits them.
+  // Add them back so the two sides cover the same money.
   const rows: Array<[string, number, number]> = [
-    ["Total fee (before discount)", stats.totalFee, sum((r) => r.totalFee)],
+    ["Total fee (before discount)", stats.totalFee + stats.previousYearTotalFee, sum((r) => r.totalFee)],
     ["Discount", stats.totalDiscount, sum((r) => r.totalFee - r.finalFee)],
-    ["Collected", stats.totalCollected, sum((r) => r.amountPaid)],
-    ["Due", stats.totalDue, sum((r) => r.remainingFee)],
+    ["Collected", stats.totalCollected + stats.previousYearCollected, sum((r) => r.amountPaid)],
+    ["Due", stats.totalDue + stats.previousYearDue, sum((r) => r.remainingFee)],
   ];
+  console.log(
+    `Summary split: current year fee ${Math.round(stats.totalFee).toLocaleString("en-IN")}, previous-year fee ${Math.round(stats.previousYearTotalFee).toLocaleString("en-IN")}`
+  );
   const perHead = fees.filter((r) => r.discountFeeHeadKey && r.discountFeeHeadKey !== "__DISCOUNT_OVERALL__").length;
   console.log(`${fees.length} active students | ${fees.filter((r) => r.discountPercent > 0).length} with a discount | ${perHead} with a per-head discount`);
   console.log("Measure".padEnd(30), "Summary".padStart(14), "Records".padStart(14), "Difference".padStart(12));
@@ -62,7 +67,7 @@ async function main() {
       );
     }
   }
-  console.log("(Summary Total fee includes previous-year dues separately; compare the current-year rows.)");
+  console.log("(Summary rows above are current year plus previous year, to match the stored copy.)");
 }
 
 main()
