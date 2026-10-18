@@ -3,6 +3,11 @@
  */
 import { POST } from "@/app/api/fees/offline-payment/route";
 
+jest.mock("@/lib/fees/receiptNumber", () => ({
+  ...jest.requireActual("@/lib/fees/receiptNumber"),
+  ensureReceiptNo: jest.fn().mockResolvedValue(1),
+}));
+
 jest.mock("@/lib/db/tenantContext", () => ({
   runInTenantScope: (schoolId: string, fn: (id: string) => unknown) => fn(schoolId),
   runInOptionalTenantScope: (_schoolId: unknown, fn: () => unknown) => fn(),

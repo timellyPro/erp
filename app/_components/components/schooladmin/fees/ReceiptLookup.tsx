@@ -1,5 +1,6 @@
 "use client";
 
+import { formatReceiptNo } from "@/lib/fees/receiptNumber";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Search, History, Trash2 } from "lucide-react";
@@ -17,6 +18,7 @@ type HistoryEvent = {
 
 type FoundPayment = {
   id: string;
+  receiptNo: number | null;
   createdAt: string;
   amount: number;
   status: string;
@@ -33,6 +35,7 @@ type FoundPayment = {
 
 type DeletedPayment = {
   auditId: string;
+  receiptNo: number | null;
   paymentId: string;
   deletedAt: string;
   deletedBy: string | null;
@@ -138,13 +141,13 @@ export default function ReceiptLookup() {
       <h3 className="text-lg font-semibold">Receipt lookup &amp; payment history</h3>
       <p className="mt-1 text-sm text-gray-400">
         Find a payment from a receipt the parent is holding. This search shows every payment, including pending and
-        failed ones, and payments that were deleted. Use the UTR / reference number from the receipt. The
-        &quot;Receipt no&quot; in day reports (1, 2, 3…) is only the row position in that report, so it cannot be searched.
+        failed ones, and payments that were deleted. Search by the receipt number (for example R-000123 or 123) or by the UTR / reference number. Receipt
+        numbers are printed in the day reports; payments recorded before numbering was introduced were numbered in date order.
       </p>
 
       <form onSubmit={search} className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <label className="block text-xs text-gray-400 lg:col-span-2">
-          Reference / UTR, student name, admission no. or payment id
+          Receipt no., reference / UTR, student name, admission no. or payment id
           <input
             className={`${inputClass} mt-1`}
             value={q}
@@ -238,6 +241,10 @@ export default function ReceiptLookup() {
 
                 <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-1 text-xs text-gray-300 sm:grid-cols-2">
                   <div className="flex gap-2">
+                    <dt className="text-gray-500">Receipt no</dt>
+                    <dd>{formatReceiptNo(p.receiptNo)}</dd>
+                  </div>
+                  <div className="flex gap-2">
                     <dt className="text-gray-500">Date</dt>
                     <dd>{fmtDay(p.createdAt)}</dd>
                   </div>
@@ -323,6 +330,7 @@ export default function ReceiptLookup() {
               </p>
               <p className="mt-1">
                 Originally paid {fmtDay(d.originalDate)}
+                {d.receiptNo ? ` · Receipt ${formatReceiptNo(d.receiptNo)}` : ""}
                 {d.transactionId ? ` · Reference ${d.transactionId}` : ""}
               </p>
               {d.heads.length > 0 && (

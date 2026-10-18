@@ -316,6 +316,7 @@ model School {
   teacherDailyAttendances TeacherDailyAttendance[]
   paymentAuditLogs        PaymentAuditLog[]
   feeAuditLogs            FeeAuditLog[]
+  receiptCounter          ReceiptCounter?
 }
 
 model BackupEmailSchedule {
@@ -1394,6 +1395,10 @@ model Payment {
 
   transactionId String? // Our order_id (TMLxxx) for lookups
 
+  /// Stable per-school receipt number (1, 2, 3...), assigned once when a fee payment succeeds.
+  /// Never reused: a deleted payment leaves a gap. Authority is "ReceiptCounter"; see lib/fees/receiptNumber.ts.
+  receiptNo Int?
+
   // Per-submit-attempt idempotency key from the client (offline/manual entry form).
   // Distinct from transactionId (the business reference/UTR shown in reports):
   // this exists purely to collapse a double-click or a retried request into one
@@ -1418,6 +1423,7 @@ model Payment {
   @@index([studentId, createdAt])
   @@index([studentId, status, createdAt])
   @@index([studentId, purpose, status, createdAt])
+  @@index([receiptNo])
   @@index([collectedByUserId])
   @@index([collectedByUserId, createdAt])
 }
@@ -1569,6 +1575,13 @@ model FeeAuditLog {
 
   @@index([schoolId, createdAt])
   @@index([schoolId, entityType, entityId, createdAt])
+}
+
+/// Last receipt number issued per school (one row per school).
+model ReceiptCounter {
+  schoolId String @id
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  lastNo   Int    @default(0)
 }
 
 model Refund {

@@ -1,6 +1,11 @@
 const mockStudentFindUnique = jest.fn();
 const mockExtraFeeFindMany = jest.fn();
 const mockTransaction = jest.fn();
+jest.mock("@/lib/fees/receiptNumber", () => ({
+  ...jest.requireActual("@/lib/fees/receiptNumber"),
+  ensureReceiptNo: jest.fn().mockResolvedValue(1),
+}));
+
 jest.mock("@/lib/db", () => ({
   __esModule: true,
   default: {

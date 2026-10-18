@@ -43,6 +43,7 @@ import { roundRupee } from "@/lib/formatRupee";
 import { paymentAuditSnapshot, recordPaymentAudit } from "@/lib/fees/paymentAudit";
 import { logger } from "@/lib/logger";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
+import { ensureReceiptNo } from "@/lib/fees/receiptNumber";
 
 const selectedHeadSchema = z.union([
   z.object({
@@ -653,6 +654,8 @@ export async function POST(req: Request) {
             ...(selectedPaymentDate ? { createdAt: selectedPaymentDate } : {}),
           },
         });
+
+        await ensureReceiptNo(tx, schoolId, payment.id);
 
         const allocationsCreateMany = paymentAllocationsData.map((d) => ({
           paymentId: payment.id,

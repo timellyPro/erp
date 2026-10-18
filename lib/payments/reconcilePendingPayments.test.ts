@@ -3,6 +3,11 @@
  */
 import { reconcilePendingPayments } from "@/lib/payments/reconcilePendingPayments";
 
+jest.mock("@/lib/fees/receiptNumber", () => ({
+  ...jest.requireActual("@/lib/fees/receiptNumber"),
+  ensureReceiptNo: jest.fn().mockResolvedValue(1),
+}));
+
 jest.mock("@/lib/db/tenantContext", () => ({
   runInTenantScope: (_id: string, fn: () => unknown) => fn(),
   tenantDb: new Proxy({}, { get: (_t, p) => (jest.requireMock("@/lib/db").default as Record<string | symbol, unknown>)[p] }),

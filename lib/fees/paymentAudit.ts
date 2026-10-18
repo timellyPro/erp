@@ -15,6 +15,7 @@ export type PaymentAuditActor = {
 
 export type PaymentAuditPayment = {
   id: string;
+  receiptNo?: number | null;
   studentId: string;
   amount: number;
   status?: string | null;
@@ -75,6 +76,7 @@ export function paymentAuditSnapshot(
 ): Prisma.InputJsonObject {
   const out: Record<string, Prisma.InputJsonValue | null> = {
     id: p.id,
+    receiptNo: p.receiptNo ?? null,
     studentId: p.studentId,
     amount: p.amount,
     status: p.status ?? null,

@@ -19,6 +19,7 @@ import { computeAdminStudentFeeBreakdown } from "@/lib/fees/computeAdminStudentF
 import { reconcileStudentFeeIntegrity } from "@/lib/fees/reconcileStudentFeeIntegrity";
 import { paymentAuditSnapshot, recordPaymentAudit } from "@/lib/fees/paymentAudit";
 import { roundRupee } from "@/lib/formatRupee";
+import { ensureReceiptNo } from "@/lib/fees/receiptNumber";
 
 export type OfflineSelectedHead =
   | { headType: "BASE_COMPONENT"; componentIndex: number; componentName?: string }
@@ -406,6 +407,8 @@ export async function recordFastOfflineFeePayment(input: FastOfflinePaymentInput
           ...(selectedPaymentDate ? { createdAt: selectedPaymentDate } : {}),
         },
       });
+
+      await ensureReceiptNo(tx, schoolId, payment.id);
 
       if (paymentAllocationsData.length > 0) {
         await tx.paymentFeeAllocation.createMany({

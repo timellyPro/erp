@@ -42,10 +42,18 @@ collector name, amount (to the paisa), date range. Unlike the Transactions list 
 payments by status, so `PENDING`, `FAILED` and refunded payments are shown. It also searches the audit
 log, so a **deleted** payment is found with who deleted it, when, and what it covered.
 
-Important: the "Receipt no" printed in day reports (1, 2, 3...) is only the row position in that one
-report. It is not stored and changes between reports, so a receipt number a parent quotes from there cannot be
-matched. Search by the UTR / reference instead. (Follow-up worth considering: a stable, per-school receipt
-number stored on the payment.)
+### Receipt numbers
+Every successful fee payment has a stable per-school receipt number (`Payment.receiptNo`, shown as
+`R-000123`). It is assigned once, in the same transaction as the payment (offline entry, online verify,
+gateway webhook, and the reconcile cron), from a one-row-per-school counter (`ReceiptCounter`), so two
+simultaneous payments can never share a number. Numbers are never reused: deleting a payment leaves a gap,
+and the deleted payment's number stays in its history.
+
+- The day report "Receipt no" column is this number (admission-desk rows show `-`).
+- Receipt Lookup searches it (`R-000123`, `r123` or `123`), shows it, and also finds deleted payments by it.
+- Payments that existed when numbering was introduced were numbered per school in date order by the
+  migration (`20261018130000_payment_receipt_number`). Pending, failed and event payments have no number.
+- Old printed day reports carry row positions, not these numbers, so they still cannot be matched.
 
 ## Useful queries
 

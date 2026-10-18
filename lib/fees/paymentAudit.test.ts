@@ -37,6 +37,7 @@ describe("paymentAuditSnapshot", () => {
     const snap = paymentAuditSnapshot(payment) as Record<string, unknown>;
     expect(snap).toEqual({
       id: "p1",
+      receiptNo: null,
       studentId: "s1",
       amount: 1500,
       status: "SUCCESS",

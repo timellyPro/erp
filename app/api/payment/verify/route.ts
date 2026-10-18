@@ -10,6 +10,7 @@ import { logger } from "@/lib/logger";
 import { invalidateFeeListServerCaches } from "@/lib/fees/feeListServerCache";
 import { rateLimit, rateLimitKey } from "@/lib/rateLimit";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
+import { ensureReceiptNo } from "@/lib/fees/receiptNumber";
 
 const verifyPaymentBodySchema = z.object({
   gateway: z.string().optional().nullable(),
@@ -199,6 +200,7 @@ export async function POST(req: Request) {
 
         const transitioned = before?.status !== "SUCCESS";
         if (transitioned) {
+          await ensureReceiptNo(tx, student.schoolId, existing.id);
           await recordPaymentAudit(tx, {
             schoolId: student.schoolId,
             paymentId: existing.id,
@@ -303,6 +305,7 @@ export async function POST(req: Request) {
           data: { amountPaid: newAmountPaid, remainingFee: newRemaining },
         });
 
+        await ensureReceiptNo(tx, student.schoolId, payment.id);
         await recordPaymentAudit(tx, {
           schoolId: student.schoolId,
           paymentId: payment.id,

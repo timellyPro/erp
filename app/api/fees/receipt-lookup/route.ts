@@ -6,6 +6,7 @@ import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
 import { logger } from "@/lib/logger";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
+import { parseReceiptNo } from "@/lib/fees/receiptNumber";
 
 const MAX_QUERY_LENGTH = 100;
 const DEFAULT_LIMIT = 25;
@@ -64,9 +65,10 @@ export async function GET(req: Request) {
     if (searchParams.get("to") && !toInclusive) {
       return NextResponse.json({ message: "to must be a date like 2026-10-07" }, { status: 400 });
     }
-    if (q.length < 2 && amount === null && !from && !toInclusive) {
+    const receiptNo = q ? parseReceiptNo(q) : null;
+    if (q.length < 2 && receiptNo === null && amount === null && !from && !toInclusive) {
       return NextResponse.json(
-        { message: "Enter at least 2 characters of a receipt, reference, student name or admission number, or an amount or date." },
+        { message: "Enter a receipt number or at least 2 characters of a reference, student name or admission number, or an amount or date." },
         { status: 400 }
       );
     }
@@ -74,9 +76,10 @@ export async function GET(req: Request) {
     return await runInTenantScope(schoolId, async () => {
       const AND: Prisma.PaymentWhereInput[] = [{ student: { schoolId } }];
 
-      if (q.length >= 2) {
+      if (q.length >= 2 || receiptNo !== null) {
         AND.push({
           OR: [
+            ...(receiptNo !== null ? [{ receiptNo }] : []),
             { id: { equals: q } },
             { id: { startsWith: q } },
             { id: { endsWith: q } },
@@ -106,6 +109,7 @@ export async function GET(req: Request) {
         take: limit,
         select: {
           id: true,
+          receiptNo: true,
           studentId: true,
           amount: true,
           status: true,
@@ -174,6 +178,7 @@ export async function GET(req: Request) {
 
       // Deleted payments no longer exist in Payment; the DELETE audit row is their only trace.
       const deleteOr: Prisma.PaymentAuditLogWhereInput[] = [];
+      if (receiptNo !== null) deleteOr.push({ before: { path: ["receiptNo"], equals: receiptNo } });
       if (q.length >= 2) {
         deleteOr.push(
           { paymentId: { equals: q } },
@@ -218,6 +223,7 @@ export async function GET(req: Request) {
             deletedByRole: d.actorRole,
             summary: d.summary,
             amount: typeof snap.amount === "number" ? snap.amount : null,
+            receiptNo: typeof snap.receiptNo === "number" ? snap.receiptNo : null,
             transactionId: typeof snap.transactionId === "string" ? snap.transactionId : null,
             originalDate: typeof snap.createdAt === "string" ? snap.createdAt : null,
             heads: Array.isArray(snap.allocations)
@@ -243,6 +249,7 @@ export async function GET(req: Request) {
         {
           payments: payments.map((p) => ({
             id: p.id,
+            receiptNo: p.receiptNo,
             createdAt: p.createdAt,
             amount: p.amount,
             status: p.status,

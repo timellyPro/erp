@@ -3,6 +3,7 @@ import { runInTenantScope, tenantDb } from "@/lib/db/tenantContext";
 import { invalidateFeeListServerCaches } from "@/lib/fees/feeListServerCache";
 import { recordPaymentAudit, type PaymentAuditActor } from "@/lib/fees/paymentAudit";
 import { logger } from "@/lib/logger";
+import { ensureReceiptNo } from "@/lib/fees/receiptNumber";
 
 /**
  * Reconciles Payments stuck in PENDING (browser closed before /verify, webhook lost)
@@ -175,6 +176,7 @@ export async function reconcilePendingPayments(now = new Date()): Promise<Reconc
               },
             });
             if (flipped.count !== 1) return false; // verify/webhook got there first
+            await ensureReceiptNo(tx, schoolId, p.id);
 
             await recordPaymentAudit(tx, {
               schoolId,

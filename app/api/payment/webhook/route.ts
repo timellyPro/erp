@@ -5,6 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { invalidateFeeListServerCaches } from "@/lib/fees/feeListServerCache";
 import { recordPaymentAudit, type PaymentAuditActor } from "@/lib/fees/paymentAudit";
 import { logger } from "@/lib/logger";
+import { ensureReceiptNo } from "@/lib/fees/receiptNumber";
 
 export const runtime = "nodejs";
 
@@ -290,6 +291,7 @@ export async function POST(req: Request) {
       }
 
       if (isTransitionToSuccess) {
+        await ensureReceiptNo(tx, schoolId, payment.id);
         if (payment.eventRegistrationId) {
           await tx.eventRegistration.update({
             where: { id: payment.eventRegistrationId },
