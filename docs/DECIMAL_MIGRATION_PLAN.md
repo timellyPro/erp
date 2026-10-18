@@ -5,6 +5,13 @@ problems (`114677.570093458`, `11.5384615384615`). Stored fee totals are now who
 columns can still hold fractions: on the Demo School, 9 of 20 `PaymentFeeAllocation.allocatedAmount` rows were
 not whole paise (prorated hostel installments such as 23,833.33).
 
+## Decision (2026-10-18): not needed for now
+Measured on the live Lotus school (821 fee rows): payments, amounts paid and payment allocations have no
+float noise. The only non-2-decimal money values are `finalFee`/`remainingFee` on 9 students, each off by under
+one rupee (the same 9 the reconcile dry run found), plus `discountPercent`, which is a derived percent. New
+writes are whole rupees. That does not justify a change that touches every fee read and write. Revisit if the
+precision report starts showing growth.
+
 ## Measure first
 ```bash
 npx tsx scripts/money-precision-report.ts --school-id=<id>
