@@ -168,3 +168,15 @@ FROM "StudentFee" WHERE "studentId" = '<student id>';
 - The Summary page is computed from the due-report logic, not from stored totals, so it can still differ
   from the Fee Records list when discounts are assigned to specific heads.
 - Float money columns and the unrounded `discountPercent` (Phase 4).
+
+## 8. Editing an extra fee (Phases A and B of the client-feedback fixes)
+`PATCH/DELETE /api/fees/extra/:id` run inside one tenant transaction, so the fee change and the stored-fee
+update commit or roll back together.
+- Stored totals are adjusted in whole rupees, and `remainingFee` is recomputed as final fee minus paid
+  (not shifted by the delta, which left a clamped value permanently off).
+- A **rename** that moves a fee into or out of the Mess/Hostel residency rules now adds it to, or removes it
+  from, the stored fee of the students whose eligibility changed. Before, nothing was recalculated.
+- A Mess/Hostel **lump** is split into two rows (new row ids) only when the admin asks for a split or
+  changes the amount. A rename or an unchanged save keeps the row and its id.
+- A rename refreshes the name snapshot on the fee's payment allocations (it is shown only if the fee row is
+  later deleted or merged).

@@ -41,6 +41,15 @@ function getStudentWhere(
   return null;
 }
 
+/**
+ * Shift the stored fee of the given students by `delta` (negative to remove a fee).
+ *
+ * Runs on the request's tenant transaction, so it commits or rolls back together with the extra-fee
+ * change that caused it. Totals are kept in whole rupees like every other writer
+ * (upsertStudentFeeFromStructure, recalculateStoredFees), and `remainingFee` is derived from the new
+ * final fee and what was paid rather than shifted by the delta. Shifting a value that had been clamped
+ * at 0 would otherwise leave it off by the clamped amount for good.
+ */
 async function applyStudentFeeDelta(studentIds: string[], delta: number) {
   if (studentIds.length === 0 || delta === 0) return;
   for (let i = 0; i < studentIds.length; i += STUDENT_FEE_UPDATE_CHUNK) {
@@ -49,9 +58,9 @@ async function applyStudentFeeDelta(studentIds: string[], delta: number) {
       Prisma.sql`
         UPDATE "StudentFee"
         SET
-          "totalFee" = "totalFee" + ${delta},
-          "finalFee" = "finalFee" + ${delta},
-          "remainingFee" = GREATEST(0, "remainingFee" + ${delta})
+          "totalFee" = ROUND("totalFee" + ${delta}),
+          "finalFee" = ROUND("finalFee" + ${delta}),
+          "remainingFee" = GREATEST(0, ROUND("finalFee" + ${delta}) - "amountPaid")
         WHERE "studentId" IN (${Prisma.join(ids)})
       `
     );
@@ -137,6 +146,10 @@ export async function PATCH(
     logger.info("Request body:", body);
     logger.info("====================================\n");
 
+    // A rename can move a fee into or out of the Mess/Hostel residency rules, which changes who owes it.
+    const eligibleBefore =
+      body.name !== undefined ? await eligibleStudentIdsForExtra(extraFee, schoolId) : null;
+
     const result = await patchExtraFeeWithInstallmentSupport(prisma, extraFee, {
       name: body.name,
       amount: body.amount,
@@ -149,7 +162,27 @@ export async function PATCH(
       return NextResponse.json({ extraFee });
     }
 
-    if (result.studentFeeDelta !== 0) {
+    const totalAfter = result.totalBefore + result.studentFeeDelta;
+    if (eligibleBefore) {
+      const eligibleAfter = await eligibleStudentIdsForExtra(
+        { ...extraFee, name: result.extraFee.name },
+        schoolId
+      );
+      const before = new Set(eligibleBefore);
+      const after = new Set(eligibleAfter);
+      await applyStudentFeeDelta(
+        eligibleAfter.filter((id) => before.has(id)),
+        result.studentFeeDelta
+      );
+      await applyStudentFeeDelta(
+        eligibleAfter.filter((id) => !before.has(id)),
+        totalAfter
+      );
+      await applyStudentFeeDelta(
+        eligibleBefore.filter((id) => !after.has(id)),
+        -result.totalBefore
+      );
+    } else if (result.studentFeeDelta !== 0) {
       const eligibleIds = await eligibleStudentIdsForExtra(extraFee, schoolId);
       await applyStudentFeeDelta(eligibleIds, result.studentFeeDelta);
       logger.info("[ExtraFee Installments] Student fee totals adjusted:", {

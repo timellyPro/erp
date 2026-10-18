@@ -145,6 +145,7 @@ describe("PATCH /api/fees/extra/[id]", () => {
       splitApplied: false,
       migrated: false,
       studentFeeDelta: 200,
+      totalBefore: 500,
     });
 
     const res = await PATCH(patchRequest({ amount: 700 }), ctx);
@@ -165,13 +166,65 @@ describe("PATCH /api/fees/extra/[id]", () => {
       splitApplied: false,
       migrated: false,
       studentFeeDelta: 0,
+      totalBefore: 500,
     });
+    mockStudentFindMany.mockResolvedValue([{ id: "stu1", residencyType: "Day Scholar" }]);
 
     const res = await PATCH(patchRequest({ name: "Renamed" }), ctx);
     expect(res.status).toBe(200);
-    expect(mockStudentFindMany).not.toHaveBeenCalled();
     expect(mockExecuteRaw).not.toHaveBeenCalled();
     expect(mockInvalidateSchoolFeeReadCaches).toHaveBeenCalledWith("s1");
+  });
+
+  it("charges hostellers when a rename takes a fee out of the Mess rules, and still skips day scholars", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    mockExtraFeeFindFirst.mockResolvedValue({ ...existingExtraFee, name: "Mess Fee", amount: 1000 });
+    mockStudentFindMany.mockResolvedValue([
+      { id: "day", residencyType: "Day Scholar" },
+      { id: "host", residencyType: "Hosteller" },
+    ]);
+    mockPatchExtraFeeWithInstallmentSupport.mockResolvedValue({
+      extraFee: { id: "ef1", name: "Meals" },
+      extraFeeIds: ["ef1"],
+      splitApplied: false,
+      migrated: false,
+      studentFeeDelta: 0,
+      totalBefore: 1000,
+    });
+
+    const res = await PATCH(patchRequest({ name: "Meals" }), ctx);
+    expect(res.status).toBe(200);
+    // Only the hosteller newly owes it: one update, for that student.
+    expect(mockExecuteRaw).toHaveBeenCalledTimes(1);
+    const sql = mockExecuteRaw.mock.calls[0]![0] as { values: unknown[] };
+    expect(sql.values).toContain(1000);
+    expect(sql.values).toContain("host");
+    expect(sql.values).not.toContain("day");
+  });
+
+  it("removes the fee from students who no longer owe it after a rename", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    mockExtraFeeFindFirst.mockResolvedValue({ ...existingExtraFee, name: "Meals", amount: 1000 });
+    mockStudentFindMany.mockResolvedValue([
+      { id: "day", residencyType: "Day Scholar" },
+      { id: "host", residencyType: "Hosteller" },
+    ]);
+    mockPatchExtraFeeWithInstallmentSupport.mockResolvedValue({
+      extraFee: { id: "ef1", name: "Mess Fee" },
+      extraFeeIds: ["ef1"],
+      splitApplied: false,
+      migrated: false,
+      studentFeeDelta: 0,
+      totalBefore: 1000,
+    });
+
+    await PATCH(patchRequest({ name: "Mess Fee" }), ctx);
+    expect(mockExecuteRaw).toHaveBeenCalledTimes(1);
+    const sql = mockExecuteRaw.mock.calls[0]![0] as { values: unknown[] };
+    expect(sql.values).toContain(-1000);
+    expect(sql.values).toContain("host");
   });
 });
 
