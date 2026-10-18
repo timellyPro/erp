@@ -1,0 +1,57 @@
+# Weekly, read-only check that stored fee totals still match what each student's fee breakdown and
+# payments say they should be (scripts/fee-integrity-report.ts). It writes nothing.
+#
+# The repo is PUBLIC, so this job's logs are public too: the script prints counts only, schools by
+# number, no names and no student ids. Keep it that way.
+#
+# A run FAILS when more students have drifted than the allowed baseline, and GitHub then emails the
+# repo admins. Set the baseline with the repo variable FEE_INTEGRITY_MAX_CHANGED (default 0). After a
+# known problem is repaired, lower it.
+#
+# Required repo secret (already used by the backup workflow):
+#   BACKUP_DATABASE_URL = Supabase *session pooler* URL (port 5432) with ?sslmode=require
+# Optional repo secret: FEE_INTEGRITY_HEALTHCHECK_URL (its own check, separate from the backup one,
+# because this job runs weekly and the backup nightly).
+name: Fee integrity check
+
+on:
+  schedule:
+    - cron: "0 22 * * 0" # Monday 03:30 IST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+
+      - name: Compare stored fee totals with fee breakdowns (read-only)
+        env:
+          DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          FEE_INTEGRITY_MAX_CHANGED: ${{ vars.FEE_INTEGRITY_MAX_CHANGED || '0' }}
+          # quiet the per-query slow-query warnings so the public log stays small
+          PRISMA_SLOW_QUERY_MS: "600000"
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "Missing BACKUP_DATABASE_URL secret"
+            exit 1
+          fi
+          npx tsx scripts/fee-integrity-report.ts
+
+      - name: Heartbeat (success)
+        if: success()
+        env:
+          HEALTHCHECK_URL: ${{ secrets.FEE_INTEGRITY_HEALTHCHECK_URL }}
+        run: |
+          [ -z "$HEALTHCHECK_URL" ] || curl -fsS -m 20 --retry 3 "$HEALTHCHECK_URL" >/dev/null

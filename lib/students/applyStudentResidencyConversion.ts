@@ -201,6 +201,13 @@ export async function previewStudentResidencyConversion(
   };
 }
 
+/** The transaction client handed to {@link applyStudentResidencyConversion}'s `afterWrite` hook. */
+export type ConversionTx = Parameters<Parameters<AppPrisma["$transaction"]>[0]>[0];
+
+function roundMoney(n: number): number {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
 export async function applyStudentResidencyConversion(
   db: AppPrisma,
   input: {
@@ -211,6 +218,16 @@ export async function applyStudentResidencyConversion(
     fromResidency: ResidencyKind;
     toResidency: ResidencyKind;
     transportKey?: string | null;
+    /** YYYY-MM-DD the student actually changed type; defaults to today (Asia/Kolkata). */
+    convertedOn?: string;
+  },
+  hooks?: {
+    /**
+     * Runs inside the same transaction, after the fee rows, periods and residency type are
+     * written. The route recalculates the student's stored fee here, so a conversion can never
+     * commit with a stale total (before, that ran after the commit and a failure left it stale).
+     */
+    afterWrite?: (tx: ConversionTx) => Promise<void>;
   }
 ): Promise<ResidencyConversionPreview> {
   const preview = await previewStudentResidencyConversion(db, input);
@@ -227,17 +244,73 @@ export async function applyStudentResidencyConversion(
 
   const year = preview.academicYearStartYear;
   await db.$transaction(async (tx) => {
-    await tx.extraFee.deleteMany({
+    // Update the student's conversion rows IN PLACE (matched by name) instead of deleting and
+    // recreating them. Payments are linked to a fee row by id, so recreating a row stranded every
+    // payment made against the old one ("orphan allocations") and relied on a display-time credit
+    // to hide it.
+    const existing = await tx.extraFee.findMany({
       where: {
         schoolId: input.schoolId,
         targetType: "STUDENT",
         targetStudentId: input.studentId,
         residencyConversion: true,
       },
+      select: { id: true, name: true, amount: true },
     });
-    if (preview.feeRows.length > 0) {
+
+    const paidById = new Map<string, number>();
+    if (existing.length > 0) {
+      const allocations = await tx.paymentFeeAllocation.findMany({
+        where: {
+          extraFeeId: { in: existing.map((row) => row.id) },
+          headType: "EXTRA_FEE",
+          payment: { status: { in: [...FEE_ALLOCATION_PAYMENT_STATUSES] } },
+        },
+        select: { extraFeeId: true, allocationType: true, allocatedAmount: true },
+      });
+      for (const a of allocations) {
+        if (!a.extraFeeId) continue;
+        const sign = a.allocationType === "REFUND" ? -1 : 1;
+        paidById.set(a.extraFeeId, (paidById.get(a.extraFeeId) ?? 0) + sign * (Number(a.allocatedAmount) || 0));
+      }
+    }
+
+    const nameKey = (name: string) => name.trim().toLowerCase();
+    const unmatched = new Map(existing.map((row) => [row.id, row]));
+    const byName = new Map<string, (typeof existing)[number]>();
+    for (const row of existing) {
+      if (!byName.has(nameKey(row.name))) byName.set(nameKey(row.name), row);
+    }
+
+    const toCreate: typeof preview.feeRows = [];
+    for (const planned of preview.feeRows) {
+      const match = byName.get(nameKey(planned.name));
+      if (match && unmatched.has(match.id)) {
+        unmatched.delete(match.id);
+        if (Math.abs(match.amount - planned.amount) > 0.001) {
+          await tx.extraFee.update({ where: { id: match.id }, data: { amount: planned.amount } });
+        }
+      } else {
+        toCreate.push(planned);
+      }
+    }
+
+    // A row the new plan no longer includes. With payments linked to it, keep it but bill only
+    // what was paid (nothing more is due, and the payments stay attached); otherwise remove it.
+    for (const row of unmatched.values()) {
+      const netPaid = roundMoney(paidById.get(row.id) ?? 0);
+      if (netPaid > 0.009) {
+        if (Math.abs(row.amount - netPaid) > 0.001) {
+          await tx.extraFee.update({ where: { id: row.id }, data: { amount: netPaid } });
+        }
+      } else {
+        await tx.extraFee.delete({ where: { id: row.id } });
+      }
+    }
+
+    if (toCreate.length > 0) {
       await tx.extraFee.createMany({
-        data: preview.feeRows.map((row) => ({
+        data: toCreate.map((row) => ({
           schoolId: input.schoolId,
           name: row.name,
           amount: row.amount,
@@ -249,6 +322,7 @@ export async function applyStudentResidencyConversion(
         })),
       });
     }
+
     await tx.studentResidencyPeriod.deleteMany({
       where: { studentId: input.studentId, academicYearStartYear: year },
     });
@@ -271,6 +345,8 @@ export async function applyStudentResidencyConversion(
       where: { id: input.studentId },
       data: { residencyType: input.toResidency },
     });
+
+    await hooks?.afterWrite?.(tx);
   });
 
   return preview;

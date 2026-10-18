@@ -39,8 +39,12 @@ export async function GET(req: Request) {
     const classIdFilter = searchParams.get("classId")?.trim() || undefined;
     const headFilter = searchParams.get("head")?.trim() || "";
     const statusFilter = studentStatusFilter(searchParams.get("status"));
-    const includeSchoolWideExtras =
-      searchParams.get("schoolWideExtras") === "1" || searchParams.get("schoolWideExtras") === "true";
+    // School-wide fees (Uniform Kit, Annual Day, ...) are part of every student's bill, so the
+    // report includes them by default: its "Total fees" and "Fees Due" must match the fee card and
+    // the summary page. Before, they were silently left out and the totals came out short by exactly
+    // those fees. Pass schoolWideExtras=0 for the older, narrower layout.
+    const schoolWideParam = searchParams.get("schoolWideExtras");
+    const includeSchoolWideExtras = !(schoolWideParam === "0" || schoolWideParam === "false");
 
     const [school, fees, structuresRaw, extraFeesRaw, classesMeta] = await Promise.all([
       prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } }),

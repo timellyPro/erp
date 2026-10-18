@@ -208,9 +208,24 @@ describe("buildStudentFeeRecalcPayload", () => {
     expect(buildStudentFeeRecalcPayload({ ...base, amountPaid: 50000 }, cache).remainingFee).toBe(0);
   });
 
-  it("rounds remaining fee to paise", () => {
+  it("stores whole rupees: no long decimals from a percentage discount", () => {
+    // 33.333% off 10,000 of tuition leaves 6,666.7; the stored value must not carry the fraction
     const p = buildStudentFeeRecalcPayload({ ...base, discountPercent: 33.333, amountPaid: 0 }, cache);
-    expect(p.remainingFee).toBe(Math.round(p.finalFee * 100) / 100);
-    expect(p.remainingFee).toBeCloseTo(2000 + 10000 * (1 - 0.33333), 5);
+    expect(p.finalFee).toBe(Math.round(2000 + 10000 * (1 - 0.33333)));
+    expect(Number.isInteger(p.finalFee)).toBe(true);
+    expect(Number.isInteger(p.totalFee)).toBe(true);
+    expect(p.remainingFee).toBe(p.finalFee);
+  });
+
+  it("reproduces the long-decimal case seen in production and rounds it to the rupee", () => {
+    // a 9.1% style discount that used to be stored as 114677.570093458
+    const p = buildStudentFeeRecalcPayload({ ...base, discountPercent: 2.5700934579439, amountPaid: 110000 }, {
+      ...cache,
+      baseByClassId: new Map([["c1", 117700]]),
+      extraFees: [],
+    });
+    expect(Number.isInteger(p.finalFee)).toBe(true);
+    expect(p.remainingFee).toBe(Math.max(0, p.finalFee - 110000));
+    expect(Number.isInteger(p.remainingFee)).toBe(true);
   });
 });

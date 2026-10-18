@@ -1,3 +1,4 @@
+import { roundRupee } from "@/lib/formatRupee";
 import prisma from "@/lib/db";
 import { normalizeExtraFeeResidencyScope } from "@/lib/fees/extraFeeResidencyScope";
 import {
@@ -333,15 +334,17 @@ export function buildStudentFeeRecalcPayload(
     cache
   );
   const discountPercent = student.discountPercent;
-  const finalFee = finalFeeFromStructureAndExtras(parts.base, parts.extrasTotal, discountPercent);
+  // Whole rupees, like the UI and reconcileStudentFeeIntegrity: a stored 114677.570093458 would
+  // otherwise be flagged by every reconcile and shown differently on different screens.
+  const finalFee = roundRupee(finalFeeFromStructureAndExtras(parts.base, parts.extrasTotal, discountPercent));
   const amountPaid = student.amountPaid;
   return {
     studentId: student.id,
-    totalFee: parts.totalFee,
+    totalFee: roundRupee(parts.totalFee),
     discountPercent,
     finalFee,
     amountPaid,
-    remainingFee: Math.max(0, Math.round((finalFee - amountPaid) * 100) / 100),
+    remainingFee: Math.max(0, roundRupee(finalFee - amountPaid)),
   };
 }
 
@@ -417,9 +420,10 @@ export async function upsertStudentFeeFromStructure(
     },
     cache
   );
-  const totalFee = parts.totalFee;
-  const finalFee = finalFeeFromStructureAndExtras(parts.base, parts.extrasTotal, params.discountPercent);
-  const remainingFee = Math.max(0, finalFee - params.amountPaid);
+  // Whole rupees, matching buildStudentFeeRecalcPayload and reconcileStudentFeeIntegrity.
+  const totalFee = roundRupee(parts.totalFee);
+  const finalFee = roundRupee(finalFeeFromStructureAndExtras(parts.base, parts.extrasTotal, params.discountPercent));
+  const remainingFee = Math.max(0, roundRupee(finalFee - params.amountPaid));
 
   await db.studentFee.upsert({
     where: { studentId: params.studentId },
