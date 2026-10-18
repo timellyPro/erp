@@ -25,6 +25,15 @@ export type CurrentPreviousFeeSummaryStats = {
 export async function computeCurrentAndPreviousFeeStats(
   schoolId: string
 ): Promise<CurrentPreviousFeeSummaryStats> {
+  return (await loadFeeSummaryRows(schoolId)).stats;
+}
+
+/** The per-student rows behind the Summary cards, plus the cards. Used by the stats and by diagnostics. */
+export async function loadFeeSummaryRows(schoolId: string): Promise<{
+  stats: CurrentPreviousFeeSummaryStats;
+  rows: ReturnType<typeof buildFeeDueReportPayload>["rows"];
+  netPaidByStudentHead: Map<string, number>;
+}> {
   const [fees, structuresRaw, extraFeesRaw, classesMeta] = await Promise.all([
     prisma.studentFee.findMany({
       where: { student: { schoolId, ...activeStudentWhere } },
@@ -193,15 +202,19 @@ export async function computeCurrentAndPreviousFeeStats(
   );
 
   return {
-    totalStudents: payload.rows.length,
-    totalFee,
-    totalCollected,
-    totalDue,
-    totalDiscount,
-    previousYearTotalFee,
-    previousYearCollected,
-    previousYearDue,
-    pending: payload.rows.filter((row) => row.feesDue > 0.01).length,
-    paid: payload.rows.filter((row) => row.feesDue <= 0.01).length,
+    rows: payload.rows,
+    netPaidByStudentHead,
+    stats: {
+      totalStudents: payload.rows.length,
+      totalFee,
+      totalCollected,
+      totalDue,
+      totalDiscount,
+      previousYearTotalFee,
+      previousYearCollected,
+      previousYearDue,
+      pending: payload.rows.filter((row) => row.feesDue > 0.01).length,
+      paid: payload.rows.filter((row) => row.feesDue <= 0.01).length,
+    },
   };
 }
