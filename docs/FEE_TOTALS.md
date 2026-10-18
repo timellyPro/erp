@@ -98,12 +98,30 @@ missing transport fee) is never flagged by it. The Lotus dry run on 2026-10-18 t
 11 students in that subset had drifted, not that the rest were fine. Use the integrity report for the full
 picture.
 
+**First full run on live data (2026-10-18, read-only):** 956 active students checked. Paid and remaining
+were clean for everyone. The gross total had drifted for **7**: six at Lotus (of 717) and one test student
+on the Demo School. Genius Best (233) was clean. The six at Lotus:
+
+| Difference (expected minus stored) | Count | Reading |
+|---|---|---|
+| +39,600 | 3 | Class tuition missing from the stored total (clean numbers, so the old check could not see them) |
+| +17,600.34 and +11,000.34 | 2 | The transport fee on the converted students; stored total never included it |
+| -17,050 | 1 | Stored is higher by exactly one Mess installment |
+
+Whether each is a mistake or intended (a waiver, a staff child) needs the school's answer.
+
 ## 5. Repairing
 
 1. **Confirm with the school** what the student should owe. Take a backup first.
-2. **A stored total that is stale:** `npx tsx scripts/reconcile-school-fees.ts --dry-run --school-id=<id>`, read
-   the before/after, then `--apply`. (It rewrites `totalFee`, `finalFee`, `amountPaid`, `remainingFee`; it
-   never deletes payments or allocations.)
+2. **A wrong gross total with clean numbers** (what the integrity report flags):
+   `npx tsx scripts/recalculate-student-fees.ts --school-id=<id> --student-ids=<id1>,<id2>` (dry run), read
+   before/after, then add `--apply`. It rewrites only `totalFee`, `finalFee` and `remainingFee` from the
+   class structure and extra fees, never `amountPaid`, and blocks students with a discount unless
+   `--allow-discount`. `reconcile-school-fees.ts` cannot fix these: it skips students without a discount or
+   a long decimal.
+   **A stale total with a discount or long decimals:** `npx tsx scripts/reconcile-school-fees.ts --dry-run
+   --school-id=<id>`, read the before/after, then `--apply`. (It rewrites `totalFee`, `finalFee`,
+   `amountPaid`, `remainingFee`; it never deletes payments or allocations.)
 3. **A payment whose fee-head allocations add up to more than the payment**
    (compare each payment's allocations with its amount; query 6 in `scripts/db/phase0-fee-audit.sql`, which arrives with the stale-data PR):
 
@@ -139,9 +157,13 @@ FROM "StudentFee" WHERE "studentId" = '<student id>';
 ```
 
 ## 7. Still open
-- **Why two Lotus students' stored totals omitted a transport fee (about 17,600 and 11,000).** The assign
-  path and the totals function were ruled out by test (`lib/fees/batchAssignStudentExtraFees.test.ts`). The
-  rows from the diagnosing queries above would let the exact cause be reproduced offline.
+- **Why six Lotus students' stored totals are wrong** (three missing class tuition of 39,600, two missing a
+  transport fee, one with an extra Mess installment). The assign path and the totals function were ruled out
+  by test (`lib/fees/batchAssignStudentExtraFees.test.ts`). The rows from the diagnosing queries above would
+  let the exact cause be reproduced offline. A student moved into a class after the fee was set up is one
+  unconfirmed possibility for the missing tuition.
+- **Whether those students should owe the difference.** Only the school can say; see the confirmation
+  request. Repair with `scripts/recalculate-student-fees.ts` only after that.
 - Per-head discount rules differ between the stored fee and the reports (section 1).
 - The Summary page is computed from the due-report logic, not from stored totals, so it can still differ
   from the Fee Records list when discounts are assigned to specific heads.
