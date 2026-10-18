@@ -1,7 +1,8 @@
 import { tenantDb as prisma } from "@/lib/db/tenantContext";
+import { roundRupee } from "@/lib/formatRupee";
 import {
   computeStudentTuitionParts,
-  finalFeeFromStructureAndExtras,
+  storedFinalFee,
 } from "@/lib/fees/studentTuitionFromStructure";
 
 export type FeeStructureComponent = { name: string; amount: number };
@@ -67,13 +68,9 @@ export async function saveClassFeeStructureAndSyncStudents(args: {
           studentId: student.id,
           residencyType: student.residencyType ?? "Day Scholar",
         });
-        const newTotalFee = parts.totalFee;
-        const newFinalFee = finalFeeFromStructureAndExtras(
-          parts.base,
-          parts.extrasTotal,
-          fee.discountPercent
-        );
-        const newRemainingFee = Math.max(0, newFinalFee - fee.amountPaid);
+        const newTotalFee = roundRupee(parts.totalFee);
+        const newFinalFee = storedFinalFee(parts, fee.discountPercent, fee);
+        const newRemainingFee = Math.max(0, roundRupee(newFinalFee - fee.amountPaid));
 
         await prisma.studentFee.update({
           where: { studentId: student.id },

@@ -104,6 +104,7 @@ export async function recalculateStoredFees(
         residencyType: row.student.residencyType,
         discountPercent: row.discountPercent,
         amountPaid: row.amountPaid, // never changed here
+        existing: { totalFee: row.totalFee, finalFee: row.finalFee, discountFeeHeadKey: row.discountFeeHeadKey },
       },
       cache
     );

@@ -198,3 +198,26 @@ logged yet.
 
 Permissions: a teacher can edit or delete an extra fee only when it is assigned to a single student (the
 admission desk does this). School, class and section fees can be edited or deleted by a school admin only.
+
+## 10. Per-head discounts survive recalculation (Phase E)
+A discount placed on one fee head is a **rupee amount** (for example 2,000 off Tuition). The stored copy
+keeps it only as gross minus final, so every writer that recomputed the final fee from the student's
+percent turned it into percent-of-the-whole-structure (8,000 instead of 2,000). That is why the Fee
+Records list (stored) and the Summary page / profile (recomputed per head) disagreed for discounted
+students. The writers now keep the existing per-head rupee discount (`storedFinalFee` in
+`lib/fees/studentTuitionFromStructure.ts`):
+`upsertStudentFeeFromStructure`, saving or deleting a class fee structure, and
+`scripts/recalculate-student-fees.ts --allow-discount`. Students with an overall (percent) discount are
+calculated as before. Class structure saves and deletes now store whole rupees too.
+
+Existing wrong rows are not changed by this. Opening a student's profile realigns that student's stored
+totals; `scripts/reconcile-school-fees.ts --dry-run` lists the rest.
+
+To see where the two views differ for a school (read-only, counts and amounts only):
+`npx tsx scripts/fee-summary-vs-records.ts --school-id=<id> [--students]`.
+
+On the Demo School it showed two students whose stored final fee differed from the profile's (by 22,500
+and 2,000); the other four matched.
+
+Not done: storing the discount as an explicit rupee column, and the Float to Decimal change for money
+columns. Both touch every fee read and write and need their own plan and a data migration.

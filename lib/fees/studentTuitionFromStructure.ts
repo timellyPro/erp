@@ -321,6 +321,8 @@ export function buildStudentFeeRecalcPayload(
     residencyType: string | null;
     discountPercent: number;
     amountPaid: number;
+    /** Stored copy before this recalculation; lets a per-head rupee discount survive it. */
+    existing?: StoredDiscountState | null;
   },
   cache: TuitionBulkCache
 ): StudentFeeRecalcPayload {
@@ -336,7 +338,7 @@ export function buildStudentFeeRecalcPayload(
   const discountPercent = student.discountPercent;
   // Whole rupees, like the UI and reconcileStudentFeeIntegrity: a stored 114677.570093458 would
   // otherwise be flagged by every reconcile and shown differently on different screens.
-  const finalFee = roundRupee(finalFeeFromStructureAndExtras(parts.base, parts.extrasTotal, discountPercent));
+  const finalFee = storedFinalFee(parts, discountPercent, student.existing);
   const amountPaid = student.amountPaid;
   return {
     studentId: student.id,
@@ -377,6 +379,43 @@ export function finalFeeFromStructureAndExtras(
   discountPercent: number
 ): number {
   return structurePreDiscountTotal * structureMultiplierAfterDiscount(discountPercent) + extraFeesTotal;
+}
+
+const OVERALL_DISCOUNT_KEY = "__DISCOUNT_OVERALL__";
+
+export type StoredDiscountState = {
+  totalFee: number;
+  finalFee: number;
+  discountFeeHeadKey?: string | null;
+};
+
+/**
+ * Rupees already discounted on one specific fee head, read from the stored copy (gross minus final), or
+ * null when the student has no per-head discount. A per-head discount is a rupee amount against one head
+ * (for example 2,000 off Tuition), not a percent of the whole structure, so a recalculation that only
+ * knows the percent would silently replace it with percent-of-everything.
+ */
+export function perHeadDiscountRupee(existing: StoredDiscountState | null | undefined): number | null {
+  if (!existing) return null;
+  const key = existing.discountFeeHeadKey?.trim();
+  if (!key || key === OVERALL_DISCOUNT_KEY) return null;
+  const rupee = roundRupee(existing.totalFee - existing.finalFee);
+  return rupee > 0 ? rupee : null;
+}
+
+/**
+ * Stored final fee after the fee structure or extra fees change, in whole rupees. Keeps a per-head rupee
+ * discount as it was; otherwise discounts the structure by the student's percent (extras are never
+ * discounted by the percent).
+ */
+export function storedFinalFee(
+  parts: { base: number; extrasTotal: number },
+  discountPercent: number,
+  existing?: StoredDiscountState | null
+): number {
+  const rupee = perHeadDiscountRupee(existing);
+  if (rupee !== null) return Math.max(0, roundRupee(parts.base + parts.extrasTotal - rupee));
+  return roundRupee(finalFeeFromStructureAndExtras(parts.base, parts.extrasTotal, discountPercent));
 }
 
 /** @deprecated Prefer {@link finalFeeFromStructureAndExtras} when extras exist; kept for all-or-nothing discount on one lump. */
@@ -422,7 +461,11 @@ export async function upsertStudentFeeFromStructure(
   );
   // Whole rupees, matching buildStudentFeeRecalcPayload and reconcileStudentFeeIntegrity.
   const totalFee = roundRupee(parts.totalFee);
-  const finalFee = roundRupee(finalFeeFromStructureAndExtras(parts.base, parts.extrasTotal, params.discountPercent));
+  const existing = await db.studentFee.findUnique({
+    where: { studentId: params.studentId },
+    select: { totalFee: true, finalFee: true, discountFeeHeadKey: true },
+  });
+  const finalFee = storedFinalFee(parts, params.discountPercent, existing);
   const remainingFee = Math.max(0, roundRupee(finalFee - params.amountPaid));
 
   await db.studentFee.upsert({
