@@ -10,6 +10,7 @@
 import { writeFileSync } from "node:fs";
 import prisma from "../lib/db";
 import { loadSchoolFeesBackupData } from "@/lib/fees/loadSchoolFeesBackupData";
+import { loadFeeSummaryRows } from "@/lib/fees/computeFeeSummaryStats";
 import { detectFeeTotalsDrift } from "@/lib/fees/feeTotalsDrift";
 import { isStudentHosteller } from "@/lib/fees/extraFeeResidencyScope";
 import { activeStudentWhere } from "@/lib/students/studentStatus";
@@ -34,8 +35,10 @@ async function main() {
   const inactiveCount = await prisma.student.count({ where: { schoolId, NOT: { ...activeStudentWhere } } });
 
   const stored = new Map(data.studentFees.map((f) => [f.studentId, f]));
-  const rows = data.feeDuePayload.rows.filter((r) => activeIds.has(r.studentId));
-  const groupLabel = new Map(data.feeDuePayload.groups.map((g) => [g.id, g.label]));
+  // The figures come from the same calculation as the Summary page cards, so this report matches the portal.
+  const summary = await loadFeeSummaryRows(schoolId);
+  const rows = summary.rows.filter((r) => activeIds.has(r.studentId));
+  const groupLabel = new Map(summary.groups.map((g) => [g.id, g.label]));
 
   // Receipt numbers (one query), and payments whose fee-head split does not add up to the payment.
   const payIds = data.transactions.map((t) => t.id);
@@ -100,8 +103,10 @@ async function main() {
     if (st && st.amountPaid - counted > TOL) flags.push(`Rs ${r2(st.amountPaid - counted)} was paid against a fee the student does not currently owe`);
     const over = tx.filter((t) => t.splitMismatch > 1).reduce((s, t) => s + t.splitMismatch, 0);
     if (over > 0) flags.push(`Fee heads add up to Rs ${r2(over)} more than the cash received`);
-    if (st && Math.abs(st.finalFee - (fee + prevFee - r2(r.totalDiscount))) > TOL && !d) {
-      flags.push(`Saved final fee Rs ${r2(st.finalFee)} differs from the calculated Rs ${r2(fee + prevFee - r.totalDiscount)}`);
+    // Concessions given on previous-year dues sit on that head, not in the current-year discount.
+    const allConcession = r2(heads.reduce((sum, h) => sum + h.concession, 0));
+    if (st && Math.abs(st.finalFee - (fee + prevFee - allConcession)) > TOL && !d) {
+      flags.push(`Saved final fee Rs ${r2(st.finalFee)} differs from the calculated Rs ${r2(fee + prevFee - allConcession)}`);
     }
 
     return {
