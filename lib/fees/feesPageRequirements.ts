@@ -7,6 +7,7 @@ export type FeesSection =
   | "transactions"
   | "fees-records"
   | "petty-cash"
+  | "receipt-lookup"
   | "student-fee-records";
 
 export type FeesPageRequirements = {
@@ -96,6 +97,7 @@ export function feesRequirementsForSection(section?: FeesSection): FeesPageRequi
         extraFees: false,
       };
     case "petty-cash":
+    case "receipt-lookup":
       return {
         summary: false,
         statsOnly: false,

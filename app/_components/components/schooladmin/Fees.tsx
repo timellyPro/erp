@@ -16,6 +16,7 @@ import FeeRecordsTable from "./fees/FeeRecordsTable";
 import FeeTransactionsList from "./fees/FeeTransactionsList";
 import FeesSectionNav from "./fees/FeesSectionNav";
 import PettyCashSection from "./fees/PettyCashSection";
+import ReceiptLookup from "./fees/ReceiptLookup";
 import type { Class, Student, FeeSummary, FeeRecord, FeeStructure, ExtraFee } from "./fees/types";
 import Spinner from "../common/Spinner";
 import {
@@ -313,6 +314,12 @@ export default function FeesTab({ section }: FeesTabProps) {
             ) : (
               <FeeRecordsTable fees={recordsForTable} classes={classesList} />
             )}
+          </div>
+        )}
+
+        {section === "receipt-lookup" && (
+          <div id="fees-section-receipt-lookup" className="scroll-mt-28 w-full">
+            <ReceiptLookup />
           </div>
         )}
 

@@ -193,6 +193,7 @@ describe("POST /api/payment/verify", () => {
     mockStudentFeeFindUnique.mockResolvedValue(null);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => unknown) =>
       cb({
+        paymentAuditLog: { create: jest.fn().mockResolvedValue({}) },
         studentFee: {
           findUnique: (...args: unknown[]) => mockStudentFeeFindUnique(...args),
           update: (...args: unknown[]) => mockStudentFeeUpdate(...args),
@@ -221,6 +222,7 @@ describe("POST /api/payment/verify", () => {
     mockStudentFeeUpdate.mockResolvedValue({ amountPaid: 500, remainingFee: 500 });
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => unknown) =>
       cb({
+        paymentAuditLog: { create: jest.fn().mockResolvedValue({}) },
         studentFee: {
           findUnique: (...args: unknown[]) => mockStudentFeeFindUnique(...args),
           update: (...args: unknown[]) => mockStudentFeeUpdate(...args),
@@ -269,6 +271,7 @@ describe("POST /api/payment/verify", () => {
     });
 
     const txMock = {
+      paymentAuditLog: { create: jest.fn().mockResolvedValue({}) },
       payment: {
         findUnique: jest.fn().mockResolvedValue({
           status: "PENDING",
@@ -302,6 +305,12 @@ describe("POST /api/payment/verify", () => {
       data: { amountPaid: 500, remainingFee: 500 },
     });
     expect(txMock.eventRegistration.update).not.toHaveBeenCalled();
+    expect(txMock.paymentAuditLog.create).toHaveBeenCalledTimes(1);
+    expect(txMock.paymentAuditLog.create.mock.calls[0][0].data).toMatchObject({
+      action: "STATUS",
+      paymentId: "pay1",
+      actorRole: "SYSTEM",
+    });
   });
 
   it("marks the linked event registration as PAID instead of touching studentFee", async () => {
@@ -318,6 +327,7 @@ describe("POST /api/payment/verify", () => {
     });
 
     const txMock = {
+      paymentAuditLog: { create: jest.fn().mockResolvedValue({}) },
       payment: {
         findUnique: jest.fn().mockResolvedValue({
           status: "PENDING",

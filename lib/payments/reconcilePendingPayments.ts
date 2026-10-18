@@ -1,6 +1,7 @@
 import prisma from "@/lib/db";
 import { runInTenantScope, tenantDb } from "@/lib/db/tenantContext";
 import { invalidateFeeListServerCaches } from "@/lib/fees/feeListServerCache";
+import { recordPaymentAudit, type PaymentAuditActor } from "@/lib/fees/paymentAudit";
 import { logger } from "@/lib/logger";
 
 /**
@@ -16,6 +17,9 @@ import { logger } from "@/lib/logger";
  * (`where status = PENDING`); only the caller whose update affects 1 row credits the
  * fee, so a concurrent /verify or webhook can never credit the same payment twice.
  */
+
+/** Shown as the actor on history rows written by this job. */
+const RECONCILE_ACTOR: PaymentAuditActor = { userId: null, name: "Payment reconcile job", role: "SYSTEM" };
 
 const MIN_AGE_MS = 15 * 60 * 1000; // give the normal verify/webhook path time first
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // older than this needs a human
@@ -172,6 +176,17 @@ export async function reconcilePendingPayments(now = new Date()): Promise<Reconc
             });
             if (flipped.count !== 1) return false; // verify/webhook got there first
 
+            await recordPaymentAudit(tx, {
+              schoolId,
+              paymentId: p.id,
+              studentId: p.studentId,
+              action: "STATUS",
+              actor: RECONCILE_ACTOR,
+              summary: `Status PENDING -> SUCCESS (recovered by polling the gateway: ${gwStatus})`,
+              before: { status: "PENDING" },
+              after: { status: "SUCCESS", gatewayStatus: gwStatus },
+            });
+
             if (p.eventRegistrationId) {
               await tx.eventRegistration.update({
                 where: { id: p.eventRegistrationId },
@@ -208,6 +223,18 @@ export async function reconcilePendingPayments(now = new Date()): Promise<Reconc
               where: { id: p.id, status: "PENDING" },
               data: { status: "FAILED", hyperpgStatus: gwStatus, hyperpgLastUpdatedAt: new Date() },
             });
+            if (flipped.count === 1) {
+              await recordPaymentAudit(tx, {
+                schoolId,
+                paymentId: p.id,
+                studentId: p.studentId,
+                action: "STATUS",
+                actor: RECONCILE_ACTOR,
+                summary: `Status PENDING -> FAILED (gateway: ${gwStatus})`,
+                before: { status: "PENDING" },
+                after: { status: "FAILED", gatewayStatus: gwStatus },
+              });
+            }
             if (flipped.count === 1 && p.eventRegistrationId) {
               await tx.eventRegistration.update({
                 where: { id: p.eventRegistrationId },

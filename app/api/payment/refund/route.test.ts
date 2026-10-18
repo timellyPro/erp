@@ -17,6 +17,7 @@ const mockExecuteRawUnsafe = jest.fn();
 const mockAllocationFindMany = jest.fn();
 const mockAllocationCreateMany = jest.fn();
 const mockStudentFeeUpdate = jest.fn();
+const mockAuditCreate = jest.fn();
 const mockSchoolSettingsFindUnique = jest.fn();
 const mockCreateNotification = jest.fn();
 
@@ -40,6 +41,7 @@ jest.mock("@/lib/db", () => {
       createMany: (...args: unknown[]) => mockAllocationCreateMany(...args),
     },
     studentFee: { update: (...args: unknown[]) => mockStudentFeeUpdate(...args) },
+    paymentAuditLog: { create: (...args: unknown[]) => mockAuditCreate(...args) },
     $queryRawUnsafe: (...args: unknown[]) => mockQueryRawUnsafe(...args),
     $executeRawUnsafe: (...args: unknown[]) => mockExecuteRawUnsafe(...args),
     // Callback-form transaction (route wraps the refund flow in one tx + advisory lock):
@@ -55,7 +57,7 @@ const request = (body: unknown) =>
     body: JSON.stringify(body),
   });
 
-const adminSession = { user: { id: "admin1", role: "SCHOOLADMIN", schoolId: "s1" } };
+const adminSession = { user: { id: "admin1", name: "Asha Admin", role: "SCHOOLADMIN", schoolId: "s1" } };
 
 const validBody = { paymentId: "pay1", amount: 200, reason: "duplicate" };
 
@@ -85,6 +87,7 @@ describe("POST /api/payment/refund", () => {
     mockAllocationFindMany.mockReset().mockResolvedValue([]);
     mockAllocationCreateMany.mockReset().mockResolvedValue({ count: 0 });
     mockStudentFeeUpdate.mockReset().mockResolvedValue({});
+    mockAuditCreate.mockReset().mockResolvedValue({});
     mockSchoolSettingsFindUnique.mockReset().mockResolvedValue(null);
     mockCreateNotification.mockReset().mockResolvedValue(undefined);
     global.fetch = jest.fn();
@@ -194,6 +197,30 @@ describe("POST /api/payment/refund", () => {
       data: { amountPaid: 300, remainingFee: 700 },
     });
     expect(global.fetch).not.toHaveBeenCalled();
+
+    // who refunded what, written in the same transaction
+    expect(mockAuditCreate).toHaveBeenCalledTimes(1);
+    const audit = mockAuditCreate.mock.calls[0][0].data;
+    expect(audit).toMatchObject({
+      paymentId: "pay1",
+      studentId: "stu1",
+      action: "REFUND",
+      actorUserId: "admin1",
+      actorName: "Asha Admin",
+      actorRole: "SCHOOLADMIN",
+    });
+    expect(audit.summary).toMatch(/Refunded 200 of/);
+    expect(audit.summary).toMatch(/duplicate/);
+    expect(audit.after).toMatchObject({ refundAmount: 200, reason: "duplicate" });
+  });
+
+  it("does not complete a refund when the audit row cannot be written", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    mockPaymentFindFirst.mockResolvedValue(offlinePayment);
+    mockAuditCreate.mockRejectedValue(new Error("audit down"));
+    const res = await POST(request(validBody));
+    expect(res.status).toBe(500);
+    expect(mockCreateNotification).not.toHaveBeenCalled();
   });
 
   it("returns 400 when a HyperPG payment has no gateway order id", async () => {

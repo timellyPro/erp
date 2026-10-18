@@ -7,6 +7,12 @@ import { resolveFeesSchoolId } from "@/lib/fees/resolveFeesSchoolId";
 import { canonicalizeGatewayForStorage } from "@/lib/fees/feePaymentGateway";
 import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
 import { deleteFastFeePayment } from "@/lib/fees/deleteFastFeePayment";
+import {
+  auditActorFromSession,
+  describePaymentChange,
+  paymentAuditSnapshot,
+  recordPaymentAudit,
+} from "@/lib/fees/paymentAudit";
 import { logger } from "@/lib/logger";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
@@ -151,6 +157,7 @@ export async function PATCH(req: Request, context: RouteParams) {
       }
       const newRemaining = Math.max(0, Math.round((fee.finalFee - newAmountPaid) * 100) / 100);
 
+      const actor = auditActorFromSession(session);
       await prisma.$transaction(async (tx) => {
         const payAllocations = await tx.paymentFeeAllocation.findMany({
           where: { paymentId: payment.id, allocationType: "PAYMENT" },
@@ -164,6 +171,7 @@ export async function PATCH(req: Request, context: RouteParams) {
           },
         });
 
+        let afterAllocations = payAllocations.map((a) => ({ ...a, allocationType: "PAYMENT", allocatedAmount: a.allocatedAmount }));
         if (payAllocations.length > 0 && Math.abs(delta) > 0.00001) {
           const oldTotal = payAllocations.reduce((s, a) => s + a.allocatedAmount, 0);
           if (oldTotal > 0.00001) {
@@ -184,6 +192,12 @@ export async function PATCH(req: Request, context: RouteParams) {
                 data: { allocatedAmount: row.allocatedAmount },
               });
             }
+            const scaledById = new Map(scaled.map((r) => [r.id, r.allocatedAmount]));
+            afterAllocations = payAllocations.map((a) => ({
+              ...a,
+              allocationType: "PAYMENT",
+              allocatedAmount: scaledById.get(a.id) ?? a.allocatedAmount,
+            }));
           }
         }
 
@@ -204,6 +218,24 @@ export async function PATCH(req: Request, context: RouteParams) {
             remainingFee: newRemaining,
           },
         });
+
+        const afterPayment = {
+          ...payment,
+          amount: newAmount,
+          ...(hasTxn ? { transactionId } : {}),
+          ...(hasGateway ? { gateway } : {}),
+          ...(newCreatedAt ? { createdAt: newCreatedAt } : {}),
+        };
+        await recordPaymentAudit(tx, {
+          schoolId,
+          paymentId: payment.id,
+          studentId: payment.studentId,
+          action: "UPDATE",
+          actor,
+          summary: describePaymentChange(payment, afterPayment) ?? "Edited",
+          before: paymentAuditSnapshot(payment, payAllocations.map((a) => ({ ...a, allocationType: "PAYMENT" }))),
+          after: paymentAuditSnapshot(afterPayment, afterAllocations),
+        });
       });
 
       const updated = await prisma.payment.findUnique({ where: { id: payment.id } });
@@ -212,13 +244,35 @@ export async function PATCH(req: Request, context: RouteParams) {
     }
 
     // No amount change — metadata only
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: {
-        ...(hasTxn ? { transactionId } : {}),
-        ...(hasGateway ? { gateway } : {}),
-        ...(newCreatedAt ? { createdAt: newCreatedAt } : {}),
-      },
+    const metaActor = auditActorFromSession(session);
+    const afterMeta = {
+      ...payment,
+      ...(hasTxn ? { transactionId } : {}),
+      ...(hasGateway ? { gateway } : {}),
+      ...(newCreatedAt ? { createdAt: newCreatedAt } : {}),
+    };
+    await prisma.$transaction(async (tx) => {
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: {
+          ...(hasTxn ? { transactionId } : {}),
+          ...(hasGateway ? { gateway } : {}),
+          ...(newCreatedAt ? { createdAt: newCreatedAt } : {}),
+        },
+      });
+      const summary = describePaymentChange(payment, afterMeta);
+      if (summary) {
+        await recordPaymentAudit(tx, {
+          schoolId,
+          paymentId: payment.id,
+          studentId: payment.studentId,
+          action: "UPDATE",
+          actor: metaActor,
+          summary,
+          before: paymentAuditSnapshot(payment),
+          after: paymentAuditSnapshot(afterMeta),
+        });
+      }
     });
     const updated = await prisma.payment.findUnique({ where: { id: payment.id } });
     await invalidateStudentFeeReadCaches({ studentId: payment.studentId, schoolId });
@@ -265,7 +319,7 @@ export async function DELETE(req: Request, context: RouteParams) {
     const expectedStudentId =
       new URL(req.url).searchParams.get("studentId")?.trim() || undefined;
 
-    const result = await deleteFastFeePayment(paymentId, schoolId, expectedStudentId);
+    const result = await deleteFastFeePayment(paymentId, schoolId, expectedStudentId, auditActorFromSession(session));
     return NextResponse.json({ success: true, ...result }, { status: 200 });
     });
   } catch (error: unknown) {

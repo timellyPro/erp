@@ -314,6 +314,7 @@ model School {
   timetables              Timetable[]
   backupEmailSchedules    BackupEmailSchedule[]
   teacherDailyAttendances TeacherDailyAttendance[]
+  paymentAuditLogs        PaymentAuditLog[]
 }
 
 model BackupEmailSchedule {
@@ -1501,6 +1502,42 @@ model PaymentWebhookEvent {
 
   receivedAt DateTime @default(now())
   payload    Json
+
+  /// Set once the event has been applied. A retry of an event that was stored but never processed
+  /// (crash or error mid-way) is processed again instead of being acknowledged and dropped.
+  processedAt DateTime?
+}
+
+/// Append-only history of who created, changed, deleted or refunded a payment.
+/// paymentId is deliberately NOT a foreign key: the payment row can be deleted and this log must
+/// survive it. Snapshots hold ids, amounts and references only (no student personal data).
+/// app_tenant has SELECT/INSERT only (see the migration), so the app cannot rewrite history.
+model PaymentAuditLog {
+  id String @id @default(cuid())
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  paymentId String
+  studentId String
+
+  /// CREATE | UPDATE | DELETE | REFUND | STATUS (gateway webhook) | ALERT (needs human review)
+  action String
+
+  actorUserId String?
+  actorName   String?
+  actorRole   String?
+
+  /// One human-readable line, e.g. "Amount 5000 -> 4500".
+  summary String?
+  before  Json?
+  after   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([schoolId, createdAt])
+  @@index([schoolId, paymentId, createdAt])
+  @@index([schoolId, studentId, createdAt])
 }
 
 model Refund {

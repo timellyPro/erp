@@ -40,6 +40,7 @@ import {
 } from "@/lib/fees/recordFastOfflineFeePayment";
 import { reconcileStudentFeeIntegrity } from "@/lib/fees/reconcileStudentFeeIntegrity";
 import { roundRupee } from "@/lib/formatRupee";
+import { paymentAuditSnapshot, recordPaymentAudit } from "@/lib/fees/paymentAudit";
 import { logger } from "@/lib/logger";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
@@ -183,6 +184,7 @@ export async function POST(req: Request) {
           clientRequestId,
           collectedByUserId: collector?.collectedByUserId,
           collectedByName: collector?.collectedByName,
+          collectedByRole: session.user.role,
         });
         const message = fastResult.idempotent
           ? "Payment already recorded for this reference"
@@ -614,6 +616,21 @@ export async function POST(req: Request) {
               },
             });
 
+            await recordPaymentAudit(tx, {
+              schoolId,
+              paymentId: existing.id,
+              studentId,
+              action: "UPDATE",
+              actor: {
+                userId: collector?.collectedByUserId ?? null,
+                name: collector?.collectedByName ?? null,
+                role: session.user.role,
+              },
+              summary: `Added ${plan.appendTotal} of fee heads to existing reference ${txId} (amount ${existing.amount} -> ${updatedPayment.amount})`,
+              before: paymentAuditSnapshot(existing),
+              after: paymentAuditSnapshot(updatedPayment),
+            });
+
             return {
               payment: updatedPayment,
               updatedFee,
@@ -655,6 +672,20 @@ export async function POST(req: Request) {
         const updatedFee = await tx.studentFee.update({
           where: { studentId },
           data: { amountPaid: newAmountPaid, remainingFee: newRemaining },
+        });
+
+        await recordPaymentAudit(tx, {
+          schoolId,
+          paymentId: payment.id,
+          studentId,
+          action: "CREATE",
+          actor: {
+            userId: collector?.collectedByUserId ?? null,
+            name: collector?.collectedByName ?? null,
+            role: session.user.role,
+          },
+          summary: `Recorded payment of ${amount} (${offlineGateway}${txId ? `, ref ${txId}` : ""})`,
+          after: paymentAuditSnapshot(payment, paymentAllocationsData),
         });
 
         return { payment, updatedFee, idempotent: false as const, appended: false as const };
