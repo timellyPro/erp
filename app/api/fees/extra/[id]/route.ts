@@ -138,6 +138,12 @@ export async function PATCH(
         { status: 404 }
       );
     }
+    if (!isAdmin && extraFee.targetType !== "STUDENT") {
+      return NextResponse.json(
+        { message: "Only a school admin can change a school, class or section fee" },
+        { status: 403 }
+      );
+    }
 
     const parsedBody = patchExtraFeeBodySchema.safeParse(await req.json().catch(() => null));
     const body = parsedBody.success ? parsedBody.data : {};
@@ -274,6 +280,12 @@ export async function DELETE(
       return NextResponse.json(
         { message: "Extra fee not found" },
         { status: 404 }
+      );
+    }
+    if (!isAdmin && extraFee.targetType !== "STUDENT") {
+      return NextResponse.json(
+        { message: "Only a school admin can change a school, class or section fee" },
+        { status: 403 }
       );
     }
 

@@ -195,3 +195,6 @@ FROM "FeeAuditLog" WHERE "schoolId" = '<school id>' ORDER BY "createdAt" DESC LI
 ```
 History starts when the migration is applied. Class fee-structure edits and bulk assignment are not
 logged yet.
+
+Permissions: a teacher can edit or delete an extra fee only when it is assigned to a single student (the
+admission desk does this). School, class and section fees can be edited or deleted by a school admin only.

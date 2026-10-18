@@ -104,6 +104,25 @@ describe("PATCH /api/fees/extra/[id]", () => {
     expect(res.status).toBe(403);
   });
 
+  it("returns 403 when a teacher edits a school-wide fee", async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: "t1", role: "TEACHER", schoolId: "s1" } });
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    mockExtraFeeFindFirst.mockResolvedValue(existingExtraFee);
+    const res = await PATCH(patchRequest({ amount: 600 }), ctx);
+    expect(res.status).toBe(403);
+    expect(mockPatchExtraFeeWithInstallmentSupport).not.toHaveBeenCalled();
+  });
+
+  it("lets a teacher edit a fee assigned to a single student", async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: "t1", role: "TEACHER", schoolId: "s1" } });
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    const own = { ...existingExtraFee, targetType: "STUDENT", targetStudentId: "stu1" };
+    mockExtraFeeFindFirst.mockResolvedValue(own);
+    mockPatchExtraFeeWithInstallmentSupport.mockResolvedValue("no_changes");
+    const res = await PATCH(patchRequest({ amount: 500 }), ctx);
+    expect(res.status).toBe(200);
+  });
+
   it("returns 400 when schoolId cannot be resolved", async () => {
     mockGetServerSession.mockResolvedValue(adminSession);
     mockResolveFeesSchoolId.mockResolvedValue(null);
@@ -262,6 +281,15 @@ describe("DELETE /api/fees/extra/[id]", () => {
     mockGetServerSession.mockResolvedValue({ user: { id: "u1", role: "STUDENT" } });
     const res = await DELETE(deleteRequest(), ctx);
     expect(res.status).toBe(403);
+  });
+
+  it("returns 403 when a teacher deletes a school-wide fee", async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: "t1", role: "TEACHER", schoolId: "s1" } });
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    mockExtraFeeFindFirst.mockResolvedValue(existingExtraFee);
+    const res = await DELETE(deleteRequest(), ctx);
+    expect(res.status).toBe(403);
+    expect(mockExtraFeeDelete).not.toHaveBeenCalled();
   });
 
   it("does not delete the fee when the audit row cannot be written", async () => {
