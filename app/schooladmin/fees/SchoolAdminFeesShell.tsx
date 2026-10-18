@@ -18,6 +18,7 @@ type FeesSection =
   | "fees-records"
   | "petty-cash"
   | "receipt-lookup"
+  | "bulk-fee-edit"
   | "student-fee-records";
 
 type SchoolAdminFeesShellProps = {

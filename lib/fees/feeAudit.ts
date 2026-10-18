@@ -5,6 +5,8 @@ import type { Prisma } from "@prisma/client";
  * transaction as the change, so a fee change never commits unaudited. Payments have their own log
  * (lib/fees/paymentAudit.ts). Ids, names and amounts only: no student personal data.
  */
+export type FeeAuditActor = { userId?: string | null; name?: string | null; role?: string | null };
+
 export type FeeAuditAction = "CREATE" | "UPDATE" | "DELETE";
 
 export type FeeAuditWriter = {
@@ -57,7 +59,7 @@ export async function recordFeeAudit(
     entityType: "EXTRA_FEE";
     entityId: string;
     action: FeeAuditAction;
-    actor?: { userId?: string | null; name?: string | null; role?: string | null } | null;
+    actor?: FeeAuditActor | null;
     summary?: string | null;
     before?: Prisma.InputJsonValue | null;
     after?: Prisma.InputJsonValue | null;

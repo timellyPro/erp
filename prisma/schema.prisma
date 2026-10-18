@@ -317,6 +317,7 @@ model School {
   paymentAuditLogs        PaymentAuditLog[]
   feeAuditLogs            FeeAuditLog[]
   receiptCounter          ReceiptCounter?
+  feeBulkEdits            FeeBulkEdit[]
 }
 
 model BackupEmailSchedule {
@@ -1575,6 +1576,36 @@ model FeeAuditLog {
 
   @@index([schoolId, createdAt])
   @@index([schoolId, entityType, entityId, createdAt])
+}
+
+/// One bulk "set a fee head's amount" run, with enough detail to undo it as a whole.
+model FeeBulkEdit {
+  id String @id @default(cuid())
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  headName String
+  amount   Float
+
+  /// APPLIED | UNDONE
+  status String @default("APPLIED")
+
+  actorUserId String?
+  actorName   String?
+  actorRole   String?
+
+  /// Per student: { studentId, action: CREATE|UPDATE, createdIds[], updated: [{ id, previousAmount }], previousTotal, delta }
+  changes Json
+
+  studentCount Int
+  totalDelta   Float
+
+  createdAt   DateTime  @default(now())
+  undoneAt    DateTime?
+  undoneByName String?
+
+  @@index([schoolId, createdAt])
 }
 
 /// Last receipt number issued per school (one row per school).

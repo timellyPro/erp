@@ -221,3 +221,24 @@ and 2,000); the other four matched.
 
 Not done: storing the discount as an explicit rupee column, and the Float to Decimal change for money
 columns. Both touch every fee read and write and need their own plan and a data migration.
+
+## 11. Bulk fee edit (Phase G)
+Fees, then **Bulk Fee Edit** (`/schooladmin/fees/bulk-fee-edit`, API `/api/fees/bulk-set-head`). School admins
+only. It sets one fee head (for example Hostel Fee) to one amount for chosen students, this year's records
+only.
+
+- **Choose** students by class and hostel/day scholar, then tick them (up to 500 per run).
+- **Preview** shows each student's amount now, after, and the change, with the reason for every skip. Nothing
+  is written.
+- **Apply** re-checks first and refuses (409) if the number of students that would change is no longer what the
+  preview showed. One transaction: all students change or none do.
+- **What it writes:** a student-specific fee (`ExtraFee` with `targetType = STUDENT`), created or updated per
+  student. Mess and Hostel are created as the usual 1st and 2nd installment rows. The stored fee moves by the
+  same difference as the fee (so existing drift is left as it was). Every student gets a `FeeAuditLog` entry
+  naming the run, and the run is saved in `FeeBulkEdit`.
+- **Skipped, never changed:** a student who already gets a fee with that name from a school, class or section
+  fee (changing both would charge it twice); a head that does not apply to the student under the hostel/mess
+  rules; no change needed; already paid more on that fee than the new amount; more than one fee with the name.
+- **Undo** reverses a whole run (history list, Undo). All or nothing: if a payment has since been made on a fee
+  the run created, nothing is undone and the message says so.
+- Not covered: future academic years, discounts, removing a head, editing school/class/section fees.
