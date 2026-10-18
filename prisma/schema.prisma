@@ -315,6 +315,7 @@ model School {
   backupEmailSchedules    BackupEmailSchedule[]
   teacherDailyAttendances TeacherDailyAttendance[]
   paymentAuditLogs        PaymentAuditLog[]
+  feeAuditLogs            FeeAuditLog[]
 }
 
 model BackupEmailSchedule {
@@ -1538,6 +1539,36 @@ model PaymentAuditLog {
   @@index([schoolId, createdAt])
   @@index([schoolId, paymentId, createdAt])
   @@index([schoolId, studentId, createdAt])
+}
+
+/// Append-only history of fee-setup changes (who created, edited or deleted an extra fee).
+/// entityId is not a foreign key on purpose, so a deleted fee keeps its history.
+model FeeAuditLog {
+  id String @id @default(cuid())
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  /// EXTRA_FEE
+  entityType String
+  entityId   String
+
+  /// CREATE | UPDATE | DELETE
+  action String
+
+  actorUserId String?
+  actorName   String?
+  actorRole   String?
+
+  /// One human-readable line, e.g. "Amount 500 -> 700".
+  summary String?
+  before  Json?
+  after   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([schoolId, createdAt])
+  @@index([schoolId, entityType, entityId, createdAt])
 }
 
 model Refund {

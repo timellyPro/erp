@@ -9,6 +9,12 @@ import { snapshotExtraFeeNameOnAllocations } from "@/lib/fees/backfillPaymentAll
 import { patchExtraFeeWithInstallmentSupport } from "@/lib/fees/extraFeeInstallmentDb";
 import { invalidateSchoolFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
 import { Prisma } from "@prisma/client";
+import { auditActorFromSession } from "@/lib/fees/paymentAudit";
+import {
+  describeExtraFeeChange,
+  extraFeeAuditSnapshot,
+  recordFeeAudit,
+} from "@/lib/fees/feeAudit";
 import { logger } from "@/lib/logger";
 
 const STUDENT_FEE_UPDATE_CHUNK = 200;
@@ -202,6 +208,23 @@ export async function PATCH(
     }
     logger.info("============================================\n");
 
+    const totalAfterEdit = result.totalBefore + result.studentFeeDelta;
+    const summary =
+      describeExtraFeeChange(
+        { name: extraFee.name, amount: result.totalBefore },
+        { name: result.extraFee.name, amount: totalAfterEdit }
+      ) ?? "Saved with no change to name or amount";
+    await recordFeeAudit(prisma, {
+      schoolId,
+      entityType: "EXTRA_FEE",
+      entityId: extraFee.id,
+      action: "UPDATE",
+      actor: auditActorFromSession(session),
+      summary: result.migrated ? `${summary}; split into 1st and 2nd installment rows` : summary,
+      before: extraFeeAuditSnapshot(extraFee),
+      after: extraFeeAuditSnapshot(result.extraFee),
+    });
+
     await invalidateSchoolFeeReadCaches(schoolId);
 
     return NextResponse.json({
@@ -258,6 +281,15 @@ export async function DELETE(
     await applyStudentFeeDelta(eligibleIds, -extraFee.amount);
     await snapshotExtraFeeNameOnAllocations(prisma, id, extraFee.name);
     await prisma.extraFee.delete({ where: { id } });
+    await recordFeeAudit(prisma, {
+      schoolId,
+      entityType: "EXTRA_FEE",
+      entityId: id,
+      action: "DELETE",
+      actor: auditActorFromSession(session),
+      summary: `Deleted "${extraFee.name}" (${extraFee.amount})`,
+      before: extraFeeAuditSnapshot(extraFee),
+    });
 
     await invalidateSchoolFeeReadCaches(schoolId);
     return NextResponse.json({ success: true });

@@ -180,3 +180,18 @@ update commit or roll back together.
   changes the amount. A rename or an unchanged save keeps the row and its id.
 - A rename refreshes the name snapshot on the fee's payment allocations (it is shown only if the fee row is
   later deleted or merged).
+
+## 9. Extra-fee audit trail (Phase C)
+Table `FeeAuditLog` (migration `20261018120000_fee_audit_log`) records who created, edited or deleted an
+extra fee: actor id, name and role, a one-line summary (`Amount 500 -> 700`, `Name "A" -> "B"`) and
+before/after snapshots. Same guarantees as the payment log (`docs/PAYMENT_AUDIT.md`): written in the same
+transaction as the change, append-only for `app_tenant`, tenant-isolated by RLS, kept after the fee is
+deleted, no student personal data.
+
+```sql
+-- Who changed fee setup recently, newest first
+SELECT "createdAt", "actorName", "actorRole", action, summary, "entityId"
+FROM "FeeAuditLog" WHERE "schoolId" = '<school id>' ORDER BY "createdAt" DESC LIMIT 100;
+```
+History starts when the migration is applied. Class fee-structure edits and bulk assignment are not
+logged yet.

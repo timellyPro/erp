@@ -16,6 +16,8 @@ import {
   setSchoolDashboardServerCached,
 } from "@/lib/school/schoolDashboardServerCache";
 import { invalidateAssignCatalogServerCache } from "@/lib/fees/assignCatalogServerCache";
+import { auditActorFromSession } from "@/lib/fees/paymentAudit";
+import { extraFeeAuditSnapshot, recordFeeAudit } from "@/lib/fees/feeAudit";
 import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
 import { logger } from "@/lib/logger";
 
@@ -213,6 +215,24 @@ export async function POST(req: Request) {
     const { ids, totalAmount } = await createExtraFeeRows(prisma, payload);
     const extraFee = await prisma.extraFee.findFirst({
       where: { id: ids[0] },
+    });
+    await recordFeeAudit(prisma, {
+      schoolId,
+      entityType: "EXTRA_FEE",
+      entityId: ids[0]!,
+      action: "CREATE",
+      actor: auditActorFromSession(session),
+      summary: `Created "${payload.name}" (${totalAmount})${ids.length > 1 ? " as 2 installment rows" : ""}`,
+      after: extraFeeAuditSnapshot({
+        id: ids[0]!,
+        name: payload.name,
+        amount: totalAmount,
+        targetType: payload.targetType,
+        targetClassId: payload.targetClassId,
+        targetSection: payload.targetSection,
+        targetStudentId: payload.targetStudentId,
+        residencyScope: payload.residencyScope,
+      }),
     });
 
     const studentWhere =

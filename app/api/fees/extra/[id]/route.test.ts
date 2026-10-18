@@ -14,6 +14,7 @@ const mockResolveFeesSchoolId = jest.fn();
 const mockExtraFeeFindFirst = jest.fn();
 const mockExtraFeeDelete = jest.fn();
 const mockStudentFindMany = jest.fn();
+const mockFeeAuditCreate = jest.fn().mockResolvedValue({});
 const mockExecuteRaw = jest.fn();
 const mockPatchExtraFeeWithInstallmentSupport = jest.fn();
 const mockSnapshotExtraFeeNameOnAllocations = jest.fn();
@@ -52,6 +53,7 @@ jest.mock("@/lib/db", () => ({
     },
     student: { findMany: (...args: unknown[]) => mockStudentFindMany(...args) },
     $executeRaw: (...args: unknown[]) => mockExecuteRaw(...args),
+    feeAuditLog: { create: (...args: unknown[]) => mockFeeAuditCreate(...args) },
   },
 }));
 
@@ -140,7 +142,7 @@ describe("PATCH /api/fees/extra/[id]", () => {
       { id: "stu2", residencyType: "Hosteller" },
     ]);
     mockPatchExtraFeeWithInstallmentSupport.mockResolvedValue({
-      extraFee: { id: "ef1", amount: 700 },
+      extraFee: { ...existingExtraFee, amount: 700 },
       extraFeeIds: ["ef1"],
       splitApplied: false,
       migrated: false,
@@ -152,6 +154,16 @@ describe("PATCH /api/fees/extra/[id]", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.extraFee.amount).toBe(700);
+    expect(mockFeeAuditCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        entityType: "EXTRA_FEE",
+        entityId: "ef1",
+        action: "UPDATE",
+        actorUserId: "u1",
+        actorRole: "SCHOOLADMIN",
+        summary: "Amount 500 -> 700",
+      }),
+    });
     expect(mockExecuteRaw).toHaveBeenCalledTimes(1);
     expect(mockInvalidateSchoolFeeReadCaches).toHaveBeenCalledWith("s1");
   });
@@ -161,7 +173,7 @@ describe("PATCH /api/fees/extra/[id]", () => {
     mockResolveFeesSchoolId.mockResolvedValue("s1");
     mockExtraFeeFindFirst.mockResolvedValue(existingExtraFee);
     mockPatchExtraFeeWithInstallmentSupport.mockResolvedValue({
-      extraFee: { id: "ef1", name: "Renamed" },
+      extraFee: { ...existingExtraFee, name: "Renamed" },
       extraFeeIds: ["ef1"],
       splitApplied: false,
       migrated: false,
@@ -185,7 +197,7 @@ describe("PATCH /api/fees/extra/[id]", () => {
       { id: "host", residencyType: "Hosteller" },
     ]);
     mockPatchExtraFeeWithInstallmentSupport.mockResolvedValue({
-      extraFee: { id: "ef1", name: "Meals" },
+      extraFee: { ...existingExtraFee, name: "Meals" },
       extraFeeIds: ["ef1"],
       splitApplied: false,
       migrated: false,
@@ -212,7 +224,7 @@ describe("PATCH /api/fees/extra/[id]", () => {
       { id: "host", residencyType: "Hosteller" },
     ]);
     mockPatchExtraFeeWithInstallmentSupport.mockResolvedValue({
-      extraFee: { id: "ef1", name: "Mess Fee" },
+      extraFee: { ...existingExtraFee, name: "Mess Fee" },
       extraFeeIds: ["ef1"],
       splitApplied: false,
       migrated: false,
@@ -252,6 +264,15 @@ describe("DELETE /api/fees/extra/[id]", () => {
     expect(res.status).toBe(403);
   });
 
+  it("does not delete the fee when the audit row cannot be written", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    mockResolveFeesSchoolId.mockResolvedValue("s1");
+    mockExtraFeeFindFirst.mockResolvedValue(existingExtraFee);
+    mockFeeAuditCreate.mockRejectedValueOnce(new Error("audit down"));
+    const res = await DELETE(deleteRequest(), ctx);
+    expect(res.status).toBe(500);
+  });
+
   it("returns 404 when the extra fee is not found in the school", async () => {
     mockGetServerSession.mockResolvedValue(adminSession);
     mockResolveFeesSchoolId.mockResolvedValue("s1");
@@ -278,6 +299,14 @@ describe("DELETE /api/fees/extra/[id]", () => {
       "Sports Fee"
     );
     expect(mockExtraFeeDelete).toHaveBeenCalledWith({ where: { id: "ef1" } });
+    expect(mockFeeAuditCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        entityId: "ef1",
+        action: "DELETE",
+        actorUserId: "u1",
+        summary: 'Deleted "Sports Fee" (500)',
+      }),
+    });
     expect(mockInvalidateSchoolFeeReadCaches).toHaveBeenCalledWith("s1");
   });
 });
