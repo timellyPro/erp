@@ -108,6 +108,27 @@ describe("POST /api/student/credentials/reset", () => {
     expect(mockInvalidateTenant).toHaveBeenCalledWith("s1");
   });
 
+  it("resets only the chosen students, inside this school, and ignores class filters", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    mockStudentFindMany.mockResolvedValue([{ id: "stu1", dob: new Date("2010-01-01"), userId: "user1" }]);
+
+    const res = await POST(request({ studentIds: ["stu1", "stu1", " "], className: "Class 5" }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).resetCount).toBe(1);
+    expect(mockStudentFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { schoolId: "s1", status: "Active", id: { in: ["stu1"] } } })
+    );
+    expect(mockUserUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects more than 100 chosen students", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    const ids = Array.from({ length: 101 }, (_, i) => `s${i}`);
+    const res = await POST(request({ studentIds: ids }));
+    expect(res.status).toBe(400);
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+  });
+
   it("uses singular wording when exactly one password is reset", async () => {
     mockGetServerSession.mockResolvedValue(adminSession);
     mockStudentFindMany.mockResolvedValue([{ id: "stu1", dob: new Date("2010-01-01"), userId: "user1" }]);

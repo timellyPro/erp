@@ -2,23 +2,25 @@
 
 import type { StudentCredentialRow } from "./types";
 import { passwordUnavailableLabel } from "./passwordStateLabel";
+import { ResetOneButton, type ResetOneProps } from "./ResetOneButton";
 import StudentCredentialsMobileList from "./StudentCredentialsMobileList";
 import StudentCredentialsPagination from "./StudentCredentialsPagination";
 
-function PasswordCell({ row }: { row: StudentCredentialRow }) {
+function PasswordCell({ row, reset }: { row: StudentCredentialRow; reset: ResetOneProps }) {
   if (row.passwordVerified) {
     return (
       <span className="font-mono text-xs text-lime-300 sm:text-sm">{row.password}</span>
     );
   }
   return (
-    <span className="text-xs text-amber-300/90 sm:text-sm">
-      {passwordUnavailableLabel(row)}
-    </span>
+    <div>
+      <span className="text-xs text-amber-300/90 sm:text-sm">{passwordUnavailableLabel(row)}</span>
+      {row.passwordState !== "NO_DOB" ? <ResetOneButton row={row} {...reset} /> : null}
+    </div>
   );
 }
 
-type TableProps = {
+type TableProps = ResetOneProps & {
   rows: StudentCredentialRow[];
   summaryLabel: string;
   page: number;
@@ -32,12 +34,16 @@ export function StudentCredentialsTable({
   page,
   totalPages,
   onPageChange,
+  onResetOne,
+  resettingId,
+  busy,
 }: TableProps) {
+  const reset: ResetOneProps = { onResetOne, resettingId, busy };
   return (
     <>
       <p className="mb-3 text-xs text-white/45 sm:text-sm">{summaryLabel}</p>
 
-      <StudentCredentialsMobileList rows={rows} />
+      <StudentCredentialsMobileList rows={rows} reset={reset} />
 
       <div className="hidden lg:block">
         <div className="overflow-x-auto overscroll-x-contain rounded-xl border border-white/10">
@@ -63,7 +69,7 @@ export function StudentCredentialsTable({
               ) : (
                 rows.map((row) => (
                   <tr
-                    key={`${row.admissionNumber}-${row.email}`}
+                    key={row.studentId}
                     className="border-b border-white/5 last:border-0 hover:bg-white/3"
                   >
                     <td className="py-3 pl-4 pr-3 font-medium text-white">{row.name}</td>
@@ -74,7 +80,7 @@ export function StudentCredentialsTable({
                       {row.dob || "—"}
                     </td>
                     <td className="py-3 px-2">
-                      <PasswordCell row={row} />
+                      <PasswordCell row={row} reset={reset} />
                     </td>
                     <td className="py-3 px-2">{row.className || "—"}</td>
                     <td className="py-3 px-2">{row.section || "—"}</td>

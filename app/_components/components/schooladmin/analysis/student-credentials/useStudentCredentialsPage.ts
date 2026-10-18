@@ -67,6 +67,8 @@ export function useStudentCredentialsPage() {
   const [revalidating, setRevalidating] = useState(false);
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [resetting, setResetting] = useState(false);
+  const [resettingId, setResettingId] = useState<string | null>(null);
+  const [truncated, setTruncated] = useState(false);
   const [page, setPage] = useState(1);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -149,8 +151,9 @@ export function useStudentCredentialsPage() {
   }, [classes, selectedClass, selectedSection]);
 
   const applyPayload = useCallback(
-    (payload: { students: StudentCredentialRow[]; mismatchCount?: number }) => {
+    (payload: { students: StudentCredentialRow[]; mismatchCount?: number; truncated?: boolean }) => {
       setRows(payload.students);
+      setTruncated(Boolean(payload.truncated));
       setMismatchCount(
         typeof payload.mismatchCount === "number"
           ? payload.mismatchCount
@@ -338,7 +341,39 @@ export function useStudentCredentialsPage() {
     }
   };
 
+  const handleResetOne = async (row: StudentCredentialRow) => {
+    if (resetting || resettingId) return;
+    const ok = window.confirm(
+      `Reset the password for ${row.name || row.admissionNumber} to their date of birth (YYYYMMDD)?
+
+If the student chose their own password, it will be replaced by the default.`
+    );
+    if (!ok) return;
+
+    setResettingId(row.studentId);
+    try {
+      const { ok: done, data } = await resetStudentCredentials({ studentIds: [row.studentId] });
+      if (!done) {
+        toast.error(data.message || "Reset failed");
+        return;
+      }
+      toast.success(data.message || "Password reset");
+      if (schoolId !== "anon") {
+        invalidateStudentCredentialsCache(schoolId);
+      }
+      const payload = await fetchStudentCredentials(filterKey, { revalidate: true });
+      applyPayload(payload);
+    } catch {
+      toast.error("Reset failed");
+    } finally {
+      setResettingId(null);
+    }
+  };
+
   return {
+    truncated,
+    resettingId,
+    handleResetOne,
     classesLoading,
     selectedClass,
     setSelectedClass,

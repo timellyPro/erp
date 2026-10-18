@@ -7,6 +7,7 @@ import {
 } from "@/lib/students/studentDefaultPassword";
 
 export type StudentCredentialRow = {
+  studentId: string;
   name: string;
   email: string;
   password: string;
@@ -26,6 +27,8 @@ export type StudentCredentialsPayload = {
   total: number;
   verifiedCount: number;
   mismatchCount: number;
+  /** True when more students matched than the page returns (the list was cut at the cap). */
+  truncated?: boolean;
 };
 
 const MAX_EXPORT = 5000;
@@ -61,6 +64,7 @@ function formatDobDisplay(dob: Date): string {
 
 async function toCredentialRows(
   students: Array<{
+    id: string;
     admissionNumber: string;
     rollNo: string | null;
     dob: Date;
@@ -72,6 +76,7 @@ async function toCredentialRows(
     students.map(async (s) => {
       const resolved = await resolveStudentPasswordState(s.dob, s.user.password);
       return {
+        studentId: s.id,
         name: s.user.name?.trim() || "",
         email: s.user.email?.trim() || "",
         password: resolved.password,
@@ -110,8 +115,9 @@ export async function computeStudentCredentials(
 
   const students = await prisma.student.findMany({
     where,
-    take: MAX_EXPORT,
+    take: MAX_EXPORT + 1,
     select: {
+      id: true,
       admissionNumber: true,
       rollNo: true,
       dob: true,
@@ -121,7 +127,8 @@ export async function computeStudentCredentials(
     orderBy: [{ class: { name: "asc" } }, { user: { name: "asc" } }],
   });
 
-  const rows = await toCredentialRows(students);
+  const truncated = students.length > MAX_EXPORT;
+  const rows = await toCredentialRows(truncated ? students.slice(0, MAX_EXPORT) : students);
   const verifiedCount = rows.filter((r) => r.passwordVerified).length;
   const mismatchCount = rows.filter((r) => !r.passwordVerified).length;
 
@@ -130,5 +137,6 @@ export async function computeStudentCredentials(
     total: rows.length,
     verifiedCount,
     mismatchCount,
+    ...(truncated ? { truncated: true } : {}),
   };
 }

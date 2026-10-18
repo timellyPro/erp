@@ -2,24 +2,29 @@
 
 import type { StudentCredentialRow } from "./types";
 import { passwordUnavailableLabel } from "./passwordStateLabel";
+import { ResetOneButton, type ResetOneProps } from "./ResetOneButton";
 
-function PasswordCell({ row }: { row: StudentCredentialRow }) {
+function PasswordCell({ row, reset }: { row: StudentCredentialRow; reset: ResetOneProps }) {
   if (row.passwordVerified) {
     return (
       <span className="font-mono text-sm text-lime-300">{row.password}</span>
     );
   }
   return (
-    <span className="text-sm text-amber-300/90">{passwordUnavailableLabel(row)}</span>
+    <div>
+      <span className="text-sm text-amber-300/90">{passwordUnavailableLabel(row)}</span>
+      {row.passwordState !== "NO_DOB" ? <ResetOneButton row={row} {...reset} /> : null}
+    </div>
   );
 }
 
 type Props = {
   rows: StudentCredentialRow[];
+  reset: ResetOneProps;
 };
 
 /** Card layout for phone & tablet — easier to read than a wide table. */
-export default function StudentCredentialsMobileList({ rows }: Props) {
+export default function StudentCredentialsMobileList({ rows, reset }: Props) {
   if (rows.length === 0) {
     return (
       <p className="rounded-xl border border-white/10 bg-black/20 py-10 text-center text-sm text-white/40 lg:hidden">
@@ -32,7 +37,7 @@ export default function StudentCredentialsMobileList({ rows }: Props) {
     <ul className="flex flex-col gap-3 lg:hidden">
       {rows.map((row) => (
         <li
-          key={`${row.admissionNumber}-${row.email}`}
+          key={row.studentId}
           className="rounded-xl border border-white/10 bg-black/25 p-3.5 shadow-sm backdrop-blur-sm sm:p-4"
         >
           <div className="mb-2 flex items-start justify-between gap-2">
@@ -53,7 +58,7 @@ export default function StudentCredentialsMobileList({ rows }: Props) {
             <div>
               <dt className="text-white/40">Password</dt>
               <dd className="mt-0.5">
-                <PasswordCell row={row} />
+                <PasswordCell row={row} reset={reset} />
               </dd>
             </div>
             <div className="col-span-2 sm:col-span-1">

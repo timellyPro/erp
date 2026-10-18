@@ -16,6 +16,8 @@ const resetCredentialsBodySchema = z.object({
   classId: z.string().optional(),
   className: z.string().optional(),
   section: z.string().optional(),
+  /** Reset only these students (admission-desk fix for one login); the class filters are then ignored. */
+  studentIds: z.array(z.string().min(1)).max(100).optional(),
 });
 
 async function resolveSchoolId(session: {
@@ -99,7 +101,11 @@ export async function POST(req: Request) {
       }
     }
 
-    const where = buildWhere(schoolId, classId, className, section);
+    const studentIds = [...new Set((body.studentIds ?? []).map((s) => s.trim()).filter(Boolean))];
+    const where: Prisma.StudentWhereInput =
+      studentIds.length > 0
+        ? { schoolId, status: "Active", id: { in: studentIds } }
+        : buildWhere(schoolId, classId, className, section);
 
     const students = await prisma.student.findMany({
       where,
