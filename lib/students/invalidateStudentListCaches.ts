@@ -5,6 +5,7 @@ import { invalidateTenant } from "@/lib/cache/tenantCache";
 export function invalidateStudentListCaches(schoolId: string): void {
   purgeSchoolDashboardServerCacheMatching(`students:list:${schoolId}`);
   purgeSchoolDashboardServerCacheMatching(`analysis:${schoolId}:`);
+  purgeSchoolDashboardServerCacheMatching(`credentials:${schoolId}:`);
   purgeSchoolDashboardServerCacheMatching(`dashboard:${schoolId}:`);
   void invalidateTenant(schoolId).catch(() => {});
 }

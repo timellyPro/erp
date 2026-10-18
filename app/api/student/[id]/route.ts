@@ -14,6 +14,7 @@ import {
 } from "@/lib/fees/paymentFeeHeadLines";
 import type { PrismaClient } from "@prisma/client";
 import { hashStudentPasswordFromDob } from "@/lib/students/studentDefaultPassword";
+import { refreshDefaultPasswordOnDobChange } from "@/lib/students/refreshDefaultPasswordOnDobChange";
 import {
   parseStudentStatus,
   STUDENT_STATUS_ACTIVE,
@@ -640,6 +641,15 @@ export async function PUT(req: Request, context: RouteParams) {
       status === STUDENT_STATUS_ACTIVE &&
       student.status === STUDENT_STATUS_INACTIVE &&
       Boolean(student.user);
+
+    // A corrected date of birth moves a still-default password with it (a password the student set stays).
+    if (dob && !isReactivating && status !== STUDENT_STATUS_INACTIVE && student.user) {
+      await refreshDefaultPasswordOnDobChange(ownerPrisma, {
+        userId: student.user.id,
+        oldDob: student.dob,
+        newDob: dob,
+      }).catch((err) => logger.error("Default password refresh after DOB change failed:", err));
+    }
 
     if (isReactivating) {
       const effectiveDob = dob !== undefined ? dob : student.dob;

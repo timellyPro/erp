@@ -154,7 +154,7 @@ export function useStudentCredentialsPage() {
       setMismatchCount(
         typeof payload.mismatchCount === "number"
           ? payload.mismatchCount
-          : payload.students.filter((r) => r.accountActive && !r.passwordVerified).length
+          : payload.students.filter((r) => !r.passwordVerified).length
       );
     },
     []

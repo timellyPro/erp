@@ -1,18 +1,16 @@
 "use client";
 
 import type { StudentCredentialRow } from "./types";
+import { passwordUnavailableLabel } from "./passwordStateLabel";
 
 function PasswordCell({ row }: { row: StudentCredentialRow }) {
-  if (!row.accountActive) {
-    return <span className="text-white/40">—</span>;
-  }
   if (row.passwordVerified) {
     return (
       <span className="font-mono text-sm text-lime-300">{row.password}</span>
     );
   }
   return (
-    <span className="text-sm text-amber-300/90">Not matching — reset required</span>
+    <span className="text-sm text-amber-300/90">{passwordUnavailableLabel(row)}</span>
   );
 }
 

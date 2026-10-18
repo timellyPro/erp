@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import { formatDobYmd } from "@/lib/dobCalendar";
 
 function toDate(dob: Date | string | null | undefined): Date | null {
   if (!dob) return null;
@@ -19,15 +20,22 @@ export function formatDobPasswordLocal(date: Date): string {
   return `${y}${m}${d}`;
 }
 
-/** All plausible default passwords for a stored DOB (UTC vs local can differ by 1 day). */
+/** India calendar date: the DOB exactly as the app shows it (see lib/dobCalendar.ts). */
+export function formatDobPasswordIst(date: Date): string {
+  return formatDobYmd(date).replace(/-/g, "");
+}
+
+/**
+ * All plausible default passwords for a stored DOB. UTC, server-local and India dates can differ by a day
+ * for a DOB that was saved as local midnight; the India one is what the screens show, so a password
+ * typed or generated from the displayed DOB is recognised too.
+ */
 export function passwordCandidatesFromDob(
   dob: Date | string | null | undefined
 ): string[] {
   const date = toDate(dob);
   if (!date) return [];
-  const utc = formatDobPasswordUtc(date);
-  const local = formatDobPasswordLocal(date);
-  return utc === local ? [utc] : [utc, local];
+  return [...new Set([formatDobPasswordUtc(date), formatDobPasswordLocal(date), formatDobPasswordIst(date)])];
 }
 
 /** Legacy alias used at student creation time (UTC). */
@@ -46,6 +54,28 @@ export function canonicalStudentPasswordFromDob(
   const date = toDate(dob);
   if (!date) return "";
   return formatDobPasswordLocal(date);
+}
+
+/**
+ * Why a password can or cannot be shown:
+ *  DEFAULT   the login still uses the DOB default, so it can be shown
+ *  CUSTOM    the login uses some other password (changed by the student or an admin, or set from a
+ *            different DOB before the DOB was corrected); only a hash is stored, so it cannot be shown
+ *  NO_LOGIN  the account has no password (deactivated)
+ *  NO_DOB    there is no usable date of birth to derive a default from
+ */
+export type StudentPasswordState = "DEFAULT" | "CUSTOM" | "NO_LOGIN" | "NO_DOB";
+
+export async function resolveStudentPasswordState(
+  dob: Date | string | null | undefined,
+  passwordHash: string | null | undefined
+): Promise<{ password: string; verified: boolean; state: StudentPasswordState }> {
+  if (!passwordHash) return { password: "", verified: false, state: "NO_LOGIN" };
+  if (passwordCandidatesFromDob(dob).length === 0) {
+    return { password: "", verified: false, state: "NO_DOB" };
+  }
+  const resolved = await resolveVerifiedStudentPassword(dob, passwordHash);
+  return { ...resolved, state: resolved.verified ? "DEFAULT" : "CUSTOM" };
 }
 
 export async function resolveVerifiedStudentPassword(

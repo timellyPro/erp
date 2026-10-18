@@ -2,7 +2,8 @@ import { tenantDb as prisma } from "@/lib/db/tenantContext";
 import type { Prisma } from "@prisma/client";
 import {
   canonicalStudentPasswordFromDob,
-  resolveVerifiedStudentPassword,
+  resolveStudentPasswordState,
+  type StudentPasswordState,
 } from "@/lib/students/studentDefaultPassword";
 
 export type StudentCredentialRow = {
@@ -16,6 +17,8 @@ export type StudentCredentialRow = {
   rollNo: string;
   accountActive: boolean;
   passwordVerified: boolean;
+  /** Why the password can or cannot be shown; see StudentPasswordState. */
+  passwordState: StudentPasswordState;
 };
 
 export type StudentCredentialsPayload = {
@@ -67,7 +70,7 @@ async function toCredentialRows(
 ): Promise<StudentCredentialRow[]> {
   return Promise.all(
     students.map(async (s) => {
-      const resolved = await resolveVerifiedStudentPassword(s.dob, s.user.password);
+      const resolved = await resolveStudentPasswordState(s.dob, s.user.password);
       return {
         name: s.user.name?.trim() || "",
         email: s.user.email?.trim() || "",
@@ -79,6 +82,7 @@ async function toCredentialRows(
         rollNo: s.rollNo ?? "",
         accountActive: s.user.password !== null,
         passwordVerified: resolved.verified,
+        passwordState: resolved.state,
       };
     })
   );
@@ -119,7 +123,7 @@ export async function computeStudentCredentials(
 
   const rows = await toCredentialRows(students);
   const verifiedCount = rows.filter((r) => r.passwordVerified).length;
-  const mismatchCount = rows.filter((r) => r.accountActive && !r.passwordVerified).length;
+  const mismatchCount = rows.filter((r) => !r.passwordVerified).length;
 
   return {
     students: rows,

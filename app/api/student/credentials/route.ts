@@ -141,7 +141,7 @@ export async function GET(req: Request) {
     }
 
     const verifiedCount = rows.filter((r) => r.passwordVerified).length;
-    const mismatchCount = rows.filter((r) => r.accountActive && !r.passwordVerified).length;
+    const mismatchCount = rows.filter((r) => !r.passwordVerified).length;
 
     if (format === "xlsx") {
       const wb = XLSX.utils.book_new();

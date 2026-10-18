@@ -1,13 +1,11 @@
 "use client";
 
 import type { StudentCredentialRow } from "./types";
+import { passwordUnavailableLabel } from "./passwordStateLabel";
 import StudentCredentialsMobileList from "./StudentCredentialsMobileList";
 import StudentCredentialsPagination from "./StudentCredentialsPagination";
 
 function PasswordCell({ row }: { row: StudentCredentialRow }) {
-  if (!row.accountActive) {
-    return <span className="text-white/40">—</span>;
-  }
   if (row.passwordVerified) {
     return (
       <span className="font-mono text-xs text-lime-300 sm:text-sm">{row.password}</span>
@@ -15,7 +13,7 @@ function PasswordCell({ row }: { row: StudentCredentialRow }) {
   }
   return (
     <span className="text-xs text-amber-300/90 sm:text-sm">
-      Not matching — reset required
+      {passwordUnavailableLabel(row)}
     </span>
   );
 }

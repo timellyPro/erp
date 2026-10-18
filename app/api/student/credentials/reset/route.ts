@@ -5,7 +5,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/authOptions";
 import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { hashStudentPasswordFromDob } from "@/lib/students/studentDefaultPassword";
-import { invalidateTenant } from "@/lib/cache/tenantCache";
+import { invalidateStudentListCaches } from "@/lib/students/invalidateStudentListCaches";
 import { logger } from "@/lib/logger";
 import { schoolIdViaAdminRelation } from "@/lib/auth/tenant";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
@@ -125,7 +125,7 @@ export async function POST(req: Request) {
       }
     }
 
-    await invalidateTenant(schoolId);
+    invalidateStudentListCaches(schoolId);
 
     return NextResponse.json(
       {
