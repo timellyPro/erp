@@ -45,8 +45,18 @@ async function main() {
         `(total ${report.byKind.grossTotal}, paid ${report.byKind.amountPaid}, remaining ${report.byKind.remaining})`
     );
     if (details) {
+      const adm = new Map(
+        (
+          await prisma.student.findMany({
+            where: { id: { in: report.samples.map((s) => s.studentId) } },
+            select: { id: true, admissionNumber: true },
+          })
+        ).map((st) => [st.id, st.admissionNumber])
+      );
       for (const s of report.samples) {
-        console.log(`  ${s.studentId} ${s.kind}: stored ${s.stored}, expected ${s.expected} (${s.difference >= 0 ? "+" : ""}${s.difference})`);
+        console.log(
+          `  ${adm.get(s.studentId) ?? "?"} (${s.studentId}) ${s.kind}: stored ${s.stored}, expected ${s.expected} (${s.difference >= 0 ? "+" : ""}${s.difference})`
+        );
       }
     }
     if (deep) {
