@@ -39,6 +39,7 @@ export async function computeCurrentAndPreviousFeeStats(
 export async function loadFeeSummaryRows(schoolId: string): Promise<{
   stats: CurrentPreviousFeeSummaryStats;
   rows: ReturnType<typeof buildFeeDueReportPayload>["rows"];
+  groups: ReturnType<typeof buildFeeDueReportPayload>["groups"];
   netPaidByStudentHead: Map<string, number>;
 }> {
   const [fees, structuresRaw, extraFeesRaw, classesMeta] = await Promise.all([
@@ -226,6 +227,7 @@ export async function loadFeeSummaryRows(schoolId: string): Promise<{
 
   return {
     rows: payload.rows,
+    groups: payload.groups,
     netPaidByStudentHead,
     stats: {
       totalStudents: payload.rows.length,
