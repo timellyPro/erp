@@ -9,6 +9,16 @@ import { canonicalizeResidencyType } from "@/lib/students/residencyDisplay";
 
 export const ACADEMIC_YEAR_MONTHS = 12;
 
+/**
+ * Months a school bills in its academic year for hostel / day-scholar conversions. The year always starts
+ * in June; a school that bills 10 months counts June to March, so a student who moves on 1 October has 4
+ * months before and 6 after, and each month is annual / 10. Default 12 (June to May).
+ */
+export function normalizeYearMonths(value: number | null | undefined): number {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 && n <= ACADEMIC_YEAR_MONTHS ? n : ACADEMIC_YEAR_MONTHS;
+}
+
 export type ResidencyKind = "Hosteller" | "Day Scholar";
 
 export type CatalogExtraFee = {
@@ -167,12 +177,18 @@ export function monthIndexFromYmd(ymd: string): number {
   return month >= 6 ? month - 6 : month + 6;
 }
 
-export function monthsBetweenYmd(start: string, endExclusive: string, yearStart: number): number {
+export function monthsBetweenYmd(
+  start: string,
+  endExclusive: string,
+  yearStart: number,
+  yearMonths: number = ACADEMIC_YEAR_MONTHS
+): number {
+  const months = normalizeYearMonths(yearMonths);
   const end =
     endExclusive === academicYearEndYmd(yearStart)
-      ? ACADEMIC_YEAR_MONTHS
-      : monthIndexFromYmd(endExclusive);
-  return Math.max(0, end - monthIndexFromYmd(start));
+      ? months
+      : Math.min(monthIndexFromYmd(endExclusive), months);
+  return Math.max(0, end - Math.min(monthIndexFromYmd(start), months));
 }
 
 function roundMoney(n: number): number {
@@ -247,11 +263,15 @@ function omitLegacySplitDuplicates(rows: CatalogExtraFee[]): CatalogExtraFee[] {
   return rows.filter((row) => !dropped.has(row));
 }
 
-function prorateRows(rows: Array<{ name: string; amount: number }>, months: number): PlannedFeeRow[] {
+function prorateRows(
+  rows: Array<{ name: string; amount: number }>,
+  months: number,
+  yearMonths: number = ACADEMIC_YEAR_MONTHS
+): PlannedFeeRow[] {
   if (months <= 0) return [];
   const annual = rows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
   if (annual <= 0) return [];
-  const target = roundMoney((annual * months) / ACADEMIC_YEAR_MONTHS);
+  const target = roundMoney((annual * months) / yearMonths);
   if (target <= 0) return [];
   let left = target;
   const out: PlannedFeeRow[] = [];
@@ -285,8 +305,11 @@ export function buildResidencyConversionPlan(input: {
   catalog: CatalogExtraFee[];
   existingPeriods: PeriodDraft[];
   transportKey?: string | null;
+  /** Months the school bills in its year (default 12); see {@link normalizeYearMonths}. */
+  yearMonths?: number;
 }): ConversionPlan {
   const year = input.academicYearStartYear;
+  const yearMonths = normalizeYearMonths(input.yearMonths);
   const hostelSource = omitLegacySplitDuplicates(
     catalogRows(input.catalog, input.classId, input.section, (fee) =>
       isHostelCategoryExtraFeeName(fee.name) &&
@@ -353,6 +376,7 @@ export function buildResidencyConversionPlan(input: {
     existing: input.existingPeriods,
     pastChoice,
     nextChoice: input.toResidency === "Day Scholar" ? nextChoice : null,
+    yearMonths,
   });
 
   const unresolvedDayScholarMonths = periods
@@ -368,8 +392,8 @@ export function buildResidencyConversionPlan(input: {
     .reduce((sum, period) => sum + period.months, 0);
 
   const feeRows: PlannedFeeRow[] = [
-    ...prorateRows(hostelSource, hostelMonths),
-    ...prorateRows(messSource, messMonths),
+    ...prorateRows(hostelSource, hostelMonths, yearMonths),
+    ...prorateRows(messSource, messMonths, yearMonths),
   ];
   const charges: ChargePreview[] = [];
   const hostelAnnual = roundMoney(hostelSource.reduce((sum, row) => sum + (Number(row.amount) || 0), 0));
@@ -398,7 +422,7 @@ export function buildResidencyConversionPlan(input: {
       .filter((period) => period.residencyType === "Day Scholar" && period.transportKey === option.key)
       .reduce((sum, period) => sum + period.months, 0);
     const rows = transportGroups.get(option.key) ?? [];
-    const created = prorateRows(rows, months);
+    const created = prorateRows(rows, months, yearMonths);
     feeRows.push(...created);
     if (months > 0) {
       charges.push({
@@ -412,7 +436,7 @@ export function buildResidencyConversionPlan(input: {
     return {
       ...option,
       proratedAmount: requiresTransportChoice
-        ? roundMoney((option.annualAmount * unresolvedDayScholarMonths) / ACADEMIC_YEAR_MONTHS)
+        ? roundMoney((option.annualAmount * unresolvedDayScholarMonths) / yearMonths)
         : roundMoney(created.reduce((sum, row) => sum + row.amount, 0)),
     };
   });
@@ -436,6 +460,7 @@ function planPeriods(input: {
   existing: PeriodDraft[];
   pastChoice: TransportChoice | null;
   nextChoice: TransportChoice | null;
+  yearMonths: number;
 }): PeriodDraft[] {
   const yearStart = academicYearStartYmd(input.year);
   const yearEnd = academicYearEndYmd(input.year);
@@ -450,8 +475,8 @@ function planPeriods(input: {
   };
 
   if (input.existing.length === 0) {
-    const before = monthsBetweenYmd(yearStart, convertedOn, input.year);
-    const after = ACADEMIC_YEAR_MONTHS - before;
+    const before = monthsBetweenYmd(yearStart, convertedOn, input.year, input.yearMonths);
+    const after = Math.max(0, input.yearMonths - before);
     const periods: PeriodDraft[] = [];
     if (before > 0) {
       periods.push(
@@ -493,14 +518,14 @@ function planPeriods(input: {
   const next = sorted.map((period) => ({ ...period }));
   if (openIndex >= 0) {
     const open = next[openIndex]!;
-    const months = monthsBetweenYmd(open.startedOn, convertedOn, input.year);
+    const months = monthsBetweenYmd(open.startedOn, convertedOn, input.year, input.yearMonths);
     next[openIndex] = fill(
       { ...open, endedOn: convertedOn, months },
       input.pastChoice,
       true
     );
   }
-  const after = ACADEMIC_YEAR_MONTHS - monthIndexFromYmd(convertedOn);
+  const after = Math.max(0, input.yearMonths - Math.min(monthIndexFromYmd(convertedOn), input.yearMonths));
   if (after > 0) {
     next.push(
       fill(

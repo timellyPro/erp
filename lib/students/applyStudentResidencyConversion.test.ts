@@ -35,6 +35,7 @@ function makeDb(opts: {
   existingConversionRows?: Row[];
   allocations?: Row[];
   afterWriteFails?: boolean;
+  residencyYearMonths?: number | null;
 }) {
   const order: string[] = [];
   const catalog = opts.catalog ?? [hostelCatalog, messCatalog];
@@ -65,6 +66,9 @@ function makeDb(opts: {
     extraFee: { findMany: extraFeeFindMany },
     studentResidencyPeriod: { findMany: jest.fn(async () => []) },
     paymentFeeAllocation: { findMany: jest.fn(async () => []) },
+    schoolSettings: {
+      findUnique: jest.fn(async () => (opts.residencyYearMonths == null ? null : { residencyYearMonths: opts.residencyYearMonths })),
+    },
     $transaction: jest.fn(async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx)),
   };
   return { db, tx, order };
@@ -95,6 +99,23 @@ describe("applyStudentResidencyConversion", () => {
     ]);
     expect(created.every((r) => r.residencyConversion === true && r.targetStudentId === "stu1")).toBe(true);
     expect(tx.student.update).toHaveBeenCalledWith({ where: { id: "stu1" }, data: { residencyType: "Hosteller" } });
+  });
+
+  it("uses the school's year length: with 10 months a move on 1 October is 4 day-scholar months then 6 hostel months, each annual / 10", async () => {
+    const { db, tx } = makeDb({ residencyYearMonths: 10 });
+    await applyStudentResidencyConversion(db as unknown as Parameters<typeof applyStudentResidencyConversion>[0], { ...base, convertedOn: "2026-10-01" });
+    const created = (tx.extraFee.createMany.mock.calls[0]![0] as { data: Row[] }).data;
+    expect(created.map((r) => [r.name, r.amount])).toEqual([
+      ["Hostel Fee", 7200], // 12,000 / 10 x 6
+      ["Mess Fee", 2400], // 6,000 / 10 x 4
+    ]);
+  });
+
+  it("falls back to 12 months when the school has no setting row", async () => {
+    const { db, tx } = makeDb({ residencyYearMonths: null });
+    await applyStudentResidencyConversion(db as unknown as Parameters<typeof applyStudentResidencyConversion>[0], { ...base, convertedOn: "2026-10-01" });
+    const created = (tx.extraFee.createMany.mock.calls[0]![0] as { data: Row[] }).data;
+    expect(created.map((r) => r.amount)).toEqual([8000, 2000]);
   });
 
   it("runs the afterWrite hook inside the same transaction, after every write", async () => {

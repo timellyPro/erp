@@ -348,6 +348,11 @@ model SchoolSettings {
   rollNoPrefix     String @default("") // optional prefix for roll numbers
   admissionCounter Int    @default(0) // last used number for admission
 
+  // Months the school bills in its academic year (June start) for hostel / day-scholar conversions.
+  // 12 = June to May (default); a school that bills 10 months (June to March) sets 10: each month is
+  // annual / 10 and a student who moves on 1 October has 4 months before and 6 after.
+  residencyYearMonths Int @default(12)
+
   // Email domain override for auto-generated emails (e.g. "myschool.in")
   emailDomain String?
 

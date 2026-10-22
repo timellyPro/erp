@@ -126,6 +126,26 @@ describe("PUT /api/school/settings", () => {
     );
   });
 
+  it("lets a school admin set the residency year months", async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: "u1", schoolId: "s1", role: "SCHOOLADMIN" } });
+    mockSettingsUpsert.mockResolvedValue({ schoolId: "s1", residencyYearMonths: 10 });
+    const res = await PUT(makePutRequest({ residencyYearMonths: 10 }));
+    expect(res.status).toBe(200);
+    expect(mockSettingsUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({ update: expect.objectContaining({ residencyYearMonths: 10 }) })
+    );
+  });
+
+  it("refuses the residency year months for a teacher, and for a value outside 1-12", async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: "u1", schoolId: "s1", role: "TEACHER" } });
+    expect((await PUT(makePutRequest({ residencyYearMonths: 10 }))).status).toBe(403);
+    mockGetServerSession.mockResolvedValue({ user: { id: "u1", schoolId: "s1", role: "SCHOOLADMIN" } });
+    expect((await PUT(makePutRequest({ residencyYearMonths: 13 }))).status).toBe(400);
+    expect((await PUT(makePutRequest({ residencyYearMonths: 0 }))).status).toBe(400);
+    expect((await PUT(makePutRequest({ residencyYearMonths: 9.5 }))).status).toBe(400);
+    expect(mockSettingsUpsert).not.toHaveBeenCalled();
+  });
+
   it("returns 500 when the database throws", async () => {
     mockGetServerSession.mockResolvedValue({ user: { id: "u1", schoolId: "s1" } });
     mockSettingsUpsert.mockRejectedValue(new Error("DB exploded"));
