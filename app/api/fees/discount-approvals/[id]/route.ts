@@ -4,7 +4,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/authOptions";
 import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { invalidateStudentFeeReadCaches } from "@/lib/fees/studentFeeReadCache";
+import { recalculateFeeAfterDiscountApproval } from "@/lib/fees/applyDiscountApproval";
 import { invalidateDiscountApprovalsListCache } from "@/lib/fees/discountApprovalsListCache";
+
+class AlreadyReviewedError extends Error {}
 
 const reviewDiscountBodySchema = z.object({
   action: z.enum(["APPROVE", "REJECT", "REVERT"]),
@@ -99,63 +102,26 @@ async function reviewDiscount(req: Request, context: RouteParams) {
     return NextResponse.json({ message: "Only approved discounts can be reverted" }, { status: 400 });
   }
 
+  try {
   await runInTenantScope(approval.schoolId, () => prisma.$transaction(async (tx) => {
-    const recalculateStudentFee = async () => {
-      const totalFee = Math.max(Number(approval.studentTotalFee || approval.totalFee || 0), 0);
-      const approvedRows = await tx.$queryRaw<
-        Array<{
-          discountPercent: number;
-          discountFixedAmount: number | null;
-          discountFeeHeadKey: string | null;
-          discountFeeHeadLabel: string | null;
-          discountRemarks: string | null;
-        }>
-      >`
-        SELECT
-          "discountPercent",
-          "discountFixedAmount",
-          "discountFeeHeadKey",
-          "discountFeeHeadLabel",
-          "discountRemarks"
-        FROM "FeeDiscountApproval"
-        WHERE "studentId" = ${approval.studentId}
-          AND status::text = 'APPROVED'
-        ORDER BY COALESCE("reviewedAt", "createdAt") DESC
-      `;
-      const totalDiscount = approvedRows.reduce((sum, row) => {
-        const fixed = Number(row.discountFixedAmount || 0);
-        if (fixed > 0) return sum + fixed;
-        return sum + totalFee * (Number(row.discountPercent || 0) / 100);
-      }, 0);
-      const finalFee = Math.max(Math.round((totalFee - totalDiscount) * 100) / 100, 0);
-      const remainingFee = Math.max(finalFee - approval.amountPaid, 0);
-      const discountPercent = totalFee > 0 ? (totalDiscount / totalFee) * 100 : 0;
-      const latest = approvedRows[0] ?? null;
-
-      await tx.$executeRaw`
-        UPDATE "StudentFee"
-        SET "totalFee" = ${totalFee},
-            "discountPercent" = ${discountPercent},
-            "finalFee" = ${finalFee},
-            "remainingFee" = ${remainingFee},
-            "discountFeeHeadKey" = ${latest?.discountFeeHeadKey ?? null},
-            "discountFeeHeadLabel" = ${latest?.discountFeeHeadLabel ?? null},
-            "discountRemarks" = ${latest?.discountRemarks ?? null},
-            "updatedAt" = NOW()
-        WHERE id = ${approval.studentFeeId}
-      `;
-    };
+    const recalculateStudentFee = () =>
+      recalculateFeeAfterDiscountApproval(tx, {
+        schoolId: approval.schoolId,
+        studentId: approval.studentId,
+        studentFeeId: approval.studentFeeId,
+      });
 
     if (action === "REJECT") {
-      await tx.$executeRaw`
+      const changed = await tx.$executeRaw`
         UPDATE "FeeDiscountApproval"
         SET status = CAST('REJECTED' AS "DiscountApprovalStatus"),
             "reviewedById" = ${session.user.id},
             "reviewRemarks" = ${reviewRemarks},
             "reviewedAt" = NOW(),
             "updatedAt" = NOW()
-        WHERE id = ${id}
+        WHERE id = ${id} AND status::text = 'PENDING'
       `;
+      if (changed === 0) throw new AlreadyReviewedError();
       return;
     }
 
@@ -163,30 +129,38 @@ async function reviewDiscount(req: Request, context: RouteParams) {
       const revertRemarks = reviewRemarks
         ? `Reverted by chairman: ${reviewRemarks}`
         : "Reverted by chairman";
-      await tx.$executeRaw`
+      const changed = await tx.$executeRaw`
         UPDATE "FeeDiscountApproval"
         SET status = CAST('REJECTED' AS "DiscountApprovalStatus"),
             "reviewedById" = ${session.user.id},
             "reviewRemarks" = ${revertRemarks},
             "reviewedAt" = NOW(),
             "updatedAt" = NOW()
-        WHERE id = ${id}
+        WHERE id = ${id} AND status::text = 'APPROVED'
       `;
+      if (changed === 0) throw new AlreadyReviewedError();
       await recalculateStudentFee();
       return;
     }
 
-    await tx.$executeRaw`
+    const changed = await tx.$executeRaw`
       UPDATE "FeeDiscountApproval"
       SET status = CAST('APPROVED' AS "DiscountApprovalStatus"),
           "reviewedById" = ${session.user.id},
           "reviewRemarks" = ${reviewRemarks},
           "reviewedAt" = NOW(),
           "updatedAt" = NOW()
-      WHERE id = ${id}
+      WHERE id = ${id} AND status::text = 'PENDING'
     `;
+    if (changed === 0) throw new AlreadyReviewedError();
     await recalculateStudentFee();
   }));
+  } catch (err) {
+    if (err instanceof AlreadyReviewedError) {
+      return NextResponse.json({ message: "This request is already reviewed" }, { status: 409 });
+    }
+    throw err;
+  }
 
   await invalidateStudentFeeReadCaches({
     studentId: approval.studentId,

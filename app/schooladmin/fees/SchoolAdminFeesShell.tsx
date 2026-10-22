@@ -55,7 +55,7 @@ export default function SchoolAdminFeesShell({ section }: SchoolAdminFeesShellPr
         const u = data.user;
         if (u) {
           setProfile({
-            name: u.name ?? session?.user?.name ?? "School Admin",
+            name: u.name?.trim() || u.schoolName || session?.user?.name || "School Admin",
             subtitle: "School Admin",
             image: u.photoUrl ?? null,
             email: u.email ?? undefined,
