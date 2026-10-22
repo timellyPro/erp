@@ -1,7 +1,13 @@
 import type { AdminStudentFeeBreakdownResult } from "@/lib/fees/computeAdminStudentFeeBreakdown";
+import { ensureFeeVersionFresh, onFeeVersionChange } from "@/lib/fees/feeVersionClient";
 
-const MEMORY_TTL_MS = 30 * 60 * 1000;
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * Backstop only: the school's fee-data version (lib/fees/feeVersionClient.ts) drops these copies the moment a
+ * fee changes anywhere, so a long lifetime no longer risks showing an old figure. The session copy used to
+ * live 24 hours.
+ */
+const MEMORY_TTL_MS = 10 * 60 * 1000;
+const SESSION_TTL_MS = 15 * 60 * 1000;
 /** Bump when breakdown attribution logic changes so stale session totals are dropped. */
 const SESSION_KEY = "erp:fee-breakdown:v5";
 const MAX_SESSION_ENTRIES = 80;
@@ -94,10 +100,14 @@ export function invalidateFeeBreakdownCache(studentId?: string): void {
   }
 }
 
+// Drop every copy when the school's fee-data version moves.
+onFeeVersionChange(() => invalidateFeeBreakdownCache());
+
 export async function fetchFeeBreakdownFast(
   studentId: string,
   options?: { signal?: AbortSignal; force?: boolean; minAmountPaid?: number }
 ): Promise<AdminStudentFeeBreakdownResult | null> {
+  await ensureFeeVersionFresh();
   if (!options?.force) {
     const cached = getFeeBreakdownCached(studentId);
     // Ignore cache that undercounts paid vs shell / payments (stale orphan-attribution).

@@ -359,6 +359,10 @@ model SchoolSettings {
   hyperpgMerchantId String?
   hyperpgApiKey     String?
 
+  // Bumped on every fee change (payments, fee edits, repairs) so a cached copy of a student's fee details,
+  // in the server's memory or a browser, can tell it is out of date. See lib/fees/feeDataVersion.ts.
+  feeDataVersion Int @default(0)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

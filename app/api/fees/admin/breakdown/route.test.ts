@@ -19,12 +19,17 @@ const mockSetBreakdownMemCached = jest.fn();
 const mockTenantCacheKey = jest.fn();
 const mockSwrGet = jest.fn();
 const mockSwrSet = jest.fn();
+const mockGetFeeVersion = jest.fn();
 
 jest.mock("next-auth", () => ({
   getServerSession: (...args: unknown[]) => mockGetServerSession(...args),
 }));
 
 jest.mock("@/lib/auth/authOptions", () => ({}));
+
+jest.mock("@/lib/fees/feeDataVersion", () => ({
+  getSchoolFeeDataVersion: (...args: unknown[]) => mockGetFeeVersion(...args),
+}));
 
 jest.mock("@/lib/fees/computeAdminStudentFeeBreakdown", () => ({
   computeAdminStudentFeeBreakdown: (...args: unknown[]) => mockComputeAdminStudentFeeBreakdown(...args),
@@ -69,6 +74,7 @@ describe("GET /api/fees/admin/breakdown", () => {
     mockTenantCacheKey.mockReset();
     mockSwrGet.mockReset();
     mockSwrSet.mockReset();
+    mockGetFeeVersion.mockReset().mockResolvedValue(7);
   });
 
   it("returns 401 when no session", async () => {
@@ -141,7 +147,16 @@ describe("GET /api/fees/admin/breakdown", () => {
       cleanupHostelMessDuplicates: false,
       reconcileTotals: false,
     });
-    expect(mockSetBreakdownMemCached).toHaveBeenCalledWith("s1:stu1:fast", { finalFee: 900 });
+    expect(mockSetBreakdownMemCached).toHaveBeenCalledWith("s1:stu1:fast", { finalFee: 900 }, undefined, 7);
+  });
+
+  it("asks the cache for the school's current fee-data version, so a copy built before a fee change is a miss", async () => {
+    mockGetServerSession.mockResolvedValue(adminSession);
+    mockGetFeeVersion.mockResolvedValue(8);
+    mockComputeAdminStudentFeeBreakdown.mockResolvedValue({ finalFee: 900 });
+    await GET(request("?studentId=stu1&fast=1"));
+    expect(mockGetFeeVersion).toHaveBeenCalledWith("s1");
+    expect(mockGetBreakdownMemCached).toHaveBeenCalledWith("s1:stu1:fast", 8);
   });
 
   it("uses the Redis SWR cache on the fast path when Redis is enabled", async () => {

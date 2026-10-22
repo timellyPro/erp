@@ -6,14 +6,18 @@ export type StudentDetailsCoreCacheValue = {
   feeBreakdown: AdminStudentFeeBreakdownResult | null;
 };
 
-const coreBundleCache = new Map<string, { freshUntil: number; value: StudentDetailsCoreCacheValue }>();
+const coreBundleCache = new Map<
+  string,
+  { freshUntil: number; value: StudentDetailsCoreCacheValue; version: number | null }
+>();
 export const CORE_BUNDLE_TTL_MS = 300_000;
 
 export function getStudentDetailsCoreCached(
-  cacheKey: string
+  cacheKey: string,
+  feeVersion?: number | null
 ): StudentDetailsCoreCacheValue | null {
   const hit = coreBundleCache.get(cacheKey);
-  if (!hit || Date.now() >= hit.freshUntil) {
+  if (!hit || Date.now() >= hit.freshUntil || (feeVersion != null && hit.version !== feeVersion)) {
     if (hit) coreBundleCache.delete(cacheKey);
     return null;
   }
@@ -22,9 +26,10 @@ export function getStudentDetailsCoreCached(
 
 export function setStudentDetailsCoreCached(
   cacheKey: string,
-  value: StudentDetailsCoreCacheValue
+  value: StudentDetailsCoreCacheValue,
+  feeVersion: number | null = null
 ): void {
-  coreBundleCache.set(cacheKey, { value, freshUntil: Date.now() + CORE_BUNDLE_TTL_MS });
+  coreBundleCache.set(cacheKey, { value, freshUntil: Date.now() + CORE_BUNDLE_TTL_MS, version: feeVersion });
 }
 
 export function invalidateStudentDetailsCoreCache(studentId?: string, schoolId?: string | null) {
