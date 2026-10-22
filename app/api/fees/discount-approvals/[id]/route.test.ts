@@ -21,6 +21,11 @@ jest.mock("next-auth", () => ({
 
 jest.mock("@/lib/auth/authOptions", () => ({}));
 
+const mockRecalc = jest.fn();
+jest.mock("@/lib/fees/applyDiscountApproval", () => ({
+  recalculateFeeAfterDiscountApproval: (...args: unknown[]) => mockRecalc(...args),
+}));
+
 jest.mock("@/lib/fees/studentFeeReadCache", () => ({
   invalidateStudentFeeReadCaches: (...args: unknown[]) => mockInvalidateStudentFeeReadCaches(...args),
 }));
@@ -79,6 +84,7 @@ describe("POST /api/fees/discount-approvals/[id]", () => {
     mockTransaction.mockReset();
     mockInvalidateStudentFeeReadCaches.mockReset().mockResolvedValue(undefined);
     mockInvalidateDiscountApprovalsListCache.mockReset();
+    mockRecalc.mockReset().mockResolvedValue({});
   });
 
   it("returns 401 when no session", async () => {
@@ -167,9 +173,9 @@ describe("POST /api/fees/discount-approvals/[id]", () => {
     const json = await res.json();
     expect(json.message).toMatch(/approved and applied/i);
 
-    // 1 update for the approval status + 1 update for the recalculated StudentFee.
-    expect(tx.$executeRaw).toHaveBeenCalledTimes(2);
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    // The status update runs in the transaction, then the fee is rebuilt from the structure (not the stored total).
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(mockRecalc).toHaveBeenCalledWith(tx, { schoolId: "s1", studentId: "stu1", studentFeeId: "sf1" });
   });
 
   it("reverts an approved request, marks it rejected, and restores the fee", async () => {
@@ -182,7 +188,21 @@ describe("POST /api/fees/discount-approvals/[id]", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.message).toMatch(/reverted and fee restored/i);
-    expect(tx.$executeRaw).toHaveBeenCalledTimes(2);
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(mockRecalc).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 409 and changes nothing when another reviewer got there first", async () => {
+    mockGetServerSession.mockResolvedValue(chairmanSession);
+    mockQueryRaw.mockResolvedValue([pendingApproval]);
+    const tx = txMockFor();
+    tx.$executeRaw.mockResolvedValue(0); // status was no longer PENDING when the guarded update ran
+    mockTransaction.mockImplementation(async (cb: (tx: unknown) => unknown) => cb(tx));
+
+    const res = await POST(request({ action: "APPROVE" }), ctx);
+    expect(res.status).toBe(409);
+    expect(mockRecalc).not.toHaveBeenCalled();
+    expect(mockInvalidateStudentFeeReadCaches).not.toHaveBeenCalled();
   });
 
   it("uses a superadmin session across schools without the schoolId match check", async () => {
