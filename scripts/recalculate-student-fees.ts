@@ -7,6 +7,7 @@
  *   npx tsx scripts/recalculate-student-fees.ts --school-id=<id> --student-ids=<id1>,<id2>
  *   npx tsx scripts/recalculate-student-fees.ts --school-id=<id> --student-ids=<id1>,<id2> --apply
  *   --concession=<rupees> (one student): use the rupee concession the school confirmed in writing
+ *   --head-key=BASE:1 --head-label="Tuition Fee 2nd Installment" --remarks="..." (with --concession): also record the concession on the fee record
  *   add --allow-discount only after a person has reviewed a student that has a discount
  *
  * Confirm with the school what each student should owe, and take a backup, before --apply.
@@ -27,6 +28,10 @@ async function main() {
   const allowDiscount = process.argv.includes("--allow-discount");
   const concessionArg = arg("concession");
   const concessionRupee = concessionArg === undefined ? undefined : Number(concessionArg);
+  const headKey = arg("head-key");
+  const headLabel = arg("head-label");
+  const remarks = arg("remarks");
+  const concessionRecord = headKey && headLabel && remarks ? { headKey, headLabel, remarks } : undefined;
 
   if (!schoolId || ids.length === 0) {
     console.error("Usage: --school-id=<id> --student-ids=<id1>,<id2> [--apply] [--allow-discount] [--concession=<rupees>]");
@@ -34,7 +39,7 @@ async function main() {
   }
 
   console.log(apply ? "APPLYING: stored fees will be rewritten" : "DRY RUN: nothing will be changed");
-  const plans = await recalculateStoredFees(prisma as unknown as RecalcDb, { schoolId, studentIds: ids, apply, allowDiscount, concessionRupee });
+  const plans = await recalculateStoredFees(prisma as unknown as RecalcDb, { schoolId, studentIds: ids, apply, allowDiscount, concessionRupee, concessionRecord });
 
   let wouldChange = 0;
   let blocked = 0;
