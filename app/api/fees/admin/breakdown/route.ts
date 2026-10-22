@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth/authOptions";
 import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { computeAdminStudentFeeBreakdown } from "@/lib/fees/computeAdminStudentFeeBreakdown";
 import { isRedisEnabled } from "@/lib/cache/redis";
+import { getSchoolFeeDataVersion } from "@/lib/fees/feeDataVersion";
 import {
   getBreakdownMemCached,
   setBreakdownMemCached,
@@ -64,8 +65,10 @@ export async function GET(req: Request) {
 
     const now = Date.now();
     const memKey = `${schoolId}:${studentId}:fast`;
+    // Read the school's fee-data version BEFORE the data it will stamp (see lib/fees/feeDataVersion.ts).
+    const feeVersion = await getSchoolFeeDataVersion(schoolId);
     if (skipMigrate && !bypassCache) {
-      const memHit = getBreakdownMemCached(memKey);
+      const memHit = getBreakdownMemCached(memKey, feeVersion);
       if (memHit) {
         return NextResponse.json(memHit, { status: 200 });
       }
@@ -76,6 +79,7 @@ export async function GET(req: Request) {
       ? await tenantCacheKey(schoolId, "api", "fees:admin:breakdown", {
           studentId,
           fast: true,
+          v: feeVersion,
         })
       : null;
     if (cacheKey) {
@@ -92,7 +96,7 @@ export async function GET(req: Request) {
       reconcileTotals: !skipMigrate,
     });
     if (skipMigrate && !bypassCache) {
-      setBreakdownMemCached(memKey, result);
+      setBreakdownMemCached(memKey, result, undefined, feeVersion);
     }
     if (cacheKey) {
       await swrSet(

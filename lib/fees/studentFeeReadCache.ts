@@ -10,15 +10,21 @@ import {
 } from "@/lib/students/studentDetailsCoreCache";
 import { invalidateTenant } from "@/lib/cache/tenantCache";
 import { invalidateFeeListServerCaches } from "@/lib/fees/feeListServerCache";
+import { scheduleFeeDataVersionBump } from "@/lib/fees/feeDataVersion";
 
 export { CORE_BUNDLE_TTL_MS, getStudentDetailsCoreCached, setStudentDetailsCoreCached };
 
 const breakdownMemCache = new Map<
   string,
-  { freshUntil: number; value: AdminStudentFeeBreakdownResult }
+  { freshUntil: number; value: AdminStudentFeeBreakdownResult; version: number | null }
 >();
 
-const shellCache = new Map<string, { freshUntil: number; value: Record<string, unknown> }>();
+const shellCache = new Map<string, { freshUntil: number; value: Record<string, unknown>; version: number | null }>();
+
+/** A copy built at one fee-data version is a miss once the school's counter has moved (see feeDataVersion.ts). */
+function versionMatches(stored: number | null, wanted: number | null | undefined): boolean {
+  return wanted == null || stored === wanted;
+}
 
 export const BREAKDOWN_MEM_TTL_MS = 300_000;
 export const SHELL_CACHE_TTL_MS = 300_000;
@@ -27,10 +33,11 @@ export const SHELL_CACHE_TTL_MS = 300_000;
 const BREAKDOWN_MEM_VERSION = "v2";
 
 export function getBreakdownMemCached(
-  key: string
+  key: string,
+  feeVersion?: number | null
 ): AdminStudentFeeBreakdownResult | null {
   const hit = breakdownMemCache.get(`${BREAKDOWN_MEM_VERSION}:${key}`);
-  if (!hit || Date.now() >= hit.freshUntil) {
+  if (!hit || Date.now() >= hit.freshUntil || !versionMatches(hit.version, feeVersion)) {
     if (hit) breakdownMemCache.delete(`${BREAKDOWN_MEM_VERSION}:${key}`);
     return null;
   }
@@ -40,17 +47,19 @@ export function getBreakdownMemCached(
 export function setBreakdownMemCached(
   key: string,
   value: AdminStudentFeeBreakdownResult,
-  ttlMs = BREAKDOWN_MEM_TTL_MS
+  ttlMs = BREAKDOWN_MEM_TTL_MS,
+  feeVersion: number | null = null
 ): void {
   breakdownMemCache.set(`${BREAKDOWN_MEM_VERSION}:${key}`, {
     value,
     freshUntil: Date.now() + ttlMs,
+    version: feeVersion,
   });
 }
 
-export function getShellCached(key: string): Record<string, unknown> | null {
+export function getShellCached(key: string, feeVersion?: number | null): Record<string, unknown> | null {
   const hit = shellCache.get(key);
-  if (!hit || Date.now() >= hit.freshUntil) {
+  if (!hit || Date.now() >= hit.freshUntil || !versionMatches(hit.version, feeVersion)) {
     if (hit) shellCache.delete(key);
     return null;
   }
@@ -60,9 +69,10 @@ export function getShellCached(key: string): Record<string, unknown> | null {
 export function setShellCached(
   key: string,
   value: Record<string, unknown>,
-  ttlMs = SHELL_CACHE_TTL_MS
+  ttlMs = SHELL_CACHE_TTL_MS,
+  feeVersion: number | null = null
 ): void {
-  shellCache.set(key, { value, freshUntil: Date.now() + ttlMs });
+  shellCache.set(key, { value, freshUntil: Date.now() + ttlMs, version: feeVersion });
 }
 
 function deleteKeysWithPrefix(map: Map<string, unknown>, prefix: string): void {
@@ -100,6 +110,8 @@ export function invalidateStudentFeeReadCaches(options: {
   const { schoolId = null } = options;
   invalidateStudentFeeReadCachesSync(options);
   invalidateFeeListServerCaches(schoolId);
+  // Tell every other copy (other server processes, every browser) that fee data changed.
+  if (schoolId) void scheduleFeeDataVersionBump(schoolId).catch(() => {});
   // Never block API responses on Redis — in-memory caches are already cleared.
   if (schoolId) void invalidateTenant(schoolId).catch(() => {});
 }
@@ -112,5 +124,6 @@ export function invalidateSchoolFeeReadCaches(schoolId: string): void {
   breakdownMemCache.clear();
   shellCache.clear();
   invalidateFeeListServerCaches(schoolId);
+  void scheduleFeeDataVersionBump(schoolId).catch(() => {});
   void invalidateTenant(schoolId).catch(() => {});
 }

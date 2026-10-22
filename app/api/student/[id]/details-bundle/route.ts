@@ -16,6 +16,7 @@ import {
   setShellCached,
 } from "@/lib/fees/studentFeeReadCache";
 import { logger } from "@/lib/logger";
+import { getSchoolFeeDataVersion } from "@/lib/fees/feeDataVersion";
 import { schoolIdViaAdminRelation } from "@/lib/auth/tenant";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
@@ -118,8 +119,10 @@ export async function GET(req: Request, context: RouteParams) {
     if (shellOnly || (fast && !profileOnly)) {
       if (shellOnly && !withBreakdown) {
         const shellKey = `${resolvedSchoolId ?? "own"}:${id}:shell`;
+        // Read the school's fee-data version BEFORE the data it will stamp (see lib/fees/feeDataVersion.ts).
+        const shellVersion = await getSchoolFeeDataVersion(resolvedSchoolId);
         if (!bypassCache) {
-          const shellHit = getShellCached(shellKey);
+          const shellHit = getShellCached(shellKey, shellVersion);
           if (shellHit) {
             return NextResponse.json({ ...shellHit, feeBreakdown: null }, { status: 200 });
           }
@@ -131,7 +134,7 @@ export async function GET(req: Request, context: RouteParams) {
           return NextResponse.json({ message: "Student not found" }, { status: 404 });
         }
         if (!bypassCache) {
-          setShellCached(shellKey, shell as unknown as Record<string, unknown>);
+          setShellCached(shellKey, shell as unknown as Record<string, unknown>, undefined, shellVersion);
         }
         return NextResponse.json({ ...shell, feeBreakdown: null }, { status: 200 });
       }

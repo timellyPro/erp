@@ -1,4 +1,5 @@
 import { tenantDb as prisma } from "@/lib/db/tenantContext";
+import { getSchoolFeeDataVersion } from "@/lib/fees/feeDataVersion";
 import {
   computeAdminStudentFeeBreakdown,
   type AdminStudentFeeBreakdownResult,
@@ -572,8 +573,10 @@ export async function buildStudentDetailsCoreBundle(
   feeBreakdown: AdminStudentFeeBreakdownResult | null;
 } | null> {
   const cacheKey = `${schoolId ?? "own"}:${studentId}:core`;
+  // Read the school's fee-data version BEFORE the data it will stamp (see lib/fees/feeDataVersion.ts).
+  const feeVersion = await getSchoolFeeDataVersion(schoolId);
   if (!options?.bypassCache) {
-    const cached = getStudentDetailsCoreCached(cacheKey);
+    const cached = getStudentDetailsCoreCached(cacheKey, feeVersion);
     if (cached) return cached;
   }
 
@@ -642,7 +645,7 @@ export async function buildStudentDetailsCoreBundle(
       : shell;
 
   const value = { shell: syncedShell, feeBreakdown };
-  setStudentDetailsCoreCached(cacheKey, value);
+  setStudentDetailsCoreCached(cacheKey, value, feeVersion);
   return value;
 }
 

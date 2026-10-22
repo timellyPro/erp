@@ -1,6 +1,7 @@
 import type { AdminStudentFeeBreakdownResult } from "@/lib/fees/computeAdminStudentFeeBreakdown";
 import type { StudentDetailsTabExtras, StudentDetailsTabPayload } from "@/lib/students/buildStudentDetailsTabPayload";
 import { invalidateStudentDetailsCoreCache } from "@/lib/students/studentDetailsCoreCache";
+import { ensureFeeVersionFresh, onFeeVersionChange } from "@/lib/fees/feeVersionClient";
 import { invalidateSchoolFeeClientCaches } from "@/lib/fees/invalidateSchoolFeeClientCaches";
 import {
   fetchFeeBreakdownFast,
@@ -542,6 +543,9 @@ async function fetchPaymentsExtras(
     });
 }
 
+// Drop every copy when the school's fee-data version moves (lib/fees/feeVersionClient.ts).
+onFeeVersionChange(() => invalidateStudentDetailsFast());
+
 /**
  * One core API call (profile + fees, single DB student read), then extras in background.
  */
@@ -556,6 +560,7 @@ export async function fetchStudentDetailsFast(
     onExtrasLoaded?: (bundle: StudentDetailsFastBundle) => void;
   }
 ): Promise<StudentDetailsFastBundle> {
+  await ensureFeeVersionFresh();
   if (options?.force) {
     bundleMemory.delete(studentId);
     bundleInflight.delete(studentId);
