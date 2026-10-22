@@ -59,10 +59,26 @@ const EPS = 0.005;
 
 export async function recalculateStoredFees(
   db: RecalcDb,
-  input: { schoolId: string; studentIds: string[]; apply: boolean; allowDiscount?: boolean }
+  input: {
+    schoolId: string;
+    studentIds: string[];
+    apply: boolean;
+    allowDiscount?: boolean;
+    /**
+     * Rupee concession the school has confirmed in writing. Used instead of the stored percent, which can
+     * be stale when the stored total was wrong: final = rebuilt total - this amount. Counts as the review
+     * that allowDiscount stands for. Only valid for a single student.
+     */
+    concessionRupee?: number;
+  }
 ): Promise<StoredFeePlan[]> {
   const wanted = [...new Set(input.studentIds.map((s) => s.trim()).filter(Boolean))];
   if (wanted.length === 0) throw new Error("Give at least one student id");
+  const concession = input.concessionRupee;
+  if (concession !== undefined) {
+    if (!Number.isFinite(concession) || concession < 0) throw new Error("concessionRupee must be zero or more");
+    if (wanted.length !== 1) throw new Error("concessionRupee applies to one student at a time");
+  }
 
   const rows = await db.studentFee.findMany({
     where: { studentId: { in: wanted }, student: { schoolId: input.schoolId } },
@@ -108,11 +124,13 @@ export async function recalculateStoredFees(
       },
       cache
     );
+    const finalFee =
+      concession !== undefined ? Math.max(0, Math.round(payload.totalFee - concession)) : payload.finalFee;
     const after: StoredFee = {
       totalFee: payload.totalFee,
-      finalFee: payload.finalFee,
+      finalFee,
       amountPaid: row.amountPaid,
-      remainingFee: payload.remainingFee,
+      remainingFee: concession !== undefined ? Math.max(0, Math.round(finalFee - row.amountPaid)) : payload.remainingFee,
     };
     const changed =
       Math.abs(before.totalFee - after.totalFee) > EPS ||
@@ -121,7 +139,7 @@ export async function recalculateStoredFees(
 
     const hasDiscount =
       row.discountPercent > 0 || Boolean(row.discountFeeHeadKey?.trim()) || Boolean(row.discountRemarks?.trim());
-    if (hasDiscount && !input.allowDiscount) {
+    if (hasDiscount && !input.allowDiscount && concession === undefined) {
       plans.push({
         studentId,
         found: true,

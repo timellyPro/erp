@@ -128,3 +128,37 @@ describe("recalculateStoredFees", () => {
     await expect(recalculateStoredFees(db, { ...base, studentIds: [" "] })).rejects.toThrow(/at least one/);
   });
 });
+
+describe("recalculateStoredFees with a confirmed concession", () => {
+  it("uses the rupee amount, not the stale percent", async () => {
+    const db = makeDbForConcessionTest();
+    const [plan] = await recalculateStoredFees(db as never, { schoolId: "s1", studentIds: ["st1"], apply: false, concessionRupee: 10000 });
+    expect(plan.blockedReason).toBeUndefined();
+    expect(plan.after).toMatchObject({ totalFee: 88000, finalFee: 78000, amountPaid: 44000, remainingFee: 34000 });
+  });
+
+  it("refuses more than one student with a concession", async () => {
+    const db = makeDbForConcessionTest();
+    await expect(
+      recalculateStoredFees(db as never, { schoolId: "s1", studentIds: ["a", "b"], apply: false, concessionRupee: 1 })
+    ).rejects.toThrow(/one student/);
+  });
+});
+
+function makeDbForConcessionTest() {
+  return {
+    studentFee: {
+      findMany: jest.fn().mockResolvedValue([
+        {
+          studentId: "st1", totalFee: 48400, finalFee: 48400, amountPaid: 44000, remainingFee: 4400,
+          discountPercent: 11.3636, discountFeeHeadKey: "BASE:1", discountRemarks: "CHAIRMAN",
+          student: { classId: "c1", residencyType: "Day Scholar", class: { section: "B" } },
+        },
+      ]),
+      update: jest.fn(),
+    },
+    extraFee: { findMany: jest.fn().mockResolvedValue([{ name: "Mess", amount: 48400, targetType: "STUDENT", targetStudentId: "st1", targetClassId: null, targetSection: null, residencyScope: null, residencyConversion: false }]) },
+    classFeeStructure: { findMany: jest.fn().mockResolvedValue([{ classId: "c1", components: [{ amount: 39600 }] }]) },
+    class: { findMany: jest.fn().mockResolvedValue([]) },
+  };
+}
