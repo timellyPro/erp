@@ -31,6 +31,7 @@ export async function GET() {
         subjects: true,
         teachingClassIds: true,
         createdAt: true,
+        school: { select: { name: true } },
         assignedClasses: {
           select: {
             id: true,
@@ -70,12 +71,13 @@ export async function GET() {
       }
     }
 
-    const { teachingClassIds, ...rest } = user;
+    const { teachingClassIds, school, ...rest } = user;
     return NextResponse.json(
       {
         user: {
           ...rest,
           teachingClassIds,
+          schoolName: school?.name ?? null,
           assignedClasses,
           assignedClassIds: teachingClassIds ?? [],
         },
