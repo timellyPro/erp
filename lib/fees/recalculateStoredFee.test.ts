@@ -162,3 +162,23 @@ function makeDbForConcessionTest() {
     class: { findMany: jest.fn().mockResolvedValue([]) },
   };
 }
+
+describe("recalculateStoredFees recording the concession", () => {
+  it("writes the head, percent and note along with the amounts when asked", async () => {
+    const db = makeDbForConcessionTest();
+    await recalculateStoredFees(db as never, {
+      schoolId: "s1", studentIds: ["st1"], apply: true, concessionRupee: 10000,
+      concessionRecord: { headKey: "BASE:1", headLabel: "Tuition Fee 2nd Installment", remarks: "confirmed" },
+    });
+    const data = db.studentFee.update.mock.calls[0][0].data;
+    expect(data).toMatchObject({ totalFee: 88000, finalFee: 78000, discountFeeHeadKey: "BASE:1", discountFeeHeadLabel: "Tuition Fee 2nd Installment", discountRemarks: "confirmed" });
+    expect(data.discountPercent).toBeCloseTo((10000 / 88000) * 100);
+  });
+
+  it("refuses a concession record without a concession amount", async () => {
+    const db = makeDbForConcessionTest();
+    await expect(
+      recalculateStoredFees(db as never, { schoolId: "s1", studentIds: ["st1"], apply: false, concessionRecord: { headKey: "k", headLabel: "l", remarks: "r" } })
+    ).rejects.toThrow(/concessionRupee/);
+  });
+});

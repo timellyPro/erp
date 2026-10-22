@@ -47,7 +47,7 @@ type FeeRow = {
 export type RecalcDb = {
   studentFee: {
     findMany: (args: unknown) => Promise<FeeRow[]>;
-    update: (args: { where: { studentId: string }; data: Record<string, number> }) => Promise<unknown>;
+    update: (args: { where: { studentId: string }; data: Record<string, number | string | null> }) => Promise<unknown>;
   };
   extraFee: { findMany: (args: unknown) => Promise<unknown[]> };
   classFeeStructure: { findMany: (args: unknown) => Promise<unknown[]> };
@@ -70,6 +70,12 @@ export async function recalculateStoredFees(
      * that allowDiscount stands for. Only valid for a single student.
      */
     concessionRupee?: number;
+    /**
+     * Also record the concession on the fee record (which head it sits on, the percent and the note), for a
+     * student whose record has none. Without a head the profile recalculates from the heads and drops the
+     * rupee concession again. Only used together with concessionRupee.
+     */
+    concessionRecord?: { headKey: string; headLabel: string; remarks: string };
   }
 ): Promise<StoredFeePlan[]> {
   const wanted = [...new Set(input.studentIds.map((s) => s.trim()).filter(Boolean))];
@@ -79,6 +85,7 @@ export async function recalculateStoredFees(
     if (!Number.isFinite(concession) || concession < 0) throw new Error("concessionRupee must be zero or more");
     if (wanted.length !== 1) throw new Error("concessionRupee applies to one student at a time");
   }
+  if (input.concessionRecord && concession === undefined) throw new Error("concessionRecord needs concessionRupee");
 
   const rows = await db.studentFee.findMany({
     where: { studentId: { in: wanted }, student: { schoolId: input.schoolId } },
@@ -135,7 +142,8 @@ export async function recalculateStoredFees(
     const changed =
       Math.abs(before.totalFee - after.totalFee) > EPS ||
       Math.abs(before.finalFee - after.finalFee) > EPS ||
-      Math.abs(before.remainingFee - after.remainingFee) > EPS;
+      Math.abs(before.remainingFee - after.remainingFee) > EPS ||
+      Boolean(input.concessionRecord && row.discountFeeHeadKey !== input.concessionRecord.headKey);
 
     const hasDiscount =
       row.discountPercent > 0 || Boolean(row.discountFeeHeadKey?.trim()) || Boolean(row.discountRemarks?.trim());
@@ -163,6 +171,14 @@ export async function recalculateStoredFees(
           totalFee: plan.after.totalFee,
           finalFee: plan.after.finalFee,
           remainingFee: plan.after.remainingFee,
+          ...(input.concessionRecord && plan.after.totalFee > 0
+            ? {
+                discountPercent: Math.min(100, ((concession ?? 0) / plan.after.totalFee) * 100),
+                discountFeeHeadKey: input.concessionRecord.headKey,
+                discountFeeHeadLabel: input.concessionRecord.headLabel,
+                discountRemarks: input.concessionRecord.remarks,
+              }
+            : {}),
         },
       });
       invalidateStudentFeeReadCaches({ studentId: plan.studentId, schoolId: input.schoolId });
