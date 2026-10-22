@@ -84,7 +84,7 @@ describe("recalculateFeeAfterDiscountApproval", () => {
   it("locks the fee row before reading it", async () => {
     const { tx } = fakeTx({ storedTotal: 1, amountPaid: 0, structure: 1000, approved: [] });
     await recalculateFeeAfterDiscountApproval(tx as never, { schoolId: "s1", studentId: "st1", studentFeeId: "sf1" });
-    expect((tx.$queryRaw.mock.calls[0][0] as string[]).join(" ")).toMatch(/FOR UPDATE/);
+    expect((tx.$queryRaw.mock.calls[0][0] as string[]).join(" ")).toMatch(/FOR UPDATE OF sf/);
   });
 
   it("keeps the stored total when there is no structure to rebuild from", async () => {

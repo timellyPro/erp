@@ -52,9 +52,11 @@ export async function recalculateFeeAfterDiscountApproval(
   args: { schoolId: string; studentId: string; studentFeeId: string }
 ): Promise<DiscountedFee | null> {
   const [locked] = await tx.$queryRaw<Array<{ totalFee: number; amountPaid: number }>>`
-    SELECT "totalFee", "amountPaid" FROM "StudentFee"
-    WHERE id = ${args.studentFeeId} AND "schoolId" = ${args.schoolId}
-    FOR UPDATE
+    SELECT sf."totalFee", sf."amountPaid"
+    FROM "StudentFee" sf
+    JOIN "Student" s ON s.id = sf."studentId"
+    WHERE sf.id = ${args.studentFeeId} AND s."schoolId" = ${args.schoolId}
+    FOR UPDATE OF sf
   `;
   if (!locked) return null;
 
@@ -99,7 +101,7 @@ export async function recalculateFeeAfterDiscountApproval(
         "discountFeeHeadLabel" = ${latest?.discountFeeHeadLabel ?? null},
         "discountRemarks" = ${latest?.discountRemarks ?? null},
         "updatedAt" = NOW()
-    WHERE id = ${args.studentFeeId} AND "schoolId" = ${args.schoolId}
+    WHERE id = ${args.studentFeeId}
   `;
   return result;
 }
