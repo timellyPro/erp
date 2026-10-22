@@ -12,6 +12,7 @@ import {
   isResidencyBoundFeeName,
   isTransportFeeName,
   kolkataYmd,
+  normalizeYearMonths,
   residencyKind,
   type CatalogExtraFee,
   type ChargePreview,
@@ -21,7 +22,7 @@ import {
 } from "@/lib/fees/residencyConversion";
 
 type AppPrisma = typeof prismaClient;
-type Db = Pick<AppPrisma, "extraFee" | "studentResidencyPeriod" | "paymentFeeAllocation">;
+type Db = Pick<AppPrisma, "extraFee" | "studentResidencyPeriod" | "paymentFeeAllocation" | "schoolSettings">;
 
 function ymdToDate(ymd: string): Date {
   return new Date(`${ymd}T00:00:00.000Z`);
@@ -175,10 +176,11 @@ export async function previewStudentResidencyConversion(
 ): Promise<ResidencyConversionPreview> {
   const convertedOn = input.convertedOn ?? kolkataYmd();
   const year = academicYearStartYearFromYmd(convertedOn);
-  const [catalog, existingPeriods, paid] = await Promise.all([
+  const [catalog, existingPeriods, paid, settings] = await Promise.all([
     loadCatalog(db, input.schoolId, input.studentId, input.classId, input.section),
     loadPeriods(db, input.studentId, year),
     loadPaidByName(db, input.studentId),
+    db.schoolSettings.findUnique({ where: { schoolId: input.schoolId }, select: { residencyYearMonths: true } }),
   ]);
   const plan = buildResidencyConversionPlan({
     academicYearStartYear: year,
@@ -191,6 +193,7 @@ export async function previewStudentResidencyConversion(
     catalog,
     existingPeriods,
     transportKey: input.transportKey,
+    yearMonths: normalizeYearMonths(settings?.residencyYearMonths),
   });
   return {
     ...plan,

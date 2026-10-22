@@ -184,3 +184,66 @@ describe("residency conversion plan", () => {
     expect(creditByKey.has("hostel")).toBe(false);
   });
 });
+
+describe("residency conversion with a school year of 10 months", () => {
+  const lotus: CatalogExtraFee[] = [
+    fee({ id: "h1", name: "Hostel Fee (1st Installment)", amount: 35750, residencyScope: "HOSTELLER" }),
+    fee({ id: "h2", name: "Hostel Fee (2nd Installment)", amount: 35750, residencyScope: "HOSTELLER" }),
+    fee({ id: "m1", name: "Mess Fee (1st Installment)", amount: 17050, residencyScope: "DAY_SCHOLAR", targetType: "CLASS", targetClassId: "c1" }),
+    fee({ id: "m2", name: "Mess Fee (2nd Installment)", amount: 17050, residencyScope: "DAY_SCHOLAR", targetType: "CLASS", targetClassId: "c1" }),
+  ];
+  const plan = (yearMonths: number | undefined, convertedOn: string) =>
+    buildResidencyConversionPlan({
+      academicYearStartYear: 2026,
+      convertedOn,
+      fromResidency: "Hosteller",
+      toResidency: "Day Scholar",
+      classId: "c1",
+      section: null,
+      studentId: "s1",
+      catalog: lotus,
+      existingPeriods: [],
+      yearMonths,
+    });
+  const total = (p: ReturnType<typeof plan>, re: RegExp) =>
+    Math.round(p.feeRows.filter((r) => re.test(r.name)).reduce((s, r) => s + r.amount, 0) * 100) / 100;
+
+  it("bills 4 months of hostel and 6 months of mess, each annual / 10, for a move on 1 October", () => {
+    const p = plan(10, "2026-10-01");
+    expect(p.periods.map((x) => [x.residencyType, x.months])).toEqual([["Hosteller", 4], ["Day Scholar", 6]]);
+    expect(total(p, /hostel/i)).toBe(28600); // 71,500 / 10 x 4
+    expect(total(p, /mess/i)).toBe(20460); // 34,100 / 10 x 6
+  });
+
+  it("matches the school's 3 and 7 month case for a move on 1 September", () => {
+    const p = plan(10, "2026-09-01");
+    expect(p.periods.map((x) => [x.residencyType, x.months])).toEqual([["Hosteller", 3], ["Day Scholar", 7]]);
+    expect(total(p, /hostel/i)).toBe(21450);
+    expect(total(p, /mess/i)).toBe(23870);
+  });
+
+  it("splits each head into two installments", () => {
+    const p = plan(10, "2026-10-01");
+    expect(p.feeRows.filter((r) => /hostel/i.test(r.name)).map((r) => r.amount)).toEqual([14300, 14300]);
+  });
+
+  it("defaults to the 12-month year when no setting is given, so other schools are unchanged", () => {
+    const p = plan(undefined, "2026-10-01");
+    expect(p.periods.map((x) => [x.residencyType, x.months])).toEqual([["Hosteller", 4], ["Day Scholar", 8]]);
+    expect(total(p, /hostel/i)).toBeCloseTo(23833.33, 1); // 71,500 / 12 x 4
+    expect(plan(12, "2026-10-01").feeRows).toEqual(p.feeRows);
+  });
+
+  it("clamps an invalid setting to 12 and a late-year move to zero remaining months", () => {
+    expect(plan(0, "2026-10-01").periods.map((x) => x.months)).toEqual([4, 8]);
+    expect(plan(99, "2026-10-01").periods.map((x) => x.months)).toEqual([4, 8]);
+    // April is month index 10, so a 10-month year has no months left to bill as a day scholar.
+    expect(plan(10, "2027-04-01").periods.map((x) => [x.residencyType, x.months])).toEqual([["Hosteller", 10]]);
+  });
+
+  it("monthsBetweenYmd respects the year length", () => {
+    expect(monthsBetweenYmd("2026-06-01", "2026-10-01", 2026, 10)).toBe(4);
+    expect(monthsBetweenYmd("2026-06-01", "2027-06-01", 2026, 10)).toBe(10);
+    expect(monthsBetweenYmd("2026-06-01", "2027-06-01", 2026)).toBe(12);
+  });
+});

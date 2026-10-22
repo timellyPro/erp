@@ -13,6 +13,8 @@ const updateSettingsBodySchema = z.object({
   emailDomain: z.union([z.string(), z.null()]).optional(),
   hyperpgMerchantId: z.union([z.string(), z.null()]).optional(),
   hyperpgApiKey: z.union([z.string(), z.null()]).optional(),
+  /** Months the school bills in its year for hostel / day-scholar conversions (1-12, default 12). */
+  residencyYearMonths: z.number().int().min(1).max(12).optional(),
 });
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
@@ -75,7 +77,16 @@ export async function PUT(req: Request) {
       emailDomain,
       hyperpgMerchantId,
       hyperpgApiKey,
+      residencyYearMonths,
     } = parsedBody.data;
+
+    // Changes how every hostel / day-scholar conversion is billed, so only school leadership may set it.
+    if (
+      residencyYearMonths !== undefined &&
+      !(["SCHOOLADMIN", "CHAIRMAN", "SUPERADMIN"] as string[]).includes(String(session.user.role))
+    ) {
+      return NextResponse.json({ message: "Only the school admin or chairman can change this" }, { status: 403 });
+    }
 
     const data: {
       admissionPrefix?: string;
@@ -83,12 +94,14 @@ export async function PUT(req: Request) {
       emailDomain?: string | null;
       hyperpgMerchantId?: string | null;
       hyperpgApiKey?: string | null;
+      residencyYearMonths?: number;
     } = {};
     if (typeof admissionPrefix === "string") data.admissionPrefix = admissionPrefix;
     if (typeof rollNoPrefix === "string") data.rollNoPrefix = rollNoPrefix;
     if (emailDomain !== undefined) data.emailDomain = emailDomain === "" ? null : String(emailDomain);
 
     if (hyperpgMerchantId !== undefined) data.hyperpgMerchantId = hyperpgMerchantId === "" ? null : String(hyperpgMerchantId);
+    if (residencyYearMonths !== undefined) data.residencyYearMonths = residencyYearMonths;
     if (hyperpgApiKey !== undefined) data.hyperpgApiKey = hyperpgApiKey === "" ? null : String(hyperpgApiKey);
 
     const createData = {
