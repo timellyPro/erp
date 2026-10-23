@@ -47,7 +47,7 @@ describe("resolveDiscountFeeHeadKey", () => {
 describe("studentFeeDiscountFromRecord", () => {
   it("treats a percent-only discount as overall with no fixed amount", () => {
     const d = studentFeeDiscountFromRecord({ discountPercent: 10, totalFee: 1000, finalFee: 900 });
-    expect(d).toEqual({ discountPercent: 10, discountFeeHeadKey: null, discountFixedAmount: null, discountBaseTotal: 1000 });
+    expect(d).toEqual({ discountPercent: 10, discountFeeHeadKey: null, discountFixedAmount: null });
   });
 
   it("derives a fixed rupee amount for a per-head discount", () => {
@@ -55,7 +55,7 @@ describe("studentFeeDiscountFromRecord", () => {
       { discountPercent: 0, totalFee: 1000, finalFee: 850.5, discountFeeHeadKey: "BASE:1" },
       [{ name: "A" }, { name: "B" }]
     );
-    expect(d).toEqual({ discountPercent: 0, discountFeeHeadKey: "BASE:1", discountFixedAmount: 149.5, discountBaseTotal: 1000 });
+    expect(d).toEqual({ discountPercent: 0, discountFeeHeadKey: "BASE:1", discountFixedAmount: 149.5 });
   });
 
   it("does not report a fixed amount when nothing was actually discounted", () => {
@@ -70,10 +70,14 @@ describe("studentFeeDiscountFromRecord", () => {
 });
 
 describe("per-head discount without a rupee amount", () => {
-  it("takes the percent of the whole-year fee, not of the head", () => {
-    const d = { discountPercent: 8.4962, discountFeeHeadKey: "BASE:1", discountFixedAmount: null, discountBaseTotal: 117700 };
-    // 8.4962% of 117,700 = 10,000 (not 8.4962% of the 46,200 head = 3,925.23)
-    expect(discountedSnapshotDueForHead("BASE:1", 46200, d)).toBeCloseTo(36200, 0);
+  it("takes nothing off: a head discount is only ever the rupee amount that was entered", () => {
+    const d = { discountPercent: 8.4962, discountFeeHeadKey: "BASE:1", discountFixedAmount: null };
+    expect(discountedSnapshotDueForHead("BASE:1", 46200, d)).toBe(46200);
+  });
+
+  it("takes exactly the entered rupee amount off the head", () => {
+    const d = { discountPercent: 8.4962, discountFeeHeadKey: "BASE:1", discountFixedAmount: 10000 };
+    expect(discountedSnapshotDueForHead("BASE:1", 46200, d)).toBe(36200);
   });
 });
 
@@ -114,8 +118,8 @@ describe("discountedSnapshotDueForHead", () => {
     expect(discountedSnapshotDueForHead("BASE:0", 1000, { discountPercent: -20 })).toBe(1000);
   });
 
-  it("applies a per-head percent only to the targeted head", () => {
-    const d = { discountPercent: 20, discountFeeHeadKey: "BASE:1" };
+  it("applies a per-head rupee amount only to the targeted head, never a percent", () => {
+    const d = { discountPercent: 20, discountFeeHeadKey: "BASE:1", discountFixedAmount: 200 };
     expect(discountedSnapshotDueForHead("BASE:1", 1000, d)).toBe(800);
     expect(discountedSnapshotDueForHead("BASE:0", 1000, d)).toBe(1000);
   });
@@ -137,8 +141,8 @@ describe("discountedSnapshotDueForHead", () => {
       expect(discountedSnapshotDueForHead("BASE:0", 1000, d)).toBe(500);
     });
 
-    it("discounts only the second half", () => {
-      const d = { discountPercent: 10, discountFeeHeadKey: "BASE:0::INST2" };
+    it("discounts only the second half, by the rupee amount", () => {
+      const d = { discountPercent: 10, discountFeeHeadKey: "BASE:0::INST2", discountFixedAmount: 50 };
       expect(discountedSnapshotDueForHead("BASE:0", 1000, d)).toBe(450);
     });
 
