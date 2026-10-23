@@ -10,6 +10,8 @@ import {
 } from "@/lib/fees/extraFeeResidencyScope";
 import {
   includeExtraFeeOnStudentBill,
+  isResidencyBoundFeeName,
+  residencyConversionCreditByHead,
   residencyConversionStudentIds,
 } from "@/lib/fees/residencyConversion";
 import { isStudentRte, isTuitionNamedExtraFee } from "@/lib/students/studentRte";
@@ -320,6 +322,8 @@ type HeadRow = {
   concession: number;
   /** Extra fee ids merged into this EXTRA_NAME column (for orphan rollup + discounts). */
   extraFeeIds?: string[];
+  /** True when this column is a mid-year residency-conversion charge. */
+  residencyConversion?: boolean;
 };
 
 function computeStudentHeads(
@@ -415,6 +419,7 @@ function computeStudentHeads(
       concession,
       // Keep all ids so payments allocated to duplicate catalog rows still roll into this column
       extraFeeIds: efs.map((e) => e.id),
+      residencyConversion: uniqueEfs.some((e) => e.residencyConversion),
     });
   }
 
@@ -464,9 +469,34 @@ function computeStudentHeads(
    * across heads (that marked unpaid installments as paid). Cap at snapshot so overpay on
    * one head cannot inflate "Fees paid" above that head's due.
    */
+  /**
+   * Money paid on a hostel/mess/transport fee the student no longer owes (they were converted mid-year)
+   * is credited onto the converted fees, exactly as the student profile does, so the report agrees with it.
+   */
+  const liveExtraIds = new Set(heads.flatMap((h) => h.extraFeeIds ?? []));
+  let orphanResidencyPaid = 0;
+  for (const [key, amount] of idKeyed) {
+    if (!key.startsWith("EXTRA:")) continue;
+    const id = key.slice("EXTRA:".length);
+    if (liveExtraIds.has(id)) continue;
+    const name = extraFeesById.get(id)?.name;
+    if (name && isResidencyBoundFeeName(name)) orphanResidencyPaid += amount;
+  }
+  const { creditByKey } = heads.some((h) => h.residencyConversion)
+    ? residencyConversionCreditByHead(
+        heads.map((h) => ({
+          key: h.headKey,
+          snapshotDue: h.snapshotDue,
+          paid: netPaidByHead.get(h.headKey) ?? 0,
+          residencyConversion: Boolean(h.residencyConversion),
+        })),
+        orphanResidencyPaid
+      )
+    : { creditByKey: new Map<string, number>() };
+
   const cells: Record<string, { fee: number; concession: number; paid: number; due: number }> = {};
   for (const h of heads) {
-    const paidAlloc = Math.max(netPaidByHead.get(h.headKey) ?? 0, 0);
+    const paidAlloc = Math.max((netPaidByHead.get(h.headKey) ?? 0) + (creditByKey.get(h.headKey) ?? 0), 0);
     const paidApplied = roundMoney(Math.min(paidAlloc, h.snapshotDue));
     const dueBefore = roundMoney(Math.max(h.snapshotDue - paidApplied, 0));
 
