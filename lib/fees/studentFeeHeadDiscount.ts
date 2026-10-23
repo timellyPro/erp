@@ -7,19 +7,7 @@ export type StudentFeeDiscountInput = {
   discountFeeHeadKey?: string | null;
   /** Rupee discount applied to the selected head (when not overall). */
   discountFixedAmount?: number | null;
-  /**
-   * Whole-year fee the stored percent was taken of. A per-head discount is saved as rupees / totalFee,
-   * so without a rupee amount the discount is totalFee x percent, never percent x the head's own amount.
-   */
-  discountBaseTotal?: number | null;
 };
-
-/** Rupee discount for a per-head discount that has no explicit rupee amount. */
-function fallbackHeadDiscountRupee(pre: number, pct: number, discount: StudentFeeDiscountInput): number {
-  const base = Number(discount.discountBaseTotal) || 0;
-  const rupee = base > 0 ? Math.round(base * (pct / 100) * 100) / 100 : pre * (pct / 100);
-  return Math.min(rupee, pre);
-}
 
 export function isOverallDiscountKey(key: string | null | undefined): boolean {
   const k = key?.trim();
@@ -67,7 +55,6 @@ export function studentFeeDiscountFromRecord(
     discountPercent: fee.discountPercent,
     discountFeeHeadKey: headKey,
     discountFixedAmount: perHead ? rupee : null,
-    discountBaseTotal: fee.totalFee,
   };
 }
 
@@ -124,7 +111,7 @@ export function discountedSnapshotDueForHead(
     const fixed =
       typeof discount.discountFixedAmount === "number" && discount.discountFixedAmount > 0
         ? discount.discountFixedAmount
-        : fallbackHeadDiscountRupee(otherHalf, pct, discount);
+        : 0;
     return Math.max(0, Math.round((otherHalf - fixed) * 100) / 100);
   }
 
@@ -132,7 +119,7 @@ export function discountedSnapshotDueForHead(
     const fixed =
       typeof discount.discountFixedAmount === "number" && discount.discountFixedAmount > 0
         ? discount.discountFixedAmount
-        : fallbackHeadDiscountRupee(pre, pct, discount);
+        : 0;
     return Math.max(0, Math.round((pre - fixed) * 100) / 100);
   }
 

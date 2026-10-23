@@ -387,7 +387,6 @@ export async function computeAdminStudentFeeBreakdown(
     discountPercent: approval.discountPercent,
     discountFeeHeadKey: approval.discountFeeHeadKey,
     discountFixedAmount: approval.discountFixedAmount,
-    discountBaseTotal: fee.totalFee,
   }));
   const discountInputs = approvedDiscountInputs.length > 0 ? approvedDiscountInputs : [fallbackDiscount];
   const discountedDue = (key: string, preDue: number) =>
