@@ -47,7 +47,7 @@ describe("resolveDiscountFeeHeadKey", () => {
 describe("studentFeeDiscountFromRecord", () => {
   it("treats a percent-only discount as overall with no fixed amount", () => {
     const d = studentFeeDiscountFromRecord({ discountPercent: 10, totalFee: 1000, finalFee: 900 });
-    expect(d).toEqual({ discountPercent: 10, discountFeeHeadKey: null, discountFixedAmount: null });
+    expect(d).toEqual({ discountPercent: 10, discountFeeHeadKey: null, discountFixedAmount: null, discountBaseTotal: 1000 });
   });
 
   it("derives a fixed rupee amount for a per-head discount", () => {
@@ -55,7 +55,7 @@ describe("studentFeeDiscountFromRecord", () => {
       { discountPercent: 0, totalFee: 1000, finalFee: 850.5, discountFeeHeadKey: "BASE:1" },
       [{ name: "A" }, { name: "B" }]
     );
-    expect(d).toEqual({ discountPercent: 0, discountFeeHeadKey: "BASE:1", discountFixedAmount: 149.5 });
+    expect(d).toEqual({ discountPercent: 0, discountFeeHeadKey: "BASE:1", discountFixedAmount: 149.5, discountBaseTotal: 1000 });
   });
 
   it("does not report a fixed amount when nothing was actually discounted", () => {
@@ -66,6 +66,14 @@ describe("studentFeeDiscountFromRecord", () => {
   it("never yields a negative discount when finalFee exceeds totalFee", () => {
     const d = studentFeeDiscountFromRecord({ discountPercent: 0, totalFee: 1000, finalFee: 1200, discountFeeHeadKey: "BASE:0" });
     expect(d.discountFixedAmount).toBeNull();
+  });
+});
+
+describe("per-head discount without a rupee amount", () => {
+  it("takes the percent of the whole-year fee, not of the head", () => {
+    const d = { discountPercent: 8.4962, discountFeeHeadKey: "BASE:1", discountFixedAmount: null, discountBaseTotal: 117700 };
+    // 8.4962% of 117,700 = 10,000 (not 8.4962% of the 46,200 head = 3,925.23)
+    expect(discountedSnapshotDueForHead("BASE:1", 46200, d)).toBeCloseTo(36200, 0);
   });
 });
 
