@@ -7,6 +7,7 @@ import { isActiveStudent } from "@/lib/students/studentStatus";
 import bcrypt from "bcryptjs";
 import { logger } from "@/lib/logger";
 import { rateLimit, rateLimitKey } from "@/lib/rateLimit";
+import { recordLogin } from "@/lib/auth/recordLogin";
 
 // Brute-force protection on the credentials login: 10 attempts per email per 5
 // minutes. Keyed by email (not IP — authorize() doesn't receive the request),
@@ -33,7 +34,7 @@ export const authOptions: NextAuthOptions = {
         password: { label: "Password", type: "password" },
       },
 
-      async authorize(credentials) {
+      async authorize(credentials, req) {
         if (!credentials?.email || !credentials?.password) {
           logger.info("Auth: Missing email or password");
           return null;
@@ -76,6 +77,8 @@ export const authOptions: NextAuthOptions = {
               student: { select: { id: true, schoolId: true, status: true } },
               assignedClasses: true,
               school: true,
+              adminSchools: { select: { id: true }, take: 1 },
+              teacherSchools: { select: { id: true }, take: 1 },
             },
           });
           if (matches.length === 0) {
@@ -124,6 +127,25 @@ export const authOptions: NextAuthOptions = {
           }
 
           logger.info("Auth: Successfully authenticated user:", user.email, "Role:", user.role);
+
+          // Same fallback order as the jwt callback / requireSchoolId, so the row lands in the
+          // school whose admin can see it.
+          await recordLogin(
+            {
+              id: user.id,
+              role: user.role,
+              name: user.name,
+              email: user.email,
+              schoolId:
+                user.schoolId ??
+                user.student?.schoolId ??
+                user.adminSchools?.[0]?.id ??
+                user.teacherSchools?.[0]?.id ??
+                null,
+              studentId: user.student?.id ?? null,
+            },
+            req?.headers
+          );
 
           return {
             id: user.id,

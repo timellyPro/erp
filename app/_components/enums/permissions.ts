@@ -24,6 +24,7 @@ export enum Permission {
   EXAMS = "EXAMS",
   NEW_USER = "NEW_USER",
   TEACHER_AUDIT = "TEACHER_AUDIT",
+  LOGIN_AUDIT = "LOGIN_AUDIT",
 
   // Super Admin
   ADD_SCHOOL = "ADD_SCHOOL",

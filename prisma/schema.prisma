@@ -319,6 +319,7 @@ model School {
   teacherDailyAttendances TeacherDailyAttendance[]
   paymentAuditLogs        PaymentAuditLog[]
   feeAuditLogs            FeeAuditLog[]
+  loginAuditLogs          LoginAuditLog[]
   receiptCounter          ReceiptCounter?
   feeBulkEdits            FeeBulkEdit[]
 }
@@ -1588,6 +1589,35 @@ model FeeAuditLog {
 
   @@index([schoolId, createdAt])
   @@index([schoolId, entityType, entityId, createdAt])
+}
+
+/// Append-only record of every successful sign-in to a school's portals, shown to that school's admin.
+/// userId / studentId are not foreign keys on purpose, so a deleted account keeps its history.
+/// Parents and students share one STUDENT account, so a STUDENT row cannot say which of them signed in.
+model LoginAuditLog {
+  id String @id @default(cuid())
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  userId    String
+  /// Set for STUDENT (parent / student) sign-ins.
+  studentId String?
+
+  /// SCHOOLADMIN | CHAIRMAN | TEACHER | STUDENT
+  role  String
+  /// Name and login id at the time of sign-in.
+  name  String?
+  email String?
+
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  @@index([schoolId, createdAt])
+  @@index([schoolId, role, createdAt])
+  @@index([schoolId, userId, createdAt])
 }
 
 /// One bulk "set a fee head's amount" run, with enough detail to undo it as a whole.
