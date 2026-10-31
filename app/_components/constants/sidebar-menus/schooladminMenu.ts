@@ -15,6 +15,7 @@ import {
     DollarSign,
     ClipboardList,
     ChartColumn,
+    ShieldCheck,
     Settings,
     LogOut,
 } from "lucide-react";
@@ -147,6 +148,13 @@ export const SCHOOLADMIN_MENU_ITEMS: SidebarItem[] = [
         permission: Permission.ANALYSIS,
     },
     {
+        label: "Login Audit",
+        tab: "login-audit",
+        href: "/schooladmin?tab=login-audit",
+        icon: ShieldCheck,
+        permission: Permission.LOGIN_AUDIT,
+    },
+    {
         label: "Settings",
         tab: "settings",
         href: "/schooladmin?tab=settings",
@@ -177,6 +185,7 @@ export const SCHOOLADMIN_TAB_TITLES: Record<string, string> = {
     "student-details": "Student Details",
     "add-user": "Add User",
     "teacher-audit": "Teacher Audit",
+    "login-audit": "Login Audit",
     timetable: "Timetable",
     circulars: "Circulars",
     certificates: "Certificate Requests",

@@ -12,6 +12,7 @@ Mirrors section 6 of the public Privacy Policy (`app/privacy-policy/page.tsx`). 
 | Application logs (Vercel log drain) | 30 days | Auto-expire in log provider |
 | Error tracking (Sentry) | 90 days | Auto-expire in Sentry project settings |
 | Database backups (Supabase) | 35 days | Auto-expire |
+| Login audit (`LoginAuditLog`: who signed in, when, IP address, browser / device) | Proposed 1 year. Visible to the school admin in the Login Audit tab | Removed with the school; no purge job yet, see "Still manual" |
 | Parent consent record (`User.privacyConsentVersion/At`) | Life of the account | Deleted with the user |
 
 ## School closure

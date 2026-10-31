@@ -105,7 +105,9 @@ export default function PrivacyPolicyPage() {
               </li>
               <li>
                 <strong>App usage needed to run the service:</strong> in-app
-                notifications, and a login session stored in a cookie. The app may
+                notifications, and a login session stored in a cookie. Each sign-in is
+                recorded with its time, IP address and browser / device type, and your
+                school&apos;s administrator can see this record. The app may
                 remember recent logins and display preferences on your device. We do
                 not collect your device location, contacts, SMS, microphone, or camera
                 in the background, and we do not use advertising or analytics SDKs.

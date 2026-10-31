@@ -12,6 +12,7 @@ import SchoolTeacherLeavesTab from "@/app/_components/components/schooladmin/Tea
 import NewsFeed from "@/app/_components/components/schooladmin/Newsfeed";
 import WorkshopsAndEventsTab from "@/app/_components/components/schooladmin/workshopsandevents";
 import TeacherAuditTab from "@/app/_components/components/schooladmin/TeacherAudit";
+import LoginAuditTab from "@/app/_components/components/schooladmin/LoginAudit";
 import AddUser from "@/app/_components/components/schooladmin/AddUser";
 import SchoolAdminDashboard from "@/app/_components/components/schooladmin/dashboard/DashboardContent";
 import StudentDetails from "@/app/_components/components/schooladmin/StudentDetails";
@@ -150,6 +151,8 @@ function SchoolAdminContent() {
         return <SchoolTeacherLeavesTab />;
       case "teacher-audit":
         return <TeacherAuditTab />;
+      case "login-audit":
+        return <LoginAuditTab />;
       case "workshops":
         return <WorkshopsAndEventsTab />;
       case "newsfeed":
