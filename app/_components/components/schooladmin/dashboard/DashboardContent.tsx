@@ -1,6 +1,7 @@
 "use client";
 
 import { AttendanceCard } from "./components/AttendanceCard";
+import { BirthdayCard } from "./components/BirthdayCard";
 import { SidebarList } from "./components/SidebarList";
 import { DayCollectionByHeadCard } from "./components/DayCollectionByHeadCard";
 import { SchoolDashboardLoader } from "./components/SchoolDashboardLoader";
@@ -58,6 +59,7 @@ export default function Dashboard() {
             </div>
 
             <div className="space-y-4 sm:space-y-6 md:space-y-8">
+              <BirthdayCard />
               <SidebarList
                 title="Teachers on Leave"
                 subtitle="Current leave requests"
