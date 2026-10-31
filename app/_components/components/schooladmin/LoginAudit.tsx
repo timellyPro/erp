@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, GraduationCap, Search, ShieldCheck, Users } from "lucide-react";
 import type { LoginAuditCategory, LoginAuditPage } from "@/lib/school/loginAudit";
+import LoginAuditEarlier from "./LoginAuditEarlier";
 
 const CATEGORY_LABEL: Record<LoginAuditCategory, string> = {
   TEACHER: "Teacher",
@@ -57,8 +58,41 @@ const QUICK_RANGES: Array<{ key: QuickRange; label: string }> = [
 const inputClass =
   "w-full bg-black/30 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-lime-400/50 [color-scheme:dark]";
 
-/** School admin: who signed in to the school's portals, with filters. */
+type View = "RECENT" | "EARLIER";
+
+const VIEWS: Array<{ key: View; label: string }> = [
+  { key: "RECENT", label: "Recent sign-ins" },
+  { key: "EARLIER", label: "Earlier parent logins" },
+];
+
+/** School admin: recorded sign-ins, plus parent logins from before recording started. */
 export default function LoginAuditTab() {
+  const [view, setView] = useState<View>("RECENT");
+  return (
+    <div className="space-y-4 sm:space-y-6">
+      <div className="inline-flex p-1 rounded-xl bg-white/5 border border-white/10" role="tablist">
+        {VIEWS.map(({ key, label }) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={view === key}
+            onClick={() => setView(key)}
+            className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
+              view === key ? "bg-lime-400/15 text-lime-300" : "text-gray-400 hover:text-gray-200"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {view === "RECENT" ? <RecentSignIns /> : <LoginAuditEarlier />}
+    </div>
+  );
+}
+
+/** Who signed in to the school's portals, with filters. */
+function RecentSignIns() {
   const [category, setCategory] = useState<"ALL" | LoginAuditCategory>("ALL");
   const [to, setTo] = useState(todayIst);
   const [from, setFrom] = useState(() => daysBefore(todayIst(), 6));
@@ -251,8 +285,8 @@ export default function LoginAuditTab() {
         {data && (
           <p className="text-xs text-gray-500 mt-1">
             {recordingSince
-              ? `Sign-ins are recorded from ${dayFormat.format(new Date(recordingSince))}; earlier logins were not tracked.`
-              : "Sign-in recording has just started, so nothing has been recorded yet; earlier logins were not tracked."}
+              ? `Sign-ins are recorded from ${dayFormat.format(new Date(recordingSince))}; parent logins from before then are under Earlier parent logins.`
+              : "Sign-in recording has just started, so nothing has been recorded yet; parent logins from before then are under Earlier parent logins."}
           </p>
         )}
       </div>

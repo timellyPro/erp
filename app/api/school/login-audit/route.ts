@@ -3,15 +3,25 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/authOptions";
 import { tenantDb as prisma, runInTenantScope } from "@/lib/db/tenantContext";
 import { resolveSchoolAdminSchoolId } from "@/lib/school/resolveSchoolAdminSchoolId";
-import { loadLoginAudit, parseLoginAuditFilters } from "@/lib/school/loginAudit";
+import {
+  type EarlierLoginFilters,
+  type EarlierLoginPage,
+  type LoginAuditFilters,
+  type LoginAuditPage,
+  loadEarlierLogins,
+  loadLoginAudit,
+  parseEarlierLoginFilters,
+  parseLoginAuditFilters,
+} from "@/lib/school/loginAudit";
 import { logger } from "@/lib/logger";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 /**
  * Sign-in history of the school admin's own school: who logged in (teachers, parents / students,
  * admin staff), when, and from which device, plus `recordingSince` (the school's earliest stored
- * sign-in) so the UI can offer "All time". School admins only; the school always comes from
- * the session, never from the request.
+ * sign-in) so the UI can offer "All time". `?view=earlier` lists parents / students who logged in
+ * before the login audit existed, from their privacy-policy acceptance. School admins only; the
+ * school always comes from the session, never from the request.
  */
 export async function GET(request: Request) {
   const session = await getServerSession(authOptions);
@@ -23,7 +33,9 @@ export async function GET(request: Request) {
   }
 
   try {
-    const filters = parseLoginAuditFilters(new URL(request.url).searchParams);
+    const params = new URL(request.url).searchParams;
+    const earlier = params.get("view") === "earlier";
+    const filters = earlier ? parseEarlierLoginFilters(params) : parseLoginAuditFilters(params);
     if ("error" in filters) {
       return NextResponse.json({ message: filters.error }, { status: 400 });
     }
@@ -33,7 +45,11 @@ export async function GET(request: Request) {
       return NextResponse.json({ message: ctx.error }, { status: ctx.status });
     }
 
-    const page = await runInTenantScope(ctx.schoolId, () => loadLoginAudit(prisma, ctx.schoolId, filters));
+    const page = await runInTenantScope<LoginAuditPage | EarlierLoginPage>(ctx.schoolId, () =>
+      earlier
+        ? loadEarlierLogins(prisma, ctx.schoolId, filters as EarlierLoginFilters)
+        : loadLoginAudit(prisma, ctx.schoolId, filters as LoginAuditFilters)
+    );
     return NextResponse.json(page, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error: unknown) {
     logger.error("Login audit error:", error);
