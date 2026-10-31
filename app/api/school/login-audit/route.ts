@@ -9,7 +9,8 @@ import { toClientErrorMessage } from "@/lib/errors/errorInfo";
 
 /**
  * Sign-in history of the school admin's own school: who logged in (teachers, parents / students,
- * admin staff), when, and from which device. School admins only; the school always comes from
+ * admin staff), when, and from which device, plus `recordingSince` (the school's earliest stored
+ * sign-in) so the UI can offer "All time". School admins only; the school always comes from
  * the session, never from the request.
  */
 export async function GET(request: Request) {

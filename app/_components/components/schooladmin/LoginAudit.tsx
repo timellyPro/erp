@@ -18,8 +18,9 @@ const CATEGORY_BADGE: Record<LoginAuditCategory, string> = {
 
 const PAGE_SIZE = 50;
 
-function todayIst(): string {
-  return new Date(Date.now() + 330 * 60 * 1000).toISOString().slice(0, 10);
+/** India-time calendar date (YYYY-MM-DD) of a moment, default now. */
+function todayIst(at = Date.now()): string {
+  return new Date(at + 330 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 function daysBefore(ymd: string, days: number): string {
@@ -37,6 +38,21 @@ const timeFormat = new Intl.DateTimeFormat("en-IN", {
   minute: "2-digit",
   hour12: true,
 });
+
+const dayFormat = new Intl.DateTimeFormat("en-IN", {
+  timeZone: "Asia/Kolkata",
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+});
+
+type QuickRange = "7" | "30" | "ALL";
+
+const QUICK_RANGES: Array<{ key: QuickRange; label: string }> = [
+  { key: "7", label: "Last 7 days" },
+  { key: "30", label: "Last 30 days" },
+  { key: "ALL", label: "All time" },
+];
 
 const inputClass =
   "w-full bg-black/30 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-lime-400/50 [color-scheme:dark]";
@@ -95,6 +111,27 @@ export default function LoginAuditTab() {
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
   const firstRow = data && data.total > 0 ? (data.page - 1) * data.pageSize + 1 : 0;
   const lastRow = data ? Math.min(data.total, data.page * data.pageSize) : 0;
+
+  const recordingSince = data?.recordingSince ?? null;
+  // "All time" starts at the school's first recorded sign-in; nothing older was ever stored.
+  const recordingStartDay = recordingSince ? todayIst(Date.parse(recordingSince)) : todayIst();
+
+  function rangeFrom(key: QuickRange, today: string): string {
+    if (key === "7") return daysBefore(today, 6);
+    if (key === "30") return daysBefore(today, 29);
+    return recordingStartDay < today ? recordingStartDay : today;
+  }
+
+  function applyQuickRange(key: QuickRange) {
+    const today = todayIst();
+    setTo(today);
+    setFrom(rangeFrom(key, today));
+  }
+
+  const activeRange = QUICK_RANGES.find(({ key }) => {
+    const today = todayIst();
+    return to === today && from === rangeFrom(key, today);
+  })?.key;
 
   const cards = useMemo(
     () => [
@@ -175,6 +212,24 @@ export default function LoginAuditTab() {
             <span className="text-xs text-gray-400 font-medium">To</span>
             <input type="date" value={to} min={from} onChange={(e) => e.target.value && setTo(e.target.value)} className={`${inputClass} mt-1`} />
           </label>
+          <div className="sm:col-span-2 lg:col-span-3 flex flex-wrap items-end gap-2">
+            {QUICK_RANGES.map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => applyQuickRange(key)}
+                disabled={key === "ALL" && !data}
+                aria-pressed={activeRange === key}
+                className={`px-3 py-2 rounded-xl text-xs font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                  activeRange === key
+                    ? "border-lime-400/50 bg-lime-400/10 text-lime-300"
+                    : "border-white/10 bg-black/30 text-gray-300 hover:border-white/20"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           {showClassFilter && (
             <label className="block sm:col-span-2 lg:col-span-2">
               <span className="text-xs text-gray-400 font-medium">Class (parents / students)</span>
@@ -193,6 +248,13 @@ export default function LoginAuditTab() {
           Parents and students use the same login, so their sign-ins are listed together under the student.
           The counts above cover the selected dates.
         </p>
+        {data && (
+          <p className="text-xs text-gray-500 mt-1">
+            {recordingSince
+              ? `Sign-ins are recorded from ${dayFormat.format(new Date(recordingSince))}; earlier logins were not tracked.`
+              : "Sign-in recording has just started, so nothing has been recorded yet; earlier logins were not tracked."}
+          </p>
+        )}
       </div>
 
       <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl overflow-hidden">

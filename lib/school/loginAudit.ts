@@ -130,6 +130,11 @@ export type LoginAuditPage = {
   total: number;
   /** Counts for the date range only (category / search / class filters do not apply). */
   summary: LoginAuditSummary;
+  /**
+   * Time of the school's earliest stored sign-in (ISO), or null if none yet. Sign-ins were not
+   * recorded before the LoginAuditLog table existed, so nothing older can be shown.
+   */
+  recordingSince: string | null;
   classes: Array<{ id: string; name: string }>;
   entries: LoginAuditEntry[];
 };
@@ -165,7 +170,9 @@ export async function loadLoginAudit(db: Db, schoolId: string, f: LoginAuditFilt
     where.studentId = { in: inClass.map((s) => s.id) };
   }
 
-  const [total, rows, perUser, classes] = await Promise.all([
+  // count / findMany / groupBy all lead with schoolId + createdAt, so even an "All time" range
+  // stays on the (schoolId, createdAt) index; findMany is still capped at pageSize rows.
+  const [total, rows, perUser, classes, earliest] = await Promise.all([
     db.loginAuditLog.count({ where }),
     db.loginAuditLog.findMany({
       where,
@@ -185,6 +192,7 @@ export async function loadLoginAudit(db: Db, schoolId: string, f: LoginAuditFilt
     }),
     db.loginAuditLog.groupBy({ by: ["role", "userId"], where: rangeWhere, _count: { _all: true } }),
     db.class.findMany({ where: { schoolId }, select: { id: true, name: true, section: true }, orderBy: [{ name: "asc" }, { section: "asc" }] }),
+    db.loginAuditLog.findFirst({ where: { schoolId }, orderBy: { createdAt: "asc" }, select: { createdAt: true } }),
   ]);
 
   const summary: LoginAuditSummary = {
@@ -215,6 +223,7 @@ export async function loadLoginAudit(db: Db, schoolId: string, f: LoginAuditFilt
     pageSize: f.pageSize,
     total,
     summary,
+    recordingSince: earliest?.createdAt.toISOString() ?? null,
     classes: classes.map((c) => ({ id: c.id, name: classLabel(c) ?? c.name })),
     entries: rows.map((r) => {
       const st = r.studentId ? studentById.get(r.studentId) : undefined;
