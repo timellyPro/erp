@@ -1,7 +1,19 @@
 /**
  * @jest-environment node
  */
-import { birthdayMonthDays, loadBirthdaysToday, todayInIst } from "@/lib/school/birthdaysToday";
+import { birthdayMonthDays, loadBirthdaysToday, toLimitedBirthdays, todayInIst } from "@/lib/school/birthdaysToday";
+
+describe("toLimitedBirthdays", () => {
+  it("keeps only id, name and class", () => {
+    const out = toLimitedBirthdays({
+      date: "2026-10-31",
+      count: 1,
+      students: [{ id: "s1", name: "Asha", className: "CLASS 6 - A", admissionNumber: "ADM/1", turning: 11 }],
+    });
+    expect(out).toEqual({ date: "2026-10-31", count: 1, students: [{ id: "s1", name: "Asha", className: "CLASS 6 - A" }] });
+    expect(Object.keys(out.students[0]).sort()).toEqual(["className", "id", "name"]);
+  });
+});
 
 describe("todayInIst", () => {
   it("uses the India calendar date, not the server's", () => {

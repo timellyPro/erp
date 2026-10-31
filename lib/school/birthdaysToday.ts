@@ -17,6 +17,19 @@ export type BirthdaysToday = {
   students: BirthdayStudent[];
 };
 
+/** What parents and students get: other children's name and class only, never admission number or age. */
+export type BirthdayStudentLimited = Pick<BirthdayStudent, "id" | "name" | "className">;
+
+export type BirthdaysTodayLimited = Omit<BirthdaysToday, "students"> & { students: BirthdayStudentLimited[] };
+
+export function toLimitedBirthdays(full: BirthdaysToday): BirthdaysTodayLimited {
+  return {
+    date: full.date,
+    count: full.count,
+    students: full.students.map(({ id, name, className }) => ({ id, name, className })),
+  };
+}
+
 export type IstDate = { year: number; month: number; day: number; ymd: string };
 
 const SCHOOL_TIME_ZONE = "Asia/Kolkata";

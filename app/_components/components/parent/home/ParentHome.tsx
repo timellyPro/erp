@@ -5,6 +5,7 @@ import { useSession } from "next-auth/react";
 import { Sun } from "lucide-react";
 import PageHeader from "../../common/PageHeader";
 import ParentHomeStats from "./ParentHomeStats";
+import { BirthdayCard } from "../../common/BirthdayCard";
 import ParentHomeCircularsSection from "./ParentHomeCircularsSection";
 import ParentHomeUpdatesSection from "./ParentHomeUpdatesSection";
 import { ParentHomeData } from "./types";
@@ -151,6 +152,8 @@ export default function ParentHomeTab() {
         gradeLabel={data.gradeLabel}
         feePendingAmount={data.feePendingAmount}
       />
+
+      <BirthdayCard />
 
       <ParentHomeCircularsSection circulars={data.circulars} />
       <ParentHomeUpdatesSection feeds={data.feeds} events={data.events} />

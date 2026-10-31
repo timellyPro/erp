@@ -1,7 +1,7 @@
 "use client";
 
 import { AttendanceCard } from "./components/AttendanceCard";
-import { BirthdayCard } from "./components/BirthdayCard";
+import { BirthdayCard } from "@/app/_components/components/common/BirthdayCard";
 import { SidebarList } from "./components/SidebarList";
 import { DayCollectionByHeadCard } from "./components/DayCollectionByHeadCard";
 import { SchoolDashboardLoader } from "./components/SchoolDashboardLoader";
