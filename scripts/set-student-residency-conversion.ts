@@ -9,6 +9,10 @@
  * (created when the student has none, updated when they do); transport updates the student's own transport
  * rows (it never creates one, because the route and name come from the student's assignment).
  *
+ * By default each total is split into two equal installments. When the school gives an uneven split, pass
+ * --hostel-split=0,35750 / --mess-split=17050,0 / --transport-split=5500,550 (1st,2nd; must add up to the total).
+ * --set-type="Hostel" also sets the student's residency type (the periods alone do not change it).
+ *
  * Dry run unless --apply is given: the dry run makes the changes inside a transaction and rolls it back.
  *
  * Usage:
@@ -27,7 +31,12 @@ function arg(name: string): string | undefined {
   return hit ? hit.slice(name.length + 3) : undefined;
 }
 
-function halves(total: number): [number, number] {
+function halves(total: number, split?: string): [number, number] {
+  if (split) {
+    const [a, b] = split.split(",").map(Number);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || Math.abs(a! + b! - total) > 0.005) throw new Error(`Split "${split}" does not add up to ${total}`);
+    return [a!, b!];
+  }
   const first = Math.round((total / 2) * 100) / 100;
   return [first, Math.round((total - first) * 100) / 100];
 }
@@ -65,8 +74,8 @@ async function main() {
           select: { id: true, name: true, amount: true, residencyConversion: true },
         });
 
-        for (const [label, total] of [["Hostel Fee", hostel], ["Mess Fee", mess]] as const) {
-          const [a, b] = halves(total);
+        for (const [label, total, split] of [["Hostel Fee", hostel, arg("hostel-split")], ["Mess Fee", mess, arg("mess-split")]] as const) {
+          const [a, b] = halves(total, split);
           for (const [suffix, amount] of [["(1st Installment)", a], ["(2nd Installment)", b]] as const) {
             const name = `${label} ${suffix}`;
             const found = own.filter((r) => r.name === name && r.residencyConversion);
@@ -88,11 +97,17 @@ async function main() {
           const first = rows.filter((r) => /1st/i.test(r.name));
           const second = rows.filter((r) => /2nd/i.test(r.name));
           if (first.length !== 1 || second.length !== 1) throw new Error("Expected exactly one 1st and one 2nd transport row for this student");
-          const [a, b] = halves(transport);
+          const [a, b] = halves(transport, arg("transport-split"));
           console.log(`  ${first[0]!.name}: ${first[0]!.amount} -> ${a}`);
           console.log(`  ${second[0]!.name}: ${second[0]!.amount} -> ${b}`);
           await tx.extraFee.update({ where: { id: first[0]!.id }, data: { amount: a } });
           await tx.extraFee.update({ where: { id: second[0]!.id }, data: { amount: b } });
+        }
+
+        const setType = arg("set-type");
+        if (setType) {
+          console.log(`  residency type: -> ${setType}`);
+          await tx.student.update({ where: { id: student.id }, data: { residencyType: setType } });
         }
 
         const old = await tx.studentResidencyPeriod.findMany({ where: { studentId: student.id, academicYearStartYear: yearStart }, select: { id: true } });
