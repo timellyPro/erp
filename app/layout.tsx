@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
-import { Inter, Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import { AuthProvider } from "@/app/_components/context/AuthContext";
 import { GlobalBackground } from "./_components/components/common/GlobalBackground";
 import PwaRegister from "./_components/components/common/PwaRegister";
@@ -8,19 +10,14 @@ import InstallAppBanner from "./_components/components/common/InstallAppBanner";
 // A nonce-based CSP needs a fresh nonce on every request, so pages cannot be prerendered statically.
 export const dynamic = "force-dynamic";
 
-const inter = Inter({
-  subsets: ["latin"],
+// Fonts are bundled with the app (not fetched from Google at build/dev time), so a network that
+// blocks fonts.gstatic.com cannot break the build or return a 500 from the dev server.
+// Geist Sans/Mono ship in the `geist` package and already expose --font-geist-sans / --font-geist-mono.
+const inter = localFont({
+  src: "../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2",
   variable: "--font-inter",
-});
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+  weight: "100 900",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -64,8 +61,8 @@ export default function RootLayout({
         suppressHydrationWarning
         className={`
           ${inter.variable}
-          ${geistSans.variable}
-          ${geistMono.variable}
+          ${GeistSans.variable}
+          ${GeistMono.variable}
           antialiased
         `}
       >
