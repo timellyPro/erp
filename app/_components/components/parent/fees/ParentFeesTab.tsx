@@ -7,6 +7,7 @@ import FeePaymentReceiptTemplate from "../../pdf/FeePaymentReceiptTemplate";
 import { useParentFeesState } from "./shared";
 import { FeeSummarySection } from "./shared";
 import { DueHeadsSection } from "./shared";
+import { DueReportSection } from "./shared";
 import { PaymentHistorySection } from "./shared";
 
 export default function ParentFeesTab() {
@@ -55,6 +56,8 @@ export default function ParentFeesTab() {
       <PageHeader title="Fees" subtitle="View all fee dues and payment history" compact />
 
       <FeeSummarySection fee={fee} progress={progress} />
+
+      <DueReportSection />
 
       <DueHeadsSection dueHeadRows={dueHeadRows} totalDue={totalDue} />
 
