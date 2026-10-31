@@ -6,6 +6,7 @@ import { GET } from "@/app/api/school/login-audit/route";
 const mockGetServerSession = jest.fn();
 const mockResolveSchoolAdminSchoolId = jest.fn();
 const mockLoadLoginAudit = jest.fn();
+const mockLoadEarlierLogins = jest.fn();
 const mockRunInTenantScope = jest.fn();
 
 jest.mock("@/lib/db/tenantContext", () => ({
@@ -22,6 +23,7 @@ jest.mock("@/lib/school/resolveSchoolAdminSchoolId", () => ({
 jest.mock("@/lib/school/loginAudit", () => ({
   ...jest.requireActual("@/lib/school/loginAudit"),
   loadLoginAudit: (...args: unknown[]) => mockLoadLoginAudit(...args),
+  loadEarlierLogins: (...args: unknown[]) => mockLoadEarlierLogins(...args),
 }));
 
 const PAGE = {
@@ -94,6 +96,26 @@ describe("GET /api/school/login-audit", () => {
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({ message });
       expect(mockLoadLoginAudit).not.toHaveBeenCalled();
+    });
+
+    it("?view=earlier loads the earlier logins for the server-resolved school, no default dates", async () => {
+      mockLoadEarlierLogins.mockResolvedValue({ total: 0, entries: [] });
+      const res = await GET(req("?view=earlier&schoolId=someone-elses&q=asha&classId=c6a"));
+
+      expect(res.status).toBe(200);
+      expect(mockLoadLoginAudit).not.toHaveBeenCalled();
+      expect(mockRunInTenantScope).toHaveBeenCalledWith("school-1", expect.any(Function));
+      expect(mockLoadEarlierLogins).toHaveBeenCalledWith(
+        expect.anything(),
+        "school-1",
+        { from: null, to: null, q: "asha", classId: "c6a", page: 1, pageSize: 50 }
+      );
+    });
+
+    it("400 for bad earlier-view dates", async () => {
+      const res = await GET(req("?view=earlier&from=2026-10-31&to=2026-10-01"));
+      expect(res.status).toBe(400);
+      expect(mockLoadEarlierLogins).not.toHaveBeenCalled();
     });
 
     it("passes through the school-resolution error", async () => {

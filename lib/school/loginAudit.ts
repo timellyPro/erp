@@ -132,7 +132,7 @@ export type LoginAuditPage = {
   summary: LoginAuditSummary;
   /**
    * Time of the school's earliest stored sign-in (ISO), or null if none yet. Sign-ins were not
-   * recorded before the LoginAuditLog table existed, so nothing older can be shown.
+   * recorded before the LoginAuditLog table existed; for parents see loadEarlierLogins.
    */
   recordingSince: string | null;
   classes: Array<{ id: string; name: string }>;
@@ -241,5 +241,139 @@ export async function loadLoginAudit(db: Db, schoolId: string, f: LoginAuditFilt
         ipAddress: r.ipAddress,
       };
     }),
+  };
+}
+
+export type EarlierLoginFilters = {
+  /** YYYY-MM-DD, India time, inclusive; null means no bound. */
+  from: string | null;
+  to: string | null;
+  q: string;
+  classId: string | null;
+  page: number;
+  pageSize: number;
+};
+
+export function parseEarlierLoginFilters(params: URLSearchParams): EarlierLoginFilters | { error: string } {
+  const from = params.get("from")?.trim() || null;
+  const to = params.get("to")?.trim() || null;
+  if ((from && !YMD.test(from)) || (to && !YMD.test(to))) return { error: "Dates must be YYYY-MM-DD" };
+  if (from && to && from > to) return { error: "From date is after To date" };
+
+  const page = Math.max(1, Number.parseInt(params.get("page") || "1", 10) || 1);
+  const pageSize = Math.min(
+    MAX_PAGE_SIZE,
+    Math.max(1, Number.parseInt(params.get("pageSize") || String(DEFAULT_PAGE_SIZE), 10) || DEFAULT_PAGE_SIZE)
+  );
+
+  return {
+    from,
+    to,
+    q: (params.get("q") || "").trim().slice(0, 100),
+    classId: params.get("classId")?.trim() || null,
+    page,
+    pageSize,
+  };
+}
+
+export type EarlierLoginEntry = {
+  userId: string;
+  /** When the parent accepted the privacy policy, which they are asked to do on their first visit. */
+  firstLoginAt: string;
+  name: string;
+  admissionNumber: string | null;
+  className: string | null;
+  fatherName: string | null;
+  /** Latest sign-in in the login audit, if any. */
+  lastSignInAt: string | null;
+};
+
+export type EarlierLoginPage = {
+  from: string | null;
+  to: string | null;
+  page: number;
+  pageSize: number;
+  total: number;
+  /** Parents / students who logged in within the dates (search / class filters do not apply). */
+  loggedIn: number;
+  activeStudents: number;
+  /** Same as LoginAuditPage.recordingSince: when sign-in recording started for this school. */
+  recordingSince: string | null;
+  classes: Array<{ id: string; name: string }>;
+  entries: EarlierLoginEntry[];
+};
+
+type EarlierDb = Pick<typeof prisma, "user" | "loginAuditLog" | "student" | "class">;
+
+/**
+ * Parents / students who have logged in, from before the login audit existed. The only record of
+ * those sign-ins is the privacy-policy acceptance the parent portal asks for on the first visit
+ * (User.privacyConsentAt). Every query is filtered by schoolId; callers run it inside
+ * runInTenantScope so RLS also enforces it.
+ */
+export async function loadEarlierLogins(db: EarlierDb, schoolId: string, f: EarlierLoginFilters): Promise<EarlierLoginPage> {
+  const consentAt: Prisma.DateTimeNullableFilter = { not: null };
+  if (f.from) consentAt.gte = new Date(`${f.from}T00:00:00.000+05:30`);
+  if (f.to) consentAt.lte = new Date(`${f.to}T23:59:59.999+05:30`);
+  const rangeWhere: Prisma.UserWhereInput = { schoolId, role: "STUDENT", privacyConsentAt: consentAt, student: { schoolId } };
+
+  const studentWhere: Prisma.StudentWhereInput = { schoolId };
+  if (f.classId) studentWhere.classId = f.classId;
+  const where: Prisma.UserWhereInput = { ...rangeWhere, student: studentWhere };
+  if (f.q) {
+    where.OR = [
+      { name: { contains: f.q, mode: "insensitive" } },
+      { student: { schoolId, admissionNumber: { contains: f.q, mode: "insensitive" } } },
+      { student: { schoolId, fatherName: { contains: f.q, mode: "insensitive" } } },
+    ];
+  }
+
+  const [total, loggedIn, activeStudents, firstAudit, rows, classes] = await Promise.all([
+    db.user.count({ where }),
+    db.user.count({ where: rangeWhere }),
+    db.student.count({ where: { schoolId, status: "Active" } }),
+    db.loginAuditLog.findFirst({ where: { schoolId }, orderBy: { createdAt: "asc" }, select: { createdAt: true } }),
+    db.user.findMany({
+      where,
+      orderBy: { privacyConsentAt: "desc" },
+      skip: (f.page - 1) * f.pageSize,
+      take: f.pageSize,
+      select: {
+        id: true,
+        name: true,
+        privacyConsentAt: true,
+        student: {
+          select: { admissionNumber: true, fatherName: true, class: { select: { name: true, section: true } } },
+        },
+      },
+    }),
+    db.class.findMany({ where: { schoolId }, select: { id: true, name: true, section: true }, orderBy: [{ name: "asc" }, { section: "asc" }] }),
+  ]);
+
+  const userIds = rows.map((r) => r.id);
+  const lastSignIns = userIds.length
+    ? await db.loginAuditLog.groupBy({ by: ["userId"], where: { schoolId, userId: { in: userIds } }, _max: { createdAt: true } })
+    : [];
+  const lastByUser = new Map(lastSignIns.map((g) => [g.userId, g._max.createdAt]));
+
+  return {
+    from: f.from,
+    to: f.to,
+    page: f.page,
+    pageSize: f.pageSize,
+    total,
+    loggedIn,
+    activeStudents,
+    recordingSince: firstAudit?.createdAt.toISOString() ?? null,
+    classes: classes.map((c) => ({ id: c.id, name: classLabel(c) ?? c.name })),
+    entries: rows.map((r) => ({
+      userId: r.id,
+      firstLoginAt: r.privacyConsentAt!.toISOString(),
+      name: r.name?.trim() || r.student?.admissionNumber || "Unknown",
+      admissionNumber: r.student?.admissionNumber ?? null,
+      className: classLabel(r.student?.class),
+      fatherName: r.student?.fatherName ?? null,
+      lastSignInAt: lastByUser.get(r.id)?.toISOString() ?? null,
+    })),
   };
 }

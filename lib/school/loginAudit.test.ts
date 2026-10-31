@@ -1,7 +1,14 @@
 /**
  * @jest-environment node
  */
-import { describeDevice, loadLoginAudit, parseLoginAuditFilters, todayIst } from "@/lib/school/loginAudit";
+import {
+  describeDevice,
+  loadEarlierLogins,
+  loadLoginAudit,
+  parseEarlierLoginFilters,
+  parseLoginAuditFilters,
+  todayIst,
+} from "@/lib/school/loginAudit";
 
 const params = (q: string) => new URLSearchParams(q);
 // 31 Oct 2026, 23:00 UTC = 1 Nov 2026, 04:30 in India.
@@ -161,5 +168,101 @@ describe("loadLoginAudit", () => {
     expect(args.take).toBe(10);
     // Summary covers the date range only.
     expect(db.loginAuditLog.groupBy.mock.calls[0][0].where).not.toHaveProperty("role");
+  });
+});
+
+describe("parseEarlierLoginFilters", () => {
+  it("has no default dates", () => {
+    expect(parseEarlierLoginFilters(params(""))).toEqual({ from: null, to: null, q: "", classId: null, page: 1, pageSize: 50 });
+  });
+
+  it("rejects bad or reversed dates", () => {
+    expect(parseEarlierLoginFilters(params("to=31-10-2026"))).toEqual({ error: "Dates must be YYYY-MM-DD" });
+    expect(parseEarlierLoginFilters(params("from=2026-10-31&to=2026-10-01"))).toEqual({ error: "From date is after To date" });
+  });
+});
+
+describe("loadEarlierLogins", () => {
+  const db = {
+    user: { count: jest.fn(), findMany: jest.fn() },
+    student: { count: jest.fn() },
+    loginAuditLog: { findFirst: jest.fn(), groupBy: jest.fn() },
+    class: { findMany: jest.fn() },
+  };
+  const base = { from: null, to: null, q: "", classId: null, page: 1, pageSize: 50 } as const;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    db.user.count.mockResolvedValueOnce(2).mockResolvedValueOnce(5);
+    db.student.count.mockResolvedValue(40);
+    db.loginAuditLog.findFirst.mockResolvedValue({ createdAt: new Date("2026-10-31T11:00:00Z") });
+    db.class.findMany.mockResolvedValue([{ id: "c6a", name: "CLASS 6", section: "A" }]);
+    db.user.findMany.mockResolvedValue([
+      {
+        id: "u1",
+        name: "Asha",
+        privacyConsentAt: new Date("2026-10-22T09:20:18Z"),
+        student: { admissionNumber: "ADM/1", fatherName: "Ravi", class: { name: "CLASS 6", section: "A" } },
+      },
+      { id: "u2", name: null, privacyConsentAt: new Date("2026-10-20T09:00:00Z"), student: { admissionNumber: "ADM/2", fatherName: "Kiran", class: null } },
+    ]);
+    db.loginAuditLog.groupBy.mockResolvedValue([{ userId: "u1", _max: { createdAt: new Date("2026-10-31T12:00:00Z") } }]);
+  });
+
+  it("lists the school's parents / students who accepted the privacy policy, newest first", async () => {
+    const page = await loadEarlierLogins(db as never, "school-1", base);
+
+    const args = db.user.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({
+      schoolId: "school-1",
+      role: "STUDENT",
+      privacyConsentAt: { not: null },
+      student: { schoolId: "school-1" },
+    });
+    expect(args.orderBy).toEqual({ privacyConsentAt: "desc" });
+    expect(db.student.count.mock.calls[0][0].where).toEqual({ schoolId: "school-1", status: "Active" });
+    expect(db.loginAuditLog.findFirst.mock.calls[0][0].where).toEqual({ schoolId: "school-1" });
+    expect(db.loginAuditLog.groupBy.mock.calls[0][0].where).toEqual({ schoolId: "school-1", userId: { in: ["u1", "u2"] } });
+    expect(db.class.findMany.mock.calls[0][0].where).toEqual({ schoolId: "school-1" });
+
+    expect(page).toMatchObject({ total: 2, loggedIn: 5, activeStudents: 40, recordingSince: "2026-10-31T11:00:00.000Z" });
+    expect(page.entries).toEqual([
+      {
+        userId: "u1",
+        firstLoginAt: "2026-10-22T09:20:18.000Z",
+        name: "Asha",
+        admissionNumber: "ADM/1",
+        className: "CLASS 6 - A",
+        fatherName: "Ravi",
+        lastSignInAt: "2026-10-31T12:00:00.000Z",
+      },
+      { userId: "u2", firstLoginAt: "2026-10-20T09:00:00.000Z", name: "ADM/2", admissionNumber: "ADM/2", className: null, fatherName: "Kiran", lastSignInAt: null },
+    ]);
+  });
+
+  it("filters by India-time dates, class and search; the logged-in count ignores search and class", async () => {
+    await loadEarlierLogins(db as never, "school-1", { ...base, from: "2026-10-20", to: "2026-10-25", q: "ravi", classId: "c6a", page: 2, pageSize: 10 });
+
+    const args = db.user.findMany.mock.calls[0][0];
+    const consentAt = { not: null, gte: new Date("2026-10-19T18:30:00.000Z"), lte: new Date("2026-10-25T18:29:59.999Z") };
+    expect(args.where).toEqual({
+      schoolId: "school-1",
+      role: "STUDENT",
+      privacyConsentAt: consentAt,
+      student: { schoolId: "school-1", classId: "c6a" },
+      OR: [
+        { name: { contains: "ravi", mode: "insensitive" } },
+        { student: { schoolId: "school-1", admissionNumber: { contains: "ravi", mode: "insensitive" } } },
+        { student: { schoolId: "school-1", fatherName: { contains: "ravi", mode: "insensitive" } } },
+      ],
+    });
+    expect(args.skip).toBe(10);
+    expect(args.take).toBe(10);
+    expect(db.user.count.mock.calls[1][0].where).toEqual({
+      schoolId: "school-1",
+      role: "STUDENT",
+      privacyConsentAt: consentAt,
+      student: { schoolId: "school-1" },
+    });
   });
 });
