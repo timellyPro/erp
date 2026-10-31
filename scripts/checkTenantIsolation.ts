@@ -83,6 +83,10 @@ const CLIENT_SCHOOL_ID_ALLOWLIST = new Set<string>([
   "app/api/superadmin/schools/[id]/subscription/route.ts",
   "app/api/superadmin/schools/[id]/fees-backup/route.ts",
   "app/api/superadmin/schools/create/route.ts",
+  // ?schoolId= is read only in the SUPERADMIN branch (cross-tenant by design, and
+  // the id is checked to exist); SCHOOLADMIN and STUDENT callers always get their
+  // school from the session and ignore the param — pinned by its route.test.ts.
+  "app/api/school/birthdays-today/route.ts",
 ]);
 
 /** Matches `searchParams.get("schoolId")`, `.get('school_id')`, etc. (case-insensitive). */
