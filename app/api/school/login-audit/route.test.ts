@@ -24,7 +24,16 @@ jest.mock("@/lib/school/loginAudit", () => ({
   loadLoginAudit: (...args: unknown[]) => mockLoadLoginAudit(...args),
 }));
 
-const PAGE = { from: "2026-10-25", to: "2026-10-31", page: 1, pageSize: 50, total: 0, entries: [], classes: [] };
+const PAGE = {
+  from: "2026-10-25",
+  to: "2026-10-31",
+  page: 1,
+  pageSize: 50,
+  total: 0,
+  recordingSince: "2026-10-31T03:15:00.000Z",
+  entries: [],
+  classes: [],
+};
 
 const req = (query = "") => new Request(`http://localhost/api/school/login-audit${query}`);
 
@@ -61,6 +70,18 @@ describe("GET /api/school/login-audit", () => {
         expect.anything(),
         "school-1",
         expect.objectContaining({ category: "TEACHER", from: "2026-10-01", to: "2026-10-31", q: "ravi", page: 2 })
+      );
+    });
+
+    it("passes an all-time range through with the page size capped, returning recordingSince", async () => {
+      const res = await GET(req("?from=2026-10-31&to=2027-03-31&page=7&pageSize=5000"));
+
+      expect(res.status).toBe(200);
+      expect((await res.json()).recordingSince).toBe("2026-10-31T03:15:00.000Z");
+      expect(mockLoadLoginAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        "school-1",
+        expect.objectContaining({ from: "2026-10-31", to: "2027-03-31", page: 7, pageSize: 100 })
       );
     });
 

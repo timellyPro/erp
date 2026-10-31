@@ -25,6 +25,15 @@ describe("parseLoginAuditFilters", () => {
     expect(parseLoginAuditFilters(params("pageSize=5000&page=-3"))).toMatchObject({ pageSize: 100, page: 1 });
   });
 
+  it("accepts a wide (all-time) range and still caps the page size", () => {
+    expect(parseLoginAuditFilters(params("from=2020-01-01&to=2026-11-01&pageSize=100000&page=40"), LATE_UTC)).toMatchObject({
+      from: "2020-01-01",
+      to: "2026-11-01",
+      page: 40,
+      pageSize: 100,
+    });
+  });
+
   it("treats ALL as no category", () => {
     expect(parseLoginAuditFilters(params("category=ALL"))).toMatchObject({ category: null });
   });
@@ -43,7 +52,7 @@ describe("describeDevice", () => {
 
 describe("loadLoginAudit", () => {
   const db = {
-    loginAuditLog: { count: jest.fn(), findMany: jest.fn(), groupBy: jest.fn() },
+    loginAuditLog: { count: jest.fn(), findMany: jest.fn(), groupBy: jest.fn(), findFirst: jest.fn() },
     student: { findMany: jest.fn() },
     class: { findMany: jest.fn() },
   };
@@ -52,6 +61,7 @@ describe("loadLoginAudit", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     db.loginAuditLog.count.mockResolvedValue(2);
+    db.loginAuditLog.findFirst.mockResolvedValue({ createdAt: new Date("2026-10-31T03:15:00Z") });
     db.loginAuditLog.groupBy.mockResolvedValue([
       { role: "STUDENT", userId: "u1", _count: { _all: 3 } },
       { role: "STUDENT", userId: "u2", _count: { _all: 1 } },
@@ -79,6 +89,34 @@ describe("loadLoginAudit", () => {
     expect(db.loginAuditLog.groupBy.mock.calls[0][0].where.schoolId).toBe("school-1");
     expect(db.class.findMany.mock.calls[0][0].where).toEqual({ schoolId: "school-1" });
     expect(db.student.findMany.mock.calls[0][0].where).toEqual({ schoolId: "school-1", id: { in: ["s1"] } });
+  });
+
+  it("reports when recording started for this school only, or null before the first sign-in", async () => {
+    const page = await loadLoginAudit(db as never, "school-1", base);
+    expect(page.recordingSince).toBe("2026-10-31T03:15:00.000Z");
+    expect(db.loginAuditLog.findFirst).toHaveBeenCalledWith({
+      where: { schoolId: "school-1" },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true },
+    });
+
+    db.loginAuditLog.findFirst.mockResolvedValueOnce(null);
+    expect((await loadLoginAudit(db as never, "school-1", base)).recordingSince).toBeNull();
+  });
+
+  it("pages an all-time range by schoolId + createdAt, capped at pageSize rows", async () => {
+    db.loginAuditLog.count.mockResolvedValue(950);
+    const page = await loadLoginAudit(db as never, "school-1", { ...base, from: "2026-10-31", to: "2027-03-31", page: 4, pageSize: 100 });
+
+    const range = { gte: new Date("2026-10-30T18:30:00.000Z"), lte: new Date("2027-03-31T18:29:59.999Z") };
+    expect(db.loginAuditLog.count.mock.calls[0][0].where).toEqual({ schoolId: "school-1", createdAt: range });
+    expect(db.loginAuditLog.groupBy.mock.calls[0][0].where).toEqual({ schoolId: "school-1", createdAt: range });
+    const args = db.loginAuditLog.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ schoolId: "school-1", createdAt: range });
+    expect(args.orderBy).toEqual({ createdAt: "desc" });
+    expect(args.skip).toBe(300);
+    expect(args.take).toBe(100);
+    expect(page).toMatchObject({ from: "2026-10-31", to: "2027-03-31", page: 4, pageSize: 100, total: 950 });
   });
 
   it("summarises people and sign-ins per category, admin and chairman together", async () => {
