@@ -6,6 +6,7 @@ import PageHeader from "../common/PageHeader";
 import { Users, School, GraduationCap } from "lucide-react";
 import { formatNumber as fmtNum } from "../../utils/format";
 import StatCard from "../common/statCard";
+import { BirthdayCard } from "../common/BirthdayCard";
 import Spinner from "../common/Spinner";
 import { AVATAR_URL } from "../../constants/images";
 import {
@@ -19,6 +20,7 @@ export default function Dashboard() {
   const [data, setData] = useState<SuperadminDashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [birthdaySchoolId, setBirthdaySchoolId] = useState<string>("");
 
   useEffect(() => {
     let cancelled = false;
@@ -144,6 +146,26 @@ export default function Dashboard() {
             </div>
           </StatCard>
         </div>
+
+        {schools.length > 0 && (
+          <BirthdayCard
+            schoolId={birthdaySchoolId || schools[0].id}
+            action={
+              <select
+                aria-label="School"
+                value={birthdaySchoolId || schools[0].id}
+                onChange={(e) => setBirthdaySchoolId(e.target.value)}
+                className="max-w-[12rem] rounded-lg border border-white/10 bg-white/10 px-2 py-1.5 text-xs text-white"
+              >
+                {schools.map((s) => (
+                  <option key={s.id} value={s.id} className="text-black">
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            }
+          />
+        )}
       </div>
     </main>
   );
