@@ -1,4 +1,4 @@
-import { NextResponse, NextRequest } from "next/server";
+import { NextResponse, NextRequest } from "next/server";
 import { invalidateUserListServerCache } from "@/lib/school/userListServerCache";
 import { z } from "zod";
 import { getServerSession } from "next-auth";
