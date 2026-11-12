@@ -12,6 +12,7 @@ import {
   type StudentFeeDueInput,
 } from "@/lib/fees/feeDueReportCompute";
 import { buildFeeDueReportWorkbook } from "@/lib/fees/feeDueReportExcel";
+import { buildFeeDueTemplateWorkbook } from "@/lib/fees/feeDueTemplateExcel";
 import { studentStatusFilter } from "@/lib/students/studentStatus";
 import { logger } from "@/lib/logger";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
@@ -221,12 +222,15 @@ export async function GET(req: Request) {
       );
     }
 
-    const workbook = await buildFeeDueReportWorkbook(payload);
+    const useTemplate = searchParams.get("layout") === "template";
+    const workbook = useTemplate
+      ? await buildFeeDueTemplateWorkbook(payload)
+      : await buildFeeDueReportWorkbook(payload);
     const buf = await workbook.xlsx.writeBuffer();
     const bytes = new Uint8Array(Buffer.isBuffer(buf) ? buf : Buffer.from(buf as ArrayBuffer));
 
     const date = new Date().toISOString().slice(0, 10);
-    const filename = `fee-due-report-${date}.xlsx`;
+    const filename = `fee-due-report${useTemplate ? "-template" : ""}-${date}.xlsx`;
 
     return new NextResponse(bytes, {
       status: 200,

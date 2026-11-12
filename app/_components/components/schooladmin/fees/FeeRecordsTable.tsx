@@ -315,6 +315,15 @@ export default function FeeRecordsTable({ fees, classes }: FeeRecordsTableProps)
           <Download size={16} />
           Export Class-wise
         </button>
+        <button
+          type="button"
+          onClick={() => void exportFeeDueReport("template")}
+          disabled={feeDueExporting}
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+        >
+          <Download size={16} />
+          Revenue Template
+        </button>
       </div>
       <FeeRecordsRows paginatedFees={paginatedFees} router={router} />
       <div className="mt-4">
