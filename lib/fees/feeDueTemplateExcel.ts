@@ -70,9 +70,42 @@ export async function buildFeeDueTemplateWorkbook(payload: FeeDueReportPayload):
     ws.addRow(values);
   });
 
-  ws.columns.forEach((c, idx) => {
-    c.width = idx === 1 || idx === 4 ? 30 : idx < 7 ? 16 : 14;
-  });
+  // Look of the school's template: pale header fill (a colour per head), thin grey borders, 45pt header row.
+  const HEAD_FILL: Record<DueHeadKey, string> = {
+    hostel: "FFFFF2CC",
+    mess: "FFDDEBF7",
+    bus: "FFE2D5F7",
+    tuition: "FFC6E0B4",
+    admission: "FFF8CBAD",
+    other: "FFEDEDED",
+    previousYear: "FFD9D9D9",
+  };
+  const grey = { style: "thin" as const, color: { argb: "FFBFBFBF" } };
+  const border = { top: grey, left: grey, bottom: grey, right: grey };
+  const totalCols = fixed.length + heads.length * 4;
+  const widths = [8, 44, 21, 17, 43, 30, 16];
+  for (let c = 1; c <= totalCols; c++) ws.getColumn(c).width = widths[c - 1] ?? 17;
+  ws.getRow(1).height = 45;
+  for (let c = 1; c <= totalCols; c++) {
+    const cell = ws.getRow(1).getCell(c);
+    const head = c <= fixed.length ? null : heads[Math.floor((c - fixed.length - 1) / 4)];
+    cell.font = { bold: true, size: 10 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: head ? HEAD_FILL[head] : "FFF9FAFB" } };
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    cell.border = border;
+  }
+  for (let r = 2; r <= payload.rows.length + 1; r++) {
+    for (let c = 1; c <= totalCols; c++) {
+      const cell = ws.getRow(r).getCell(c);
+      cell.border = border;
+      if (c >= 8) {
+        cell.numFmt = "#,##0.00";
+        cell.alignment = { horizontal: "right" };
+      } else {
+        cell.alignment = { horizontal: c === 2 || c === 5 ? "left" : "center" };
+      }
+    }
+  }
 
   const totals = wb.addWorksheet("Totals");
   totals.addRow(["Head", "Fee", "Concession", "Paid", "Due"]);
@@ -100,8 +133,7 @@ export async function buildFeeDueTemplateWorkbook(payload: FeeDueReportPayload):
   const prev = sum("previousYear");
   totals.addRow(["Previous year (extra)", r2(prev.fee), r2(prev.concession), r2(prev.paid), r2(prev.due)]);
   totals.addRow(["Students", payload.rows.length]);
-  totals.getColumn(1).width = 24;
-  [2, 3, 4, 5].forEach((c) => (totals.getColumn(c).width = 16));
+  [1, 2, 3, 4, 5].forEach((c) => (totals.getColumn(c).width = 24));
 
   return wb;
 }
