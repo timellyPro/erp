@@ -69,6 +69,7 @@ export const authOptions: NextAuthOptions = {
               name: true,
               email: true,
               password: true,
+              loginBlocked: true,
               role: true,
               schoolId: true,
               mobile: true,
@@ -93,8 +94,8 @@ export const authOptions: NextAuthOptions = {
 
           // Check if password is explicitly null (deactivated account)
           // Only block login if password is null - allow password verification for all other cases
-          if (user.password === null) {
-            logger.info("Auth: User account is deactivated (password is null) for email:", credentials.email);
+          if (user.password === null || user.loginBlocked) {
+            logger.info("Auth: User account is deactivated (password is null or login blocked) for email:", credentials.email);
             throw new Error("Account is deactivated or password not set. Please contact your administrator.");
           }
 
@@ -229,6 +230,7 @@ export const authOptions: NextAuthOptions = {
           select: {
             role: true,
             password: true,
+            loginBlocked: true,
             schoolId: true,
             allowedFeatures: true,
             photoUrl: true,
@@ -241,7 +243,7 @@ export const authOptions: NextAuthOptions = {
           // Deactivation (password set to null) must invalidate the session immediately,
           // not just at next login — otherwise a deactivated user keeps full access for
           // the rest of their token's lifetime.
-          if (dbUser.password === null) {
+          if (dbUser.password === null || dbUser.loginBlocked) {
             throw new Error("account_deactivated");
           }
 

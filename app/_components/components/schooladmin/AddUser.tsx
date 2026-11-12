@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { motion } from "framer-motion";
-import { Pencil, Search, Trash2 } from "lucide-react";
+import { Pencil, Search, Trash2, UserCheck, UserX } from "lucide-react";
 import { useDebounce } from "@/app/_components/hooks/useDebounce";
 import PageHeader from "../common/PageHeader";
 import DataTable from "../common/TableLayout";
@@ -14,10 +14,12 @@ import DeleteConfirmation from "../common/DeleteConfirmation";
 import UserBadge from "./schooladmincomponents/UserBadge";
 import RoleBadge from "./schooladmincomponents/RoleBadge";
 import StatusBadge from "./schooladmincomponents/StatusBadge";
+import StatusChangeConfirmation from "./schooladmincomponents/StatusChangeConfirmation";
 import UsersMobileList from "./schooladmincomponents/UsersMobileList";
 import InlinePagination from "./schooladmincomponents/InlinePagination";
 import { IUser, TableColumn } from "@/app/_components/constants/addUserTable";
 import { deleteUser } from "@/lib/api/user";
+import { apiPut } from "@/lib/api/http";
 import {
   fetchUserListPage,
   invalidateAddUserPageCache,
@@ -63,6 +65,8 @@ export default function AddUser() {
     userId: "",
     userName: "",
   });
+
+  const [statusModal, setStatusModal] = useState<{ user: IUser; next: "Active" | "Inactive" } | null>(null);
 
   const listKey = schoolId
     ? listCacheKey(schoolId, page, PAGE_SIZE, debouncedSearch, LIST_ROLE)
@@ -163,6 +167,25 @@ export default function AddUser() {
     }
   };
 
+  /** Teachers only: the toggle opens a confirmation popup; confirming flips Active <-> Inactive. */
+  const handleToggleStatus = (user: IUser) => {
+    setStatusModal({ user, next: user.teacherStatus === "Inactive" ? "Active" : "Inactive" });
+  };
+
+  const handleStatusConfirm = async (blockLogin: boolean) => {
+    if (!statusModal) return;
+    const { user, next } = statusModal;
+    // Only the status is sent, nothing else on the user changes.
+    const { ok, data } = await apiPut<{ message?: string }>(`/api/user/${user.id}`, {
+      teacherStatus: next,
+      loginBlocked: next === "Inactive" && blockLogin,
+    });
+    if (!ok) throw new Error(data?.message || "Could not change the status.");
+    setUsers((rows) => rows.map((u) => (u.id === user.id ? { ...u, teacherStatus: next } : u)));
+    if (schoolId) invalidateAddUserPageCache(schoolId);
+    setStatusModal(null);
+  };
+
   const handleFormSuccess = useCallback(() => {
     if (schoolId) invalidateAddUserPageCache(schoolId);
     const params = new URLSearchParams(searchParams.toString());
@@ -199,7 +222,9 @@ export default function AddUser() {
     },
     {
       header: "STATUS",
-      render: () => <StatusBadge status="active" />,
+      render: (row: IUser) => (
+        <StatusBadge status={row.teacherStatus === "Inactive" ? "inactive" : "active"} />
+      ),
     },
     {
       header: "LAST ACTIVE",
@@ -232,6 +257,17 @@ export default function AddUser() {
               }
             >
               <Pencil size={18} />
+            </motion.button>
+          )}
+          {row.role === "TEACHER" && (
+            <motion.button
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => handleToggleStatus(row)}
+              className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-amber-300 transition-colors"
+              title={row.teacherStatus === "Inactive" ? "Make active" : "Make inactive"}
+            >
+              {row.teacherStatus === "Inactive" ? <UserCheck size={18} /> : <UserX size={18} />}
             </motion.button>
           )}
           <motion.button
@@ -299,6 +335,7 @@ export default function AddUser() {
               loading={loading && users.length === 0}
               onEdit={handleEdit}
               onDelete={handleDeleteClick}
+              onToggleStatus={handleToggleStatus}
               getLastActive={getLastActive}
             />
             <InlinePagination page={page} totalPages={totalPages} onChange={setPage} />
@@ -333,6 +370,14 @@ export default function AddUser() {
           />
         </motion.div>
       )}
+
+      <StatusChangeConfirmation
+        isOpen={statusModal !== null}
+        userName={statusModal?.user.name ?? ""}
+        nextStatus={statusModal?.next ?? "Inactive"}
+        onConfirm={handleStatusConfirm}
+        onCancel={() => setStatusModal(null)}
+      />
 
       <DeleteConfirmation
         isOpen={deleteModal.isOpen}

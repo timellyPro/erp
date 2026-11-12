@@ -1,6 +1,6 @@
 "use client";
 
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2, UserCheck, UserX } from "lucide-react";
 import RoleBadge from "./RoleBadge";
 import StatusBadge from "./StatusBadge";
 import { IUser } from "@/app/_components/constants/addUserTable";
@@ -11,6 +11,7 @@ type Props = {
   loading?: boolean;
   onEdit: (user: IUser) => void;
   onDelete: (user: IUser) => void;
+  onToggleStatus?: (user: IUser) => void;
   getLastActive: (user: IUser) => string;
 };
 
@@ -19,6 +20,7 @@ export default function UsersMobileList({
   loading = false,
   onEdit,
   onDelete,
+  onToggleStatus,
   getLastActive,
 }: Props) {
   return (
@@ -55,7 +57,7 @@ export default function UsersMobileList({
 
             <div className="mt-3 flex items-center gap-2">
               <RoleBadge role={row.role} />
-              <StatusBadge status="active" />
+              <StatusBadge status={row.teacherStatus === "Inactive" ? "inactive" : "active"} />
             </div>
 
             <div className="mt-3 text-xs text-white/55">
@@ -80,6 +82,16 @@ export default function UsersMobileList({
                   }
                 >
                   <Pencil size={16} />
+                </button>
+              )}
+              {row.role === "TEACHER" && onToggleStatus && (
+                <button
+                  type="button"
+                  onClick={() => onToggleStatus(row)}
+                  className="p-2 rounded-lg text-white/60 hover:text-amber-300 hover:bg-white/10 transition-colors"
+                  title={row.teacherStatus === "Inactive" ? "Make active" : "Make inactive"}
+                >
+                  {row.teacherStatus === "Inactive" ? <UserCheck size={16} /> : <UserX size={16} />}
                 </button>
               )}
               <button
