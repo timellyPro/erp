@@ -229,7 +229,9 @@ export default function useFeeRecordsExportActions({
     });
   };
 
-  const exportFeeDueReport = async () => {
+  const exportFeeDueReport = (layout?: "template") => exportFeeDueReportImpl(layout);
+
+  const exportFeeDueReportImpl = async (layout?: "template") => {
     if (statusFilteredFees.length === 0) {
       alert("No fee records available for this report.");
       return;
@@ -237,6 +239,7 @@ export default function useFeeRecordsExportActions({
     setFeeDueExporting(true);
     try {
       const params = new URLSearchParams();
+      if (layout === "template") params.set("layout", "template");
       if (selectedClass) params.set("classId", selectedClass);
       if (selectedHead) params.set("head", selectedHead);
       if (studentStatusFilter !== "All") params.set("status", studentStatusFilter);
@@ -257,7 +260,7 @@ export default function useFeeRecordsExportActions({
       const headSlug = selectedHead
         ? `-${selectedHead.replace(/[^\w]+/g, "_").replace(/^_|_$/g, "").slice(0, 40)}`
         : "";
-      a.download = `fee-due-report${headSlug}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.download = `fee-due-report${layout === "template" ? "-revenue-template" : ""}${headSlug}-${new Date().toISOString().slice(0, 10)}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
