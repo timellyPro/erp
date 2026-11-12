@@ -1,4 +1,5 @@
-import { NextResponse, NextRequest } from "next/server";
+import { NextResponse, NextRequest } from "next/server";
+import { invalidateUserListServerCache } from "@/lib/school/userListServerCache";
 import { z } from "zod";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/authOptions";
@@ -27,6 +28,8 @@ const updateUserBodySchema = z.object({
   experience: z.union([z.string(), z.number()]).optional().nullable(),
   joiningDate: z.string().optional().nullable(),
   teacherStatus: z.string().optional().nullable(),
+  /** With teacherStatus "Inactive": also block the teacher from signing in. Ignored (cleared) when set Active. */
+  loginBlocked: z.boolean().optional(),
   mobile: z.union([z.string(), z.number()]).optional().nullable(),
   address: z.string().optional().nullable(),
   photoUrl: z.string().optional().nullable(),
@@ -134,6 +137,7 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
       experience,
       joiningDate,
       teacherStatus,
+      loginBlocked,
       mobile,
       address,
       photoUrl,
@@ -215,7 +219,11 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
           updateData.joiningDate = null;
         }
       }
-      if (teacherStatus !== undefined) updateData.teacherStatus = teacherStatus && String(teacherStatus).trim() ? String(teacherStatus).trim() : "Active";
+      if (teacherStatus !== undefined) {
+        updateData.teacherStatus = teacherStatus && String(teacherStatus).trim() ? String(teacherStatus).trim() : "Active";
+        // Blocking login only goes with Inactive; making a teacher Active again always lifts the block.
+        updateData.loginBlocked = updateData.teacherStatus === "Inactive" ? loginBlocked === true : false;
+      }
       if (mobile !== undefined) updateData.mobile = mobile && String(mobile).trim() ? String(mobile).trim() : null;
       if (address !== undefined) updateData.address = address && String(address).trim() ? String(address).trim() : null;
     }
@@ -241,6 +249,7 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
         experience: true,
         joiningDate: true,
         teacherStatus: true,
+        loginBlocked: true,
         mobile: true,
         address: true,
         photoUrl: true,
@@ -249,6 +258,7 @@ export async function PUT(req: NextRequest, { params }: { params: Params }) {
     if (user.role === "TEACHER") {
       purgeSchoolDashboardServerCacheMatching(`teacher:list:${schoolId}`);
       purgeSchoolDashboardServerCacheMatching(`class:list:lite:${schoolId}`);
+      invalidateUserListServerCache(schoolId);
     }
 
     return NextResponse.json({

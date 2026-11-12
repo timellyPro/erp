@@ -76,6 +76,7 @@ export async function GET(req: Request) {
             photoUrl: true,
             subject: true,
             allowedFeatures: true,
+            teacherStatus: true,
           },
         }),
         tx.user.count({ where }),

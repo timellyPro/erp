@@ -107,6 +107,8 @@ model User {
   experience        String? // e.g. 5 Years
   joiningDate       DateTime?        @db.Date
   teacherStatus     String?          @default("Active") // Active, Inactive
+  /// True when a school admin made the user inactive AND blocked their login (kept separate from the status label).
+  loginBlocked      Boolean          @default(false)
   address           String?          @db.Text
   leaveAprrover     Boolean          @default(false)
   /**

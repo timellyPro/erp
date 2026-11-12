@@ -7,6 +7,8 @@ export interface IUser {
   designation?: string;
   allowedFeatures?: string[];
    photoUrl?: string | null;
+  /** Teachers only: "Active" (default) or "Inactive". */
+  teacherStatus?: string | null;
 }
 
 export interface TableColumn {
