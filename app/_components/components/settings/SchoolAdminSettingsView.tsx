@@ -5,7 +5,7 @@ import { fetchNotifications, markNotificationRead } from "@/lib/api/notification
 import { CommonSettingsProps } from "./portalSettingsTypes";
 import { SchoolAdminAccountCard } from "./shared";
 import { SchoolEmailDomainCard } from "./shared";
-import { SchoolResidencyMonthsCard } from "./shared";
+import { SchoolResidencyMonthsCard, FeeLastDatesCard } from "./shared";
 import { SchoolHyperPGCredentialsCard } from "./shared";
 import { SchoolAdminPasswordCard } from "./shared";
 import {
@@ -82,6 +82,7 @@ export default function SchoolAdminSettingsView({
       />
       <SchoolEmailDomainCard />
       <SchoolResidencyMonthsCard />
+      <FeeLastDatesCard />
       <SchoolHyperPGCredentialsCard />
       <SchoolAdminPasswordCard passwords={passwords} setPasswords={setPasswords} />
       <SchoolAdminNotificationsCard

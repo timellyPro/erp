@@ -15,6 +15,13 @@ const updateSettingsBodySchema = z.object({
   hyperpgApiKey: z.union([z.string(), z.null()]).optional(),
   /** Months the school bills in its year for hostel / day-scholar conversions (1-12, default 12). */
   residencyYearMonths: z.number().int().min(1).max(12).optional(),
+  /** Last date to pay each fee head: { tuition: "2026-12-15", hostel: null, ... }. null / "" clears one. */
+  feeLastDates: z
+    .record(
+      z.enum(["hostel", "mess", "bus", "tuition", "admission", "other", "previousYear"]),
+      z.union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/), z.literal(""), z.null()])
+    )
+    .optional(),
 });
 
 async function getSchoolId(session: { user: { id: string; schoolId?: string | null } }) {
@@ -78,11 +85,13 @@ export async function PUT(req: Request) {
       hyperpgMerchantId,
       hyperpgApiKey,
       residencyYearMonths,
+      feeLastDates,
     } = parsedBody.data;
 
-    // Changes how every hostel / day-scholar conversion is billed, so only school leadership may set it.
+    // Changes how every hostel / day-scholar conversion is billed (and the dates parents are told to pay by),
+    // so only school leadership may set it.
     if (
-      residencyYearMonths !== undefined &&
+      (residencyYearMonths !== undefined || feeLastDates !== undefined) &&
       !(["SCHOOLADMIN", "CHAIRMAN", "SUPERADMIN"] as string[]).includes(String(session.user.role))
     ) {
       return NextResponse.json({ message: "Only the school admin or chairman can change this" }, { status: 403 });
@@ -95,7 +104,15 @@ export async function PUT(req: Request) {
       hyperpgMerchantId?: string | null;
       hyperpgApiKey?: string | null;
       residencyYearMonths?: number;
+      feeLastDates?: Record<string, string>;
     } = {};
+    if (feeLastDates !== undefined) {
+      const cleaned: Record<string, string> = {};
+      for (const [k, v] of Object.entries(feeLastDates)) {
+        if (v) cleaned[k] = v;
+      }
+      data.feeLastDates = cleaned;
+    }
     if (typeof admissionPrefix === "string") data.admissionPrefix = admissionPrefix;
     if (typeof rollNoPrefix === "string") data.rollNoPrefix = rollNoPrefix;
     if (emailDomain !== undefined) data.emailDomain = emailDomain === "" ? null : String(emailDomain);

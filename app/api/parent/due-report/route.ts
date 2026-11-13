@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/authOptions";
-import { runInTenantScope } from "@/lib/db/tenantContext";
+import { runInTenantScope, tenantDb } from "@/lib/db/tenantContext";
 import { schoolIdViaStudentId } from "@/lib/auth/tenant";
 import { buildStudentFeeDueReport } from "@/lib/fees/buildStudentFeeDueReport";
 import { logger } from "@/lib/logger";
@@ -28,13 +28,26 @@ export async function GET() {
       return NextResponse.json({ message: "School not found in session" }, { status: 400 });
     }
 
-    const report = await runInTenantScope(schoolId, () => buildStudentFeeDueReport(schoolId, studentId));
+    const { report, lastDates } = await runInTenantScope(schoolId, async () => {
+      const [report, settings] = await Promise.all([
+        buildStudentFeeDueReport(schoolId, studentId),
+        tenantDb.schoolSettings.findUnique({ where: { schoolId }, select: { feeLastDates: true } }),
+      ]);
+      const raw = settings?.feeLastDates;
+      const lastDates: Record<string, string> = {};
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+          if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) lastDates[k] = v;
+        }
+      }
+      return { report, lastDates };
+    });
     if (!report) {
       return NextResponse.json({ message: "Fee details not found for this student" }, { status: 404 });
     }
 
     // Money figures must never be served from a browser or CDN cache.
-    return NextResponse.json({ report }, { status: 200, headers: { "Cache-Control": "private, no-store" } });
+    return NextResponse.json({ report, lastDates }, { status: 200, headers: { "Cache-Control": "private, no-store" } });
   } catch (error: unknown) {
     logger.error("Parent fee due report error:", error);
     return NextResponse.json({ message: toClientErrorMessage(error, "Internal server error") }, { status: 500 });

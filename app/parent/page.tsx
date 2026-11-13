@@ -26,6 +26,7 @@ import {
   peekParentDetailsFromBootstrap,
   warmParentPortalBootstrap,
 } from "@/lib/parent/loadParentPortal";
+import ParentFeeDueNotice from "@/app/_components/components/parent/ParentFeeDueNotice";
 import ParentConsentGate from "@/app/_components/components/parent/ParentConsentGate";
 import { Lock } from "lucide-react";
 
@@ -222,6 +223,7 @@ function ParentDashboardInner() {
       >
         <div className="relative min-h-[70vh]">
           <ParentConsentGate />
+          <ParentFeeDueNotice />
           <div className={blurBackground}>{renderTabContent()}</div>
 
           {showSubscriptionModal && (
