@@ -358,6 +358,11 @@ model SchoolSettings {
   // annual / 10 and a student who moves on 1 October has 4 months before and 6 after.
   residencyYearMonths Int @default(12)
 
+  // Last date to pay each fee head, set by the school admin: { "tuition": "2026-12-15", "hostel": "2026-12-31", ... }
+  // Keys are the due-report head keys (hostel, mess, bus, tuition, admission, other, previousYear).
+  // Shown to parents in the fee-due popup and fee screen. Null / missing key = no last date set.
+  feeLastDates Json?
+
   // Email domain override for auto-generated emails (e.g. "myschool.in")
   emailDomain String?
 

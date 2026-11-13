@@ -4,3 +4,4 @@ export * from "./SchoolAdminPasswordCard";
 export * from "./SchoolEmailDomainCard";
 export * from "./SchoolHyperPGCredentialsCard";
 export * from "./SchoolResidencyMonthsCard";
+export * from "./FeeLastDatesCard";

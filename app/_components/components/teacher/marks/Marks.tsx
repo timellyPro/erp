@@ -197,6 +197,20 @@ export default function TeacherMarksTab() {
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <SelectField
+              label="EXAM TYPE"
+              value={form.examType}
+              onChange={(v) => handleChange("examType", v)}
+              options={examTypeOptions}
+              className="w-full px-4 py-2.5 bg-black/40 border border-white/10 rounded-xl focus:outline-none focus:border-lime-400/50 text-white text-sm"
+            />
+            <SelectField
+              label="SUBJECT"
+              value={form.subject}
+              onChange={(v) => handleChange("subject", v)}
+              options={subjectOptions.length ? subjectOptions : ["No subjects assigned"]}
+              className="w-full px-4 py-2.5 bg-black/40 border border-white/10 rounded-xl focus:outline-none focus:border-lime-400/50 text-white text-sm"
+            />
+            <SelectField
               label="CLASS"
               value={form.classLabel || ""}
               onChange={(v) => handleChange("class", v)}
@@ -208,20 +222,6 @@ export default function TeacherMarksTab() {
               value={form.section}
               onChange={(v) => handleChange("section", v)}
               options={sectionOptions}
-              className="w-full px-4 py-2.5 bg-black/40 border border-white/10 rounded-xl focus:outline-none focus:border-lime-400/50 text-white text-sm"
-            />
-            <SelectField
-              label="SUBJECT"
-              value={form.subject}
-              onChange={(v) => handleChange("subject", v)}
-              options={subjectOptions.length ? subjectOptions : ["No subjects assigned"]}
-              className="w-full px-4 py-2.5 bg-black/40 border border-white/10 rounded-xl focus:outline-none focus:border-lime-400/50 text-white text-sm"
-            />
-            <SelectField
-              label="EXAM TYPE"
-              value={form.examType}
-              onChange={(v) => handleChange("examType", v)}
-              options={examTypeOptions}
               className="w-full px-4 py-2.5 bg-black/40 border border-white/10 rounded-xl focus:outline-none focus:border-lime-400/50 text-white text-sm"
             />
             <div>
