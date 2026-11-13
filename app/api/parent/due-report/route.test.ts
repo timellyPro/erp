@@ -11,8 +11,10 @@ jest.mock("next-auth", () => ({
   getServerSession: (...args: unknown[]) => mockGetServerSession(...args),
 }));
 jest.mock("@/lib/auth/authOptions", () => ({}));
+const mockSettingsFindUnique = jest.fn();
 jest.mock("@/lib/db/tenantContext", () => ({
   runInTenantScope: (schoolId: string, fn: (id: string) => unknown) => fn(schoolId),
+  tenantDb: { schoolSettings: { findUnique: (...args: unknown[]) => mockSettingsFindUnique(...args) } },
 }));
 jest.mock("@/lib/auth/tenant", () => ({
   schoolIdViaStudentId: (...args: unknown[]) => mockSchoolIdViaStudentId(...args),
@@ -36,6 +38,7 @@ describe("GET /api/parent/due-report", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockBuild.mockResolvedValue(REPORT);
+    mockSettingsFindUnique.mockResolvedValue({ feeLastDates: null });
   });
 
   it("401 without a session", async () => {
@@ -60,8 +63,16 @@ describe("GET /api/parent/due-report", () => {
 
     expect(res.status).toBe(200);
     expect(res.headers.get("Cache-Control")).toBe("private, no-store");
-    expect(await res.json()).toEqual({ report: REPORT });
+    expect(await res.json()).toEqual({ report: REPORT, lastDates: {} });
     expect(mockBuild).toHaveBeenCalledWith("s1", "stu1");
+  });
+
+  it("returns the school's fee last dates, dropping malformed entries", async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: "u1", role: "STUDENT", studentId: "stu1", schoolId: "s1" } });
+    mockSettingsFindUnique.mockResolvedValue({ feeLastDates: { tuition: "2026-12-15", hostel: "bad", mess: 5 } });
+    const body = await (await GET()).json();
+    expect(body.lastDates).toEqual({ tuition: "2026-12-15" });
+    expect(mockSettingsFindUnique).toHaveBeenCalledWith({ where: { schoolId: "s1" }, select: { feeLastDates: true } });
   });
 
   it("looks the school up from the student when the token has none", async () => {
