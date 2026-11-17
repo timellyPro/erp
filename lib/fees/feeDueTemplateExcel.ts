@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import type { FeeDueReportPayload } from "@/lib/fees/feeDueReportCompute";
+import type { AdmissionFeeAmounts } from "@/lib/fees/loadAdmissionFeesByStudent";
 import {
   aggregateRowByHead,
   DUE_HEAD_LABELS,
@@ -31,8 +32,19 @@ function headTitles(key: DueHeadKey): [string, string, string, string] {
  * "Totals" sheet. Built from the same payload as the standard due report, so the figures are the real ones.
  * An "Other" head is added only when some student has fees outside the five heads, so Total fees adds up.
  */
-export async function buildFeeDueTemplateWorkbook(payload: FeeDueReportPayload): Promise<ExcelJS.Workbook> {
+export async function buildFeeDueTemplateWorkbook(
+  payload: FeeDueReportPayload,
+  admissionByStudentId?: Map<string, AdmissionFeeAmounts>
+): Promise<ExcelJS.Workbook> {
   const perRow = payload.rows.map((row) => aggregateRowByHead(row, payload.groups));
+  // Admission fees kept in the Admissions module are added to the Admission head and to the row's totals.
+  // A student who already has an admission fee line in their fee records is left alone (no double count).
+  const admissionExtra = payload.rows.map((row, i) => {
+    const a = admissionByStudentId?.get(row.studentId);
+    if (!a || perRow[i].admission.fee > 0) return { fee: 0, paid: 0 };
+    perRow[i].admission = { fee: a.fee, concession: 0, paid: a.paid, due: a.fee - a.paid };
+    return a;
+  });
   const hasOther = perRow.some((h) => h.other.fee || h.other.concession || h.other.paid || h.other.due);
   const heads: DueHeadKey[] = DUE_HEAD_ORDER.filter((k) => k !== "other" || hasOther);
 
@@ -54,10 +66,10 @@ export async function buildFeeDueTemplateWorkbook(payload: FeeDueReportPayload):
       row.parent,
       row.mobile,
       row.category,
-      r2(row.totalFee),
+      r2(row.totalFee + admissionExtra[i].fee),
       r2(row.totalDiscount),
-      r2(row.feesPaid),
-      { formula: `H${r}-I${r}-J${r}`, result: r2(row.feesDue) },
+      r2(row.feesPaid + admissionExtra[i].paid),
+      { formula: `H${r}-I${r}-J${r}`, result: r2(row.feesDue + admissionExtra[i].fee - admissionExtra[i].paid) },
     ];
     heads.forEach((k, idx) => {
       const base = 12 + idx * 4;

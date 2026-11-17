@@ -10,6 +10,7 @@ import prisma from "../lib/db";
 import { loadFeeSummaryRows } from "@/lib/fees/computeFeeSummaryStats";
 import { buildFeeDueReportWorkbook } from "@/lib/fees/feeDueReportExcel";
 import { buildFeeDueTemplateWorkbook } from "@/lib/fees/feeDueTemplateExcel";
+import { loadAdmissionFeesByStudent } from "@/lib/fees/loadAdmissionFeesByStudent";
 
 async function main() {
   const arg = (n: string) => process.argv.find((a) => a.startsWith(`--${n}=`))?.split("=").slice(1).join("=");
@@ -29,7 +30,7 @@ async function main() {
 
   const due = await buildFeeDueReportWorkbook(payload);
   await due.xlsx.writeFile(`${outDir}/Lotus_Fee_Due_Report_${date}.xlsx`);
-  const rev = await buildFeeDueTemplateWorkbook(payload);
+  const rev = await buildFeeDueTemplateWorkbook(payload, await loadAdmissionFeesByStudent(prisma, school.id, rows.map((r) => r.studentId)));
   await rev.xlsx.writeFile(`${outDir}/Lotus_Revenue_Template_${date}.xlsx`);
   console.log(`${school.name}: ${rows.length} students -> ${outDir}`);
   await prisma.$disconnect();

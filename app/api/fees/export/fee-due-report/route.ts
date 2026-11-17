@@ -13,6 +13,7 @@ import {
 } from "@/lib/fees/feeDueReportCompute";
 import { buildFeeDueReportWorkbook } from "@/lib/fees/feeDueReportExcel";
 import { buildFeeDueTemplateWorkbook } from "@/lib/fees/feeDueTemplateExcel";
+import { loadAdmissionFeesByStudent } from "@/lib/fees/loadAdmissionFeesByStudent";
 import { studentStatusFilter } from "@/lib/students/studentStatus";
 import { logger } from "@/lib/logger";
 import { toClientErrorMessage } from "@/lib/errors/errorInfo";
@@ -224,7 +225,10 @@ export async function GET(req: Request) {
 
     const useTemplate = searchParams.get("layout") === "template";
     const workbook = useTemplate
-      ? await buildFeeDueTemplateWorkbook(payload)
+      ? await buildFeeDueTemplateWorkbook(
+          payload,
+          await loadAdmissionFeesByStudent(prisma, schoolId, payload.rows.map((r) => r.studentId))
+        )
       : await buildFeeDueReportWorkbook(payload);
     const buf = await workbook.xlsx.writeBuffer();
     const bytes = new Uint8Array(Buffer.isBuffer(buf) ? buf : Buffer.from(buf as ArrayBuffer));
