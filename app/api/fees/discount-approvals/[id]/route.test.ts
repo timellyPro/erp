@@ -173,8 +173,9 @@ describe("POST /api/fees/discount-approvals/[id]", () => {
     const json = await res.json();
     expect(json.message).toMatch(/approved and applied/i);
 
-    // The status update runs in the transaction, then the fee is rebuilt from the structure (not the stored total).
-    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    // The status update runs in the transaction, an older approved concession on the same head is
+    // replaced, then the fee is rebuilt from the structure (not the stored total).
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(2);
     expect(mockRecalc).toHaveBeenCalledWith(tx, { schoolId: "s1", studentId: "stu1", studentFeeId: "sf1" });
   });
 

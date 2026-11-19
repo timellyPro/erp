@@ -1,6 +1,6 @@
 "use client";
 
-import { Zap, Settings, PlusCircle, AlertCircle } from "lucide-react";
+import { Zap, Settings, PlusCircle, AlertCircle, Pencil } from "lucide-react";
 import { ModifyFeeModal, type FeeModifyResult } from "./ModifyFeeModal";
 import { AddExtraFeeModal } from "./AddExtraFeeModal";
 import { AssignFeeHeadsCatalogModal } from "./AssignFeeHeadsCatalogModal";
@@ -175,6 +175,21 @@ export const FeesBreakdown = (props: Props) => {
             {approvalUi.chip}
           </span>
         ) : null}
+        <span className="inline-flex items-center gap-2">
+          <span>
+            <span className="font-semibold text-amber-300">Concession:</span> ₹{discountAmount.toLocaleString("en-IN")}
+          </span>
+          <button
+            type="button"
+            onClick={() => void openModifyFeeModal()}
+            disabled={feesRecordingDisabled || modifyFeeOpening}
+            title="Edit this student's concession"
+            className="inline-flex items-center gap-1 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-xs font-semibold text-gray-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Pencil className="h-3 w-3" />
+            Edit
+          </button>
+        </span>
         {discountFeeHeadLabel ? (
           <span>
             <span className="font-semibold text-amber-300">Discount head:</span> {discountFeeHeadLabel}
