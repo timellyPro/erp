@@ -291,6 +291,7 @@ model School {
   transferCertificates TransferCertificate[]
   studentHistories       StudentHistory[]
   studentResidencyPeriods StudentResidencyPeriod[]
+  studentFeeYearHistory   StudentFeeYearHistory[]
   appointments         Appointment[]
   leaveRequests        LeaveRequest[]
   studentLeaveRequests StudentLeaveRequest[]
@@ -658,6 +659,7 @@ model Student {
   payments             Payment[]
   feeDiscountApprovals FeeDiscountApproval[]
   residencyPeriods     StudentResidencyPeriod[]
+  feeYearHistory       StudentFeeYearHistory[]
 
   // Parent SaaS subscription entries for this student/parent
   subscriptions ParentSubscription[]
@@ -1319,6 +1321,27 @@ model StudentResidencyPeriod {
   createdAt             DateTime  @default(now())
 
   @@index([studentId, academicYearStartYear])
+  @@index([schoolId, academicYearStartYear])
+}
+
+/// Per-academic-year (June-May) fee summary for one student, saved when a year is closed.
+/// The current year is always computed live; rows here are the history.
+model StudentFeeYearHistory {
+  id                    String   @id @default(cuid())
+  studentId             String
+  student               Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  schoolId              String
+  school                School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicYearStartYear Int
+  totalFee              Float
+  concession            Float    @default(0)
+  finalFee              Float
+  amountPaid            Float
+  balance               Float
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([studentId, academicYearStartYear])
   @@index([schoolId, academicYearStartYear])
 }
 

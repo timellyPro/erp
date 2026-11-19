@@ -108,4 +108,6 @@ export type FeesBreakdownProps = {
   feeBreakdownPending?: boolean;
   /** Inactive students — block fee recording and edits. */
   feesRecordingDisabled?: boolean;
+  /** Which part of the fee UI to render; the student page shows one per tab. */
+  view?: "summary" | "global" | "progress";
 };

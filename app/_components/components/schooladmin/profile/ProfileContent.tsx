@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useState } from "react";
 import { AcademicPerformance } from "./components/AcademicPerformance";
 import { FeeTransactions } from "./components/FeeTransactions";
 import { FeesBreakdown } from "./components/FeesBreakdown";
@@ -18,7 +18,19 @@ import { StudentSearchFilterBar } from "./shared";
 import { ProfileStatCards } from "./shared";
 import { useStudentDetailsPageState } from "./shared";
 
+type StudentTab = "details" | "fees" | "global" | "progress" | "transactions" | "certificates";
+
+const STUDENT_TABS: ReadonlyArray<{ id: StudentTab; label: string }> = [
+  { id: "details", label: "Student Details" },
+  { id: "fees", label: "Fees Breakdown" },
+  { id: "global", label: "Global Fee" },
+  { id: "progress", label: "Payment Progress" },
+  { id: "transactions", label: "Fee Details & Transactions" },
+  { id: "certificates", label: "Certificates" },
+];
+
 function StudentDetailsPageContent() {
+  const [activeTab, setActiveTab] = useState<StudentTab>("details");
   const {
     students,
     selectedId,
@@ -136,6 +148,29 @@ function StudentDetailsPageContent() {
             </div>
           ) : null}
 
+          <div
+            role="tablist"
+            aria-label="Student sections"
+            className="mb-4 flex gap-2 overflow-x-auto pb-1 sm:mb-6"
+          >
+            {STUDENT_TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === t.id}
+                onClick={() => setActiveTab(t.id)}
+                className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-semibold transition-colors ${
+                  activeTab === t.id
+                    ? "border-lime-500/50 bg-lime-500/20 text-lime-200"
+                    : "border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
           <div className="flex flex-col xl:flex-row xl:flex-wrap gap-4 sm:gap-6 md:gap-8 min-w-0 w-full items-start">
             <aside
               ref={sidebarAsideRef}
@@ -178,18 +213,23 @@ function StudentDetailsPageContent() {
             </aside>
 
             <div className="flex-1 min-w-0 w-full xl:basis-[calc(100%-300px-2rem)] 2xl:basis-[calc(100%-320px-2rem)] space-y-4 sm:space-y-6 md:space-y-8">
+            {activeTab === "details" ? (
+              <>
             <ProfileStatCards detail={detail} feeBreakdown={feeBreakdown} />
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 min-w-0">
               <AcademicPerformance data={detail.academicPerformance} />
               <AttendanceTrends data={detail.attendanceTrends} />
             </div>
+              </>
+            ) : null}
             </div>
 
             <div className="relative z-0 min-w-0 w-full basis-full space-y-4 sm:space-y-6 md:space-y-8">
-            {detail.fee ? (
+            {detail.fee && (activeTab === "fees" || activeTab === "global" || activeTab === "progress") ? (
               <FeesBreakdown
-                key={`fees-${detail.student.id}`}
+                key={`fees-${detail.student.id}-${activeTab}`}
+                view={activeTab === "global" ? "global" : activeTab === "progress" ? "progress" : "summary"}
                 studentId={detail.student.id}
                 classId={detail.student.class?.id ?? null}
                 feesRecordingDisabled={isSelectedInactive}
@@ -226,6 +266,7 @@ function StudentDetailsPageContent() {
               />
             ) : null}
 
+            {activeTab === "transactions" ? (
             <FeeTransactions
               key={`txns-${detail.student.id}`}
               fee={detail.fee}
@@ -257,8 +298,9 @@ function StudentDetailsPageContent() {
                 if (detail.student.id) removePaymentForStudent(detail.student.id, result);
               }}
             />
+            ) : null}
 
-            <Certificates certificates={detail.certificates} />
+            {activeTab === "certificates" ? <Certificates certificates={detail.certificates} /> : null}
             </div>
           </div>
         </div>
