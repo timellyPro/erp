@@ -45,7 +45,7 @@ export default function Dashboard() {
       ) : data ? (
         <>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 lg:gap-8">
-            <div className="lg:col-span-2">
+            <div className="lg:col-span-2 space-y-4 sm:space-y-6 md:space-y-8">
               <AttendanceCard
                 present={data.attendance.present}
                 absent={data.attendance.absent}
@@ -55,6 +55,14 @@ export default function Dashboard() {
                 presentPct={data.attendance.presentPct}
                 absentPct={data.attendance.absentPct}
                 latePct={data.attendance.latePct}
+              />
+              <DayCollectionByHeadCard
+                fromDate={selectedCollectionFrom}
+                toDate={selectedCollectionTo}
+                onDateRangeChange={handleCollectionDateRangeChange}
+                rows={data.todayCollectionByHead?.rows ?? []}
+                formattedTotal={data.todayCollectionByHead?.formattedTotal ?? "0"}
+                loading={headsLoading}
               />
             </div>
 
@@ -91,15 +99,6 @@ export default function Dashboard() {
               />
             </div>
           </div>
-
-          <DayCollectionByHeadCard
-            fromDate={selectedCollectionFrom}
-            toDate={selectedCollectionTo}
-            onDateRangeChange={handleCollectionDateRangeChange}
-            rows={data.todayCollectionByHead?.rows ?? []}
-            formattedTotal={data.todayCollectionByHead?.formattedTotal ?? "0"}
-            loading={headsLoading}
-          />
         </>
       ) : null}
 
