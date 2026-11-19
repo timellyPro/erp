@@ -124,7 +124,7 @@ function StudentDetailsPageContent() {
 
       {detail && (
         <>
-          {showStickyStudentName && pageStudentName ? (
+          {activeTab === "details" && showStickyStudentName && pageStudentName ? (
             <div className="pointer-events-none fixed top-[5.75rem] left-[calc(16rem+1.25rem)] z-30 hidden w-[200px] xl:block">
               <StudentNameCard
                 name={pageStudentName}
@@ -134,7 +134,7 @@ function StudentDetailsPageContent() {
             </div>
           ) : null}
 
-          {showStickyStudentName && pageStudentName ? (
+          {activeTab === "details" && showStickyStudentName && pageStudentName ? (
             <div className="xl:hidden sticky top-0 z-30 -mx-3 sm:-mx-4 md:-mx-6 px-3 sm:px-4 md:px-6 py-2 mb-2 bg-[#070b14]/95 backdrop-blur-md border-b border-white/10">
               <StudentNameCard name={pageStudentName} meta={pageStudentMeta} className="bg-transparent border-0 px-0 py-0" />
             </div>
@@ -148,33 +148,38 @@ function StudentDetailsPageContent() {
             </div>
           ) : null}
 
-          <div
-            role="tablist"
-            aria-label="Student sections"
-            className="mb-4 flex gap-2 overflow-x-auto pb-1 sm:mb-6"
-          >
-            {STUDENT_TABS.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                role="tab"
-                aria-selected={activeTab === t.id}
-                onClick={() => setActiveTab(t.id)}
-                className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-semibold transition-colors ${
-                  activeTab === t.id
-                    ? "border-lime-500/50 bg-lime-500/20 text-lime-200"
-                    : "border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
+          <div className="mb-4 flex flex-col items-start gap-3 sm:mb-6">
+            <div role="tablist" aria-label="Student sections" className="flex min-w-0 flex-wrap gap-2">
+              {STUDENT_TABS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === t.id}
+                  onClick={() => setActiveTab(t.id)}
+                  className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-semibold transition-colors ${
+                    activeTab === t.id
+                      ? "border-lime-500/50 bg-lime-500/20 text-lime-200"
+                      : "border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            {activeTab !== "details" ? (
+              <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm">
+                <span className="font-bold text-white">{detail.student.name}</span>
+                <span className="text-sky-200">{detail.student.class?.displayName ?? "-"}</span>
+                <span className="text-lime-300">{detail.student.admissionNumber}</span>
+              </div>
+            ) : null}
           </div>
 
           <div className="flex flex-col xl:flex-row xl:flex-wrap gap-4 sm:gap-6 md:gap-8 min-w-0 w-full items-start">
             <aside
               ref={sidebarAsideRef}
-              className="relative z-10 w-full min-w-0 shrink-0 self-start xl:w-[280px] 2xl:w-[300px]"
+              className={`relative z-10 w-full min-w-0 shrink-0 self-start xl:w-[280px] 2xl:w-[300px] ${activeTab === "details" ? "" : "hidden"}`}
             >
             <ProfileSidebar
               studentId={detail.student.id}
@@ -212,7 +217,9 @@ function StudentDetailsPageContent() {
             />
             </aside>
 
-            <div className="flex-1 min-w-0 w-full xl:basis-[calc(100%-300px-2rem)] 2xl:basis-[calc(100%-320px-2rem)] space-y-4 sm:space-y-6 md:space-y-8">
+            <div
+              className={`flex-1 min-w-0 w-full xl:basis-[calc(100%-300px-2rem)] 2xl:basis-[calc(100%-320px-2rem)] space-y-4 sm:space-y-6 md:space-y-8 ${activeTab === "details" ? "" : "hidden"}`}
+            >
             {activeTab === "details" ? (
               <>
             <ProfileStatCards detail={detail} feeBreakdown={feeBreakdown} />
@@ -225,7 +232,9 @@ function StudentDetailsPageContent() {
             ) : null}
             </div>
 
-            <div className="relative z-0 min-w-0 w-full basis-full space-y-4 sm:space-y-6 md:space-y-8">
+            <div
+              className="relative z-0 min-w-0 w-full basis-full space-y-4 sm:space-y-6 md:space-y-8"
+            >
             {detail.fee && (activeTab === "fees" || activeTab === "global" || activeTab === "progress") ? (
               <FeesBreakdown
                 key={`fees-${detail.student.id}-${activeTab}`}
