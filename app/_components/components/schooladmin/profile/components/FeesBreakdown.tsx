@@ -11,7 +11,7 @@ import {
 } from "./shared";
 import { FeeReceiptPrintLayout } from "./shared";
 import { FeeHeadCardsGrid } from "./shared";
-import { FeeStudentHeader, FeeYearHistoryTable } from "./shared";
+import { FeeYearHistoryTable } from "./shared";
 import { FeePaymentProgressSection } from "./shared";
 import { EditBaseFeeHeadDialog } from "./shared";
 import { RecordHeadPaymentDialog } from "./shared";
@@ -156,12 +156,6 @@ export const FeesBreakdown = (props: Props) => {
           )} */}
         </div>
       </div>
-
-      <FeeStudentHeader
-        studentName={studentName}
-        classDisplayName={classDisplayName}
-        admissionNumber={admissionNumber}
-      />
 
       <FeeYearHistoryTable
         studentId={studentId}
