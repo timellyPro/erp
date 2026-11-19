@@ -84,4 +84,15 @@ describe("applyPendingDiscountsToDueRows", () => {
     ]);
     expect(next[0]).toMatchObject({ discountAmount: 5000, dueBefore: 18650 });
   });
+
+  it("a pending request replaces the head's existing concession instead of stacking on it", () => {
+    const rows = [
+      row({ key: "BASE:1", label: "Tuition Fee - 2nd Installment", totalAmount: 18150, discountAmount: 4000, dueBefore: 14150 }),
+    ];
+    const next = applyPendingDiscountsToDueRows(rows, [
+      { status: "PENDING", discountFixedAmount: 5000, discountFeeHeadKey: "BASE:1" },
+    ]);
+    expect(next[0].discountAmount).toBe(5000);
+    expect(next[0].dueBefore).toBe(13150);
+  });
 });

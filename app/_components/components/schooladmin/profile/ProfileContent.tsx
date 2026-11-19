@@ -275,7 +275,9 @@ function StudentDetailsPageContent() {
               />
             ) : null}
 
-            {activeTab === "transactions" ? (
+            {/* Always mounted (hidden when another tab is open) so the receipt auto-print after Pay & Save
+                and the school logo/name for receipts are ready, as before the tabs existed. */}
+            <div className={activeTab === "transactions" ? "" : "hidden"}>
             <FeeTransactions
               key={`txns-${detail.student.id}`}
               fee={detail.fee}
@@ -307,7 +309,7 @@ function StudentDetailsPageContent() {
                 if (detail.student.id) removePaymentForStudent(detail.student.id, result);
               }}
             />
-            ) : null}
+            </div>
 
             {activeTab === "certificates" ? <Certificates certificates={detail.certificates} /> : null}
             </div>

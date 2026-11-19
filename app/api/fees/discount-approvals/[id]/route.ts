@@ -154,6 +154,21 @@ async function reviewDiscount(req: Request, context: RouteParams) {
       WHERE id = ${id} AND status::text = 'PENDING'
     `;
     if (changed === 0) throw new AlreadyReviewedError();
+    // One concession per fee head: approving a new one replaces any earlier approved concession on
+    // the same head, so an edited amount never stacks on the old one.
+    if (approval.discountFeeHeadKey?.trim()) {
+      await tx.$executeRaw`
+        UPDATE "FeeDiscountApproval"
+        SET status = CAST('REJECTED' AS "DiscountApprovalStatus"),
+            "reviewRemarks" = 'Replaced by a newer concession on the same fee head',
+            "reviewedAt" = NOW(),
+            "updatedAt" = NOW()
+        WHERE "studentId" = ${approval.studentId}
+          AND id <> ${id}
+          AND status::text = 'APPROVED'
+          AND "discountFeeHeadKey" = ${approval.discountFeeHeadKey.trim()}
+      `;
+    }
     await recalculateStudentFee();
   }));
   } catch (err) {

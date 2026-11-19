@@ -77,7 +77,8 @@ function roundMoney(n: number): number {
 /**
  * Pending concessions are not written onto the student fee until the chairman
  * accepts them. The fees sheet still reduces that head's balance immediately.
- * Approved amounts are already in the breakdown, so they are not applied again.
+ * Approved amounts are already in the breakdown, so they are not applied again; a pending request
+ * for a head replaces that head's existing concession.
  */
 export function applyPendingDiscountsToDueRows(
   rows: DueHeadRow[],
@@ -88,7 +89,14 @@ export function applyPendingDiscountsToDueRows(
   for (const approval of pending) {
     const amount = Math.max(0, Number(approval.discountFixedAmount) || 0);
     if (amount <= 0) continue;
-    next = applyDiscountAmount(next, indexesForDiscount(next, approval), amount);
+    const indexes = indexesForDiscount(next, approval);
+    // A new request for a head replaces that head's current concession (it does not stack on it),
+    // matching what approving it does.
+    for (const index of indexes) {
+      const row = next[index];
+      next[index] = { ...row, discountAmount: 0, dueBefore: Math.max(0, roundMoney(row.totalAmount - row.paidAmount)) };
+    }
+    next = applyDiscountAmount(next, indexes, amount);
   }
   return next;
 }
