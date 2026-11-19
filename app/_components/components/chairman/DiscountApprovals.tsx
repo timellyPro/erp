@@ -23,6 +23,7 @@ export default function DiscountApprovals() {
     setReviewRemarks,
     fetchApprovals,
     pendingCount,
+    counts,
     visibleDiscountTotal,
     filteredApprovals,
     studentSuggestions,
@@ -40,6 +41,7 @@ export default function DiscountApprovals() {
         status={status}
         setStatus={setStatus}
         pendingCount={pendingCount}
+        counts={counts}
       />
 
       {error ? (

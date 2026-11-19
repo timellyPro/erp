@@ -10,6 +10,7 @@ export function DiscountApprovalsSearchHeader({
   status,
   setStatus,
   pendingCount,
+  counts,
 }: {
   search: string;
   setSearch: (v: string) => void;
@@ -19,6 +20,7 @@ export function DiscountApprovalsSearchHeader({
   status: ApprovalStatus;
   setStatus: (s: ApprovalStatus) => void;
   pendingCount: number;
+  counts?: Record<ApprovalStatus, number> | null;
 }) {
   return (
     <>
@@ -90,7 +92,13 @@ export function DiscountApprovalsSearchHeader({
             }`}
           >
             {item === "ALL" ? "History" : item.charAt(0) + item.slice(1).toLowerCase()}
-            {item === "PENDING" && status === "PENDING" ? ` (${pendingCount})` : ""}
+            {item === "ALL"
+              ? ""
+              : counts
+                ? ` (${counts[item]})`
+                : item === "PENDING"
+                  ? ` (${pendingCount})`
+                  : ""}
           </button>
         ))}
       </div>

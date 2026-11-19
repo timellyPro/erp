@@ -6,6 +6,7 @@ export * from "./FeeHeadCardsGrid";
 export * from "./FeePaymentProgressSection";
 export * from "./FeeReceiptPrintLayout";
 export * from "./FeeSummaryCards";
+export * from "./FeeYearHistoryTable";
 export * from "./RecordHeadPaymentDialog";
 export * from "./feeReceiptBuilder";
 export * from "./feeTransactionsHelpers";

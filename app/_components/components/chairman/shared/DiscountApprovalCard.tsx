@@ -61,7 +61,17 @@ export function DiscountApprovalCard({
           </div>
           <div className="rounded-2xl bg-black/20 p-3">
             <p className="text-white/50">Status</p>
-            <p className="font-black text-amber-200">{approval.status}</p>
+            <p
+              className={`font-black ${
+                approval.status === "APPROVED"
+                  ? "text-lime-300"
+                  : approval.status === "REJECTED"
+                    ? "text-red-400"
+                    : "text-amber-200"
+              }`}
+            >
+              {approval.status}
+            </p>
           </div>
         </div>
       </div>

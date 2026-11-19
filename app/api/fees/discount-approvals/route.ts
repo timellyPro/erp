@@ -82,6 +82,25 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const status = (searchParams.get("status") || "PENDING").toUpperCase();
 
+  if (searchParams.get("counts") === "1") {
+    const grouped = await runInTenantScope(schoolId, async () =>
+      prisma.$queryRaw<Array<{ status: string; count: number }>>`
+        SELECT fda.status::text AS status, COUNT(*)::int AS count
+        FROM "FeeDiscountApproval" fda
+        WHERE fda."schoolId" = ${schoolId}
+        GROUP BY fda.status
+      `
+    );
+    const counts = { PENDING: 0, APPROVED: 0, REJECTED: 0, ALL: 0 };
+    for (const g of grouped) {
+      if (g.status === "PENDING" || g.status === "APPROVED" || g.status === "REJECTED") {
+        counts[g.status] = Number(g.count);
+        counts.ALL += Number(g.count);
+      }
+    }
+    return NextResponse.json({ counts }, { headers: { "Cache-Control": "private, no-store" } });
+  }
+
   const safeStatus = ["ALL", "PENDING", "APPROVED", "REJECTED"].includes(status) ? status : "PENDING";
   const cacheKey = `${schoolId}:${safeStatus}`;
   const cached = getDiscountApprovalsListCached(cacheKey);

@@ -606,8 +606,11 @@ export async function fetchStudentDetailsFast(
       options?.signal,
       options?.force
     );
+    // If the student changes (abort) or the primary fetch fails before we await this,
+    // the rejection would be unhandled. It is still awaited below.
+    paymentsPromise.catch(() => {});
 
-    const useCore = !cachedBreakdown || Boolean(options?.force);
+    const useCore =!cachedBreakdown || Boolean(options?.force);
     const primaryQuery = useCore
       ? options?.force
         ? "core=1&refresh=1"

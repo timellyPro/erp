@@ -10,8 +10,8 @@ import {
   type FeesBreakdownProps as Props,
 } from "./shared";
 import { FeeReceiptPrintLayout } from "./shared";
-import { FeeSummaryCards } from "./shared";
 import { FeeHeadCardsGrid } from "./shared";
+import { FeeStudentHeader, FeeYearHistoryTable } from "./shared";
 import { FeePaymentProgressSection } from "./shared";
 import { EditBaseFeeHeadDialog } from "./shared";
 import { RecordHeadPaymentDialog } from "./shared";
@@ -36,6 +36,7 @@ export const FeesBreakdown = (props: Props) => {
     residencyType,
     classSection = null,
     feesRecordingDisabled = false,
+    view = "summary",
   } = props;
 
   const {
@@ -95,6 +96,8 @@ export const FeesBreakdown = (props: Props) => {
 
   return (
     <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl sm:rounded-[2rem] p-3 sm:p-6 min-w-0">
+      {view === "summary" ? (
+        <>
       {feesRecordingDisabled ? (
         <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-2.5 text-sm text-red-200">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -154,22 +157,50 @@ export const FeesBreakdown = (props: Props) => {
         </div>
       </div>
 
-      <FeeSummaryCards
-        displayTotalAmount={cardTotalAmount}
-        displayPreDiscountTotal={displayPreDiscountTotal}
-        raisedDiscountAmount={raisedDiscountAmount}
-        discountAmount={discountAmount}
-        approvalUi={approvalUi}
-        approvalState={approvalState}
-        discountFeeHeadLabel={discountFeeHeadLabel}
-        discountFeeHeadKey={discountFeeHeadKey}
-        discountRemarks={discountRemarks}
-        displayAmountPaid={cardAmountPaid}
-        paidPercentage={cardPaidPercentage}
-        displayRemainingAmount={cardRemainingAmount}
-        previousYearRemainingAmount={previousYearRemainingAmount}
+      <FeeStudentHeader
+        studentName={studentName}
+        classDisplayName={classDisplayName}
+        admissionNumber={admissionNumber}
       />
 
+      <FeeYearHistoryTable
+        studentId={studentId}
+        canSave={!feesRecordingDisabled}
+        current={{
+          totalFee: displayPreDiscountTotal,
+          concession: discountAmount,
+          finalFee: cardTotalAmount,
+          amountPaid: cardAmountPaid,
+          balance: cardRemainingAmount,
+        }}
+      />
+
+      <div className="mb-6 flex flex-wrap gap-x-6 gap-y-2 text-sm text-gray-300">
+        {approvalUi ? (
+          <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${approvalUi.border} ${approvalUi.bg} ${approvalUi.text}`}>
+            {approvalUi.chip}
+          </span>
+        ) : null}
+        {discountFeeHeadLabel ? (
+          <span>
+            <span className="font-semibold text-amber-300">Discount head:</span> {discountFeeHeadLabel}
+          </span>
+        ) : null}
+        {discountRemarks ? (
+          <span>
+            <span className="font-semibold text-amber-300">Remarks:</span> {discountRemarks}
+          </span>
+        ) : null}
+        {previousYearRemainingAmount > 0 ? (
+          <span>
+            <span className="font-semibold text-amber-300">Previous year due:</span> ₹{previousYearRemainingAmount.toLocaleString("en-IN")}
+          </span>
+        ) : null}
+      </div>
+        </>
+      ) : null}
+
+      {view === "global" ? (
       <FeeHeadCardsGrid
         headCards={headCards}
         headsLoading={headsLoading}
@@ -184,14 +215,16 @@ export const FeesBreakdown = (props: Props) => {
         onDeleteBase={deleteBaseFeeHead}
         onRecordPayment={openHeadPaymentModal}
       />
+      ) : null}
 
-      {/* Payment Progress Bar */}
+      {view === "progress" ? (
       <FeePaymentProgressSection
         paidPercentage={paidPercentage}
         headsLoading={headsLoading}
         paymentProgressRows={paymentProgressRows}
         feeBreakdown={feeBreakdown}
       />
+      ) : null}
 
       {/* Hidden Receipt Section for PDF */}
       <FeeReceiptPrintLayout

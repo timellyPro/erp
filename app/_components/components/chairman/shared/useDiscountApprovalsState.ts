@@ -19,6 +19,7 @@ export function useDiscountApprovalsState() {
   const [success, setSuccess] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
+  const [counts, setCounts] = useState<Record<ApprovalStatus, number> | null>(null);
   const [reviewRemarks, setReviewRemarks] = useState<Record<string, string>>({});
 
   const fetchApprovals = useCallback(async (opts?: { force?: boolean }) => {
@@ -45,13 +46,28 @@ export function useDiscountApprovalsState() {
     }
   }, [status]);
 
+  const fetchCounts = useCallback(async () => {
+    try {
+      const res = await fetch("/api/fees/discount-approvals?counts=1", { credentials: "include", cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as { counts?: Record<ApprovalStatus, number> };
+      if (data.counts) setCounts(data.counts);
+    } catch {
+      // Tabs simply show no count.
+    }
+  }, []);
+
   useEffect(() => {
     void fetchApprovals();
   }, [fetchApprovals]);
 
+  useEffect(() => {
+    void fetchCounts();
+  }, [fetchCounts, approvals]);
+
   const pendingCount = useMemo(
-    () => approvals.filter((approval) => approval.status === "PENDING").length,
-    [approvals]
+    () => counts?.PENDING ?? approvals.filter((approval) => approval.status === "PENDING").length,
+    [counts, approvals]
   );
   const visibleDiscountTotal = useMemo(
     () =>
@@ -173,6 +189,7 @@ export function useDiscountApprovalsState() {
     setReviewRemarks,
     fetchApprovals,
     pendingCount,
+    counts,
     visibleDiscountTotal,
     filteredApprovals,
     studentSuggestions,

@@ -11,7 +11,8 @@ class AlreadyReviewedError extends Error {}
 
 const reviewDiscountBodySchema = z.object({
   action: z.enum(["APPROVE", "REJECT", "REVERT"]),
-  reviewRemarks: z.string().trim().min(1).optional().nullable(),
+  // Remarks are optional: the chairman UI sends "" when the box is left empty.
+  reviewRemarks: z.string().trim().optional().nullable(),
 });
 
 type RouteParams =
