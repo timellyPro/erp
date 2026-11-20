@@ -275,9 +275,13 @@ function StudentDetailsPageContent() {
               />
             ) : null}
 
-            {/* Always mounted (hidden when another tab is open) so the receipt auto-print after Pay & Save
-                and the school logo/name for receipts are ready, as before the tabs existed. */}
-            <div className={activeTab === "transactions" ? "" : "hidden"}>
+            {/* Always mounted (moved off-screen, not display:none, when another tab is open) so the receipt auto-print after Pay & Save
+                and the school logo/name for receipts are ready, as before the tabs existed. display:none would give
+                the receipt template zero height and break the PDF ("Receipt template failed to render"). */}
+            <div
+              className={activeTab === "transactions" ? "" : "pointer-events-none absolute -left-[99999px] top-0 w-full"}
+              aria-hidden={activeTab !== "transactions"}
+            >
             <FeeTransactions
               key={`txns-${detail.student.id}`}
               fee={detail.fee}
