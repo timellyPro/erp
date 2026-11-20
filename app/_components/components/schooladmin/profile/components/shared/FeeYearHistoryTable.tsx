@@ -52,10 +52,13 @@ export function FeeYearHistoryTable({
   studentId,
   current,
   canSave,
+  pendingApproval = false,
 }: {
   studentId: string;
   current: { totalFee: number; concession: number; finalFee: number; amountPaid: number; balance: number };
   canSave: boolean;
+  /** Current-year figures include a concession that is still waiting for approval. */
+  pendingApproval?: boolean;
 }) {
   const [years, setYears] = useState<YearRow[]>([]);
   const [currentYear, setCurrentYear] = useState<number>(localAcademicYearStart());
@@ -142,6 +145,9 @@ export function FeeYearHistoryTable({
                   {yearLabel(r.academicYearStartYear)}
                   {r.academicYearStartYear === currentYear ? (
                     <span className="ml-2 text-[11px] font-semibold text-lime-400">current</span>
+                  ) : null}
+                  {r.academicYearStartYear === currentYear && pendingApproval ? (
+                    <span className="ml-2 text-[11px] font-semibold text-sky-300">incl. pending concession</span>
                   ) : null}
                 </td>
               </tr>

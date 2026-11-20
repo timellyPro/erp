@@ -94,6 +94,29 @@ export const FeesBreakdown = (props: Props) => {
     submitHeadPayment,
   } = useFeesBreakdownState(props);
 
+  // A pending request is shown straight away (same as the Fees Sheet); it replaces the approved
+  // concession on the same head, and the numbers settle once the chairman approves it.
+  const pendingRequests = approvalState.filter(
+    (a) => a.status === "PENDING" && Number(a.discountFixedAmount) > 0
+  );
+  const pendingConcession = pendingRequests.reduce((sum, a) => sum + Number(a.discountFixedAmount), 0);
+  const replacedApproved = approvalState
+    .filter(
+      (a) =>
+        a.status === "APPROVED" &&
+        Number(a.discountFixedAmount) > 0 &&
+        pendingRequests.some((p) => (p.discountFeeHeadKey ?? "") === (a.discountFeeHeadKey ?? ""))
+    )
+    .reduce((sum, a) => sum + Number(a.discountFixedAmount), 0);
+  const grossForConcession = displayPreDiscountTotal;
+  const effectiveConcession = Math.min(
+    grossForConcession,
+    Math.max(0, discountAmount - replacedApproved) + pendingConcession
+  );
+  const concessionShift = effectiveConcession - discountAmount;
+  const effectiveFinal = Math.max(0, cardTotalAmount - concessionShift);
+  const effectiveBalance = Math.max(0, cardRemainingAmount - concessionShift);
+
   return (
     <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl sm:rounded-[2rem] p-3 sm:p-6 min-w-0">
       {view === "summary" ? (
@@ -162,11 +185,12 @@ export const FeesBreakdown = (props: Props) => {
         canSave={!feesRecordingDisabled}
         current={{
           totalFee: displayPreDiscountTotal,
-          concession: discountAmount,
-          finalFee: cardTotalAmount,
+          concession: effectiveConcession,
+          finalFee: effectiveFinal,
           amountPaid: cardAmountPaid,
-          balance: cardRemainingAmount,
+          balance: effectiveBalance,
         }}
+        pendingApproval={pendingConcession > 0}
       />
 
       <div className="mb-6 flex flex-wrap gap-x-6 gap-y-2 text-sm text-gray-300">
@@ -177,7 +201,7 @@ export const FeesBreakdown = (props: Props) => {
         ) : null}
         <span className="inline-flex items-center gap-2">
           <span>
-            <span className="font-semibold text-amber-300">Concession:</span> ₹{discountAmount.toLocaleString("en-IN")}
+            <span className="font-semibold text-amber-300">Concession:</span> ₹{effectiveConcession.toLocaleString("en-IN")}{pendingConcession > 0 ? " (pending approval)" : ""}
           </span>
           <button
             type="button"
