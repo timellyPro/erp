@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { AcademicPerformance } from "./components/AcademicPerformance";
 import { FeeTransactions } from "./components/FeeTransactions";
 import { FeesBreakdown } from "./components/FeesBreakdown";
@@ -12,6 +12,7 @@ import { FileSpreadsheet } from "lucide-react";
 import BulkExtraFeeByTimellyModal from "./components/BulkExtraFeeByTimellyModal";
 import PageHeader from "../../common/PageHeader";
 import Spinner from "../../common/Spinner";
+import ReceiptGeneratingOverlay from "../../common/ReceiptGeneratingOverlay";
 import { StudentNameCard } from "./shared";
 import { StudentFeesPaymentModal } from "./shared";
 import { StudentSearchFilterBar } from "./shared";
@@ -31,6 +32,7 @@ const STUDENT_TABS: ReadonlyArray<{ id: StudentTab; label: string }> = [
 
 function StudentDetailsPageContent() {
   const [activeTab, setActiveTab] = useState<StudentTab>("details");
+  const [receiptWaitExpired, setReceiptWaitExpired] = useState(false);
   const {
     students,
     selectedId,
@@ -72,6 +74,18 @@ function StudentDetailsPageContent() {
     handleSidebarSaved,
   } = useStudentDetailsPageState();
 
+  // After Pay & Save the receipt PDF is built once the new payment arrives; show a loader for that whole
+  // wait (capped, so a failed refresh can never leave the screen locked).
+  useEffect(() => {
+    if (!autoPrintPaymentId) {
+      setReceiptWaitExpired(false);
+      return;
+    }
+    setReceiptWaitExpired(false);
+    const t = setTimeout(() => setReceiptWaitExpired(true), 25000);
+    return () => clearTimeout(t);
+  }, [autoPrintPaymentId]);
+
   return (
     <div className="w-full min-w-0 space-y-4 pb-6 sm:space-y-6 sm:pb-8 md:space-y-8">
       <PageHeader
@@ -94,6 +108,7 @@ function StudentDetailsPageContent() {
           </div>
         }
       />
+      {autoPrintPaymentId && !receiptWaitExpired ? <ReceiptGeneratingOverlay /> : null}
       <BulkExtraFeeByTimellyModal
         open={bulkExtraFeeOpen}
         onClose={() => setBulkExtraFeeOpen(false)}
