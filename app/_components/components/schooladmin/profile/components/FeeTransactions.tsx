@@ -6,6 +6,7 @@ import type { FeeTransactionsProps as Props } from "./shared";
 import { formatPaymentMethod, isSyntheticPaymentId } from "./shared";
 import { useFeeTransactionsState } from "./shared";
 import { EditPaymentDialog } from "./shared";
+import ReceiptGeneratingOverlay from "../../../common/ReceiptGeneratingOverlay";
 
 export const FeeTransactions = (props: Props) => {
   const { studentId = "", feesRecordingDisabled = false, transactionsLoading = false } = props;
@@ -40,6 +41,8 @@ export const FeeTransactions = (props: Props) => {
   } = useFeeTransactionsState(props);
 
   return (
+    <>
+    {printingId ? <ReceiptGeneratingOverlay /> : null}
     <div
       id="student-profile-fees-section"
       className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl sm:rounded-[2rem] p-3 sm:p-6 mt-4 sm:mt-6 min-w-0 w-full scroll-mt-28 sm:scroll-mt-24"
@@ -195,5 +198,6 @@ export const FeeTransactions = (props: Props) => {
         />
       ) : null}
     </div>
+    </>
   );
 };
